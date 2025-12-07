@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Diagnóstico Google Maps API</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 20px;
+        background-color: #f5f5f5;
+      }
+      .container {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      }
+      .status {
+        padding: 10px;
+        margin: 10px 0;
+        border-radius: 4px;
+        font-weight: bold;
+      }
+      .success {
+        background-color: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+      }
+      .error {
+        background-color: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+      }
+      .warning {
+        background-color: #fff3cd;
+        color: #856404;
+        border: 1px solid #ffeaa7;
+      }
+      .info {
+        background-color: #d1ecf1;
+        color: #0c5460;
+        border: 1px solid #bee5eb;
+      }
+      input {
+        width: 100%;
+        padding: 10px;
+        margin: 10px 0;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 16px;
+      }
+      button {
+        background-color: #007bff;
+        color: white;
+        padding: 10px 20px;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 16px;
+      }
+      button:hover {
+        background-color: #0056b3;
+      }
+      #map {
+        height: 300px;
+        width: 100%;
+        margin: 20px 0;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+      }
+      .log {
+        background-color: #f8f9fa;
+        border: 1px solid #dee2e6;
+        border-radius: 4px;
+        padding: 10px;
+        margin: 10px 0;
+        font-family: monospace;
+        font-size: 12px;
+        max-height: 200px;
+        overflow-y: auto;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🔍 Diagnóstico Google Maps API</h1>
+
+      <div id="status-container">
+        <div class="info">
+          <strong>📋 Verificando configuración de Google Maps...</strong>
+        </div>
+      </div>
+
+      <h2>🗺️ Mapa de Prueba</h2>
+      <div id="map"></div>
+
+      <h2>📍 Autocompletado de Lugares</h2>
+      <input
+        id="autocomplete-input"
+        type="text"
+        placeholder="Escribe una dirección (ej: Calle Hidalgo, Pedro Escobedo)"
+        disabled
+      />
+      <button onclick="testManualGeocode()" id="manual-btn" disabled>
+        🔍 Buscar Manualmente (sin Google Places)
+      </button>
+
+      <h2>📊 Logs de Diagnóstico</h2>
+      <div id="logs" class="log">Iniciando diagnóstico...<br /></div>
+
+      <h2>📋 Resultados</h2>
+      <div id="results"></div>
+    </div>
+
+    <script>
+      let map;
+      let autocomplete;
+      let logs = [];
+
+      function addLog(message, type = "info") {
+        const timestamp = new Date().toLocaleTimeString();
+        logs.push(`[${timestamp}] ${message}`);
+        document.getElementById("logs").innerHTML = logs.join("<br>");
+        console.log(message);
+      }
+
+      function updateStatus(message, type = "info") {
+        const statusContainer = document.getElementById("status-container");
+        statusContainer.innerHTML = `<div class="${type}"><strong>${message}</strong></div>`;
+      }
+
+      function updateResults(results) {
+        document.getElementById("results").innerHTML = results;
+      }
+
+      // Verificar si Google Maps está disponible
+      function checkGoogleMaps() {
+        addLog("🔍 Verificando disponibilidad de Google Maps...");
+
+        if (typeof google === "undefined") {
+          addLog("❌ Google Maps no está cargado", "error");
+          updateStatus("❌ Google Maps no está disponible", "error");
+          return false;
+        }
+
+        if (!google.maps) {
+          addLog("❌ google.maps no está disponible", "error");
+          updateStatus("❌ Google Maps API no está disponible", "error");
+          return false;
+        }
+
+        if (!google.maps.places) {
+          addLog("❌ google.maps.places no está disponible", "error");
+          updateStatus("❌ Google Places API no está disponible", "error");
+          return false;
+        }
+
+        addLog("✅ Google Maps y Places API están disponibles");
+        updateStatus("✅ Google Maps API está funcionando", "success");
+        return true;
+      }
+
+      // Inicializar mapa
+      function initMap() {
+        addLog("🗺️ Inicializando mapa...");
+
+        try {
+          map = new google.maps.Map(document.getElementById("map"), {
+            center: { lat: 20.5089, lng: -100.1456 }, // Pedro Escobedo
+            zoom: 13,
+            mapTypeControl: true,
+            streetViewControl: true,
+          });
+
+          // Agregar marcador de prueba
+          new google.maps.Marker({
+            position: { lat: 20.5089, lng: -100.1456 },
+            map: map,
+            title: "Pedro Escobedo, Querétaro",
+            icon: {
+              url: "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
+            },
+          });
+
+          addLog("✅ Mapa inicializado correctamente");
+          return true;
+        } catch (error) {
+          addLog(`❌ Error inicializando mapa: ${error.message}`, "error");
+          return false;
+        }
+      }
+
+      // Inicializar autocompletado
+      function initAutocomplete() {
+        addLog("📍 Inicializando autocompletado...");
+
+        try {
+          const input = document.getElementById("autocomplete-input");
+
+          autocomplete = new google.maps.places.Autocomplete(input, {
+            types: ["address"],
+            componentRestrictions: { country: "mx" },
+            fields: [
+              "address_components",
+              "formatted_address",
+              "geometry",
+              "name",
+            ],
+          });
+
+          autocomplete.addListener("place_changed", () => {
+            const place = autocomplete.getPlace();
+            addLog("🎯 Lugar seleccionado desde autocompletado");
+            addLog(`📍 Dirección: ${place.formatted_address}`);
+
+            if (place.geometry && place.geometry.location) {
+              const lat = place.geometry.location.lat();
+              const lng = place.geometry.location.lng();
+              addLog(`🗺️ Coordenadas: ${lat}, ${lng}`);
+
+              // Centrar mapa en la ubicación seleccionada
+              map.setCenter({ lat, lng });
+              map.setZoom(15);
+
+              // Agregar marcador
+              new google.maps.Marker({
+                position: { lat, lng },
+                map: map,
+                title: place.formatted_address,
+                icon: {
+                  url: "https://maps.google.com/mapfiles/ms/icons/blue-dot.png",
+                },
+              });
+
+              addLog("✅ Autocompletado funcionando correctamente");
+            } else {
+              addLog("❌ No se obtuvieron coordenadas del lugar", "error");
+            }
+          });
+
+          input.disabled = false;
+          addLog("✅ Autocompletado inicializado correctamente");
+          return true;
+        } catch (error) {
+          addLog(
+            `❌ Error inicializando autocompletado: ${error.message}`,
+            "error"
+          );
+          return false;
+        }
+      }
+
+      // Función para probar geocodificación manual
+      function testManualGeocode() {
+        const address = document.getElementById("autocomplete-input").value;
+        if (!address) {
+          addLog("❌ Por favor ingresa una dirección", "warning");
+          return;
+        }
+
+        addLog(`🔍 Geocodificando manualmente: ${address}`);
+
+        const geocoder = new google.maps.Geocoder();
+        geocoder.geocode({ address: address }, (results, status) => {
+          if (status === "OK") {
+            const location = results[0].geometry.location;
+            const lat = location.lat();
+            const lng = location.lng();
+
+            addLog(`✅ Geocodificación exitosa: ${lat}, ${lng}`);
+
+            // Centrar mapa y agregar marcador
+            map.setCenter({ lat, lng });
+            map.setZoom(15);
+
+            new google.maps.Marker({
+              position: { lat, lng },
+              map: map,
+              title: results[0].formatted_address,
+              icon: {
+                url: "https://maps.google.com/mapfiles/ms/icons/green-dot.png",
+              },
+            });
+          } else {
+            addLog(`❌ Error en geocodificación: ${status}`, "error");
+          }
+        });
+      }
+
+      // Función principal de diagnóstico
+      function runDiagnosis() {
+        addLog("🚀 Iniciando diagnóstico completo...");
+
+        let results = "<h3>📊 Resumen de Diagnóstico</h3>";
+
+        // Verificar Google Maps
+        if (checkGoogleMaps()) {
+          results +=
+            '<div class="success">✅ Google Maps API: Disponible</div>';
+
+          // Inicializar mapa
+          if (initMap()) {
+            results +=
+              '<div class="success">✅ Mapa: Inicializado correctamente</div>';
+          } else {
+            results +=
+              '<div class="error">❌ Mapa: Error en inicialización</div>';
+          }
+
+          // Inicializar autocompletado
+          if (initAutocomplete()) {
+            results +=
+              '<div class="success">✅ Autocompletado: Funcionando</div>';
+            document.getElementById("manual-btn").disabled = false;
+          } else {
+            results +=
+              '<div class="error">❌ Autocompletado: Error en inicialización</div>';
+          }
+
+          results +=
+            '<div class="info">💡 Prueba escribir una dirección en el campo de arriba</div>';
+        } else {
+          results +=
+            '<div class="error">❌ Google Maps API: No disponible</div>';
+          results +=
+            '<div class="warning">⚠️ Verifica tu API key y configuración</div>';
+        }
+
+        updateResults(results);
+        addLog("🏁 Diagnóstico completado");
+      }
+
+      // Ejecutar diagnóstico cuando Google Maps se carga
+      window.initMap = runDiagnosis;
+    </script>
+
+    <!-- Cargar Google Maps API -->
+    <script
+      async
+      defer
+      src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY_HERE&libraries=places&callback=initMap"
+    ></script>
+
+    <div
+      style="
+        margin-top: 20px;
+        padding: 15px;
+        background-color: #fff3cd;
+        border: 1px solid #ffeaa7;
+        border-radius: 4px;
+      "
+    >
+      <h3>🔧 Instrucciones de Uso</h3>
+      <ol>
+        <li>
+          <strong>Reemplaza YOUR_API_KEY_HERE</strong> con tu API key real de
+          Google Maps
+        </li>
+        <li>Abre este archivo en tu navegador</li>
+        <li>Observa los resultados del diagnóstico</li>
+        <li>Prueba escribir direcciones en el campo de autocompletado</li>
+      </ol>
+
+      <h3>📋 Qué Verificar</h3>
+      <ul>
+        <li>✅ <strong>Mapa se carga</strong> → API key válida</li>
+        <li>
+          ✅ <strong>Autocompletado muestra sugerencias</strong> → Places API
+          habilitada
+        </li>
+        <li>
+          ✅ <strong>Al seleccionar se centra el mapa</strong> → Eventos
+          funcionando
+        </li>
+        <li>
+          ❌ <strong>Errores en consola</strong> → Problemas de configuración
+        </li>
+      </ul>
+    </div>
+  </body>
+</html>
