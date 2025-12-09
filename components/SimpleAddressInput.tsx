@@ -14,6 +14,11 @@ interface SimpleAddressInputProps {
       city?: string;
       state?: string;
       country?: string;
+      postalCode?: string;
+    };
+    coordinates?: {
+      latitude: number;
+      longitude: number;
     };
   }) => void;
   placeholder?: string;
@@ -41,17 +46,43 @@ export default function SimpleAddressInput({
       // Parsear la dirección de forma simple
       const parts = address.split(',').map(part => part.trim());
       
+      // Intentar geocodificar la dirección para obtener coordenadas
+      let coordinates = undefined;
+      try {
+        console.log('🌍 Geocodificando dirección:', address);
+        const encodedAddress = encodeURIComponent(address);
+        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodedAddress}&limit=1&countrycodes=mx`;
+        
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        if (data && data.length > 0) {
+          const result = data[0];
+          coordinates = {
+            latitude: parseFloat(result.lat),
+            longitude: parseFloat(result.lon),
+          };
+          console.log('✅ Coordenadas obtenidas:', coordinates);
+        } else {
+          console.log('⚠️ No se pudieron obtener coordenadas');
+        }
+      } catch (geoError) {
+        console.error('Error geocodificando:', geoError);
+      }
+      
       const addressData = {
         fullAddress: address,
         components: {
           street: parts[0] || '',
           city: parts[1] || 'Pedro Escobedo',
           state: parts[2] || 'Querétaro',
-          country: 'México'
-        }
+          country: 'México',
+          postalCode: '',
+        },
+        coordinates: coordinates,
       };
       
-      console.log('📍 Dirección ingresada manualmente:', addressData);
+      console.log('📍 Dirección procesada:', addressData);
       onAddressSubmit(addressData);
       
     } catch (error) {

@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import useBasketStore from "@/store/store";
 import { useUser } from "@clerk/nextjs";
 import { createCashOnDeliveryOrder } from "@/actions/createCashOnDeliveryOrder";
 import { formatCurrency } from "@/lib/formatCurrency";
-import { Truck, MapPin, DollarSign } from "lucide-react";
+import { Truck, MapPin, DollarSign, CheckCircle } from "lucide-react";
 
 function CashOnDeliveryCheckout() {
   const router = useRouter();
@@ -15,6 +15,7 @@ function CashOnDeliveryCheckout() {
   const [isLoading, setIsLoading] = useState(false);
   const [shippingCalculated, setShippingCalculated] = useState(false);
   const [shippingError, setShippingError] = useState("");
+  const [addressPreloaded, setAddressPreloaded] = useState(false);
   const [formData, setFormData] = useState({
     phone: "",
     address: {
@@ -30,6 +31,61 @@ function CashOnDeliveryCheckout() {
   const subtotal = getTotalPrice();
   const [shippingCost, setShippingCost] = useState(0);
   const total = subtotal + shippingCost;
+
+  // Cargar información guardada del carrito
+  useEffect(() => {
+    const savedStore = localStorage.getItem('clickCollectStore');
+    console.log('🔍 Buscando datos guardados...');
+    
+    if (savedStore) {
+      try {
+        const storeData = JSON.parse(savedStore);
+        console.log('✅ Datos encontrados:', storeData);
+        
+        // Si hay dirección del cliente guardada, pre-cargarla
+        if (storeData.customerAddress) {
+          const addr = storeData.customerAddress;
+          console.log('📍 Dirección del cliente:', addr);
+          
+          const hasValidAddress = addr.street || addr.line1 || addr.city;
+          
+          if (hasValidAddress) {
+            const newAddress = {
+              line1: addr.street || addr.line1 || "",
+              line2: addr.line2 || "",
+              city: addr.city || "",
+              state: addr.state || "",
+              postal_code: addr.postalCode || addr.postal_code || "",
+              country: addr.country || "MX",
+            };
+            
+            console.log('✏️ Pre-cargando dirección:', newAddress);
+            
+            setFormData(prev => ({
+              ...prev,
+              address: newAddress
+            }));
+            setAddressPreloaded(true);
+            
+            // Si hay costo de envío calculado y es delivery, usarlo
+            if (storeData.shippingCost !== undefined && storeData.deliveryMethod === 'delivery') {
+              console.log('💰 Pre-cargando costo de envío:', storeData.shippingCost);
+              setShippingCost(storeData.shippingCost);
+              setShippingCalculated(true);
+            }
+          } else {
+            console.log('⚠️ No hay dirección válida para pre-cargar');
+          }
+        } else {
+          console.log('⚠️ No hay customerAddress en los datos guardados');
+        }
+      } catch (e) {
+        console.error('❌ Error loading saved store data:', e);
+      }
+    } else {
+      console.log('⚠️ No hay datos guardados en localStorage');
+    }
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -220,10 +276,34 @@ function CashOnDeliveryCheckout() {
         onSubmit={handleSubmit}
         className="bg-white rounded-lg shadow-md p-6"
       >
-        <h2 className="text-xl font-semibold mb-4 flex items-center gap-2">
-          <MapPin className="w-5 h-5" />
-          Información de Entrega
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xl font-semibold flex items-center gap-2">
+            <MapPin className="w-5 h-5" />
+            Información de Entrega
+          </h2>
+          {addressPreloaded && (
+            <div className="flex items-center gap-1 text-green-600 text-sm">
+              <CheckCircle className="w-4 h-4" />
+              <span>Dirección cargada</span>
+            </div>
+          )}
+        </div>
+
+        {addressPreloaded && (
+          <div className="mb-4 p-4 bg-green-50 border-2 border-green-300 rounded-lg">
+            <div className="flex items-start gap-2">
+              <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-green-800 mb-1">
+                  Información cargada del carrito
+                </p>
+                <p className="text-sm text-green-700">
+                  Hemos pre-cargado tu dirección y costo de envío. Verifica que sea correcta o modifícala si es necesario.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="space-y-4">
           <div>
@@ -373,15 +453,28 @@ function CashOnDeliveryCheckout() {
 
         {/* Shipping Calculator */}
         <div className="mt-6">
-          <button
-            type="button"
-            onClick={calculateShipping}
-            disabled={!formData.address.city || !formData.address.state}
-            className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-          >
-            <Truck className="w-4 h-4" />
-            Calcular Tu Envío
-          </button>
+          {!shippingCalculated && (
+            <button
+              type="button"
+              onClick={calculateShipping}
+              disabled={!formData.address.city || !formData.address.state}
+              className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            >
+              <Truck className="w-4 h-4" />
+              Calcular Tu Envío
+            </button>
+          )}
+          
+          {shippingCalculated && (
+            <button
+              type="button"
+              onClick={calculateShipping}
+              className="w-full bg-gray-600 text-white py-2 px-4 rounded-lg font-medium hover:bg-gray-700 flex items-center justify-center gap-2"
+            >
+              <Truck className="w-4 h-4" />
+              Recalcular Envío
+            </button>
+          )}
 
           {/* Shipping Results */}
           {shippingCalculated && (

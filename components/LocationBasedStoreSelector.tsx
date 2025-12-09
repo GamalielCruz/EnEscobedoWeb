@@ -9,7 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Navigation, Loader2, AlertCircle, MapPin, Edit3 } from "lucide-react";
+import { Navigation, Loader2, AlertCircle, MapPin, Edit3, Store } from "lucide-react";
 import SimpleAddressInput from "./SimpleAddressInput";
 import { CustomerAddress } from "@/lib/clickCollect";
 import { useGoogleMaps } from "@/hooks/useGoogleMaps";
@@ -465,6 +465,48 @@ export default function LocationBasedStoreSelector({
     }
   };
 
+  // Función para geocodificación inversa (coordenadas a dirección)
+  const reverseGeocode = async (lat: number, lng: number): Promise<{
+    street: string;
+    city: string;
+    state: string;
+    postalCode: string;
+  }> => {
+    try {
+      console.log(`🌍 Geocodificando coordenadas: ${lat}, ${lng}`);
+      const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`;
+      const response = await fetch(url);
+      const data = await response.json();
+      
+      console.log('🗺️ Respuesta de geocodificación:', data);
+      
+      if (data && data.address) {
+        const addr = data.address;
+        const result = {
+          street: addr.road || addr.street || addr.neighbourhood || addr.suburb || "",
+          city: addr.city || addr.town || addr.village || addr.municipality || "",
+          state: addr.state || "",
+          postalCode: addr.postcode || "",
+        };
+        console.log('✅ Dirección geocodificada:', result);
+        return result;
+      } else {
+        console.log('⚠️ No se encontró dirección en la respuesta');
+      }
+    } catch (error) {
+      console.error('❌ Error en geocodificación inversa:', error);
+    }
+    
+    // Retornar valores vacíos si falla
+    console.log('⚠️ Retornando dirección vacía');
+    return {
+      street: "",
+      city: "",
+      state: "",
+      postalCode: "",
+    };
+  };
+
   // Calcular distancia usando fórmula de Haversine
   const calculateDistance = (
     lat1: number,
@@ -591,7 +633,7 @@ export default function LocationBasedStoreSelector({
   };
 
   // Seleccionar una tienda
-  const selectStore = (store: Store) => {
+  const selectStore = async (store: Store) => {
     setSelectedStore(store);
 
     // Resaltar marcador en el mapa
@@ -600,8 +642,29 @@ export default function LocationBasedStoreSelector({
     // Mostrar ruta hacia la tienda
     showRouteToStore(store);
 
+    // Si hay ubicación del usuario, obtener su dirección primero
+    let customerAddress = null;
+    if (onAddressChange && userLocation) {
+      console.log('🔍 Obteniendo dirección del usuario...');
+      const address = await reverseGeocode(userLocation.lat, userLocation.lng);
+      customerAddress = {
+        street: address.street || "Ubicación detectada",
+        city: address.city || store.address.city,
+        state: address.state || store.address.state,
+        postalCode: address.postalCode || "",
+        country: "México",
+        latitude: userLocation.lat as any,
+        longitude: userLocation.lng as any,
+      } as unknown as CustomerAddress;
+      
+      console.log('📍 Dirección obtenida:', customerAddress);
+      onAddressChange(customerAddress);
+    }
+
     const storeData = {
       store,
+      userLocation: userLocation, // Incluir ubicación del usuario
+      customerAddress: customerAddress, // Incluir dirección del cliente
       summary: {
         storeName: store.name,
         distance: `${store.distanceKm.toFixed(2)} km`,
@@ -612,20 +675,6 @@ export default function LocationBasedStoreSelector({
     };
 
     onStoreSelected(storeData);
-
-    // Notificar cambio de dirección aproximada
-    if (onAddressChange && userLocation) {
-      onAddressChange({
-        street: store.address.street,
-        city: store.address.city,
-        state: store.address.state,
-        postalCode: store.address.postalCode,
-        country: "México",
-        // incluir coordenadas del usuario para cálculo de envío
-        latitude: userLocation.lat as any,
-        longitude: userLocation.lng as any,
-      } as unknown as CustomerAddress);
-    }
   };
 
   // Función global para seleccionar tienda desde el mapa
@@ -643,195 +692,207 @@ export default function LocationBasedStoreSelector({
   }, [nearbyStores]);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Navigation className="h-5 w-5" />
-          Encuentra Tiendas Cercanas
-        </CardTitle>
-        <CardDescription>
-          Encuentra la tienda más cercana para recoger tu pedido.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {/* Botones para obtener ubicación */}
-        {!userLocation && !showManualInput && (
-          <div className="space-y-3">
-            <Button
-              onClick={getUserLocation}
-              disabled={loading || !isMapLoaded}
-              className="w-full"
-              size="lg"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Detectando tu ubicación...
-                </>
-              ) : (
-                <>
-                  <Navigation className="mr-2 h-4 w-4" />
-                  Detectar Mi Ubicación
-                </>
-              )}
-            </Button>
-
-            {/* Separador */}
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center">
-                <span className="w-full border-t" />
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-white px-2 text-muted-foreground">O</span>
-              </div>
-            </div>
-
-            <Button
-              onClick={() => setShowManualInput(true)}
-              disabled={loading || !isMapLoaded}
-              variant="outline"
-              className="w-full"
-              size="lg"
-            >
-              <Edit3 className="mr-2 h-4 w-4" />
-              Ingresar Dirección Manualmente
-            </Button>
-
-            {loading && (
-              <p className="text-sm text-gray-600 text-center">
-                Buscando tiendas cercanas a tu ubicación...
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* Google Places Autocomplete */}
-        {!userLocation && showManualInput && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h4 className="font-medium text-gray-900">Buscar tu dirección</h4>
-              <Button
-                onClick={() => {
-                  setShowManualInput(false);
-                  setError(null);
-                  setGeolocationDenied(false);
-                }}
-                variant="ghost"
-                size="sm"
-              >
-                Volver a geolocalización
-              </Button>
-            </div>
-
-            <SimpleAddressInput
-              onAddressSubmit={handleSimpleAddressSubmit}
-              placeholder="Ej: Querétaro"
-              label="Dirección completa"
-              disabled={loading}
-            />
-
-            {loading && (
-              <div className="flex items-center justify-center py-4">
-                <Loader2 className="h-6 w-6 animate-spin text-blue-500 mr-2" />
-                <span className="text-sm text-gray-600">
-                  Buscando tiendas cercanas...
-                </span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Error */}
-        {error && (
-          <div
-            className={`p-3 border rounded-md flex items-start gap-2 ${
-              geolocationDenied
-                ? "bg-amber-50 border-amber-200"
-                : "bg-red-50 border-red-200"
-            }`}
+    <div className="space-y-4">
+      {/* Botones principales - SIEMPRE VISIBLES */}
+      {!userLocation && !showManualInput && (
+        <div className="space-y-3">
+          <Button
+            onClick={getUserLocation}
+            disabled={loading || !isMapLoaded}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white shadow-md"
+            size="lg"
           >
-            <AlertCircle
-              className={`h-4 w-4 mt-0.5 ${
-                geolocationDenied ? "text-amber-500" : "text-red-500"
-              }`}
-            />
-            <div>
-              <p
-                className={`text-sm font-medium ${
-                  geolocationDenied ? "text-amber-700" : "text-red-700"
-                }`}
-              >
-                {geolocationDenied ? "Ubicación no disponible" : "Error"}
-              </p>
-              <p
-                className={`text-sm ${
-                  geolocationDenied ? "text-amber-600" : "text-red-600"
-                }`}
-              >
-                {error}
-              </p>
-              {geolocationDenied && (
-                <p className="text-xs text-amber-600 mt-1">
-                  💡 Puedes usar la opción manual para ingresar tu dirección
-                </p>
-              )}
+            {loading ? (
+              <>
+                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                Detectando ubicación...
+              </>
+            ) : (
+              <>
+                <Navigation className="mr-2 h-5 w-5" />
+                📍 Detectar Mi Ubicación
+              </>
+            )}
+          </Button>
+
+          {/* Separador */}
+          <div className="relative">
+            <div className="absolute inset-0 flex items-center">
+              <span className="w-full border-t border-gray-300" />
+            </div>
+            <div className="relative flex justify-center text-xs uppercase">
+              <span className="bg-white px-2 text-gray-500 font-medium">O</span>
             </div>
           </div>
-        )}
 
-        {/* Mapa */}
+          <Button
+            onClick={() => setShowManualInput(true)}
+            disabled={loading || !isMapLoaded}
+            variant="outline"
+            className="w-full border-2 hover:bg-gray-50"
+            size="lg"
+          >
+            <Edit3 className="mr-2 h-4 w-4" />
+            ✏️ Escribir Mi Dirección
+          </Button>
+
+          {loading && (
+            <div className="flex items-center justify-center gap-2 p-3 bg-blue-50 rounded-lg">
+              <Loader2 className="h-4 w-4 animate-spin text-blue-600" />
+              <p className="text-sm text-blue-700 font-medium">
+                Buscando tiendas cercanas...
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Entrada manual de dirección */}
+      {!userLocation && showManualInput && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+            <h4 className="font-medium text-gray-900 flex items-center gap-2">
+              <MapPin className="h-4 w-4" />
+              Escribe tu dirección
+            </h4>
+            <Button
+              onClick={() => {
+                setShowManualInput(false);
+                setError(null);
+                setGeolocationDenied(false);
+              }}
+              variant="ghost"
+              size="sm"
+              className="text-blue-600 hover:text-blue-700"
+            >
+              ← Volver
+            </Button>
+          </div>
+
+          <SimpleAddressInput
+            onAddressSubmit={handleSimpleAddressSubmit}
+            placeholder="Ej: Calle Hidalgo 15, Pedro Escobedo, Querétaro"
+            label="Dirección completa"
+            disabled={loading}
+          />
+
+          {loading && (
+            <div className="flex items-center justify-center gap-2 p-4 bg-blue-50 rounded-lg">
+              <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+              <span className="text-sm text-blue-700 font-medium">
+                Buscando tiendas cercanas...
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div
+          className={`p-4 border-2 rounded-lg flex items-start gap-3 ${
+            geolocationDenied
+              ? "bg-amber-50 border-amber-300"
+              : "bg-red-50 border-red-300"
+          }`}
+        >
+          <AlertCircle
+            className={`h-5 w-5 mt-0.5 flex-shrink-0 ${
+              geolocationDenied ? "text-amber-600" : "text-red-600"
+            }`}
+          />
+          <div className="flex-1">
+            <p
+              className={`text-sm font-semibold mb-1 ${
+                geolocationDenied ? "text-amber-800" : "text-red-800"
+              }`}
+            >
+              {geolocationDenied ? "⚠️ Ubicación no disponible" : "❌ Error"}
+            </p>
+            <p
+              className={`text-sm ${
+                geolocationDenied ? "text-amber-700" : "text-red-700"
+              }`}
+            >
+              {error}
+            </p>
+            {geolocationDenied && !showManualInput && (
+              <Button
+                onClick={() => setShowManualInput(true)}
+                size="sm"
+                variant="outline"
+                className="mt-3 border-amber-400 text-amber-700 hover:bg-amber-100"
+              >
+                ✏️ Escribir dirección manualmente
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Mapa - Solo mostrar cuando hay ubicación */}
+      {userLocation && (
         <div
           ref={mapRef}
-          className="w-full h-64 bg-gray-100 rounded-md border"
+          className="w-full h-64 bg-gray-100 rounded-lg border-2 border-gray-200 shadow-sm"
           style={{ minHeight: "256px" }}
         >
           {!isMapLoaded && (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
-                <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-gray-400" />
-                <p className="text-gray-500 text-sm">Cargando mapa...</p>
+                <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-blue-500" />
+                <p className="text-gray-600 text-sm font-medium">Cargando mapa...</p>
               </div>
             </div>
           )}
         </div>
+      )}
 
-        {/* Lista de tiendas */}
-        {nearbyStores.length > 0 && (
-          <div className="space-y-3">
-            <h4 className="font-medium text-gray-900">Tiendas Cercanas:</h4>
+      {/* Lista de tiendas */}
+      {nearbyStores.length > 0 && (
+        <div className="space-y-3">
+          <h4 className="font-semibold text-gray-900 flex items-center gap-2">
+            <Store className="h-4 w-4" />
+            Tiendas Cercanas ({nearbyStores.length})
+          </h4>
+          <div className="space-y-2 max-h-64 overflow-y-auto">
             {nearbyStores.map((store) => (
               <div
                 key={store._id}
-                className={`p-3 border rounded-md cursor-pointer transition-colors ${
+                className={`p-3 border-2 rounded-lg cursor-pointer transition-all ${
                   selectedStore?._id === store._id
-                    ? "border-blue-500 bg-blue-50"
-                    : "border-gray-200 hover:border-gray-300"
+                    ? "border-green-500 bg-green-50 shadow-md"
+                    : "border-gray-200 hover:border-blue-300 hover:bg-blue-50"
                 }`}
                 onClick={() => selectStore(store)}
               >
-                <div className="flex justify-between items-start">
-                  <div className="flex-1">
-                    <h5 className="font-medium text-gray-900">{store.name}</h5>
-                    <p className="text-sm text-gray-600">
-                      {store.address.street}
+                <div className="flex justify-between items-start gap-3">
+                  <div className="flex-1 min-w-0">
+                    <h5 className="font-semibold text-gray-900 flex items-center gap-2">
+                      {selectedStore?._id === store._id && <span className="text-green-600">✓</span>}
+                      {store.name}
+                    </h5>
+                    <p className="text-sm text-gray-600 truncate">
+                      📍 {store.address.street}
                     </p>
-                    <p className="text-sm text-gray-500">
-                      {store.contact?.phone || "Teléfono no disponible"}
+                    <p className="text-xs text-gray-500 mt-1">
+                      📞 {store.contact?.phone || "Sin teléfono"}
                     </p>
                   </div>
-                  <div className="text-right">
-                    <p className="text-sm font-medium text-blue-600">
-                      {store.distanceKm.toFixed(2)} km
+                  <div className="text-right flex-shrink-0">
+                    <p className="text-sm font-bold text-blue-600">
+                      {store.distanceKm.toFixed(1)} km
                     </p>
                     <p className="text-xs text-gray-500">
-                      {Math.ceil(store.distanceKm * 2)} min caminando
+                      ~{Math.ceil(store.distanceKm * 2)} min
                     </p>
                   </div>
                 </div>
               </div>
             ))}
           </div>
-        )}
+        </div>
+      )}
 
         {/* Información de la tienda seleccionada */}
         {selectedStore && (
@@ -899,29 +960,16 @@ export default function LocationBasedStoreSelector({
           </div>
         )}
 
-        {/* Instrucciones */}
-        <div className="text-xs text-gray-500 space-y-1">
-          {!userLocation ? (
-            <>
-              <p>
-                • Permite el acceso a tu ubicación para encontrar tiendas
-                cercanas automáticamente
-              </p>
-              <p>
-                • O ingresa tu dirección manualmente si prefieres no compartir
-                tu ubicación
-              </p>
-              <p>
-                • Una vez localizado, verás las tiendas más cercanas en el mapa
-              </p>
-            </>
-          ) : (
-            <>
-              <p>• Selecciona una tienda para ver la ruta de cómo llegar</p>
-            </>
-          )}
+      {/* Instrucciones */}
+      {!userLocation && !showManualInput && (
+        <div className="p-3 bg-blue-50 rounded-lg border border-blue-200">
+          <p className="text-xs text-blue-700 font-medium mb-2">💡 Consejos:</p>
+          <ul className="text-xs text-blue-600 space-y-1 list-disc list-inside">
+            <li>Permite el acceso a tu ubicación para encontrar tiendas automáticamente</li>
+            <li>O escribe tu dirección si prefieres no compartir tu ubicación</li>
+          </ul>
         </div>
-      </CardContent>
-    </Card>
+      )}
+    </div>
   );
 }

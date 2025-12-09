@@ -41,6 +41,8 @@ export function SafeLocationBasedStoreSelector({
           <SimpleAddressInput
             onAddressSubmit={async (addressData) => {
               try {
+                console.log('📝 Dirección ingresada manualmente:', addressData);
+                
                 // Buscar tiendas cercanas usando la API
                 const response = await fetch('/api/nearest-store', {
                   method: 'POST',
@@ -56,28 +58,26 @@ export function SafeLocationBasedStoreSelector({
                 if (response.ok) {
                   const data = await response.json();
                   if (data.success && data.data.stores && data.data.stores.length > 0) {
-                    // Seleccionar la primera tienda (más cercana)
-                    const nearestStore = data.data.stores[0];
-                    onStoreSelected({
-                      store: nearestStore,
-                      summary: {
-                        storeName: nearestStore.name,
-                        distance: `${nearestStore.distanceKm?.toFixed(1) || '0'} km`,
-                        estimatedDelivery: nearestStore.estimatedDeliveryDate || 'mañana',
-                        address: `${nearestStore.address.street}, ${nearestStore.address.city}`,
-                        phone: nearestStore.contact?.phone || 'No disponible'
-                      }
-                    });
-
+                    // Crear dirección del cliente
+                    const customerAddress = {
+                      street: addressData.components.street || addressData.fullAddress,
+                      city: addressData.components.city || '',
+                      state: addressData.components.state || '',
+                      country: addressData.components.country || 'México',
+                      postalCode: addressData.components.postalCode || '',
+                      latitude: addressData.coordinates?.latitude,
+                      longitude: addressData.coordinates?.longitude,
+                    };
+                    
+                    console.log('📍 Dirección del cliente (manual):', customerAddress);
+                    
+                    // Notificar cambio de dirección (esto guarda la dirección inmediatamente)
                     if (onAddressChange) {
-                      onAddressChange({
-                        street: addressData.components.street || addressData.fullAddress,
-                        city: addressData.components.city || '',
-                        state: addressData.components.state || '',
-                        country: addressData.components.country || 'México',
-                        postalCode: ''
-                      });
+                      onAddressChange(customerAddress);
                     }
+                    
+                    // NO auto-seleccionar tienda, dejar que el usuario elija
+                    console.log(`✅ Se encontraron ${data.data.stores.length} tiendas. El usuario debe seleccionar una.`);
                   } else {
                     alert('No se encontraron tiendas cercanas a tu dirección. Intenta con una dirección más específica.');
                   }
