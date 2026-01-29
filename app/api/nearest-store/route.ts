@@ -3,6 +3,7 @@ import { client } from '@/sanity/lib/client';
 import { 
   findNearestStore, 
   CustomerAddress, 
+  CustomerAddressWithCoords,
   AffiliateStore,
   StoreWithDistance 
 } from '@/lib/clickCollect';
@@ -18,21 +19,56 @@ const STORES_QUERY = `*[_type == "affiliateStore" && isActive == true] {
   operatingHours,
   isActive,
   capacity,
-  averageDeliveryTime
+  averageDeliveryTime,
+  deliveryTimeMin,
+  deliveryTimeMax,
+  serviceTypes
 }`;
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { address, useGoogleMaps = false, filterStoreId } = body;
+    const { address, latitude, longitude, useGoogleMaps = false, filterStoreId } = body;
 
-    // Validar que se proporcione la dirección
-    if (!address || !address.street || !address.city) {
+    // Validar que se proporcione dirección O coordenadas
+    if (!address && (!latitude || !longitude)) {
       return NextResponse.json(
         { 
-          error: 'Dirección incompleta. Se requiere al menos calle y ciudad.',
-          required: ['street', 'city']
+          error: 'Se requiere dirección completa O coordenadas (latitude, longitude).',
+          required: ['address OR (latitude AND longitude)']
         },
+        { status: 400 }
+      );
+    }
+
+    // Si se proporcionan coordenadas pero no dirección, crear dirección mock
+    let customerAddress: CustomerAddressWithCoords;
+    
+    if (latitude && longitude && !address) {
+      customerAddress = {
+        street: `Ubicación detectada`,
+        city: 'Pedro Escobedo',
+        state: 'Querétaro',
+        postalCode: '76240',
+        country: 'México',
+        latitude: parseFloat(latitude),
+        longitude: parseFloat(longitude)
+      };
+    } else if (address) {
+      // Validar dirección completa
+      if (!address.street || !address.city) {
+        return NextResponse.json(
+          { 
+            error: 'Dirección incompleta. Se requiere al menos calle y ciudad.',
+            required: ['street', 'city']
+          },
+          { status: 400 }
+        );
+      }
+      customerAddress = address as CustomerAddressWithCoords;
+    } else {
+      return NextResponse.json(
+        { error: 'Datos de ubicación inválidos' },
         { status: 400 }
       );
     }
@@ -60,7 +96,7 @@ export async function POST(request: NextRequest) {
     // Validar y limpiar datos de tiendas de Sanity
     stores = stores.map((store) => {
       // Normalizar coordenadas desde distintos formatos posibles
-      let coords: any = store.coordinates || {};
+      const coords = store.coordinates || {};
 
       // Casos comunes: { latitude, longitude } || { lat, lng } || { lat: '19.4', lng: '-99.1' } || [lon, lat]
       let latitude: number | undefined;
@@ -70,16 +106,16 @@ export async function POST(request: NextRequest) {
         if (typeof coords.latitude === 'number' && typeof coords.longitude === 'number') {
           latitude = coords.latitude;
           longitude = coords.longitude;
-        } else if (typeof coords.lat === 'number' && typeof coords.lng === 'number') {
-          latitude = coords.lat;
-          longitude = coords.lng;
-        } else if (typeof coords.lat === 'string' && typeof coords.lng === 'string') {
-          latitude = parseFloat(coords.lat);
-          longitude = parseFloat(coords.lng);
+        } else if (typeof (coords as any).lat === 'number' && typeof (coords as any).lng === 'number') {
+          latitude = (coords as any).lat;
+          longitude = (coords as any).lng;
+        } else if (typeof (coords as any).lat === 'string' && typeof (coords as any).lng === 'string') {
+          latitude = parseFloat((coords as any).lat);
+          longitude = parseFloat((coords as any).lng);
         } else if (Array.isArray(coords) && coords.length >= 2) {
           // Sanity geoJSON sometimes stores [lng, lat]
-          const maybeLng = parseFloat(String(coords[0]));
-          const maybeLat = parseFloat(String(coords[1]));
+          const maybeLng = parseFloat(String((coords as any)[0]));
+          const maybeLat = parseFloat(String((coords as any)[1]));
           if (!Number.isNaN(maybeLat) && !Number.isNaN(maybeLng)) {
             latitude = maybeLat;
             longitude = maybeLng;
@@ -91,12 +127,9 @@ export async function POST(request: NextRequest) {
       }
 
       // Si no se pudieron normalizar, intentar buscar en propiedades alternativas
-      if ((latitude === undefined || longitude === undefined) && store.address && store.address.geo) {
-        const alt = store.address.geo;
-        if (typeof alt.lat === 'number' && typeof alt.lng === 'number') {
-          latitude = alt.lat;
-          longitude = alt.lng;
-        }
+      if ((latitude === undefined || longitude === undefined) && store.address) {
+        // Buscar coordenadas alternativas si existen
+        console.log('Buscando coordenadas alternativas para:', store.name);
       }
 
       // Fallback a 0,0 si no hay coordenadas válidas
@@ -164,6 +197,14 @@ export async function POST(request: NextRequest) {
           isActive: true,
           capacity: 80,
           averageDeliveryTime: 1,
+          deliveryTimeMin: 10,
+          deliveryTimeMax: 10,
+          serviceTypes:           {
+                    "delivery": true,
+                    "pickup": true,
+                    "deliveryRadius": 15,
+                    "minimumOrderDelivery": 150
+          },
         },
         {
           _id: 'mock-pe-plaza',
@@ -197,6 +238,14 @@ export async function POST(request: NextRequest) {
           isActive: true,
           capacity: 60,
           averageDeliveryTime: 1,
+          deliveryTimeMin: 10,
+          deliveryTimeMax: 10,
+          serviceTypes:           {
+                    "delivery": true,
+                    "pickup": true,
+                    "deliveryRadius": 12,
+                    "minimumOrderDelivery": 100
+          },
         },
         {
           _id: 'mock-pe-barrio',
@@ -230,16 +279,25 @@ export async function POST(request: NextRequest) {
           isActive: true,
           capacity: 45,
           averageDeliveryTime: 1,
+          deliveryTimeMin: 10,
+          deliveryTimeMax: 10,
+          serviceTypes:           {
+                    "delivery": false,
+                    "pickup": true,
+                    "deliveryRadius": 0,
+                    "minimumOrderDelivery": 0
+          },
         }
       ];
     }
 
     // Encontrar la tienda más cercana
     console.log(`Buscando tienda más cercana entre ${stores.length} tiendas disponibles`);
+    console.log('Dirección del cliente:', JSON.stringify(customerAddress, null, 2));
     console.log('Primera tienda de ejemplo:', JSON.stringify(stores[0], null, 2));
     
     const nearestStore: StoreWithDistance = await findNearestStore(
-      address as CustomerAddress,
+      customerAddress,
       stores,
       useGoogleMaps
     );
@@ -259,8 +317,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       data: {
+        stores: [nearestStore], // Devolver como array para compatibilidad
         store: nearestStore,
-        userCoordinates: nearestStore.userCoordinates || null, // Incluir coordenadas del usuario si están disponibles
+        userCoordinates: nearestStore.userCoordinates || null,
         summary: {
           storeName: nearestStore.name || 'Tienda sin nombre',
           distance: `${nearestStore.distanceKm || 0} km`,
@@ -312,12 +371,7 @@ export async function GET(request: NextRequest) {
     }));
 
     // Permitir filtrar por storeId desde la query string (p.ej. ?filterStoreId=abc123)
-    try {
-      const url = new URL((global as any).location?.href || 'http://localhost');
-      // En runtime de Vercel/Next, request URL debe leerse de request, pero en este contexto usamos process env fallback
-    } catch (e) {
-      // ignore
-    }
+    // En runtime de Next.js, las URLs se manejan a través de request.nextUrl
 
 
     // Si no hay tiendas en Sanity, usar datos mock de Pedro Escobedo
@@ -356,6 +410,14 @@ export async function GET(request: NextRequest) {
           isActive: true,
           capacity: 80,
           averageDeliveryTime: 1,
+          deliveryTimeMin: 10,
+          deliveryTimeMax: 10,
+          serviceTypes:           {
+                    "delivery": true,
+                    "pickup": true,
+                    "deliveryRadius": 15,
+                    "minimumOrderDelivery": 150
+          },
         },
         {
           _id: 'mock-pe-plaza',
@@ -389,6 +451,14 @@ export async function GET(request: NextRequest) {
           isActive: true,
           capacity: 60,
           averageDeliveryTime: 1,
+          deliveryTimeMin: 10,
+          deliveryTimeMax: 10,
+          serviceTypes:           {
+                    "delivery": true,
+                    "pickup": true,
+                    "deliveryRadius": 12,
+                    "minimumOrderDelivery": 100
+          },
         },
         {
           _id: 'mock-pe-barrio',
@@ -422,6 +492,14 @@ export async function GET(request: NextRequest) {
           isActive: true,
           capacity: 45,
           averageDeliveryTime: 1,
+          deliveryTimeMin: 10,
+          deliveryTimeMax: 10,
+          serviceTypes:           {
+                    "delivery": false,
+                    "pickup": true,
+                    "deliveryRadius": 0,
+                    "minimumOrderDelivery": 0
+          },
         }
       ];
     }
@@ -433,8 +511,8 @@ export async function GET(request: NextRequest) {
         stores = stores.filter(s => s._id === filterStoreId);
         console.log(`Aplicando filtro filterStoreId=${filterStoreId}, tiendas resultantes: ${stores.length}`);
       }
-    } catch (e) {
-      console.log('No se pudo leer filterStoreId de la request:', e);
+    } catch {
+      console.log('No se pudo leer filterStoreId de la request');
     }
 
     console.log(`Devolviendo ${stores.length} tiendas validadas`);

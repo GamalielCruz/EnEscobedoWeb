@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Interactive Map - Un Gallo</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .test-container {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        .test-step {
+            margin: 15px 0;
+            padding: 10px;
+            border-left: 4px solid #007bff;
+            background-color: #f8f9fa;
+        }
+        .success {
+            border-left-color: #28a745;
+            background-color: #d4edda;
+        }
+        .error {
+            border-left-color: #dc3545;
+            background-color: #f8d7da;
+        }
+        .warning {
+            border-left-color: #ffc107;
+            background-color: #fff3cd;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .instructions {
+            background: #e9ecef;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>🗺️ Test del Minimapa Interactivo - Un Gallo</h1>
+    
+    <div class="test-container">
+        <h2>📋 Instrucciones de Prueba</h2>
+        <div class="instructions">
+            <p><strong>Objetivo:</strong> Verificar que el minimapa interactivo funciona correctamente en la página del carrito.</p>
+            <ol>
+                <li>Abre <a href="http://localhost:3000/basket" target="_blank">http://localhost:3000/basket</a> en una nueva pestaña</li>
+                <li>Agrega algunos productos al carrito si está vacío</li>
+                <li>Selecciona el servicio "🏠 Entrega"</li>
+                <li>Haz clic en "Usar mi ubicación"</li>
+                <li>Permite permisos de ubicación cuando el navegador lo solicite</li>
+                <li>Verifica que aparezca el minimapa con tu ubicación</li>
+                <li>Prueba los controles del mapa (Ajustar, Confirmar, etc.)</li>
+            </ol>
+        </div>
+    </div>
+
+    <div class="test-container">
+        <h2>🔍 Verificaciones Automáticas</h2>
+        <div id="test-results">
+            <div class="test-step" id="step1">
+                <strong>1. Verificando servidor de desarrollo...</strong>
+                <span id="server-status">⏳ Verificando...</span>
+            </div>
+            <div class="test-step" id="step2">
+                <strong>2. Verificando página del carrito...</strong>
+                <span id="basket-status">⏳ Esperando...</span>
+            </div>
+            <div class="test-step" id="step3">
+                <strong>3. Verificando Google Maps API...</strong>
+                <span id="maps-status">⏳ Esperando...</span>
+            </div>
+        </div>
+        
+        <button onclick="runTests()">🚀 Ejecutar Verificaciones</button>
+        <button onclick="openBasketPage()">🛒 Abrir Página del Carrito</button>
+    </div>
+
+    <div class="test-container">
+        <h2>✅ Lista de Verificación Manual</h2>
+        <div id="manual-checklist">
+            <label><input type="checkbox" id="check1"> El botón "🏠 Entrega" está visible y funciona</label><br>
+            <label><input type="checkbox" id="check2"> El botón "Usar mi ubicación" está disponible</label><br>
+            <label><input type="checkbox" id="check3"> El navegador solicita permisos de ubicación</label><br>
+            <label><input type="checkbox" id="check4"> Aparece el minimapa después de detectar ubicación</label><br>
+            <label><input type="checkbox" id="check5"> El mapa muestra un marcador rojo en la ubicación</label><br>
+            <label><input type="checkbox" id="check6"> La dirección se muestra correctamente debajo del mapa</label><br>
+            <label><input type="checkbox" id="check7"> El botón "Ajustar" activa el modo de edición</label><br>
+            <label><input type="checkbox" id="check8"> Se puede arrastrar el marcador a una nueva posición</label><br>
+            <label><input type="checkbox" id="check9"> Se puede hacer clic en el mapa para cambiar ubicación</label><br>
+            <label><input type="checkbox" id="check10"> La dirección se actualiza automáticamente al mover el marcador</label><br>
+            <label><input type="checkbox" id="check11"> El botón "Confirmar" guarda la ubicación seleccionada</label><br>
+            <label><input type="checkbox" id="check12"> La información de entrega se actualiza correctamente</label><br>
+        </div>
+        
+        <button onclick="checkProgress()">📊 Verificar Progreso</button>
+    </div>
+
+    <div class="test-container">
+        <h2>🐛 Problemas Comunes y Soluciones</h2>
+        <div class="instructions">
+            <h3>❌ El minimapa no aparece:</h3>
+            <ul>
+                <li>Verifica que hayas otorgado permisos de ubicación</li>
+                <li>Revisa la consola del navegador para errores de Google Maps</li>
+                <li>Asegúrate de que la API key de Google Maps esté configurada</li>
+            </ul>
+            
+            <h3>⚠️ El marcador no se puede arrastrar:</h3>
+            <ul>
+                <li>Haz clic en "Ajustar" para activar el modo de edición</li>
+                <li>Verifica que el mapa esté completamente cargado</li>
+            </ul>
+            
+            <h3>🔄 La dirección no se actualiza:</h3>
+            <ul>
+                <li>Verifica la conexión a internet</li>
+                <li>Revisa que la geocodificación inversa esté funcionando</li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        function runTests() {
+            // Test 1: Verificar servidor
+            fetch('http://localhost:3000')
+                .then(response => {
+                    if (response.ok) {
+                        updateStatus('server-status', '✅ Servidor funcionando', 'success');
+                        testBasketPage();
+                    } else {
+                        updateStatus('server-status', '❌ Servidor no responde', 'error');
+                    }
+                })
+                .catch(error => {
+                    updateStatus('server-status', '❌ Error de conexión', 'error');
+                });
+        }
+
+        function testBasketPage() {
+            // Test 2: Verificar página del carrito
+            fetch('http://localhost:3000/basket')
+                .then(response => {
+                    if (response.ok) {
+                        updateStatus('basket-status', '✅ Página del carrito accesible', 'success');
+                        testGoogleMaps();
+                    } else {
+                        updateStatus('basket-status', '❌ Página del carrito no accesible', 'error');
+                    }
+                })
+                .catch(error => {
+                    updateStatus('basket-status', '❌ Error accediendo a la página', 'error');
+                });
+        }
+
+        function testGoogleMaps() {
+            // Test 3: Verificar Google Maps (básico)
+            if (typeof google !== 'undefined' && google.maps) {
+                updateStatus('maps-status', '✅ Google Maps API cargada', 'success');
+            } else {
+                updateStatus('maps-status', '⚠️ Google Maps API no detectada (normal en esta página)', 'warning');
+            }
+        }
+
+        function updateStatus(elementId, message, type) {
+            const element = document.getElementById(elementId);
+            element.textContent = message;
+            const parent = element.closest('.test-step');
+            parent.className = `test-step ${type}`;
+        }
+
+        function openBasketPage() {
+            window.open('http://localhost:3000/basket', '_blank');
+        }
+
+        function checkProgress() {
+            const checkboxes = document.querySelectorAll('#manual-checklist input[type="checkbox"]');
+            const checked = Array.from(checkboxes).filter(cb => cb.checked).length;
+            const total = checkboxes.length;
+            const percentage = Math.round((checked / total) * 100);
+            
+            alert(`Progreso: ${checked}/${total} verificaciones completadas (${percentage}%)`);
+            
+            if (percentage === 100) {
+                alert('🎉 ¡Excelente! Todas las verificaciones están completas. El minimapa interactivo está funcionando correctamente.');
+            } else if (percentage >= 80) {
+                alert('👍 ¡Muy bien! La mayoría de las funcionalidades están trabajando. Revisa los elementos faltantes.');
+            } else if (percentage >= 50) {
+                alert('⚠️ Progreso moderado. Revisa los problemas comunes y soluciones.');
+            } else {
+                alert('❌ Hay varios problemas. Revisa la implementación y la configuración.');
+            }
+        }
+
+        // Auto-ejecutar tests al cargar la página
+        window.onload = function() {
+            setTimeout(runTests, 1000);
+        };
+    </script>
+</body>
+</html>

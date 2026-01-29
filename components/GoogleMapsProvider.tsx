@@ -2,23 +2,6 @@
 
 import { createContext, useContext, useEffect, useState } from 'react';
 
-// Declaración de tipos para Google Maps
-declare global {
-  interface Window {
-    google?: {
-      maps?: {
-        Map: any;
-        places?: any;
-        Geocoder: any;
-        LatLng: any;
-        Marker: any;
-        InfoWindow: any;
-        LatLngBounds: unknown;
-      };
-    };
-  }
-}
-
 interface GoogleMapsContextType {
   isLoaded: boolean;
   loadError: string | null;

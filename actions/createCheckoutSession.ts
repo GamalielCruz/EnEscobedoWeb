@@ -14,6 +14,7 @@ export type Metadata = {
   pickupStoreId?: string;
   pickupStoreName?: string;
   customerAddress?: string;
+  shippingCost?: number; // Agregar costo de envío
 };
 
 export type GroupedBasketItem = {
@@ -63,22 +64,10 @@ export async function createCheckoutSession(
 
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
-      // Don't set customer_creation since we always have a customer now
       metadata,
       mode: "payment",
       allow_promotion_codes: true,
-      payment_method_types: ["card", "oxxo", "customer_balance"],
-      payment_method_options: {
-        oxxo: {
-          expires_after_days: 2,
-        },
-        customer_balance: {
-          funding_type: "bank_transfer",
-          bank_transfer: {
-            type: "mx_bank_transfer",
-          },
-        },
-      },
+      payment_method_types: ["card"], // Solo tarjeta
       phone_number_collection: {
         enabled: true,
       },
@@ -101,53 +90,18 @@ export async function createCheckoutSession(
         },
         quantity: item.quantity,
       })),
-      // Solo recopilar dirección de envío si NO es Click & Collect
-      ...(metadata.deliveryMethod !== 'click_collect' && {
-        shipping_address_collection: {
-          allowed_countries: ["MX"],
-        },
-      }),
-      // Solo agregar opciones de envío si NO es Click & Collect
-      ...(metadata.deliveryMethod !== 'click_collect' && {
+      // Solo agregar opciones de envío si NO es Click & Collect y hay costo de envío
+      ...(metadata.deliveryMethod !== 'click_collect' && metadata.shippingCost && metadata.shippingCost > 0 && {
         shipping_options: [
           {
             shipping_rate_data: {
               type: "fixed_amount",
               fixed_amount: {
-                amount: 14800,
+                amount: Math.round(metadata.shippingCost * 100), // Usar el costo real del metadata
                 currency: "mxn",
               },
-              display_name: "Envío nacional",
-              delivery_estimate: {
-                minimum: {
-                  unit: "business_day",
-                  value: 2,
-                },
-                maximum: {
-                  unit: "business_day",
-                  value: 10,
-                },
-              },
-            },
-          },
-          {
-            shipping_rate_data: {
-              type: "fixed_amount",
-              fixed_amount: {
-                amount: 30000,
-                currency: "mxn",
-              },
-              display_name: "Envío Express",
-              delivery_estimate: {
-                minimum: {
-                  unit: "business_day",
-                  value: 1,
-                },
-                maximum: {
-                  unit: "business_day",
-                  value: 2,
-                },
-              },
+              display_name: "Envío a domicilio",
+             
             },
           },
         ],
@@ -165,26 +119,16 @@ export async function createCheckoutSession(
       return typeof err === "object" && err !== null;
     };
 
-    // Provide more specific error messages
-    if (
-      isStripeError(error) &&
-      error.code === "parameter_invalid_empty" &&
-      error.param === "customer"
-    ) {
+    // Provide more specific error messages for card payments
+    if (isStripeError(error) && error.code === "card_declined") {
       throw new Error(
-        "Error de configuración: No se pudo crear el customer para transferencias bancarias"
+        "Tu tarjeta fue rechazada. Por favor intenta con otra tarjeta."
       );
     }
 
     if (isStripeError(error) && error.code === "payment_method_not_available") {
       throw new Error(
-        "Las transferencias bancarias SPEI no están disponibles temporalmente"
-      );
-    }
-
-    if (isStripeError(error) && error.message?.includes("customer_balance")) {
-      throw new Error(
-        "Error con transferencias bancarias. Por favor intenta con otro método de pago"
+        "El método de pago no está disponible temporalmente. Por favor intenta de nuevo."
       );
     }
 

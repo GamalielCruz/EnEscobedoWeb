@@ -9,12 +9,78 @@ import LocationBasedStoreSelector from "./LocationBasedStoreSelector";
 import SimpleAddressInput from "./SimpleAddressInput";
 import { CustomerAddress } from "@/lib/clickCollect";
 
+interface StoreData {
+  store: {
+    _id: string;
+    name: string;
+    distanceKm?: number;
+    address: {
+      street: string;
+      city: string;
+      state: string;
+    };
+    contact?: {
+      phone?: string;
+    };
+  };
+  summary: {
+    storeName: string;
+    distance: string;
+    estimatedDelivery: string;
+    address: string;
+    phone: string;
+  };
+}
+
 interface SafeLocationBasedStoreSelectorProps {
-  onStoreSelected: (storeData: any) => void;
+  onStoreSelected: (storeData: StoreData) => void;
   onAddressChange?: (address: CustomerAddress) => void;
   apiKey: string;
   filterStoreId?: string;
 }
+
+// Funciones para calcular tiempo de entrega apropiado para restaurante
+const getEstimatedDeliveryTime = (distanceKm: number, store?: any): number => {
+  // Si la tienda tiene tiempos configurados en Sanity, usarlos
+  if (store?.deliveryTimeMin != null && store?.deliveryTimeMax != null) {
+    // Usar el tiempo promedio entre min y max
+    return Math.round((store.deliveryTimeMin + store.deliveryTimeMax) / 2);
+  }
+  
+  // Fallback: calcular basado en distancia
+  if (distanceKm <= 2) {
+    return 20; // 20 minutos para tiendas muy cercanas
+  } else if (distanceKm <= 5) {
+    return 30; // 30 minutos para tiendas cercanas
+  } else if (distanceKm <= 10) {
+    return 45; // 45 minutos para tiendas moderadamente lejos
+  } else if (distanceKm <= 15) {
+    return 60; // 1 hora para tiendas más lejanas
+  } else {
+    return 90; // 1.5 horas para tiendas muy lejanas
+  }
+};
+
+const getDeliveryTimeText = (estimatedDate: string): string => {
+  const now = new Date();
+  const deliveryDate = new Date(estimatedDate);
+  const diffInMinutes = Math.ceil((deliveryDate.getTime() - now.getTime()) / (1000 * 60));
+  const diffInHours = Math.ceil(diffInMinutes / 60);
+
+  if (diffInMinutes <= 15) {
+    return "Listo en 15 minutos";
+  } else if (diffInMinutes <= 30) {
+    return `Listo en ${diffInMinutes} minutos`;
+  } else if (diffInMinutes <= 60) {
+    return `Listo en ${diffInMinutes} minutos`;
+  } else if (diffInHours <= 2) {
+    return `Listo en ${diffInHours} hora${diffInHours > 1 ? 's' : ''}`;
+  } else if (diffInHours <= 6) {
+    return `Listo en ${diffInHours} horas`;
+  } else {
+    return "Listo hoy más tarde";
+  }
+};
 
 export function SafeLocationBasedStoreSelector({ 
   onStoreSelected, 
@@ -39,7 +105,7 @@ export function SafeLocationBasedStoreSelector({
         </CardHeader>
         <CardContent className="space-y-4">
           <SimpleAddressInput
-            onAddressSubmit={async (addressData) => {
+            onAddressSelected={async (addressData) => {
               try {
                 // Buscar tiendas cercanas usando la API
                 const response = await fetch('/api/nearest-store', {
@@ -48,7 +114,7 @@ export function SafeLocationBasedStoreSelector({
                     'Content-Type': 'application/json',
                   },
                   body: JSON.stringify({
-                    address: addressData.fullAddress,
+                    address: addressData.formatted_address,
                     filterStoreId: filterStoreId,
                   }),
                 });
@@ -58,12 +124,18 @@ export function SafeLocationBasedStoreSelector({
                   if (data.success && data.data.stores && data.data.stores.length > 0) {
                     // Seleccionar la primera tienda (más cercana)
                     const nearestStore = data.data.stores[0];
+                    
+                    // Calcular tiempo de entrega realista
+                    const deliveryMinutes = getEstimatedDeliveryTime(nearestStore.distanceKm || 0, nearestStore);
+                    const estimatedDate = new Date(Date.now() + deliveryMinutes * 60 * 1000).toISOString();
+                    const deliveryText = getDeliveryTimeText(estimatedDate);
+                    
                     onStoreSelected({
                       store: nearestStore,
                       summary: {
                         storeName: nearestStore.name,
                         distance: `${nearestStore.distanceKm?.toFixed(1) || '0'} km`,
-                        estimatedDelivery: nearestStore.estimatedDeliveryDate || 'mañana',
+                        estimatedDelivery: deliveryText,
                         address: `${nearestStore.address.street}, ${nearestStore.address.city}`,
                         phone: nearestStore.contact?.phone || 'No disponible'
                       }
@@ -71,11 +143,11 @@ export function SafeLocationBasedStoreSelector({
 
                     if (onAddressChange) {
                       onAddressChange({
-                        street: addressData.components.street || addressData.fullAddress,
-                        city: addressData.components.city || '',
-                        state: addressData.components.state || '',
-                        country: addressData.components.country || 'México',
-                        postalCode: ''
+                        street: addressData.address || addressData.formatted_address,
+                        city: addressData.city || '',
+                        state: addressData.state || '',
+                        country: addressData.country || 'México',
+                        postalCode: addressData.postal_code || ''
                       });
                     }
                   } else {
@@ -90,7 +162,7 @@ export function SafeLocationBasedStoreSelector({
               }
             }}
             placeholder="Ej: Calle Hidalgo 15, Pedro Escobedo, Querétaro"
-            label="Tu dirección"
+            apiKey={apiKey}
           />
           
           {apiKey && apiKey.trim() !== '' && apiKey !== 'undefined' && (

@@ -7,6 +7,11 @@ export interface CustomerAddress {
   country?: string;
 }
 
+export interface CustomerAddressWithCoords extends CustomerAddress {
+  latitude?: number;
+  longitude?: number;
+}
+
 export interface Coordinates {
   latitude: number;
   longitude: number;
@@ -35,6 +40,14 @@ export interface AffiliateStore {
   isActive: boolean;
   capacity: number;
   averageDeliveryTime: number;
+  deliveryTimeMin?: number;
+  deliveryTimeMax?: number;
+  serviceTypes?: {
+    delivery: boolean;
+    pickup: boolean;
+    deliveryRadius?: number;
+    minimumOrderDelivery?: number;
+  };
 }
 
 export interface StoreWithDistance extends AffiliateStore {
@@ -253,9 +266,18 @@ export async function findNearestStore(
       store.coordinates.longitude
     );
 
-    // Calcular fecha estimada de entrega
+    // Calcular fecha estimada de entrega usando los nuevos campos de tiempo en minutos
     const estimatedDeliveryDate = new Date();
-    estimatedDeliveryDate.setDate(estimatedDeliveryDate.getDate() + store.averageDeliveryTime);
+    
+    // Si la tienda tiene tiempos configurados en minutos, usarlos
+    if (store.deliveryTimeMin != null && store.deliveryTimeMax != null) {
+      // Usar el tiempo promedio en minutos
+      const avgTimeMinutes = Math.round((store.deliveryTimeMin + store.deliveryTimeMax) / 2);
+      estimatedDeliveryDate.setMinutes(estimatedDeliveryDate.getMinutes() + avgTimeMinutes);
+    } else {
+      // Fallback: usar el tiempo promedio en días (comportamiento anterior)
+      estimatedDeliveryDate.setDate(estimatedDeliveryDate.getDate() + store.averageDeliveryTime);
+    }
 
     return {
       ...store,

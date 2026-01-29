@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Simple Navigation</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .test-button {
+            background: #10b981;
+            color: white;
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px;
+        }
+        .test-button:hover {
+            background: #059669;
+        }
+        .test-button:disabled {
+            background: #9ca3af;
+            cursor: not-allowed;
+        }
+        .log {
+            background: #f3f4f6;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧪 Test Simple Navigation - Pagar en Tienda</h1>
+    
+    <div>
+        <h2>Simulación del problema</h2>
+        <p>Este test simula el botón "Pagar en Tienda" para identificar el problema.</p>
+        
+        <button id="testButton" class="test-button">
+            🏪 Pagar en Tienda (Test)
+        </button>
+        
+        <button id="directNavButton" class="test-button">
+            🔗 Navegación Directa a /checkout-cod
+        </button>
+        
+        <button id="clearLogsButton" class="test-button">
+            🗑️ Limpiar Logs
+        </button>
+    </div>
+    
+    <div>
+        <h3>📋 Logs de Debugging:</h3>
+        <div id="logs" class="log">Esperando interacción del usuario...</div>
+    </div>
+    
+    <div>
+        <h3>📦 Estado de localStorage:</h3>
+        <div id="localStorageStatus" class="log">Verificando...</div>
+    </div>
+
+    <script>
+        const logsDiv = document.getElementById('logs');
+        const localStorageDiv = document.getElementById('localStorageStatus');
+        const testButton = document.getElementById('testButton');
+        const directNavButton = document.getElementById('directNavButton');
+        const clearLogsButton = document.getElementById('clearLogsButton');
+        
+        let logCount = 0;
+        
+        function addLog(message) {
+            logCount++;
+            const timestamp = new Date().toLocaleTimeString();
+            const logMessage = `[${timestamp}] ${logCount}. ${message}`;
+            logsDiv.textContent += logMessage + '\n';
+            console.log(logMessage);
+        }
+        
+        function clearLogs() {
+            logsDiv.textContent = 'Logs limpiados...\n';
+            logCount = 0;
+        }
+        
+        function updateLocalStorageStatus() {
+            try {
+                const savedStore = localStorage.getItem('clickCollectStore');
+                if (savedStore) {
+                    const data = JSON.parse(savedStore);
+                    localStorageDiv.textContent = `✅ Datos encontrados:\n${JSON.stringify(data, null, 2)}`;
+                } else {
+                    localStorageDiv.textContent = '❌ No hay datos en localStorage';
+                }
+            } catch (error) {
+                localStorageDiv.textContent = `❌ Error leyendo localStorage: ${error.message}`;
+            }
+        }
+        
+        // Simular datos de prueba en localStorage
+        function setupTestData() {
+            const testData = {
+                deliveryMethod: 'pickup',
+                storeId: 'test-store-123',
+                storeName: 'Borona Pizza (Test)',
+                storeAddress: 'Calle Test 123, Pedro Escobedo',
+                storePhone: '+52 442 123 4567',
+                estimatedDelivery: 'Listo en 2 horas',
+                customerAddress: null,
+                shippingCost: 0,
+                timestamp: Date.now()
+            };
+            
+            localStorage.setItem('clickCollectStore', JSON.stringify(testData));
+            addLog('📦 Datos de prueba guardados en localStorage');
+            updateLocalStorageStatus();
+        }
+        
+        // Simular la función handleCheckout
+        function simulateHandleCheckout(paymentMethod) {
+            addLog(`🎯 handleCheckout iniciado con: ${paymentMethod}`);
+            
+            // Simular verificaciones
+            const isSignedIn = true; // Simular usuario autenticado
+            const isLoading = false;
+            
+            addLog(`🔐 isSignedIn: ${isSignedIn}`);
+            addLog(`⏳ isLoading: ${isLoading}`);
+            
+            if (!isSignedIn) {
+                addLog('❌ Usuario no autenticado - terminando función');
+                return false;
+            }
+            
+            addLog('⏳ Estableciendo isLoading a true...');
+            testButton.disabled = true;
+            testButton.textContent = '⏳ Procesando...';
+            
+            try {
+                if (paymentMethod === 'cod') {
+                    addLog('💵 Procesando pago en efectivo...');
+                    
+                    // Verificar localStorage
+                    const savedStore = localStorage.getItem('clickCollectStore');
+                    addLog(`📦 localStorage data: ${savedStore ? 'Presente' : 'Ausente'}`);
+                    
+                    if (savedStore) {
+                        const data = JSON.parse(savedStore);
+                        addLog(`📦 Datos en localStorage: ${JSON.stringify(data, null, 1)}`);
+                    }
+                    
+                    addLog('🚀 Navegando a /checkout-cod...');
+                    
+                    // En un entorno real, esto sería router.push('/checkout-cod')
+                    // Aquí simulamos la navegación
+                    setTimeout(() => {
+                        addLog('✅ Navegación simulada completada');
+                        addLog('📄 En una app real, ahora estaríamos en /checkout-cod');
+                        
+                        // Simular lo que haría CashOnDeliveryCheckout
+                        const savedStoreCheck = localStorage.getItem('clickCollectStore');
+                        if (savedStoreCheck) {
+                            addLog('✅ CashOnDeliveryCheckout encontraría los datos');
+                            addLog('📋 El formulario se pre-llenaría correctamente');
+                            addLog('🎉 El usuario podría completar la orden');
+                        } else {
+                            addLog('❌ CashOnDeliveryCheckout NO encontraría datos');
+                            addLog('⚠️ Mostraría "Selecciona una tienda primero"');
+                        }
+                        
+                        // Restaurar botón
+                        testButton.disabled = false;
+                        testButton.textContent = '🏪 Pagar en Tienda (Test)';
+                        addLog('⏳ isLoading establecido a false');
+                    }, 1000);
+                    
+                    return true;
+                }
+            } catch (error) {
+                addLog(`❌ Error en handleCheckout: ${error.message}`);
+                return false;
+            }
+            
+            return false;
+        }
+        
+        // Event listeners
+        testButton.addEventListener('click', function() {
+            addLog('🖱️ Click en botón "Pagar en Tienda" detectado');
+            addLog(`🔒 Botón deshabilitado? ${testButton.disabled}`);
+            
+            if (!testButton.disabled) {
+                simulateHandleCheckout('cod');
+            } else {
+                addLog('❌ Click ignorado - botón deshabilitado');
+            }
+        });
+        
+        directNavButton.addEventListener('click', function() {
+            addLog('🔗 Probando navegación directa...');
+            
+            // En un navegador real, esto navegaría a la página
+            if (window.location.hostname === 'localhost') {
+                addLog('🚀 Intentando navegar a http://localhost:3000/checkout-cod');
+                window.open('http://localhost:3000/checkout-cod', '_blank');
+            } else {
+                addLog('ℹ️ Para probar navegación directa, ve manualmente a /checkout-cod');
+            }
+        });
+        
+        clearLogsButton.addEventListener('click', clearLogs);
+        
+        // Inicialización
+        addLog('🚀 Test inicializado');
+        setupTestData();
+        
+        // Verificar estado inicial
+        addLog('🔍 Verificando estado inicial...');
+        addLog(`📍 URL actual: ${window.location.href}`);
+        addLog(`🌐 Hostname: ${window.location.hostname}`);
+        addLog(`👤 User Agent: ${navigator.userAgent.substring(0, 50)}...`);
+        
+        // Actualizar estado de localStorage cada 2 segundos
+        setInterval(updateLocalStorageStatus, 2000);
+    </script>
+</body>
+</html>

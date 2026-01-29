@@ -210,6 +210,11 @@ async function createOrderInSanity(session: Stripe.Checkout.Session) {
     customer_details,
   } = session;
 
+  // Check if metadata exists and has required fields
+  if (!metadata) {
+    throw new Error("No metadata found in session");
+  }
+
   const { 
     orderNumber, 
     customerName, 
@@ -219,7 +224,7 @@ async function createOrderInSanity(session: Stripe.Checkout.Session) {
     pickupStoreId,
     pickupStoreName,
     customerAddress 
-  } = metadata as Metadata;
+  } = metadata as unknown as Metadata;
 
   // Determine payment method from the session
   let paymentMethod = "card"; // default

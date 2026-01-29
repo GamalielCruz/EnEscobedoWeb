@@ -54,7 +54,7 @@ export default async function Home(props: NextPageProps) {
   // Filter stores by category
   const filteredStores = selectedCategory
     ? stores.filter((store: any) =>
-        store.storeCategories?.some((cat: unknown) => cat._id === selectedCategory)
+        store.storeCategories?.some((cat: any) => cat._id === selectedCategory)
       )
     : stores;
 
@@ -73,6 +73,23 @@ export default async function Home(props: NextPageProps) {
   const endIdx = startIdx + PAGE_SIZE;
   const paginatedStores = filteredStores.slice(startIdx, endIdx);
 
+  // Convert stores to match StoresView interface
+  const convertedStores = paginatedStores.map(store => ({
+    ...store,
+    name: store.name || undefined, // Convert null to undefined
+    storeId: store.storeId || undefined,
+    address: store.address || undefined, // Convert null to undefined
+    operatingHours: store.operatingHours || undefined, // Convert null to undefined
+    storeCategories: store.storeCategories ? store.storeCategories.map(cat => ({
+      _id: cat._id,
+      title: cat.title || undefined,
+      slug: cat.slug ? {
+        current: cat.slug.current || undefined
+      } : undefined,
+      icon: cat.icon || undefined
+    })) : undefined
+  }));
+
   return (
     <div className="translate-y-[70px]">
       
@@ -86,8 +103,8 @@ export default async function Home(props: NextPageProps) {
       <div className="flex flex-col min-h-screen bg-gray-100 p-4 w-full">
         <div className="w-full max-w-7xl mx-auto">
           <StoresView
-            stores={paginatedStores}
-            storeCategories={storeCategories}
+            stores={paginatedStores as any}
+            storeCategories={storeCategories as any}
             selectedCategory={selectedCategory}
           />
         </div>

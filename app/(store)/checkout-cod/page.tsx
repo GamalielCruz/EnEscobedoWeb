@@ -11,12 +11,7 @@ async function CashOnDeliveryPage() {
 
   return (
     <div className="container mx-auto px-4 py-8 translate-y-[70px]">
-      <div className="max-w-2xl mx-auto">
-        <h1 className="text-3xl font-bold text-gray-900 mb-8">
-          Pago Contra Entrega
-        </h1>
-        <CashOnDeliveryCheckout />
-      </div>
+      <CashOnDeliveryCheckout />
     </div>
   );
 }

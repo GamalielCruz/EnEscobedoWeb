@@ -93,20 +93,21 @@ export function StoreSelector({ onStoreSelected, onAddressChange, apiKey }: Stor
           </CardHeader>
           <CardContent>
             <SimpleAddressInput
-              onAddressSubmit={(addressData) => {
+              onAddressSelected={(addressData) => {
                 // Aquí necesitaríamos implementar la lógica de búsqueda de tiendas
                 // Por ahora, mostrar un mensaje
                 console.log('Dirección ingresada:', addressData);
                 if (onAddressChange) {
                   onAddressChange({
-                    street: addressData.components.street || addressData.fullAddress,
-                    city: addressData.components.city || '',
-                    state: addressData.components.state || '',
-                    country: addressData.components.country || 'México',
-                    postalCode: ''
+                    street: addressData.address || addressData.formatted_address,
+                    city: addressData.city || '',
+                    state: addressData.state || '',
+                    country: addressData.country || 'México',
+                    postalCode: addressData.postal_code || ''
                   });
                 }
               }}
+              apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ""}
             />
           </CardContent>
         </Card>
@@ -122,19 +123,20 @@ export function StoreSelector({ onStoreSelected, onAddressChange, apiKey }: Stor
           </CardHeader>
           <CardContent>
             <SimpleAddressInput
-              onAddressSubmit={(addressData) => {
+              onAddressSelected={(addressData) => {
                 console.log('Dirección desde geolocalización:', addressData);
                 if (onAddressChange) {
                   onAddressChange({
-                    street: addressData.components.street || addressData.fullAddress,
-                    city: addressData.components.city || '',
-                    state: addressData.components.state || '',
-                    country: addressData.components.country || 'México',
-                    postalCode: ''
+                    street: addressData.address || addressData.formatted_address,
+                    city: addressData.city || '',
+                    state: addressData.state || '',
+                    country: addressData.country || 'México',
+                    postalCode: addressData.postal_code || ''
                   });
                 }
               }}
               placeholder="Obteniendo tu ubicación..."
+              apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ""}
             />
           </CardContent>
         </Card>

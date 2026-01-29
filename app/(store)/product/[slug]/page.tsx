@@ -1,7 +1,7 @@
 import { PortableText } from "next-sanity";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import AddToBasketButton from "@/components/AddToBasketButton";
+import AddToBasketButtonNew from "@/components/AddToBasketButtonNew";
 import { getProductBySlug } from "@/sanity/lib/products/getProductBySlug";
 import type { BlockContent, Product } from "@/sanity.types";
 import Image from "next/image";
@@ -86,7 +86,7 @@ export default async function ProductPage({
   // Get product categories for lazy loading related products
   const productCategories = product.categories?.map((cat) => cat._ref) || [];
 
-  const typedProduct = product as Product & {
+  const typedProduct = product as any as Product & {
     affiliateStore?: {
       _id: string;
       name?: string;
@@ -303,7 +303,7 @@ export default async function ProductPage({
 
         {/* Botón fijo al fondo, estilo “Add 1 to cart • $18.00” */}
         <div className="sticky bottom-0 border-t border-gray-200 bg-white px-4 py-3">
-          <AddToBasketButton product={product} disabled={isOutOfStock} />
+          <AddToBasketButtonNew product={product as any} disabled={isOutOfStock} />
         </div>
 
         <div className="px-4 py-6">

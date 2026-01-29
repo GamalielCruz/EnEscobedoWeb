@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import Image from "next/image";
-import Link from "next/link";
 import { urlFor } from "@/sanity/lib/image";
 import { CategoryFilter } from "@/components/ui/category-filter";
+import ProductSidebar from "@/components/ProductSidebar";
 
 interface Category {
   _id: string;
@@ -21,9 +21,14 @@ interface Product {
   slug?: {
     current?: string;
   };
-  image?: any;
+  image?: {
+    asset?: {
+      _ref?: string;
+    };
+  } | null;
   price?: number;
   stock?: number;
+  description?: string;
   categories?: Array<{
     _id: string;
     name?: string;
@@ -44,6 +49,8 @@ export function StoreProductsClient({
   categories,
 }: StoreProductsClientProps) {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // Filtrar productos según la categoría seleccionada
   const filteredProducts = selectedCategory
@@ -54,10 +61,22 @@ export function StoreProductsClient({
 
   // Obtener el nombre de la categoría seleccionada
   const selectedCategoryName = selectedCategory
-    ? (categories.find((cat) => cat._id === selectedCategory)?.title ||
+    ? String(categories.find((cat) => cat._id === selectedCategory)?.title ||
        categories.find((cat) => cat._id === selectedCategory)?.name ||
        "Sin categoría")
     : "Todo";
+
+  const handleProductClick = (product: Product, event: React.MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedProduct(product);
+    setIsSidebarOpen(true);
+  };
+
+  const handleCloseSidebar = () => {
+    setIsSidebarOpen(false);
+    setTimeout(() => setSelectedProduct(null), 300);
+  };
 
   return (
     <div className="py-6">
@@ -93,10 +112,10 @@ export function StoreProductsClient({
               const isOutOfStock = product.stock != null && product.stock <= 0;
 
               return (
-                <Link
+                <div
                   key={product._id}
-                  href={`/product/${product.slug?.current}`}
-                  className="group"
+                  className="group cursor-pointer"
+                  onClick={(e) => handleProductClick(product, e)}
                 >
                   <div className="relative aspect-square rounded-2xl overflow-hidden bg-gray-100 mb-2">
                     {product.image && (
@@ -115,7 +134,13 @@ export function StoreProductsClient({
                         </span>
                       </div>
                     )}
-                    <button className="absolute top-2 right-2 h-8 w-8 rounded-full bg-white shadow-md flex items-center justify-center hover:bg-gray-50 transition-colors">
+                    <button 
+                      className="absolute top-2 right-2 h-8 w-8 rounded-full bg-white shadow-md flex items-center justify-center hover:bg-gray-50 transition-colors"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleProductClick(product, e);
+                      }}
+                    >
                       <svg
                         className="h-5 w-5 text-gray-700"
                         fill="none"
@@ -142,12 +167,21 @@ export function StoreProductsClient({
                         : "0.00"}
                     </p>
                   </div>
-                </Link>
+                </div>
               );
             })}
           </div>
         )}
       </div>
+
+      {/* ProductSidebar */}
+      {selectedProduct && (
+        <ProductSidebar
+          product={selectedProduct as any}
+          isOpen={isSidebarOpen}
+          onClose={handleCloseSidebar}
+        />
+      )}
     </div>
   );
 }

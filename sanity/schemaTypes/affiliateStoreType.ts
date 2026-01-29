@@ -248,6 +248,50 @@ export const affiliateStoreType = defineType({
       title: "Tiempo máximo de entrega (minutos)",
       type: "number",
     }),
+    defineField({
+      name: "serviceTypes",
+      title: "Tipos de Servicio Disponibles",
+      type: "object",
+      fields: [
+        defineField({
+          name: "delivery",
+          title: "Entrega a Domicilio",
+          type: "boolean",
+          initialValue: true,
+          description: "¿Esta tienda ofrece servicio de entrega a domicilio?",
+        }),
+        defineField({
+          name: "pickup",
+          title: "Recoger en Tienda",
+          type: "boolean",
+          initialValue: true,
+          description: "¿Esta tienda permite recoger pedidos en el local?",
+        }),
+        defineField({
+          name: "deliveryRadius",
+          title: "Radio de Entrega (km)",
+          type: "number",
+          initialValue: 10,
+          description: "Radio máximo de entrega en kilómetros (solo si delivery está habilitado)",
+          hidden: ({ parent }) => !parent?.delivery,
+        }),
+        defineField({
+          name: "minimumOrderDelivery",
+          title: "Pedido Mínimo para Entrega (MXN)",
+          type: "number",
+          initialValue: 100,
+          description: "Monto mínimo requerido para entrega a domicilio",
+          hidden: ({ parent }) => !parent?.delivery,
+        }),
+      ],
+      description: "Configura qué tipos de servicio ofrece esta tienda",
+      validation: (Rule) => Rule.custom((serviceTypes) => {
+        if (!serviceTypes?.delivery && !serviceTypes?.pickup) {
+          return 'Debe habilitar al menos un tipo de servicio (entrega o recoger)';
+        }
+        return true;
+      }),
+    }),
   ],
   preview: {
     select: {

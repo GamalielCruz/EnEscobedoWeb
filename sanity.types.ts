@@ -12,3 +12,1379 @@
  * ---------------------------------------------------------------------------------
  */
 
+// Source: schema.json
+export type StoreCategory = {
+  _id: string;
+  _type: "storeCategory";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  title?: string;
+  slug?: Slug;
+  description?: string;
+  icon?: string;
+  order?: number;
+};
+
+export type ClickCollectOrder = {
+  _id: string;
+  _type: "clickCollectOrder";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  orderNumber?: string;
+  pickupCode?: string;
+  customerInfo?: {
+    name?: string;
+    email?: string;
+    clerkUserId?: string;
+    phone?: string;
+  };
+  storeInfo?: {
+    storeId?: string;
+    storeName?: string;
+    storeAddress?: string;
+    storePhone?: string;
+  };
+  items?: Array<{
+    productName?: string;
+    productId?: string;
+    quantity?: number;
+    price?: number;
+    _key: string;
+  }>;
+  totalAmount?: number;
+  paymentMethod?: "cash_on_pickup" | "card_on_pickup";
+  status?:
+    | "pending"
+    | "processing"
+    | "ready_for_pickup"
+    | "completed"
+    | "cancelled";
+  estimatedPickupDate?: string;
+  readyAt?: string;
+  pickedUpAt?: string;
+  notes?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type Sale = {
+  _id: string;
+  _type: "sale";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  title?: string;
+  description?: string;
+  discountAmount?: number;
+  couponCode?: string;
+  validFrom?: string;
+  validUntil?: string;
+  isActive?: boolean;
+};
+
+export type Order = {
+  _id: string;
+  _type: "order";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  orderNumber?: string;
+  stripeCheckoutSessionId?: string;
+  stripeCustomerId?: string;
+  clerkUserId?: string;
+  customerName?: string;
+  email?: string;
+  phone?: string;
+  paymentMethod?: "card" | "oxxo" | "bank_transfer" | "cash_on_delivery";
+  stripePaymentIntentId?: string;
+  products?: Array<{
+    product?: {
+      _ref: string;
+      _type: "reference";
+      _weak?: boolean;
+      [internalGroqTypeReferenceTo]?: "product";
+    };
+    quantity?: number;
+    _key: string;
+  }>;
+  totalPrice?: number;
+  currency?: string;
+  amountDiscount?: number;
+  status?:
+    | "pending"
+    | "paid"
+    | "failed"
+    | "expired"
+    | "pending_delivery"
+    | "pending_pickup"
+    | "shipped"
+    | "delivered"
+    | "cancelled"
+    | "ready_for_pickup"
+    | "picked_up";
+  expiredAt?: string;
+  paidAt?: string;
+  bankTransferReference?: string;
+  bankTransferClabe?: string;
+  oxxoReference?: string;
+  orderDate?: string;
+  subtotal?: number;
+  shippingCost?: number;
+  shippingAddress?: {
+    line1?: string;
+    line2?: string;
+    city?: string;
+    state?: string;
+    postal_code?: string;
+    country?: string;
+  };
+  codInstructions?: string;
+  deliveryNotes?: string;
+  deliveryMethod?: "home_delivery" | "click_collect";
+  pickupStore?: {
+    _ref: string;
+    _type: "reference";
+    _weak?: boolean;
+    [internalGroqTypeReferenceTo]?: "affiliateStore";
+  };
+  estimatedPickupDate?: string;
+  pickupStatus?: "in_transit" | "ready_for_pickup" | "picked_up" | "expired";
+  pickupCode?: string;
+};
+
+export type Product = {
+  _id: string;
+  _type: "product";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  name?: string;
+  affiliateStore?: {
+    _ref: string;
+    _type: "reference";
+    _weak?: boolean;
+    [internalGroqTypeReferenceTo]?: "affiliateStore";
+  };
+  optionGroups?: Array<{
+    title?: string;
+    description?: string;
+    required?: boolean;
+    selectionType?: "single" | "multiple";
+    options?: Array<{
+      label?: string;
+      description?: string;
+      priceDelta?: number;
+      isDefault?: boolean;
+      _type: "option";
+      _key: string;
+    }>;
+    _type: "optionGroup";
+    _key: string;
+  }>;
+  slug?: Slug;
+  image?: {
+    asset?: {
+      _ref: string;
+      _type: "reference";
+      _weak?: boolean;
+      [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+    };
+    media?: unknown;
+    hotspot?: SanityImageHotspot;
+    crop?: SanityImageCrop;
+    _type: "image";
+  };
+  description?: Array<
+    | {
+        children?: Array<{
+          marks?: Array<string>;
+          text?: string;
+          _type: "span";
+          _key: string;
+        }>;
+        style?: "normal" | "h1" | "h2" | "h3" | "h4" | "blockquote";
+        listItem?: "bullet";
+        markDefs?: Array<{
+          href?: string;
+          _type: "link";
+          _key: string;
+        }>;
+        level?: number;
+        _type: "block";
+        _key: string;
+      }
+    | {
+        asset?: {
+          _ref: string;
+          _type: "reference";
+          _weak?: boolean;
+          [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+        };
+        media?: unknown;
+        hotspot?: SanityImageHotspot;
+        crop?: SanityImageCrop;
+        alt?: string;
+        _type: "image";
+        _key: string;
+      }
+  >;
+  price?: number;
+  categories?: Array<{
+    _ref: string;
+    _type: "reference";
+    _weak?: boolean;
+    _key: string;
+    [internalGroqTypeReferenceTo]?: "category";
+  }>;
+  stock?: number;
+};
+
+export type AffiliateStore = {
+  _id: string;
+  _type: "affiliateStore";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  name?: string;
+  storeCategories?: Array<{
+    _ref: string;
+    _type: "reference";
+    _weak?: boolean;
+    _key: string;
+    [internalGroqTypeReferenceTo]?: "storeCategory";
+  }>;
+  image?: {
+    asset?: {
+      _ref: string;
+      _type: "reference";
+      _weak?: boolean;
+      [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+    };
+    media?: unknown;
+    hotspot?: SanityImageHotspot;
+    crop?: SanityImageCrop;
+    _type: "image";
+  };
+  coverImage?: {
+    asset?: {
+      _ref: string;
+      _type: "reference";
+      _weak?: boolean;
+      [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+    };
+    media?: unknown;
+    hotspot?: SanityImageHotspot;
+    crop?: SanityImageCrop;
+    _type: "image";
+  };
+  storeId?: string;
+  categories?: Array<{
+    name?: string;
+    slug?: Slug;
+    order?: number;
+    _key: string;
+  }>;
+  address?: {
+    street?: string;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+    country?: string;
+  };
+  coordinates?: {
+    latitude?: number;
+    longitude?: number;
+  };
+  contact?: {
+    phone?: string;
+    email?: string;
+    manager?: string;
+  };
+  operatingHours?: {
+    monday?: string;
+    tuesday?: string;
+    wednesday?: string;
+    thursday?: string;
+    friday?: string;
+    saturday?: string;
+    sunday?: string;
+  };
+  isActive?: boolean;
+  capacity?: number;
+  averageDeliveryTime?: number;
+  deliveryFee?: number;
+  deliveryTimeMin?: number;
+  deliveryTimeMax?: number;
+  serviceTypes?: {
+    delivery?: boolean;
+    pickup?: boolean;
+    deliveryRadius?: number;
+    minimumOrderDelivery?: number;
+  };
+};
+
+export type Category = {
+  _id: string;
+  _type: "category";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  title?: string;
+  slug?: Slug;
+  description?: string;
+};
+
+export type BlockContent = Array<
+  | {
+      children?: Array<{
+        marks?: Array<string>;
+        text?: string;
+        _type: "span";
+        _key: string;
+      }>;
+      style?: "normal" | "h1" | "h2" | "h3" | "h4" | "blockquote";
+      listItem?: "bullet";
+      markDefs?: Array<{
+        href?: string;
+        _type: "link";
+        _key: string;
+      }>;
+      level?: number;
+      _type: "block";
+      _key: string;
+    }
+  | {
+      asset?: {
+        _ref: string;
+        _type: "reference";
+        _weak?: boolean;
+        [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+      };
+      media?: unknown;
+      hotspot?: SanityImageHotspot;
+      crop?: SanityImageCrop;
+      alt?: string;
+      _type: "image";
+      _key: string;
+    }
+>;
+
+export type SanityImagePaletteSwatch = {
+  _type: "sanity.imagePaletteSwatch";
+  background?: string;
+  foreground?: string;
+  population?: number;
+  title?: string;
+};
+
+export type SanityImagePalette = {
+  _type: "sanity.imagePalette";
+  darkMuted?: SanityImagePaletteSwatch;
+  lightVibrant?: SanityImagePaletteSwatch;
+  darkVibrant?: SanityImagePaletteSwatch;
+  vibrant?: SanityImagePaletteSwatch;
+  dominant?: SanityImagePaletteSwatch;
+  lightMuted?: SanityImagePaletteSwatch;
+  muted?: SanityImagePaletteSwatch;
+};
+
+export type SanityImageDimensions = {
+  _type: "sanity.imageDimensions";
+  height?: number;
+  width?: number;
+  aspectRatio?: number;
+};
+
+export type SanityImageHotspot = {
+  _type: "sanity.imageHotspot";
+  x?: number;
+  y?: number;
+  height?: number;
+  width?: number;
+};
+
+export type SanityImageCrop = {
+  _type: "sanity.imageCrop";
+  top?: number;
+  bottom?: number;
+  left?: number;
+  right?: number;
+};
+
+export type SanityFileAsset = {
+  _id: string;
+  _type: "sanity.fileAsset";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  originalFilename?: string;
+  label?: string;
+  title?: string;
+  description?: string;
+  altText?: string;
+  sha1hash?: string;
+  extension?: string;
+  mimeType?: string;
+  size?: number;
+  assetId?: string;
+  uploadId?: string;
+  path?: string;
+  url?: string;
+  source?: SanityAssetSourceData;
+};
+
+export type SanityImageAsset = {
+  _id: string;
+  _type: "sanity.imageAsset";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  originalFilename?: string;
+  label?: string;
+  title?: string;
+  description?: string;
+  altText?: string;
+  sha1hash?: string;
+  extension?: string;
+  mimeType?: string;
+  size?: number;
+  assetId?: string;
+  uploadId?: string;
+  path?: string;
+  url?: string;
+  metadata?: SanityImageMetadata;
+  source?: SanityAssetSourceData;
+};
+
+export type SanityImageMetadata = {
+  _type: "sanity.imageMetadata";
+  location?: Geopoint;
+  dimensions?: SanityImageDimensions;
+  palette?: SanityImagePalette;
+  lqip?: string;
+  blurHash?: string;
+  hasAlpha?: boolean;
+  isOpaque?: boolean;
+};
+
+export type Geopoint = {
+  _type: "geopoint";
+  lat?: number;
+  lng?: number;
+  alt?: number;
+};
+
+export type Slug = {
+  _type: "slug";
+  current?: string;
+  source?: string;
+};
+
+export type SanityAssetSourceData = {
+  _type: "sanity.assetSourceData";
+  name?: string;
+  id?: string;
+  url?: string;
+};
+
+export type AllSanitySchemaTypes =
+  | StoreCategory
+  | ClickCollectOrder
+  | Sale
+  | Order
+  | Product
+  | AffiliateStore
+  | Category
+  | BlockContent
+  | SanityImagePaletteSwatch
+  | SanityImagePalette
+  | SanityImageDimensions
+  | SanityImageHotspot
+  | SanityImageCrop
+  | SanityFileAsset
+  | SanityImageAsset
+  | SanityImageMetadata
+  | Geopoint
+  | Slug
+  | SanityAssetSourceData;
+
+export declare const internalGroqTypeReferenceTo: unique symbol;
+
+// Source: sanity\lib\orders\getMyOrders.tsx
+// Variable: MY_ORDERS_QUERY
+// Query: *[(_type == "order" || _type == "clickCollectOrder") && (clerkUserId == $userId || customerInfo.clerkUserId == $userId)] | order(coalesce(orderDate, createdAt) desc) {      ...,      // For regular orders      _type == "order" => {        ...,        products[]{          ...,          product->        }      },      // For click & collect orders      _type == "clickCollectOrder" => {        ...,        "orderDate": createdAt,        "totalPrice": totalAmount,        "currency": "mxn",        "customerName": customerInfo.name,        "email": customerInfo.email,        "phone": customerInfo.phone,        "clerkUserId": customerInfo.clerkUserId,        "products": items[]{          "quantity": quantity,          "product": {            "_id": productId,            "name": productName,            "price": price          }        },        "isClickCollect": true,        "pickupCode": pickupCode,        "storeInfo": storeInfo      }    }
+export type MY_ORDERS_QUERY_RESULT = Array<
+  | {
+      _id: string;
+      _type: "clickCollectOrder";
+      _createdAt: string;
+      _updatedAt: string;
+      _rev: string;
+      orderNumber?: string;
+      pickupCode: string | null;
+      customerInfo?: {
+        name?: string;
+        email?: string;
+        clerkUserId?: string;
+        phone?: string;
+      };
+      storeInfo: {
+        storeId?: string;
+        storeName?: string;
+        storeAddress?: string;
+        storePhone?: string;
+      } | null;
+      items?: Array<{
+        productName?: string;
+        productId?: string;
+        quantity?: number;
+        price?: number;
+        _key: string;
+      }>;
+      totalAmount?: number;
+      paymentMethod?: "card_on_pickup" | "cash_on_pickup";
+      status?:
+        | "cancelled"
+        | "completed"
+        | "pending"
+        | "processing"
+        | "ready_for_pickup";
+      estimatedPickupDate?: string;
+      readyAt?: string;
+      pickedUpAt?: string;
+      notes?: string;
+      createdAt?: string;
+      updatedAt?: string;
+      orderDate: string | null;
+      totalPrice: number | null;
+      currency: "mxn";
+      customerName: string | null;
+      email: string | null;
+      phone: string | null;
+      clerkUserId: string | null;
+      products: Array<{
+        quantity: number | null;
+        product: {
+          _id: string | null;
+          name: string | null;
+          price: number | null;
+        };
+      }> | null;
+      isClickCollect: true;
+    }
+  | {
+      _id: string;
+      _type: "order";
+      _createdAt: string;
+      _updatedAt: string;
+      _rev: string;
+      orderNumber?: string;
+      stripeCheckoutSessionId?: string;
+      stripeCustomerId?: string;
+      clerkUserId?: string;
+      customerName?: string;
+      email?: string;
+      phone?: string;
+      paymentMethod?: "bank_transfer" | "card" | "cash_on_delivery" | "oxxo";
+      stripePaymentIntentId?: string;
+      products: Array<{
+        product: {
+          _id: string;
+          _type: "product";
+          _createdAt: string;
+          _updatedAt: string;
+          _rev: string;
+          name?: string;
+          affiliateStore?: {
+            _ref: string;
+            _type: "reference";
+            _weak?: boolean;
+            [internalGroqTypeReferenceTo]?: "affiliateStore";
+          };
+          optionGroups?: Array<{
+            title?: string;
+            description?: string;
+            required?: boolean;
+            selectionType?: "multiple" | "single";
+            options?: Array<{
+              label?: string;
+              description?: string;
+              priceDelta?: number;
+              isDefault?: boolean;
+              _type: "option";
+              _key: string;
+            }>;
+            _type: "optionGroup";
+            _key: string;
+          }>;
+          slug?: Slug;
+          image?: {
+            asset?: {
+              _ref: string;
+              _type: "reference";
+              _weak?: boolean;
+              [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+            };
+            media?: unknown;
+            hotspot?: SanityImageHotspot;
+            crop?: SanityImageCrop;
+            _type: "image";
+          };
+          description?: Array<
+            | {
+                children?: Array<{
+                  marks?: Array<string>;
+                  text?: string;
+                  _type: "span";
+                  _key: string;
+                }>;
+                style?: "blockquote" | "h1" | "h2" | "h3" | "h4" | "normal";
+                listItem?: "bullet";
+                markDefs?: Array<{
+                  href?: string;
+                  _type: "link";
+                  _key: string;
+                }>;
+                level?: number;
+                _type: "block";
+                _key: string;
+              }
+            | {
+                asset?: {
+                  _ref: string;
+                  _type: "reference";
+                  _weak?: boolean;
+                  [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+                };
+                media?: unknown;
+                hotspot?: SanityImageHotspot;
+                crop?: SanityImageCrop;
+                alt?: string;
+                _type: "image";
+                _key: string;
+              }
+          >;
+          price?: number;
+          categories?: Array<{
+            _ref: string;
+            _type: "reference";
+            _weak?: boolean;
+            _key: string;
+            [internalGroqTypeReferenceTo]?: "category";
+          }>;
+          stock?: number;
+        } | null;
+        quantity?: number;
+        _key: string;
+      }> | null;
+      totalPrice?: number;
+      currency?: string;
+      amountDiscount?: number;
+      status?:
+        | "cancelled"
+        | "delivered"
+        | "expired"
+        | "failed"
+        | "paid"
+        | "pending_delivery"
+        | "pending_pickup"
+        | "pending"
+        | "picked_up"
+        | "ready_for_pickup"
+        | "shipped";
+      expiredAt?: string;
+      paidAt?: string;
+      bankTransferReference?: string;
+      bankTransferClabe?: string;
+      oxxoReference?: string;
+      orderDate?: string;
+      subtotal?: number;
+      shippingCost?: number;
+      shippingAddress?: {
+        line1?: string;
+        line2?: string;
+        city?: string;
+        state?: string;
+        postal_code?: string;
+        country?: string;
+      };
+      codInstructions?: string;
+      deliveryNotes?: string;
+      deliveryMethod?: "click_collect" | "home_delivery";
+      pickupStore?: {
+        _ref: string;
+        _type: "reference";
+        _weak?: boolean;
+        [internalGroqTypeReferenceTo]?: "affiliateStore";
+      };
+      estimatedPickupDate?: string;
+      pickupStatus?:
+        | "expired"
+        | "in_transit"
+        | "picked_up"
+        | "ready_for_pickup";
+      pickupCode?: string;
+    }
+>;
+
+// Source: sanity\lib\products\getAllAffiliateStores.ts
+// Variable: ALL_STORES_QUERY
+// Query: *[_type == "affiliateStore" && isActive == true] | order(name asc) {            _id,            _type,            _createdAt,            _updatedAt,            _rev,            name,            storeId,            image,            coverImage,            storeCategories[]->{                _id,                title,                slug,                icon            },            address,            coordinates,            contact,            operatingHours,            isActive,            capacity,            averageDeliveryTime,            deliveryFee,            deliveryTimeMin,            deliveryTimeMax        }
+export type ALL_STORES_QUERY_RESULT = Array<{
+  _id: string;
+  _type: "affiliateStore";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  name: string | null;
+  storeId: string | null;
+  image: {
+    asset?: {
+      _ref: string;
+      _type: "reference";
+      _weak?: boolean;
+      [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+    };
+    media?: unknown;
+    hotspot?: SanityImageHotspot;
+    crop?: SanityImageCrop;
+    _type: "image";
+  } | null;
+  coverImage: {
+    asset?: {
+      _ref: string;
+      _type: "reference";
+      _weak?: boolean;
+      [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+    };
+    media?: unknown;
+    hotspot?: SanityImageHotspot;
+    crop?: SanityImageCrop;
+    _type: "image";
+  } | null;
+  storeCategories: Array<{
+    _id: string;
+    title: string | null;
+    slug: Slug | null;
+    icon: string | null;
+  }> | null;
+  address: {
+    street?: string;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+    country?: string;
+  } | null;
+  coordinates: {
+    latitude?: number;
+    longitude?: number;
+  } | null;
+  contact: {
+    phone?: string;
+    email?: string;
+    manager?: string;
+  } | null;
+  operatingHours: {
+    monday?: string;
+    tuesday?: string;
+    wednesday?: string;
+    thursday?: string;
+    friday?: string;
+    saturday?: string;
+    sunday?: string;
+  } | null;
+  isActive: boolean | null;
+  capacity: number | null;
+  averageDeliveryTime: number | null;
+  deliveryFee: number | null;
+  deliveryTimeMin: number | null;
+  deliveryTimeMax: number | null;
+}>;
+
+// Source: sanity\lib\products\getAllCategories.ts
+// Variable: ALL_CATEGORIES_QUERY
+// Query: *[_type == "category"] | order(name asc)
+export type ALL_CATEGORIES_QUERY_RESULT = Array<{
+  _id: string;
+  _type: "category";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  title?: string;
+  slug?: Slug;
+  description?: string;
+}>;
+
+// Source: sanity\lib\products\getAllProducts.ts
+// Variable: ALL_PRODUCTS_QUERY
+// Query: *[           _type == "product"        ] | order(name asc) {           ...,           affiliateStore->{               _id,               name,               storeId,               deliveryFee,               deliveryTimeMin,               deliveryTimeMax,               averageDeliveryTime           }        }
+export type ALL_PRODUCTS_QUERY_RESULT = Array<{
+  _id: string;
+  _type: "product";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  name?: string;
+  affiliateStore: {
+    _id: string;
+    name: string | null;
+    storeId: string | null;
+    deliveryFee: number | null;
+    deliveryTimeMin: number | null;
+    deliveryTimeMax: number | null;
+    averageDeliveryTime: number | null;
+  } | null;
+  optionGroups?: Array<{
+    title?: string;
+    description?: string;
+    required?: boolean;
+    selectionType?: "multiple" | "single";
+    options?: Array<{
+      label?: string;
+      description?: string;
+      priceDelta?: number;
+      isDefault?: boolean;
+      _type: "option";
+      _key: string;
+    }>;
+    _type: "optionGroup";
+    _key: string;
+  }>;
+  slug?: Slug;
+  image?: {
+    asset?: {
+      _ref: string;
+      _type: "reference";
+      _weak?: boolean;
+      [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+    };
+    media?: unknown;
+    hotspot?: SanityImageHotspot;
+    crop?: SanityImageCrop;
+    _type: "image";
+  };
+  description?: Array<
+    | {
+        children?: Array<{
+          marks?: Array<string>;
+          text?: string;
+          _type: "span";
+          _key: string;
+        }>;
+        style?: "blockquote" | "h1" | "h2" | "h3" | "h4" | "normal";
+        listItem?: "bullet";
+        markDefs?: Array<{
+          href?: string;
+          _type: "link";
+          _key: string;
+        }>;
+        level?: number;
+        _type: "block";
+        _key: string;
+      }
+    | {
+        asset?: {
+          _ref: string;
+          _type: "reference";
+          _weak?: boolean;
+          [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+        };
+        media?: unknown;
+        hotspot?: SanityImageHotspot;
+        crop?: SanityImageCrop;
+        alt?: string;
+        _type: "image";
+        _key: string;
+      }
+  >;
+  price?: number;
+  categories?: Array<{
+    _ref: string;
+    _type: "reference";
+    _weak?: boolean;
+    _key: string;
+    [internalGroqTypeReferenceTo]?: "category";
+  }>;
+  stock?: number;
+}>;
+
+// Source: sanity\lib\products\getAllStoreCategories.ts
+// Variable: ALL_STORE_CATEGORIES_QUERY
+// Query: *[_type == "storeCategory"] | order(order asc, title asc) {      _id,      title,      slug,      description,      icon,      order    }
+export type ALL_STORE_CATEGORIES_QUERY_RESULT = Array<{
+  _id: string;
+  title: string | null;
+  slug: Slug | null;
+  description: string | null;
+  icon: string | null;
+  order: number | null;
+}>;
+
+// Source: sanity\lib\products\getProductBySlug.ts
+// Variable: PRODUCT_BY_ID_QUERY
+// Query: *[            _type == "product" && slug.current == $slug        ] | order(name asc) [0]{          ...,          affiliateStore->{            _id,            name,            image,            averageDeliveryTime,            deliveryFee,            deliveryTimeMin,            deliveryTimeMax          },          optionGroups        }
+export type PRODUCT_BY_ID_QUERY_RESULT = {
+  _id: string;
+  _type: "product";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  name?: string;
+  affiliateStore: {
+    _id: string;
+    name: string | null;
+    image: {
+      asset?: {
+        _ref: string;
+        _type: "reference";
+        _weak?: boolean;
+        [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+      };
+      media?: unknown;
+      hotspot?: SanityImageHotspot;
+      crop?: SanityImageCrop;
+      _type: "image";
+    } | null;
+    averageDeliveryTime: number | null;
+    deliveryFee: number | null;
+    deliveryTimeMin: number | null;
+    deliveryTimeMax: number | null;
+  } | null;
+  optionGroups: Array<{
+    title?: string;
+    description?: string;
+    required?: boolean;
+    selectionType?: "multiple" | "single";
+    options?: Array<{
+      label?: string;
+      description?: string;
+      priceDelta?: number;
+      isDefault?: boolean;
+      _type: "option";
+      _key: string;
+    }>;
+    _type: "optionGroup";
+    _key: string;
+  }> | null;
+  slug?: Slug;
+  image?: {
+    asset?: {
+      _ref: string;
+      _type: "reference";
+      _weak?: boolean;
+      [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+    };
+    media?: unknown;
+    hotspot?: SanityImageHotspot;
+    crop?: SanityImageCrop;
+    _type: "image";
+  };
+  description?: Array<
+    | {
+        children?: Array<{
+          marks?: Array<string>;
+          text?: string;
+          _type: "span";
+          _key: string;
+        }>;
+        style?: "blockquote" | "h1" | "h2" | "h3" | "h4" | "normal";
+        listItem?: "bullet";
+        markDefs?: Array<{
+          href?: string;
+          _type: "link";
+          _key: string;
+        }>;
+        level?: number;
+        _type: "block";
+        _key: string;
+      }
+    | {
+        asset?: {
+          _ref: string;
+          _type: "reference";
+          _weak?: boolean;
+          [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+        };
+        media?: unknown;
+        hotspot?: SanityImageHotspot;
+        crop?: SanityImageCrop;
+        alt?: string;
+        _type: "image";
+        _key: string;
+      }
+  >;
+  price?: number;
+  categories?: Array<{
+    _ref: string;
+    _type: "reference";
+    _weak?: boolean;
+    _key: string;
+    [internalGroqTypeReferenceTo]?: "category";
+  }>;
+  stock?: number;
+} | null;
+
+// Source: sanity\lib\products\getProductsByCategory.tsx
+// Variable: PRODUCTS_BY_CATEGORY_QUERY
+// Query: *[            _type == "product"            && references(*[_type == "category" && slug.current == $categorySlug]._id)            ] | order(name asc)
+export type PRODUCTS_BY_CATEGORY_QUERY_RESULT = Array<{
+  _id: string;
+  _type: "product";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  name?: string;
+  affiliateStore?: {
+    _ref: string;
+    _type: "reference";
+    _weak?: boolean;
+    [internalGroqTypeReferenceTo]?: "affiliateStore";
+  };
+  optionGroups?: Array<{
+    title?: string;
+    description?: string;
+    required?: boolean;
+    selectionType?: "multiple" | "single";
+    options?: Array<{
+      label?: string;
+      description?: string;
+      priceDelta?: number;
+      isDefault?: boolean;
+      _type: "option";
+      _key: string;
+    }>;
+    _type: "optionGroup";
+    _key: string;
+  }>;
+  slug?: Slug;
+  image?: {
+    asset?: {
+      _ref: string;
+      _type: "reference";
+      _weak?: boolean;
+      [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+    };
+    media?: unknown;
+    hotspot?: SanityImageHotspot;
+    crop?: SanityImageCrop;
+    _type: "image";
+  };
+  description?: Array<
+    | {
+        children?: Array<{
+          marks?: Array<string>;
+          text?: string;
+          _type: "span";
+          _key: string;
+        }>;
+        style?: "blockquote" | "h1" | "h2" | "h3" | "h4" | "normal";
+        listItem?: "bullet";
+        markDefs?: Array<{
+          href?: string;
+          _type: "link";
+          _key: string;
+        }>;
+        level?: number;
+        _type: "block";
+        _key: string;
+      }
+    | {
+        asset?: {
+          _ref: string;
+          _type: "reference";
+          _weak?: boolean;
+          [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+        };
+        media?: unknown;
+        hotspot?: SanityImageHotspot;
+        crop?: SanityImageCrop;
+        alt?: string;
+        _type: "image";
+        _key: string;
+      }
+  >;
+  price?: number;
+  categories?: Array<{
+    _ref: string;
+    _type: "reference";
+    _weak?: boolean;
+    _key: string;
+    [internalGroqTypeReferenceTo]?: "category";
+  }>;
+  stock?: number;
+}>;
+
+// Source: sanity\lib\products\getProductsByStore.ts
+// Variable: PRODUCTS_BY_STORE_QUERY
+// Query: *[_type == "product" && affiliateStore._ref == $storeId] | order(name asc) {      _id,      _createdAt,      name,      slug,      image,      price,      stock,      description,      categories[]->{        _id,        title,        slug      },      affiliateStore->{        _id,        name,        categories,        averageDeliveryTime,        deliveryFee,        deliveryTimeMin,        deliveryTimeMax      }    }
+export type PRODUCTS_BY_STORE_QUERY_RESULT = Array<{
+  _id: string;
+  _createdAt: string;
+  name: string | null;
+  slug: Slug | null;
+  image: {
+    asset?: {
+      _ref: string;
+      _type: "reference";
+      _weak?: boolean;
+      [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+    };
+    media?: unknown;
+    hotspot?: SanityImageHotspot;
+    crop?: SanityImageCrop;
+    _type: "image";
+  } | null;
+  price: number | null;
+  stock: number | null;
+  description: Array<
+    | {
+        children?: Array<{
+          marks?: Array<string>;
+          text?: string;
+          _type: "span";
+          _key: string;
+        }>;
+        style?: "blockquote" | "h1" | "h2" | "h3" | "h4" | "normal";
+        listItem?: "bullet";
+        markDefs?: Array<{
+          href?: string;
+          _type: "link";
+          _key: string;
+        }>;
+        level?: number;
+        _type: "block";
+        _key: string;
+      }
+    | {
+        asset?: {
+          _ref: string;
+          _type: "reference";
+          _weak?: boolean;
+          [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+        };
+        media?: unknown;
+        hotspot?: SanityImageHotspot;
+        crop?: SanityImageCrop;
+        alt?: string;
+        _type: "image";
+        _key: string;
+      }
+  > | null;
+  categories: Array<{
+    _id: string;
+    title: string | null;
+    slug: Slug | null;
+  }> | null;
+  affiliateStore: {
+    _id: string;
+    name: string | null;
+    categories: Array<{
+      name?: string;
+      slug?: Slug;
+      order?: number;
+      _key: string;
+    }> | null;
+    averageDeliveryTime: number | null;
+    deliveryFee: number | null;
+    deliveryTimeMin: number | null;
+    deliveryTimeMax: number | null;
+  } | null;
+}>;
+
+// Source: sanity\lib\products\getStoreById.ts
+// Variable: STORE_BY_ID_QUERY
+// Query: *[_type == "affiliateStore" && _id == $storeId][0] {      _id,      name,      storeId,      image,      coverImage,      categories,      address,      coordinates,      contact,      operatingHours,      isActive,      capacity,      averageDeliveryTime,      deliveryFee,      deliveryTimeMin,      deliveryTimeMax    }
+export type STORE_BY_ID_QUERY_RESULT = {
+  _id: string;
+  name: string | null;
+  storeId: string | null;
+  image: {
+    asset?: {
+      _ref: string;
+      _type: "reference";
+      _weak?: boolean;
+      [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+    };
+    media?: unknown;
+    hotspot?: SanityImageHotspot;
+    crop?: SanityImageCrop;
+    _type: "image";
+  } | null;
+  coverImage: {
+    asset?: {
+      _ref: string;
+      _type: "reference";
+      _weak?: boolean;
+      [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+    };
+    media?: unknown;
+    hotspot?: SanityImageHotspot;
+    crop?: SanityImageCrop;
+    _type: "image";
+  } | null;
+  categories: Array<{
+    name?: string;
+    slug?: Slug;
+    order?: number;
+    _key: string;
+  }> | null;
+  address: {
+    street?: string;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+    country?: string;
+  } | null;
+  coordinates: {
+    latitude?: number;
+    longitude?: number;
+  } | null;
+  contact: {
+    phone?: string;
+    email?: string;
+    manager?: string;
+  } | null;
+  operatingHours: {
+    monday?: string;
+    tuesday?: string;
+    wednesday?: string;
+    thursday?: string;
+    friday?: string;
+    saturday?: string;
+    sunday?: string;
+  } | null;
+  isActive: boolean | null;
+  capacity: number | null;
+  averageDeliveryTime: number | null;
+  deliveryFee: number | null;
+  deliveryTimeMin: number | null;
+  deliveryTimeMax: number | null;
+} | null;
+
+// Source: sanity\lib\products\searchProductsByName.ts
+// Variable: PRODUCT_SEARCH_QUERY
+// Query: *[        _type == "product"        && name match $searchParam     ] | order(name asc)
+export type PRODUCT_SEARCH_QUERY_RESULT = Array<{
+  _id: string;
+  _type: "product";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  name?: string;
+  affiliateStore?: {
+    _ref: string;
+    _type: "reference";
+    _weak?: boolean;
+    [internalGroqTypeReferenceTo]?: "affiliateStore";
+  };
+  optionGroups?: Array<{
+    title?: string;
+    description?: string;
+    required?: boolean;
+    selectionType?: "multiple" | "single";
+    options?: Array<{
+      label?: string;
+      description?: string;
+      priceDelta?: number;
+      isDefault?: boolean;
+      _type: "option";
+      _key: string;
+    }>;
+    _type: "optionGroup";
+    _key: string;
+  }>;
+  slug?: Slug;
+  image?: {
+    asset?: {
+      _ref: string;
+      _type: "reference";
+      _weak?: boolean;
+      [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+    };
+    media?: unknown;
+    hotspot?: SanityImageHotspot;
+    crop?: SanityImageCrop;
+    _type: "image";
+  };
+  description?: Array<
+    | {
+        children?: Array<{
+          marks?: Array<string>;
+          text?: string;
+          _type: "span";
+          _key: string;
+        }>;
+        style?: "blockquote" | "h1" | "h2" | "h3" | "h4" | "normal";
+        listItem?: "bullet";
+        markDefs?: Array<{
+          href?: string;
+          _type: "link";
+          _key: string;
+        }>;
+        level?: number;
+        _type: "block";
+        _key: string;
+      }
+    | {
+        asset?: {
+          _ref: string;
+          _type: "reference";
+          _weak?: boolean;
+          [internalGroqTypeReferenceTo]?: "sanity.imageAsset";
+        };
+        media?: unknown;
+        hotspot?: SanityImageHotspot;
+        crop?: SanityImageCrop;
+        alt?: string;
+        _type: "image";
+        _key: string;
+      }
+  >;
+  price?: number;
+  categories?: Array<{
+    _ref: string;
+    _type: "reference";
+    _weak?: boolean;
+    _key: string;
+    [internalGroqTypeReferenceTo]?: "category";
+  }>;
+  stock?: number;
+}>;
+
+// Source: sanity\lib\sales\getActiveSaleByCouponCode.ts
+// Variable: ACTIVE_SALE_BY_COUPON_QUERY
+// Query: *[            _type == "sale"            && isActive == true             && couponCode == $couponCode        ] | order(validFrom desc)[0]
+export type ACTIVE_SALE_BY_COUPON_QUERY_RESULT = {
+  _id: string;
+  _type: "sale";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  title?: string;
+  description?: string;
+  discountAmount?: number;
+  couponCode?: string;
+  validFrom?: string;
+  validUntil?: string;
+  isActive?: boolean;
+} | null;
+
+// Query TypeMap
+import "@sanity/client";
+declare module "@sanity/client" {
+  interface SanityQueries {
+    '\n    *[(_type == "order" || _type == "clickCollectOrder") && (clerkUserId == $userId || customerInfo.clerkUserId == $userId)] | order(coalesce(orderDate, createdAt) desc) {\n      ...,\n      // For regular orders\n      _type == "order" => {\n        ...,\n        products[]{\n          ...,\n          product->\n        }\n      },\n      // For click & collect orders\n      _type == "clickCollectOrder" => {\n        ...,\n        "orderDate": createdAt,\n        "totalPrice": totalAmount,\n        "currency": "mxn",\n        "customerName": customerInfo.name,\n        "email": customerInfo.email,\n        "phone": customerInfo.phone,\n        "clerkUserId": customerInfo.clerkUserId,\n        "products": items[]{\n          "quantity": quantity,\n          "product": {\n            "_id": productId,\n            "name": productName,\n            "price": price\n          }\n        },\n        "isClickCollect": true,\n        "pickupCode": pickupCode,\n        "storeInfo": storeInfo\n      }\n    }\n ': MY_ORDERS_QUERY_RESULT;
+    '\n        *[_type == "affiliateStore" && isActive == true] | order(name asc) {\n            _id,\n            _type,\n            _createdAt,\n            _updatedAt,\n            _rev,\n            name,\n            storeId,\n            image,\n            coverImage,\n            storeCategories[]->{\n                _id,\n                title,\n                slug,\n                icon\n            },\n            address,\n            coordinates,\n            contact,\n            operatingHours,\n            isActive,\n            capacity,\n            averageDeliveryTime,\n            deliveryFee,\n            deliveryTimeMin,\n            deliveryTimeMax\n        }\n    ': ALL_STORES_QUERY_RESULT;
+    '\n        *[_type == "category"] | order(name asc)\n        ': ALL_CATEGORIES_QUERY_RESULT;
+    '\n       *[\n           _type == "product"\n        ] | order(name asc) {\n           ...,\n           affiliateStore->{\n               _id,\n               name,\n               storeId,\n               deliveryFee,\n               deliveryTimeMin,\n               deliveryTimeMax,\n               averageDeliveryTime\n           }\n        }\n    ': ALL_PRODUCTS_QUERY_RESULT;
+    '\n    *[_type == "storeCategory"] | order(order asc, title asc) {\n      _id,\n      title,\n      slug,\n      description,\n      icon,\n      order\n    }\n  ': ALL_STORE_CATEGORIES_QUERY_RESULT;
+    '\n        *[\n            _type == "product" && slug.current == $slug\n        ] | order(name asc) [0]{\n          ...,\n          affiliateStore->{\n            _id,\n            name,\n            image,\n            averageDeliveryTime,\n            deliveryFee,\n            deliveryTimeMin,\n            deliveryTimeMax\n          },\n          optionGroups\n        }\n        ': PRODUCT_BY_ID_QUERY_RESULT;
+    '\n        *[\n            _type == "product"\n            && references(*[_type == "category" && slug.current == $categorySlug]._id)\n            ] | order(name asc)\n        ': PRODUCTS_BY_CATEGORY_QUERY_RESULT;
+    '\n    *[_type == "product" && affiliateStore._ref == $storeId] | order(name asc) {\n      _id,\n      _createdAt,\n      name,\n      slug,\n      image,\n      price,\n      stock,\n      description,\n      categories[]->{\n        _id,\n        title,\n        slug\n      },\n      affiliateStore->{\n        _id,\n        name,\n        categories,\n        averageDeliveryTime,\n        deliveryFee,\n        deliveryTimeMin,\n        deliveryTimeMax\n      }\n    }\n  ': PRODUCTS_BY_STORE_QUERY_RESULT;
+    '\n    *[_type == "affiliateStore" && _id == $storeId][0] {\n      _id,\n      name,\n      storeId,\n      image,\n      coverImage,\n      categories,\n      address,\n      coordinates,\n      contact,\n      operatingHours,\n      isActive,\n      capacity,\n      averageDeliveryTime,\n      deliveryFee,\n      deliveryTimeMin,\n      deliveryTimeMax\n    }\n  ': STORE_BY_ID_QUERY_RESULT;
+    '\n     *[\n        _type == "product"\n        && name match $searchParam\n     ] | order(name asc)\n    ': PRODUCT_SEARCH_QUERY_RESULT;
+    '\n        *[\n            _type == "sale"\n            && isActive == true \n            && couponCode == $couponCode\n        ] | order(validFrom desc)[0]\n        ': ACTIVE_SALE_BY_COUPON_QUERY_RESULT;
+  }
+}

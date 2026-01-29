@@ -6,23 +6,20 @@ import { useStoreSearch, StoreInfo } from "@/hooks/useStoreSearch";
 import StoreCheckerModal from "./StoreCheckerModal";
 import ModalPortal from "./ModalPortal";
 
-// Tipo para los datos de la tienda seleccionada (del modal)
-interface SelectedStoreData {
+// Tipo para los datos de la tienda seleccionada (debe coincidir con StoreData del componente)
+interface StoreData {
   store: {
     _id: string;
     name: string;
+    distanceKm?: number;
     address: {
       street: string;
       city: string;
       state: string;
-      postalCode: string;
     };
-    contact: {
-      phone: string;
+    contact?: {
+      phone?: string;
     };
-    operatingHours: Record<string, string>;
-    distanceKm: number;
-    estimatedDeliveryDate: string;
   };
   summary: {
     storeName: string;
@@ -133,14 +130,14 @@ function ClickCollectAvailability({ className = "", showFullInfo = false }: Clic
             <StoreCheckerModal
               isOpen={isModalOpen}
               onClose={() => setIsModalOpen(false)}
-              onStoreFound={(store: SelectedStoreData) => {
-                // Convertir SelectedStoreData a StoreInfo para compatibilidad
+              onStoreFound={(store: StoreData) => {
+                // Convertir StoreData a StoreInfo para compatibilidad
                 const storeInfo: StoreInfo = {
                   storeId: store.store._id,
                   name: store.summary.storeName,
                   address: store.summary.address,
                   phone: store.summary.phone,
-                  distanceKm: store.store.distanceKm,
+                  distanceKm: store.store.distanceKm || 0,
                   estimatedDelivery: store.summary.estimatedDelivery
                 };
                 setStoredStore(storeInfo);

@@ -33,6 +33,8 @@ interface Store {
   operatingHours: Record<string, string>;
   distanceKm: number;
   estimatedDeliveryDate: string;
+  deliveryTimeMin?: number;
+  deliveryTimeMax?: number;
 }
 
 interface LocationBasedStoreSelectorProps {
@@ -275,8 +277,10 @@ export default function LocationBasedStoreSelector({
                 store.coordinates?.longitude || 0
               ),
               estimatedDeliveryDate: new Date(
-                Date.now() + getEstimatedDeliveryTime(store.distanceKm) * 60 * 60 * 1000
+                Date.now() + getEstimatedDeliveryTime(store.distanceKm, store) * 60 * 1000
               ).toISOString(),
+              deliveryTimeMin: store.deliveryTimeMin,
+              deliveryTimeMax: store.deliveryTimeMax,
             };
           }
         );
@@ -485,16 +489,25 @@ export default function LocationBasedStoreSelector({
     return R * c;
   };
 
-  // Calcular tiempo estimado de entrega basado en distancia (en horas)
-  const getEstimatedDeliveryTime = (distanceKm: number): number => {
-    if (distanceKm <= 5) {
-      return 4; // 4 horas para tiendas muy cercanas
+  // Calcular tiempo estimado de entrega basado en distancia (en minutos)
+  const getEstimatedDeliveryTime = (distanceKm: number, store?: any): number => {
+    // Si la tienda tiene tiempos configurados en Sanity, usarlos
+    if (store?.deliveryTimeMin != null && store?.deliveryTimeMax != null) {
+      // Usar el tiempo promedio entre min y max
+      return Math.round((store.deliveryTimeMin + store.deliveryTimeMax) / 2);
+    }
+    
+    // Fallback: calcular basado en distancia
+    if (distanceKm <= 2) {
+      return 20; // 20 minutos para tiendas muy cercanas
+    } else if (distanceKm <= 5) {
+      return 30; // 30 minutos para tiendas cercanas
+    } else if (distanceKm <= 10) {
+      return 45; // 45 minutos para tiendas moderadamente lejos
     } else if (distanceKm <= 15) {
-      return 24; // 1 día para tiendas cercanas
-    } else if (distanceKm <= 30) {
-      return 48; // 2 días para tiendas moderadamente lejos
+      return 60; // 1 hora para tiendas más lejanas
     } else {
-      return 72; // 3 días para tiendas más lejanas
+      return 90; // 1.5 horas para tiendas muy lejanas
     }
   };
 
@@ -502,25 +515,21 @@ export default function LocationBasedStoreSelector({
   const getDeliveryTimeText = (estimatedDate: string): string => {
     const now = new Date();
     const deliveryDate = new Date(estimatedDate);
-    const diffInHours = Math.ceil((deliveryDate.getTime() - now.getTime()) / (1000 * 60 * 60));
-    const diffInDays = Math.ceil(diffInHours / 24);
+    const diffInMinutes = Math.ceil((deliveryDate.getTime() - now.getTime()) / (1000 * 60));
+    const diffInHours = Math.ceil(diffInMinutes / 60);
 
-    if (diffInHours <= 1) {
-      return "Estará listo en menos de 1 hora";
+    if (diffInMinutes <= 15) {
+      return "Listo en 15 minutos";
+    } else if (diffInMinutes <= 30) {
+      return `Listo en ${diffInMinutes} minutos`;
+    } else if (diffInMinutes <= 60) {
+      return `Listo en ${diffInMinutes} minutos`;
+    } else if (diffInHours <= 2) {
+      return `Listo en ${diffInHours} hora${diffInHours > 1 ? 's' : ''}`;
     } else if (diffInHours <= 6) {
-      return `Estará listo en ${diffInHours} horas`;
-    } else if (diffInHours <= 12) {
-      return "Estará listo hoy por la tarde";
-    } else if (diffInHours <= 24) {
-      return "Estará listo mañana";
-    } else if (diffInDays === 2) {
-      return "Estará listo en 2 días";
-    } else if (diffInDays === 3) {
-      return "Estará listo en 3 días";
-    } else if (diffInDays <= 7) {
-      return `Estará listo en ${diffInDays} días`;
+      return `Listo en ${diffInHours} horas`;
     } else {
-      return `Estará listo en ${Math.ceil(diffInDays / 7)} semana${Math.ceil(diffInDays / 7) > 1 ? 's' : ''}`;
+      return "Listo hoy más tarde";
     }
   };
 
@@ -645,18 +654,14 @@ export default function LocationBasedStoreSelector({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Navigation className="h-5 w-5" />
-          Encuentra Tiendas Cercanas
+        <CardTitle className="flex items-center">
         </CardTitle>
-        <CardDescription>
-          Encuentra la tienda más cercana para recoger tu pedido.
-        </CardDescription>
+        
       </CardHeader>
-      <CardContent className="space-y-4">
+      <CardContent className="">
         {/* Botones para obtener ubicación */}
         {!userLocation && !showManualInput && (
-          <div className="space-y-3">
+          <div className="">
             <Button
               onClick={getUserLocation}
               disabled={loading || !isMapLoaded}
@@ -665,12 +670,12 @@ export default function LocationBasedStoreSelector({
             >
               {loading ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <Loader2 className=" h-4 w-4 animate-spin" />
                   Detectando tu ubicación...
                 </>
               ) : (
                 <>
-                  <Navigation className="mr-2 h-4 w-4" />
+                  <Navigation className=" h-4 w-4" />
                   Detectar Mi Ubicación
                 </>
               )}
@@ -682,7 +687,7 @@ export default function LocationBasedStoreSelector({
                 <span className="w-full border-t" />
               </div>
               <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-white px-2 text-muted-foreground">O</span>
+                <span className="bg-white  text-muted-foreground">O</span>
               </div>
             </div>
 
@@ -724,10 +729,10 @@ export default function LocationBasedStoreSelector({
             </div>
 
             <SimpleAddressInput
-              onAddressSubmit={handleSimpleAddressSubmit}
+              onAddressSelected={handleSimpleAddressSubmit as any}
               placeholder="Ej: Querétaro"
-              label="Dirección completa"
               disabled={loading}
+              apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ""}
             />
 
             {loading && (
