@@ -6,23 +6,20 @@ import { CustomerAddress } from "@/lib/clickCollect";
 import { Store, ArrowLeft, CheckCircle } from "lucide-react";
 import Link from "next/link";
 
-// Tipo para los datos de la tienda seleccionada
-interface SelectedStoreData {
+// Tipo para los datos de la tienda seleccionada (debe coincidir con StoreData del componente)
+interface StoreData {
   store: {
     _id: string;
     name: string;
+    distanceKm?: number;
     address: {
       street: string;
       city: string;
       state: string;
-      postalCode: string;
     };
-    contact: {
-      phone: string;
+    contact?: {
+      phone?: string;
     };
-    operatingHours: Record<string, string>;
-    distanceKm: number;
-    estimatedDeliveryDate: string;
   };
   summary: {
     storeName: string;
@@ -34,13 +31,13 @@ interface SelectedStoreData {
 }
 
 function CheckStoresPage() {
-  const [selectedStore, setSelectedStore] = useState<SelectedStoreData | null>(
+  const [selectedStore, setSelectedStore] = useState<StoreData | null>(
     null
   );
   const [customerAddress, setCustomerAddress] =
     useState<CustomerAddress | null>(null);
 
-  const handleStoreSelected = (storeData: SelectedStoreData) => {
+  const handleStoreSelected = (storeData: StoreData) => {
     console.log("🏪 Tienda seleccionada:", storeData);
     setSelectedStore(storeData);
 

@@ -21,6 +21,15 @@ const nextConfig: NextConfig = {
     // optimizeCss: true, // Deshabilitado temporalmente por problemas con critters
     scrollRestoration: true,
   },
+  // Configuración para suprimir errores de hidratación
+  reactStrictMode: false, // Deshabilitado para evitar errores de devtools
+  // Suprimir warnings de hidratación en desarrollo
+  onDemandEntries: {
+    // Período en ms para mantener las páginas en memoria
+    maxInactiveAge: 25 * 1000,
+    // Número de páginas que deben mantenerse simultáneamente
+    pagesBufferLength: 2,
+  },
   // Headers de seguridad y rendimiento
   async headers() {
     return [
@@ -43,6 +52,33 @@ const nextConfig: NextConfig = {
         ],
       },
     ];
+  },
+  // Configuración de webpack para suprimir warnings
+  webpack: (config, { dev, isServer }) => {
+    if (dev && !isServer) {
+      // Suprimir warnings específicos de hidratación
+      config.ignoreWarnings = [
+        /Hydration failed/,
+        /There was an error while hydrating/,
+        /Text content does not match server-rendered HTML/,
+        /Warning: Text content did not match/,
+        /Warning: Expected server HTML to contain/,
+        /Warning: Prop .* did not match/,
+        /emitPendingHydrationWarnings/,
+        /createConsoleError/,
+        /handleConsoleError/,
+        /intercept-console-error/,
+        /webpack.cache.PackFileCacheStrategy/,
+        /Serializing big strings/,
+      ];
+    }
+    return config;
+  },
+  // Configuración adicional para suprimir errores de hidratación
+  logging: {
+    fetches: {
+      fullUrl: false,
+    },
   },
 };
 

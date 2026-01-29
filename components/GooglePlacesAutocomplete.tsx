@@ -3,186 +3,173 @@
 import { useEffect, useRef, useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MapPin, Loader2 } from "lucide-react";
 
 interface GooglePlacesAutocompleteProps {
   onPlaceSelected: (place: {
-    address: string;
-    coordinates: { lat: number; lng: number };
-    components: {
-      street?: string;
-      city?: string;
-      state?: string;
-      postalCode?: string;
-      country?: string;
+    formatted_address: string;
+    address_components: google.maps.GeocoderAddressComponent[];
+    geometry: {
+      location: {
+        lat: () => number;
+        lng: () => number;
+      };
     };
+    place_id: string;
   }) => void;
   placeholder?: string;
   label?: string;
   disabled?: boolean;
+  apiKey: string;
+  className?: string;
 }
 
 export default function GooglePlacesAutocomplete({
   onPlaceSelected,
-  placeholder = "Ingresa tu dirección...",
+  placeholder = "Buscar dirección...",
   label = "Dirección",
   disabled = false,
+  apiKey,
+  className = "",
 }: GooglePlacesAutocompleteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const autocompleteRef = useRef<any>(null);
+  const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [inputValue, setInputValue] = useState("");
-  const [isGooglePlacesReady, setIsGooglePlacesReady] = useState(false);
 
+  // Cargar Google Maps API si no está cargada
   useEffect(() => {
-    // Función para inicializar Google Places
-    const initializeGooglePlaces = () => {
-      if (!inputRef.current || !(window as any).google?.maps?.places || autocompleteRef.current) {
-        console.log('Google Places no está disponible aún:', {
-          inputRef: !!inputRef.current,
-          google: !!(window as any).google,
-          places: !!(window as any).google?.maps?.places,
-          autocomplete: !!autocompleteRef.current
-        });
-        return false;
+    const loadGoogleMapsAPI = async () => {
+      // Verificar si ya está cargada
+      if (window.google && window.google.maps && window.google.maps.places) {
+        setIsLoaded(true);
+        return;
       }
 
-      // Inicializar Google Places Autocomplete solo una vez
-      const google = (window as any).google;
-      console.log('✅ Inicializando Google Places Autocomplete...');
-      
       try {
-        autocompleteRef.current = new google.maps.places.Autocomplete(inputRef.current, {
+        setLoading(true);
+        
+        // Crear script para cargar Google Maps API
+        const script = document.createElement('script');
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&callback=initGooglePlaces`;
+        script.async = true;
+        script.defer = true;
+
+        // Función callback global
+        (window as any).initGooglePlaces = () => {
+          setIsLoaded(true);
+          setLoading(false);
+        };
+
+        script.onerror = () => {
+          setError('Error cargando Google Maps API');
+          setLoading(false);
+        };
+
+        document.head.appendChild(script);
+      } catch {
+        setError('Error inicializando Google Places');
+        setLoading(false);
+      }
+    };
+
+    if (apiKey && apiKey !== 'undefined' && apiKey.trim() !== '') {
+      loadGoogleMapsAPI();
+    } else {
+      setError('API Key de Google Maps no disponible');
+    }
+  }, [apiKey]);
+
+  // Inicializar Autocomplete cuando Google Maps esté cargado
+  useEffect(() => {
+    if (isLoaded && inputRef.current && !autocompleteRef.current) {
+      try {
+        const google = (window as any).google;
+        
+        // Configurar Autocomplete con restricciones para México
+        const autocomplete = new google.maps.places.Autocomplete(inputRef.current, {
           types: ['address'],
           componentRestrictions: { country: 'mx' }, // Restringir a México
-          fields: ['address_components', 'formatted_address', 'geometry', 'name']
+          fields: ['formatted_address', 'address_components', 'geometry', 'place_id']
         });
 
         // Listener para cuando se selecciona un lugar
-        const placeChangedListener = () => {
-          console.log('🎯 Place changed event triggered');
-          const place = autocompleteRef.current.getPlace();
-          console.log('📍 Place object:', place);
+        autocomplete.addListener('place_changed', () => {
+          const place = autocomplete.getPlace();
           
-          if (!place.geometry || !place.geometry.location) {
-            console.warn('❌ No se encontraron detalles para el lugar seleccionado:', place);
-            return;
+          if (place && place.geometry && place.geometry.location) {
+            console.log('🗺️ Lugar seleccionado:', place);
+            onPlaceSelected(place);
+            setInputValue(place.formatted_address || '');
+          } else {
+            console.warn('⚠️ Lugar seleccionado sin geometría válida');
           }
-          
-          console.log('✅ Lugar válido encontrado, procesando...');
+        });
 
-          // Extraer componentes de la dirección
-          const components = {
-            street: '',
-            city: '',
-            state: '',
-            postalCode: '',
-            country: '',
-          };
-
-          place.address_components?.forEach((component: any) => {
-            const types = component.types;
-            
-            if (types.includes('street_number')) {
-              components.street = component.long_name + ' ';
-            }
-            if (types.includes('route')) {
-              components.street += component.long_name;
-            }
-            if (types.includes('locality') || types.includes('administrative_area_level_2')) {
-              components.city = component.long_name;
-            }
-            if (types.includes('administrative_area_level_1')) {
-              components.state = component.long_name;
-            }
-            if (types.includes('postal_code')) {
-              components.postalCode = component.long_name;
-            }
-            if (types.includes('country')) {
-              components.country = component.long_name;
-            }
-          });
-
-          // Limpiar street si está vacío
-          components.street = components.street.trim();
-
-          const placeData = {
-            address: place.formatted_address || place.name || inputRef.current?.value || '',
-            coordinates: {
-              lat: place.geometry.location.lat(),
-              lng: place.geometry.location.lng(),
-            },
-            components,
-          };
-
-          console.log('🎉 Lugar seleccionado desde Google Places:', placeData);
-          console.log('📍 Coordenadas obtenidas:', placeData.coordinates);
-          onPlaceSelected(placeData);
-          
-          // Actualizar el valor del input
-          setInputValue(placeData.address);
-        };
-
-        autocompleteRef.current.addListener('place_changed', placeChangedListener);
-        console.log('✅ Google Places Autocomplete inicializado correctamente');
-        setIsGooglePlacesReady(true);
-        return true;
-        
-      } catch (error) {
-        console.error('❌ Error inicializando Google Places:', error);
-        return false;
+        autocompleteRef.current = autocomplete;
+      } catch {
+        console.error('Error inicializando Autocomplete');
+        setError('Error inicializando autocompletado');
       }
-    };
-
-    // Intentar inicializar inmediatamente
-    if (!initializeGooglePlaces()) {
-      // Si falla, intentar de nuevo después de un pequeño delay
-      const timer = setTimeout(() => {
-        console.log('🔄 Reintentando inicialización de Google Places...');
-        initializeGooglePlaces();
-      }, 1000);
-      
-      return () => clearTimeout(timer);
     }
+  }, [isLoaded, onPlaceSelected]);
 
+  // Limpiar al desmontar
+  useEffect(() => {
     return () => {
-      if (autocompleteRef.current) {
-        const google = (window as any).google;
-        if (google?.maps?.event) {
-          google.maps.event.clearInstanceListeners(autocompleteRef.current);
-        }
+      if (autocompleteRef.current && (window as any).google?.maps?.event) {
+        (window as any).google.maps.event.clearInstanceListeners(autocompleteRef.current);
       }
     };
-  }, [onPlaceSelected]);
+  }, []);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // Solo actualizar el estado si no es una selección de Google Places
-    const newValue = e.target.value;
-    setInputValue(newValue);
-  };
-
-  return (
-    <div className="space-y-2">
-      <Label htmlFor="google-places-input">{label}</Label>
-      <Input
-        ref={inputRef}
-        id="google-places-input"
-        type="text"
-        placeholder={placeholder}
-        value={inputValue}
-        onChange={handleInputChange}
-        disabled={disabled}
-        className="w-full"
-      />
-      <div className="flex items-center justify-between">
-        <p className="text-xs text-gray-500">
-          Comienza a escribir tu dirección y selecciona una opción de la lista
-        </p>
-        <div className="flex items-center gap-1">
-          <div className={`w-2 h-2 rounded-full ${isGooglePlacesReady ? 'bg-green-500' : 'bg-yellow-500'}`}></div>
-          <span className="text-xs text-gray-400">
-            {isGooglePlacesReady ? 'Listo' : 'Cargando...'}
-          </span>
+  if (loading) {
+    return (
+      <div className={`space-y-2 ${className}`}>
+        <Label>{label}</Label>
+        <div className="flex items-center gap-2 p-3 border rounded-md bg-gray-50">
+          <Loader2 className="h-4 w-4 animate-spin text-gray-500" />
+          <span className="text-sm text-gray-600">Cargando autocompletado...</span>
         </div>
       </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className={`space-y-2 ${className}`}>
+        <Label>{label}</Label>
+        <div className="p-3 border border-red-200 rounded-md bg-red-50">
+          <p className="text-sm text-red-600">{error}</p>
+          <p className="text-xs text-red-500 mt-1">
+            Verifica tu conexión a internet y la configuración de Google Maps API
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`space-y-2 ${className}`}>
+      <Label htmlFor="google-places-input">{label}</Label>
+      <div className="relative">
+        <Input
+          ref={inputRef}
+          id="google-places-input"
+          type="text"
+          placeholder={placeholder}
+          value={inputValue}
+          onChange={(e) => setInputValue(e.target.value)}
+          disabled={disabled || !isLoaded}
+          className="pl-10"
+        />
+        <MapPin className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+      </div>
+      <p className="text-xs text-gray-500">
+        Escribe tu dirección y selecciona una opción de la lista
+      </p>
     </div>
   );
 }

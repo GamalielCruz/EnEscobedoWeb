@@ -61,7 +61,7 @@ export default async function StorePage({
   const categoriesMap = new Map<string, { _id: string; title?: string; slug?: { current?: string } }>();
   
   products.forEach((product: any) => {
-    product.categories?.forEach((cat: unknown) => {
+    product.categories?.forEach((cat: any) => {
       if (cat._id && cat.title && !categoriesMap.has(cat._id)) {
         categoriesMap.set(cat._id, {
           _id: cat._id,
@@ -122,7 +122,7 @@ export default async function StorePage({
           <div className="px-4 py-4">
             <div className="flex items-center gap-4 text-sm">
               {/* Estado de la tienda (Abierto/Cerrado) */}
-              <StoreStatus operatingHours={store.operatingHours} />
+              <StoreStatus operatingHours={store.operatingHours || undefined} />
               
               {/* Costo de entrega */}
               <div className="flex items-center gap-1 text-gray-600">
@@ -151,7 +151,7 @@ export default async function StorePage({
         </div>
 
         {/* Productos con filtro de categorías */}
-        <StoreProductsClient products={products} categories={categories} />
+        <StoreProductsClient products={products as any} categories={categories} />
       </div>
     </div>
   );

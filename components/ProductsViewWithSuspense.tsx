@@ -62,8 +62,8 @@ export default function ProductsViewWithSuspense({
         <Suspense fallback={<ProductsLoadingFallback />}>
             <ProductsView 
                 products={products}
-                categories={categories}
-                selectedCategory={selectedCategory}
+                stores={[]}
+                selectedStore={undefined}
             />
         </Suspense>
     );

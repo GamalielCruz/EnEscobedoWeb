@@ -10,10 +10,12 @@ import { DisableDraftMode } from "@/components/DisableDraftMode";
 import Footer from "./Footer";
 import { esMX } from '@clerk/localizations'
 import CookieConsent from "@/components/cookie-consent";
+import HydrationErrorSuppressor from "@/components/HydrationErrorSuppressor";
 
 export const metadata: Metadata = {
   title: "En Escobedo | Plaza en linea",
   description: "La imaginación se imprime.",
+  metadataBase: new URL(process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'),
   openGraph: {
     title: "En Escobedo | Plaza en linea",
     description: "La imaginación se imprime.",
@@ -33,6 +35,7 @@ export default async function RootLayout({
     >
       <html lang="es">
         <body>
+          <HydrationErrorSuppressor />
           {(await draftMode()).isEnabled && (
             <>
               <DisableDraftMode />

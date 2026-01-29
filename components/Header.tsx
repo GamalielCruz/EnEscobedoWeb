@@ -14,6 +14,7 @@ import { PackageIcon, TrolleyIcon } from "@sanity/icons";
 import useBasketStore from "@/store/store";
 import Image from "next/image";
 import { Aoboshi_One } from "next/font/google";
+import { useHydration } from "@/hooks/useHydration";
 
 const aoboshiOne = Aoboshi_One({
   subsets: ["latin"],
@@ -21,8 +22,8 @@ const aoboshiOne = Aoboshi_One({
 });
 
 export function Header() {
-
   const { user } = useUser();
+  const isHydrated = useHydration();
   const itemCount = useBasketStore((state) => 
    state.items.reduce((total, item) => total + item.quantity, 0)
   );
@@ -108,12 +109,8 @@ export function Header() {
               aria-label="Ver carrito"
             >
               <TrolleyIcon className="w-6 h-6" />
-              {itemCount !== 0 && (
-                <span
-                  className={`absolute -top-1 -right-1 text-xs bg-[#ff8800] text-black rounded-full w-5 h-5 flex items-center justify-center font-bold ${
-                    itemCount > 0 ? "animate-pulse" : ""
-                  }`}
-                >
+              {isHydrated && itemCount !== 0 && (
+                <span className="absolute -top-1 -right-1 text-xs bg-[#ff8800] text-black rounded-full w-5 h-5 flex items-center justify-center font-bold animate-pulse">
                   {itemCount}
                 </span>
               )}

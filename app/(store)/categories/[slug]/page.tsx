@@ -17,7 +17,7 @@ async function CategoryPage({ params }: { params: Promise<{ slug: string }> }) {
             .join(" ")}{" "}
           Collection
         </h1>
-        <ProductsView products={products} categories={categories} />
+        <ProductsView products={products} stores={[]} />
       </div>
     </div>
   );

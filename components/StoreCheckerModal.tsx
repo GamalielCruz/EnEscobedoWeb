@@ -5,23 +5,20 @@ import { Store, X, CheckCircle } from "lucide-react";
 import { SafeLocationBasedStoreSelector } from "./SafeLocationBasedStoreSelector";
 import { CustomerAddress } from "@/lib/clickCollect";
 
-// Tipo para los datos de la tienda seleccionada (igual que en select-store)
-interface SelectedStoreData {
+// Tipo para los datos de la tienda seleccionada (debe coincidir con StoreData del componente)
+interface StoreData {
   store: {
     _id: string;
     name: string;
+    distanceKm?: number;
     address: {
       street: string;
       city: string;
       state: string;
-      postalCode: string;
     };
-    contact: {
-      phone: string;
+    contact?: {
+      phone?: string;
     };
-    operatingHours: Record<string, string>;
-    distanceKm: number;
-    estimatedDeliveryDate: string;
   };
   summary: {
     storeName: string;
@@ -35,7 +32,7 @@ interface SelectedStoreData {
 interface StoreCheckerModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onStoreFound?: (store: SelectedStoreData) => void;
+  onStoreFound?: (store: StoreData) => void;
 }
 
 function StoreCheckerModal({
@@ -43,7 +40,7 @@ function StoreCheckerModal({
   onClose,
   onStoreFound,
 }: StoreCheckerModalProps) {
-  const [selectedStore, setSelectedStore] = useState<SelectedStoreData | null>(
+  const [selectedStore, setSelectedStore] = useState<StoreData | null>(
     null
   );
   const [customerAddress, setCustomerAddress] =
@@ -68,7 +65,7 @@ function StoreCheckerModal({
     };
   }, [isOpen, onClose]);
 
-  const handleStoreSelected = (storeData: SelectedStoreData) => {
+  const handleStoreSelected = (storeData: StoreData) => {
     console.log("🏪 Tienda seleccionada:", storeData);
     setSelectedStore(storeData);
 

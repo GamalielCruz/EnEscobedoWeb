@@ -12,27 +12,20 @@ import { calculateDistance } from '@/lib/clickCollect';
 import { ArrowLeft, ShoppingCart } from "lucide-react";
 import Loader from "@/components/Loader";
 
-// Tipo para los datos de la tienda seleccionada
-interface SelectedStoreData {
+// Tipo para los datos de la tienda seleccionada (debe coincidir con StoreData del componente)
+interface StoreData {
   store: {
     _id: string;
     name: string;
+    distanceKm?: number;
     address: {
       street: string;
       city: string;
       state: string;
-      postalCode: string;
     };
-    coordinates?: {
-      latitude: number;
-      longitude: number;
+    contact?: {
+      phone?: string;
     };
-    contact: {
-      phone: string;
-    };
-    operatingHours: Record<string, string>;
-    distanceKm: number;
-    estimatedDeliveryDate: string;
   };
   summary: {
     storeName: string;
@@ -49,7 +42,7 @@ export default function SelectStorePage() {
   const { user } = useUser();
   const groupedItems = useBasketStore((state) => state.getGroupedItems());
   
-  const [selectedStore, setSelectedStore] = useState<SelectedStoreData | null>(null);
+  const [selectedStore, setSelectedStore] = useState<StoreData | null>(null);
   // Allow storing optional coordinates along with address
   const [customerAddress, setCustomerAddress] = useState<
     (CustomerAddress & { latitude?: number; longitude?: number }) | null
@@ -58,7 +51,11 @@ export default function SelectStorePage() {
   const [isClient, setIsClient] = useState(false);
 
   // Obtener el ID de la tienda de los productos en el carrito
-  const cartStoreId = groupedItems[0]?.product?.affiliateStore?._id;
+  const cartStoreId = groupedItems[0]?.product?.affiliateStore && 
+    typeof groupedItems[0]?.product?.affiliateStore === 'object' && 
+    '_id' in groupedItems[0]?.product?.affiliateStore 
+    ? (groupedItems[0]?.product?.affiliateStore as { _id: string })._id 
+    : null;
   
   // Debug - verificar estructura completa
   console.log('=== DEBUG SELECT STORE ===');
@@ -88,7 +85,7 @@ export default function SelectStorePage() {
     return <Loader />;
   }
 
-  const handleStoreSelected = (storeData: SelectedStoreData) => {
+  const handleStoreSelected = (storeData: StoreData) => {
     setSelectedStore(storeData);
   };
 
@@ -126,10 +123,10 @@ export default function SelectStorePage() {
               latitude: lat,
               longitude: lng,
             };
-            setCustomerAddress(custAddrWithCoords);
+            setCustomerAddress(custAddrWithCoords as any);
 
             // Calcular distancia con la tienda seleccionada
-            const storeCoords = selectedStore.store.coordinates;
+            const storeCoords = (selectedStore.store as any).coordinates;
             let distanceKm = 0;
             if (storeCoords && storeCoords.latitude && storeCoords.longitude) {
               distanceKm = calculateDistance(lat, lng, storeCoords.latitude, storeCoords.longitude);
@@ -158,7 +155,7 @@ export default function SelectStorePage() {
         // Ya tenemos coordenadas en customerAddress
         const lat = customerAddress.latitude as number;
         const lng = customerAddress.longitude as number;
-        const storeCoords = selectedStore.store.coordinates;
+        const storeCoords = (selectedStore.store as any).coordinates;
         let distanceKm = 0;
         if (storeCoords && storeCoords.latitude && storeCoords.longitude) {
           distanceKm = calculateDistance(lat, lng, storeCoords.latitude, storeCoords.longitude);
