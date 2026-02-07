@@ -23,11 +23,8 @@ interface ClickCollectOrder {
   };
   items: Array<{
     _key: string;
-    product: {
-      _id: string;
-      name: string;
-      price: number;
-    };
+    productName: string;
+    productId: string;
     quantity: number;
     price: number;
   }>;
@@ -44,6 +41,7 @@ interface ClickCollectOrder {
 
 const statusConfig = {
   pending: { label: 'Pendiente', color: 'bg-yellow-100 text-yellow-800', icon: Clock },
+  pending_pickup: { label: 'Pendiente de Recoger', color: 'bg-yellow-100 text-yellow-800', icon: Clock },
   processing: { label: 'Procesando', color: 'bg-blue-100 text-blue-800', icon: Package },
   ready_for_pickup: { label: 'Listo para Recoger', color: 'bg-green-100 text-green-800', icon: CheckCircle },
   completed: { label: 'Completado', color: 'bg-gray-100 text-gray-800', icon: CheckCircle },
@@ -63,10 +61,16 @@ export default function ClickCollectOrdersAdmin() {
       setError(null);
       
       const url = selectedStatus === 'all' 
-        ? '/api/click-collect-orders'
-        : `/api/click-collect-orders?status=${selectedStatus}`;
+        ? `/api/click-collect-orders?t=${Date.now()}`
+        : `/api/click-collect-orders?status=${selectedStatus}&t=${Date.now()}`;
       
-      const response = await fetch(url);
+      const response = await fetch(url, {
+        cache: 'no-store',
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+        },
+      });
       const data = await response.json();
       
       if (data.success) {
@@ -220,6 +224,7 @@ export default function ClickCollectOrdersAdmin() {
         {[
           { value: 'all', label: 'Todas' },
           { value: 'pending', label: 'Pendientes' },
+          { value: 'pending_pickup', label: 'Pendientes de Recoger' },
           { value: 'processing', label: 'Procesando' },
           { value: 'ready_for_pickup', label: 'Listas' },
           { value: 'completed', label: 'Completadas' },
@@ -342,7 +347,7 @@ export default function ClickCollectOrdersAdmin() {
                         {order.items.map((item) => (
                           <div key={item._key} className="flex justify-between items-center text-sm">
                             <div>
-                              <span className="font-medium">{item.product.name}</span>
+                              <span className="font-medium">{item.productName}</span>
                               <span className="text-gray-600 ml-2">x{item.quantity}</span>
                             </div>
                             <span>{formatCurrency(item.price * item.quantity)}</span>

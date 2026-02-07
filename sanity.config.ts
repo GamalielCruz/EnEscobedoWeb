@@ -14,6 +14,13 @@ import {apiVersion, dataset, projectId} from './sanity/env'
 import {schema} from './sanity/schemaTypes'
 import {structure} from './sanity/structure'
 
+// DEBUG schema: Descomentar para ver qué schema carga el Studio (ver consola del navegador)
+// const _aff = schema?.types?.find((t: { name?: string }) => t?.name === 'affiliateStore')
+// const _hasOwner = _aff?.fields?.some((f: { name?: string }) => f?.name === 'ownerClerkUserId')
+// if (typeof window !== 'undefined') {
+//   console.log('[Sanity] ownerClerkUserId en schema:', _hasOwner, '| Campos:', _aff?.fields?.map((f: { name?: string }) => f?.name))
+// }
+
 export default defineConfig({
   basePath: '/studio',
   projectId,

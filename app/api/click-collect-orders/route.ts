@@ -1,63 +1,84 @@
 import { NextRequest, NextResponse } from "next/server";
 import { client, writeClient } from "@/sanity/lib/client";
 
-// Query para obtener órdenes de click and collect
-const ORDERS_QUERY = `*[_type == "clickCollectOrder"] | order(createdAt desc) {
+// Query para obtener órdenes (tanto `clickCollectOrder` como `order` con deliveryMethod == 'click_collect')
+const ORDERS_QUERY = `*[
+  (_type == "clickCollectOrder") || (_type == "order" && deliveryMethod == "click_collect")
+] | order(coalesce(createdAt, orderDate) desc) {
   _id,
+  _type,
   orderNumber,
   pickupCode,
-  customerInfo,
-  storeInfo,
-  items[] {
-    _key,
-    product-> {
-      _id,
-      name,
-      slug,
-      price,
-      image
-    },
-    quantity,
-    price
-  },
-  totalAmount,
+  // Normalizar información del cliente
+  "customerInfo": select(
+    _type == "clickCollectOrder" => customerInfo,
+    _type == "order" => { "name": customerName, "email": email, "clerkUserId": clerkUserId, "phone": phone }
+  ),
+  // Normalizar información de tienda
+  "storeInfo": select(
+    _type == "clickCollectOrder" => storeInfo,
+    _type == "order" => { "storeId": pickupStore._ref, "storeName": pickupStore->name, "storeAddress": pickupStore->address.street, "storePhone": pickupStore->contact.phone }
+  ),
+  // Normalizar items / productos
+  "items": select(
+    _type == "clickCollectOrder" => items,
+    _type == "order" => products[]{ 
+      _key, 
+      "productName": product->name,
+      "productId": product->_id,
+      "quantity": quantity, 
+      "price": product->price,
+      "product": product->{ _id, name, slug, price, image }
+    }
+  ),
+  // Totales y metadatos
+  "totalAmount": coalesce(totalAmount, totalPrice),
   paymentMethod,
   status,
   estimatedPickupDate,
   readyAt,
   pickedUpAt,
   notes,
-  createdAt,
+  "createdAt": coalesce(createdAt, orderDate),
   updatedAt
 }`;
 
 // Query para obtener una orden específica
-const ORDER_BY_NUMBER_QUERY = `*[_type == "clickCollectOrder" && orderNumber == $orderNumber][0] {
+const ORDER_BY_NUMBER_QUERY = `*[
+  (_type == "clickCollectOrder" && orderNumber == $orderNumber)
+  || (_type == "order" && orderNumber == $orderNumber && deliveryMethod == "click_collect")
+][0] {
   _id,
+  _type,
   orderNumber,
   pickupCode,
-  customerInfo,
-  storeInfo,
-  items[] {
-    _key,
-    product-> {
-      _id,
-      name,
-      slug,
-      price,
-      image
-    },
-    quantity,
-    price
-  },
-  totalAmount,
+  "customerInfo": select(
+    _type == "clickCollectOrder" => customerInfo,
+    _type == "order" => { "name": customerName, "email": email, "clerkUserId": clerkUserId, "phone": phone }
+  ),
+  "storeInfo": select(
+    _type == "clickCollectOrder" => storeInfo,
+    _type == "order" => { "storeId": pickupStore._ref, "storeName": pickupStore->name, "storeAddress": pickupStore->address.street, "storePhone": pickupStore->contact.phone }
+  ),
+  "items": select(
+    _type == "clickCollectOrder" => items,
+    _type == "order" => products[]{ 
+      _key, 
+      "productName": product->name,
+      "productId": product->_id,
+      "quantity": quantity, 
+      "price": product->price,
+      "product": product->{ _id, name, slug, price, image }
+    }
+  ),
+  "totalAmount": coalesce(totalAmount, totalPrice),
   paymentMethod,
   status,
   estimatedPickupDate,
   readyAt,
   pickedUpAt,
   notes,
-  createdAt,
+  "createdAt": coalesce(createdAt, orderDate),
   updatedAt
 }`;
 
@@ -85,32 +106,28 @@ export async function GET(request: NextRequest) {
     }
     // Si se especifica un estado
     else if (status) {
-      query = `*[_type == "clickCollectOrder" && status == $status] | order(createdAt desc) {
+      query = `*[
+        ((_type == "clickCollectOrder") || (_type == "order" && deliveryMethod == "click_collect"))
+        && status == $status
+      ] | order(coalesce(createdAt, orderDate) desc) {
         _id,
+        _type,
         orderNumber,
         pickupCode,
-        customerInfo,
-        storeInfo,
-        items[] {
-          _key,
-          product-> {
-            _id,
-            name,
-            slug,
-            price,
-            image
-          },
-          quantity,
-          price
-        },
-        totalAmount,
+        (_type == "clickCollectOrder") => { customerInfo },
+        (_type == "order") => { customerInfo: { name: customerName, email, clerkUserId, phone } },
+        (_type == "clickCollectOrder") => { storeInfo },
+        (_type == "order") => { storeInfo: { storeId: pickupStore._ref, storeName: pickupStore->name, storeAddress: pickupStore->address.street } },
+        (_type == "clickCollectOrder") => { items },
+        (_type == "order") => { items: products[] { _key, product-> { _id, name, slug, price, image }, quantity, price: product->price } },
+        totalAmount: coalesce(totalAmount, totalPrice),
         paymentMethod,
         status,
         estimatedPickupDate,
         readyAt,
         pickedUpAt,
         notes,
-        createdAt,
+        createdAt: coalesce(createdAt, orderDate),
         updatedAt
       }`;
       params.status = status;
@@ -130,6 +147,12 @@ export async function GET(request: NextRequest) {
       data: {
         orders: orderNumber ? (orders ? [orders] : []) : orders,
         count: Array.isArray(orders) ? orders.length : (orders ? 1 : 0)
+      }
+    }, {
+      headers: {
+        'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
+        'Pragma': 'no-cache',
+        'Expires': '0',
       }
     });
 

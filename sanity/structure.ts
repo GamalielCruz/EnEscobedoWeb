@@ -7,7 +7,18 @@ export const structure: StructureResolver = (S) =>
     .items([
       S.documentTypeListItem("category").title("Categories"),
       S.divider(),
+      S.listItem()
+        .title("Solicitudes Pendientes")
+        .schemaType("productUpdateRequest")
+        .child(
+          S.documentList()
+            .title("Solicitudes Pendientes de Aprobación")
+            .schemaType("productUpdateRequest")
+            .filter('_type == "productUpdateRequest" && status == "pending"')
+            .defaultOrdering([{ field: "submittedAt", direction: "desc" }])
+        ),
+      S.divider(),
       ...S.documentTypeListItems().filter(
-        (item) => item.getId() && !["category"].includes(item.getId()!)
+        (item) => item.getId() && !["category", "productUpdateRequest"].includes(item.getId()!)
       ),
     ]);

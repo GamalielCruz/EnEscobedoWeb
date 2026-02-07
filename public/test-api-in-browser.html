@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Dashboard API</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+        }
+        .log {
+            margin: 10px 0;
+            padding: 10px;
+            background: #2d2d2d;
+            border-left: 3px solid #007acc;
+        }
+        .error {
+            border-left-color: #f44336;
+        }
+        .success {
+            border-left-color: #4caf50;
+        }
+        button {
+            padding: 10px 20px;
+            background: #007acc;
+            color: white;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #005a9e;
+        }
+        pre {
+            background: #1e1e1e;
+            padding: 10px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 Test Dashboard API</h1>
+    <button onclick="testAPI()">Probar API</button>
+    <div id="output"></div>
+
+    <script>
+        async function testAPI() {
+            const output = document.getElementById('output');
+            output.innerHTML = '<div class="log">🔄 Probando API...</div>';
+
+            const storeId = '491d7dff-8884-402e-8e2b-1bcb8630e8ec';
+            const url = `/api/dashboard/store-orders?storeId=${storeId}`;
+
+            try {
+                const response = await fetch(url, {
+                    headers: {
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache'
+                    }
+                });
+
+                const data = await response.json();
+
+                let html = `
+                    <div class="log ${response.ok ? 'success' : 'error'}">
+                        <strong>📊 Respuesta de la API</strong><br>
+                        Status: ${response.status} ${response.statusText}<br>
+                        URL: ${url}
+                    </div>
+                `;
+
+                if (response.ok) {
+                    html += `
+                        <div class="log success">
+                            <strong>✅ Success: ${data.success}</strong><br>
+                            Órdenes encontradas: ${data.orders?.length || 0}
+                        </div>
+                    `;
+
+                    if (data.orders && data.orders.length > 0) {
+                        data.orders.forEach((order, idx) => {
+                            html += `
+                                <div class="log">
+                                    <strong>📦 Orden ${idx + 1}</strong><br>
+                                    - ID: ${order._id}<br>
+                                    - Número: ${order.orderNumber}<br>
+                                    - Tipo: ${order._type}<br>
+                                    - Estado: ${order.status}<br>
+                                    - Cliente: ${order.customerInfo?.name}<br>
+                                    - Tienda: ${order.storeInfo?.storeName}<br>
+                                    - StoreId: ${order.storeInfo?.storeId || 'N/A'}<br>
+                                    - Items: ${order.items?.length || 0}
+                                </div>
+                            `;
+                        });
+                    } else {
+                        html += `
+                            <div class="log error">
+                                <strong>⚠️ No se encontraron órdenes</strong><br>
+                                La API devolvió 0 órdenes para esta tienda.
+                            </div>
+                        `;
+                    }
+                } else {
+                    html += `
+                        <div class="log error">
+                            <strong>❌ Error</strong><br>
+                            ${data.error || 'Error desconocido'}
+                        </div>
+                    `;
+                }
+
+                html += `
+                    <div class="log">
+                        <strong>📄 Respuesta completa:</strong>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    </div>
+                `;
+
+                output.innerHTML = html;
+
+            } catch (error) {
+                output.innerHTML = `
+                    <div class="log error">
+                        <strong>❌ Error de red</strong><br>
+                        ${error.message}
+                    </div>
+                `;
+            }
+        }
+
+        // Auto-ejecutar al cargar
+        window.addEventListener('load', () => {
+            setTimeout(testAPI, 500);
+        });
+    </script>
+</body>
+</html>

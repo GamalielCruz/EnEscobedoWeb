@@ -70,8 +70,8 @@ function BasketPage() {
   }, []);
 
   // Obtener el ID de la tienda de los productos en el carrito (si aplica)
-  const cartStoreId = groupedItems[0]?.product?.affiliateStore?._id;
 
+  const cartStoreId = (groupedItems[0]?.product?.affiliateStore as any)?._ref || (groupedItems[0]?.product?.affiliateStore as any)?._id;
   useEffect(() => {
     // Si hay un store guardado en localStorage, cargarlo
     const saved = localStorage.getItem('clickCollectStore');
@@ -541,16 +541,6 @@ function BasketPage() {
                     </div>
                   )}
 
-                  {/* Info de tienda seleccionada */}
-                  {selectedStore && (
-                    <div className="bg-green-50 border border-green-200 rounded-lg p-3 flex items-start gap-2">
-                      <MapPin className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-green-800 font-medium text-sm">{savedStoreInfo?.storeName}</p>
-                        <p className="text-green-600 text-xs mt-1">{savedStoreInfo?.estimatedDelivery}</p>
-                      </div>
-                    </div>
-                  )}
 
                   {/* Beneficios */}
                   {serviceType && (

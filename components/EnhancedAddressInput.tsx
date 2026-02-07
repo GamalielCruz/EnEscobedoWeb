@@ -177,10 +177,9 @@ export default function EnhancedAddressInput({
         </CardHeader>
         <CardContent className="space-y-4">
           <SimpleAddressInput
-            onAddressSelected={handleManualAddressSubmit as any}
+            onAddressSubmit={handleManualAddressSubmit}
             placeholder={placeholder}
             disabled={disabled || loading}
-            apiKey={apiKey || ""}
           />
           
           {apiKey && apiKey.trim() !== '' && apiKey !== 'undefined' && (

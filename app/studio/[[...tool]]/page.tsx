@@ -10,7 +10,8 @@
 import { NextStudio } from 'next-sanity/studio'
 import config from '../../../sanity.config'
 
-export const dynamic = 'force-static'
+// force-dynamic para que el Studio siempre cargue el schema más reciente
+export const dynamic = 'force-dynamic'
 
 export { metadata, viewport } from 'next-sanity/studio'
 

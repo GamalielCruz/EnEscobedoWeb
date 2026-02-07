@@ -146,6 +146,178 @@ export const productType = defineType ({
       type: "number",
       validation: (Rule) => Rule.min(0),
     }),
+    // Campos de aprobación
+    defineField({
+      name: "approvalStatus",
+      title: "Estado de aprobación",
+      type: "string",
+      options: {
+        list: [
+          { title: "Pendiente", value: "pending" },
+          { title: "Aprobado", value: "approved" },
+          { title: "Rechazado", value: "rejected" },
+        ],
+        layout: "radio",
+      },
+      initialValue: "approved",
+      description: "Estado del producto en el flujo de aprobación",
+    }),
+    defineField({
+      name: "isVisible",
+      title: "Visible en tienda",
+      type: "boolean",
+      initialValue: true,
+      description: "Si es falso, el producto no aparecerá en la tienda",
+    }),
+    defineField({
+      name: "pendingChanges",
+      title: "Cambios pendientes",
+      type: "object",
+      description: "Cambios enviados para revisión pero no aprobados aún",
+      fields: [
+        defineField({
+          name: "name",
+          title: "Nombre propuesto",
+          type: "string",
+        }),
+        defineField({
+          name: "price",
+          title: "Precio propuesto",
+          type: "number",
+        }),
+        defineField({
+          name: "stock",
+          title: "Stock propuesto",
+          type: "number",
+        }),
+        defineField({
+          name: "description",
+          title: "Descripción propuesta",
+          type: "blockContent",
+        }),
+        defineField({
+          name: "image",
+          title: "Imagen propuesta",
+          type: "image",
+        }),
+        defineField({
+          name: "categories",
+          title: "Categorías propuestas",
+          type: "array",
+          of: [{ type: "reference", to: { type: "category" } }],
+        }),
+        defineField({
+          name: "optionGroups",
+          title: "Grupos de opciones propuestos",
+          type: "array",
+          of: [
+            defineField({
+              name: "optionGroup",
+              title: "Grupo de opciones",
+              type: "object",
+              fields: [
+                defineField({
+                  name: "title",
+                  title: "Título del grupo",
+                  type: "string",
+                }),
+                defineField({
+                  name: "description",
+                  title: "Descripción",
+                  type: "string",
+                }),
+                defineField({
+                  name: "required",
+                  title: "Obligatorio",
+                  type: "boolean",
+                }),
+                defineField({
+                  name: "selectionType",
+                  title: "Tipo de selección",
+                  type: "string",
+                }),
+                defineField({
+                  name: "options",
+                  title: "Opciones",
+                  type: "array",
+                  of: [
+                    defineField({
+                      name: "option",
+                      title: "Opción",
+                      type: "object",
+                      fields: [
+                        defineField({
+                          name: "label",
+                          title: "Etiqueta",
+                          type: "string",
+                        }),
+                        defineField({
+                          name: "description",
+                          title: "Descripción",
+                          type: "string",
+                        }),
+                        defineField({
+                          name: "priceDelta",
+                          title: "Costo adicional",
+                          type: "number",
+                        }),
+                        defineField({
+                          name: "isDefault",
+                          title: "Por defecto",
+                          type: "boolean",
+                        }),
+                      ],
+                    }),
+                  ],
+                }),
+              ],
+            }),
+          ],
+        }),
+      ],
+    }),
+    defineField({
+      name: "submittedBy",
+      title: "Enviado por",
+      type: "string",
+      description: "ID del usuario que envió los cambios",
+    }),
+    defineField({
+      name: "submittedAt",
+      title: "Fecha de envío",
+      type: "datetime",
+      description: "Cuándo se enviaron los cambios para revisión",
+    }),
+    defineField({
+      name: "approvedBy",
+      title: "Aprobado por",
+      type: "string",
+      description: "ID del admin que aprobó",
+    }),
+    defineField({
+      name: "approvedAt",
+      title: "Fecha de aprobación",
+      type: "datetime",
+      description: "Cuándo se aprobaron los cambios",
+    }),
+    defineField({
+      name: "rejectedBy",
+      title: "Rechazado por",
+      type: "string",
+      description: "ID del admin que rechazó",
+    }),
+    defineField({
+      name: "rejectedAt",
+      title: "Fecha de rechazo",
+      type: "datetime",
+      description: "Cuándo se rechazaron los cambios",
+    }),
+    defineField({
+      name: "rejectionReason",
+      title: "Motivo del rechazo",
+      type: "string",
+      description: "Razón por la que se rechazó el producto",
+    }),
   ],
   preview: {
     select: {

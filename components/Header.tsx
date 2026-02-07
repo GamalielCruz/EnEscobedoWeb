@@ -9,24 +9,41 @@ import {
 } from "@clerk/nextjs";
 import Link from "next/link";
 import Form from "next/form";
-import { SearchIcon } from "lucide-react";
+import { SearchIcon, LayoutDashboard } from "lucide-react";
 import { PackageIcon, TrolleyIcon } from "@sanity/icons";
 import useBasketStore from "@/store/store";
 import Image from "next/image";
 import { Aoboshi_One } from "next/font/google";
 import { useHydration } from "@/hooks/useHydration";
+import { useEffect, useState } from "react";
 
 const aoboshiOne = Aoboshi_One({
   subsets: ["latin"],
   weight: ["400"],
 });
 
+type OwnedStore = { _id: string; name: string; storeId?: string };
+
 export function Header() {
   const { user } = useUser();
   const isHydrated = useHydration();
+  const [ownedStores, setOwnedStores] = useState<OwnedStore[] | null>(null);
   const itemCount = useBasketStore((state) => 
    state.items.reduce((total, item) => total + item.quantity, 0)
   );
+
+  useEffect(() => {
+    if (!user?.id) {
+      setOwnedStores([]);
+      return;
+    }
+    fetch("/api/my-stores")
+      .then((res) => res.json())
+      .then((data) => setOwnedStores(data.stores ?? []))
+      .catch(() => setOwnedStores([]));
+  }, [user?.id]);
+
+  const isSingleStoreOwner = ownedStores !== null && ownedStores.length === 1;
 
   const createClerkPasskey = async () => {
     try {
@@ -126,7 +143,17 @@ export function Header() {
           </Link>
 
 
-            
+          {isSingleStoreOwner ? (
+            <Link
+              href="/dashboard"
+              className="relative flex items-center justify-center bg-[#ff8800] hover:bg-[#ff8800]/80 text-gray-900 font-bold py-2 px-3 rounded"
+              aria-label="Panel del restaurante"
+            >
+              <LayoutDashboard className="w-6 h-6" />
+              <span className="hidden sm:block">Manager</span>
+            </Link>
+          ) : null}
+
             <ClerkLoaded>
               {user ? (
                 <div className="flex items-center">
@@ -152,7 +179,7 @@ export function Header() {
                 {/* UserButton already shown above, so only show name here */}
                 <div className="hidden sm:block text-xs">
                   <p className="text-gray-900">Buen dia,</p>
-                  <p className="font-bold text-gray-900">{user.fullName}!</p>
+                  <p className="font-bold text-gray-900">{user.firstName}!</p>
                 </div>
               </div>
             )}

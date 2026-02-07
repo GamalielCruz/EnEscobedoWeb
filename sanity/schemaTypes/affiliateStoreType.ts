@@ -8,6 +8,13 @@ export const affiliateStoreType = defineType({
   icon: HomeIcon,
   fields: [
     defineField({
+      name: "ownerClerkUserId",
+      title: "Usuario Dueño (ID de Clerk)",
+      type: "string",
+      description:
+        "ID del usuario en Clerk que es dueño o administrador de esta tienda (ej: user_xxx). Vincular al acceso autenticado del usuario.",
+    }),
+    defineField({
       name: "name",
       title: "Nombre de la Tienda",
       type: "string",

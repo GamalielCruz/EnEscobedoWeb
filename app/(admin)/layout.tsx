@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
-import "../globals.css";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -28,6 +27,12 @@ export default function AdminLayout({
                   </h1>
                 </div>
                 <nav className="flex space-x-4">
+                  <a
+                    href="/pending-products"
+                    className="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
+                  >
+                    Aprobación de Productos
+                  </a>
                   <a
                     href="/click-collect-orders"
                     className="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"

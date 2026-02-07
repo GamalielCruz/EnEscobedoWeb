@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Obtener Mi Clerk User ID</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196F3;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .user-id {
+            background: #f5f5f5;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            word-break: break-all;
+            margin: 20px 0;
+        }
+        .copy-btn {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .copy-btn:hover {
+            background: #45a049;
+        }
+        .copy-btn:active {
+            background: #3d8b40;
+        }
+        .success {
+            color: #4CAF50;
+            font-weight: bold;
+        }
+        .error {
+            color: #f44336;
+            font-weight: bold;
+        }
+        .loading {
+            color: #2196F3;
+        }
+        .instructions {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .instructions ol {
+            margin: 10px 0;
+            padding-left: 20px;
+        }
+        .instructions li {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔑 Obtener Mi Clerk User ID</h1>
+        
+        <div class="info-box">
+            <strong>¿Para qué necesito esto?</strong><br>
+            Para que el dashboard muestre las órdenes de tu restaurante, necesitas asignar tu Clerk User ID como dueño de la tienda en Sanity Studio.
+        </div>
+
+        <div id="status" class="loading">
+            ⏳ Obteniendo tu Clerk User ID...
+        </div>
+
+        <div id="result" style="display: none;">
+            <h2>Tu Clerk User ID:</h2>
+            <div class="user-id" id="userId"></div>
+            <button class="copy-btn" onclick="copyUserId()">📋 Copiar ID</button>
+            <div id="copyStatus" style="margin-top: 10px;"></div>
+        </div>
+
+        <div class="instructions">
+            <h3>📝 Próximos pasos:</h3>
+            <ol>
+                <li>Copia tu Clerk User ID usando el botón de arriba</li>
+                <li>Ve a: <a href="http://localhost:3000/studio" target="_blank">http://localhost:3000/studio</a></li>
+                <li>Busca "Tiendas Afiliadas" en el menú lateral</li>
+                <li>Abre tu restaurante (ej: "Borona Pizza")</li>
+                <li>Busca el campo "Usuario Dueño (ID de Clerk)"</li>
+                <li>Pega tu Clerk User ID</li>
+                <li>Haz clic en "Publish" o "Guardar"</li>
+                <li>Recarga el dashboard: <a href="http://localhost:3000/dashboard" target="_blank">http://localhost:3000/dashboard</a></li>
+            </ol>
+        </div>
+
+        <div class="info-box" style="margin-top: 20px;">
+            <strong>💡 Nota:</strong> Si no ves tu ID arriba, asegúrate de estar autenticado en la aplicación. Ve a <a href="http://localhost:3000" target="_blank">http://localhost:3000</a> e inicia sesión primero.
+        </div>
+    </div>
+
+    <script>
+        let userIdValue = '';
+
+        async function getUserId() {
+            try {
+                // Esperar un poco para que Clerk se cargue
+                await new Promise(resolve => setTimeout(resolve, 2000));
+
+                // Intentar obtener el ID de Clerk
+                if (window.Clerk && window.Clerk.user) {
+                    userIdValue = window.Clerk.user.id;
+                    document.getElementById('userId').textContent = userIdValue;
+                    document.getElementById('result').style.display = 'block';
+                    document.getElementById('status').innerHTML = '<span class="success">✅ ID obtenido exitosamente</span>';
+                } else {
+                    // Intentar desde la sesión
+                    const response = await fetch('http://localhost:3000/api/my-stores');
+                    if (response.ok) {
+                        // Si la API responde, el usuario está autenticado
+                        document.getElementById('status').innerHTML = '<span class="error">❌ No se pudo obtener el ID automáticamente</span><br><br><strong>Solución:</strong><br>1. Ve a <a href="http://localhost:3000/dashboard" target="_blank">http://localhost:3000/dashboard</a><br>2. Si no tienes tienda asignada, verás tu Clerk User ID en pantalla<br>3. Cópialo desde ahí';
+                    } else {
+                        document.getElementById('status').innerHTML = '<span class="error">❌ No estás autenticado</span><br><br><strong>Solución:</strong><br>1. Ve a <a href="http://localhost:3000" target="_blank">http://localhost:3000</a><br>2. Inicia sesión<br>3. Vuelve a esta página';
+                    }
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('status').innerHTML = '<span class="error">❌ Error al obtener el ID</span><br><br><strong>Solución alternativa:</strong><br>1. Ve a <a href="http://localhost:3000/dashboard" target="_blank">http://localhost:3000/dashboard</a><br>2. Abre la consola del navegador (F12)<br>3. Escribe: <code>console.log(window.Clerk?.user?.id)</code><br>4. Copia el ID que aparece';
+            }
+        }
+
+        function copyUserId() {
+            navigator.clipboard.writeText(userIdValue).then(() => {
+                document.getElementById('copyStatus').innerHTML = '<span class="success">✅ ID copiado al portapapeles</span>';
+                setTimeout(() => {
+                    document.getElementById('copyStatus').innerHTML = '';
+                }, 3000);
+            }).catch(err => {
+                document.getElementById('copyStatus').innerHTML = '<span class="error">❌ Error al copiar. Selecciona y copia manualmente.</span>';
+            });
+        }
+
+        // Cargar Clerk
+        const script = document.createElement('script');
+        script.src = 'https://cdn.clerk.com/clerk.js';
+        script.async = true;
+        script.onload = () => {
+            // Inicializar Clerk con tu publishable key
+            // Nota: Esto solo funcionará si estás en el mismo dominio
+            getUserId();
+        };
+        document.head.appendChild(script);
+
+        // Intentar obtener el ID después de un tiempo
+        setTimeout(getUserId, 3000);
+    </script>
+</body>
+</html>

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import "../globals.css";
+import "@/app/globals.css";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Header } from "@/components/Header";
 import { SanityLive } from "@/sanity/lib/live";
