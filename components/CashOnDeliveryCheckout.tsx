@@ -16,6 +16,7 @@ function CashOnDeliveryCheckout() {
   const [shippingCalculated, setShippingCalculated] = useState(false);
   const [shippingError, setShippingError] = useState("");
   const [addressPreloaded, setAddressPreloaded] = useState(false);
+  const [savedStoreData, setSavedStoreData] = useState<any>(null);
   const [formData, setFormData] = useState({
     phone: "",
     address: {
@@ -41,6 +42,7 @@ function CashOnDeliveryCheckout() {
       try {
         const storeData = JSON.parse(savedStore);
         console.log('✅ Datos encontrados:', storeData);
+        setSavedStoreData(storeData);
         
         // Si hay dirección del cliente guardada, pre-cargarla
         if (storeData.customerAddress) {
@@ -113,7 +115,12 @@ function CashOnDeliveryCheckout() {
     setIsLoading(true);
 
     try {
-      const orderNumber = crypto.randomUUID();
+      const timestamp = new Date().getTime();
+      const randomStr = Math.random().toString(36).substring(2, 7).toUpperCase();
+      const orderNumber = `COD-${timestamp}-${randomStr}`;
+
+      // Buscar tienda del primer producto si no hay una seleccionada explícitamente
+      const productStoreId = items[0]?.product?.affiliateStore?._ref || (items[0]?.product?.affiliateStore as any)?._id;
 
       const result = await createCashOnDeliveryOrder(
         items.map((item) => ({
@@ -127,17 +134,28 @@ function CashOnDeliveryCheckout() {
           clerkUserId: user.id,
           phone: formData.phone,
           shippingAddress: formData.address,
+          storeInfo: {
+            storeId: savedStoreData?.storeId || productStoreId,
+            storeName: savedStoreData?.storeName || "Tienda Afiliada",
+            storeAddress: savedStoreData?.storeAddress || "",
+            storePhone: savedStoreData?.storePhone || "",
+            deliveryMethod: savedStoreData?.deliveryMethod || 'delivery',
+            estimatedDelivery: savedStoreData?.estimatedDelivery || ''
+          }
         },
         shippingCost
       );
 
       if (result.success) {
         clearBasket();
-        router.push(`/success-cod?orderNumber=${orderNumber}`);
+        // Usar window.location.href para asegurar una navegación limpia y evitar loops de hidratación
+        window.location.href = `/success-cod?orderNumber=${orderNumber}`;
+      } else {
+        alert("Error: " + (result.error || "No se pudo procesar la orden."));
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error creating COD order:", error);
-      alert("Error al crear la orden. Por favor intenta de nuevo.");
+      alert("Error crítico: " + (error.message || "Por favor intenta de nuevo."));
     } finally {
       setIsLoading(false);
     }

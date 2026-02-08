@@ -5,8 +5,10 @@ import { client, writeClient } from "@/sanity/lib/client";
 const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
 // Soporta documentos tipo `clickCollectOrder` y `order` (cuando deliveryMethod == 'click_collect')
 const ORDERS_QUERY = `*[
-  (_type == "clickCollectOrder" && storeInfo.storeId == $storeId)
-  || (_type == "order" && deliveryMethod == "click_collect" && pickupStore._ref == $storeId)
+  !(_id in path('drafts.**')) && (
+    (_type == "clickCollectOrder" && storeInfo.storeId == $storeId)
+    || (_type == "order" && (pickupStore._ref == $storeId || affiliateStore._ref == $storeId))
+  )
 ] | order(coalesce(createdAt, orderDate) desc) {
   _id,
   _type,
@@ -18,7 +20,12 @@ const ORDERS_QUERY = `*[
   ),
   "storeInfo": select(
     _type == "clickCollectOrder" => storeInfo,
-    _type == "order" => { "storeId": pickupStore._ref, "storeName": pickupStore->name, "storeAddress": pickupStore->address.street, "storePhone": pickupStore->contact.phone }
+    _type == "order" => { 
+      "storeId": coalesce(pickupStore._ref, affiliateStore._ref), 
+      "storeName": coalesce(pickupStore->name, affiliateStore->name), 
+      "storeAddress": coalesce(pickupStore->address.street, affiliateStore->address.street), 
+      "storePhone": coalesce(pickupStore->contact.phone, affiliateStore->contact.phone) 
+    }
   ),
   "items": select(
     _type == "clickCollectOrder" => items,
@@ -38,11 +45,12 @@ const ORDERS_QUERY = `*[
   pickedUpAt,
   notes,
   "createdAt": coalesce(createdAt, orderDate),
+  "deliveryMethod": coalesce(deliveryMethod, "click_collect"),
   updatedAt
 }`;
 const ORDER_BY_NUMBER = `*[
   (_type == "clickCollectOrder" && orderNumber == $orderNumber)
-  || (_type == "order" && orderNumber == $orderNumber && deliveryMethod == "click_collect")
+  || (_type == "order" && orderNumber == $orderNumber)
 ][0]`;
 
 export async function GET(request: NextRequest) {
@@ -58,7 +66,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "storeId requerido" }, { status: 400 });
     }
 
-    const ownedStores = await client.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
+    const ownedStores = await writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
       userId,
     });
     const ownsStore = ownedStores?.some((s) => s._id === storeId);
@@ -66,7 +74,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "No tienes permiso para esta tienda" }, { status: 403 });
     }
 
-    const orders = await client.fetch(ORDERS_QUERY, { storeId });
+    const orders = await writeClient.fetch(ORDERS_QUERY, { storeId });
     
     return NextResponse.json({ success: true, orders: orders ?? [] }, {
       headers: {
@@ -103,13 +111,22 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "Orden no encontrada" }, { status: 404 });
     }
 
-    const ownedStores = await client.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
+    const ownedStores = await writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
       userId,
     });
-    const storeId = order.storeInfo?.storeId;
+    
+    // Extraer storeId dependiendo del tipo de documento
+    let storeId = "";
+    if (order._type === "clickCollectOrder") {
+      storeId = order.storeInfo?.storeId;
+    } else if (order._type === "order") {
+      storeId = order.pickupStore?._ref || order.affiliateStore?._ref;
+    }
+
     const ownsStore = ownedStores?.some((s) => s._id === storeId);
     if (!ownsStore) {
-      return NextResponse.json({ error: "No tienes permiso para esta orden" }, { status: 403 });
+      console.error("[dashboard/store-orders PATCH] Store ownership check failed:", { storeId, ownedStores });
+      return NextResponse.json({ error: "No tienes permiso para esta orden o tienda no identificada" }, { status: 403 });
     }
 
     const updateData: Record<string, unknown> = {
@@ -118,8 +135,10 @@ export async function PATCH(request: NextRequest) {
     };
     if (status === "ready_for_pickup" && !order.readyAt) {
       updateData.readyAt = new Date().toISOString();
-    } else if (status === "completed" && !order.pickedUpAt) {
+    } else if (status === "picked_up" && !order.pickedUpAt) {
       updateData.pickedUpAt = new Date().toISOString();
+    } else if (status === "delivered" && !order.deliveredAt) {
+      updateData.deliveredAt = new Date().toISOString();
     }
 
     const updated = await writeClient.patch(order._id).set(updateData).commit();

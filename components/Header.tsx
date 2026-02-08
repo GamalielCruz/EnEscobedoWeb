@@ -28,6 +28,8 @@ export function Header() {
   const { user } = useUser();
   const isHydrated = useHydration();
   const [ownedStores, setOwnedStores] = useState<OwnedStore[] | null>(null);
+  const [isVisible, setIsVisible] = useState(true);
+  const [lastScrollY, setLastScrollY] = useState(0);
   const itemCount = useBasketStore((state) => 
    state.items.reduce((total, item) => total + item.quantity, 0)
   );
@@ -43,6 +45,28 @@ export function Header() {
       .catch(() => setOwnedStores([]));
   }, [user?.id]);
 
+  useEffect(() => {
+    const handleScroll = () => {
+      const currentScrollY = window.scrollY;
+      
+      if (currentScrollY > lastScrollY && currentScrollY > 100) {
+        // Scrolling down and past 100px
+        setIsVisible(false);
+      } else if (currentScrollY < lastScrollY) {
+        // Scrolling up
+        setIsVisible(true);
+      }
+      
+      setLastScrollY(currentScrollY);
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+    };
+  }, [lastScrollY]);
+
   const isSingleStoreOwner = ownedStores !== null && ownedStores.length === 1;
 
   const createClerkPasskey = async () => {
@@ -55,7 +79,9 @@ export function Header() {
   };
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 bg-white border-b border-gray-200 shadow-sm flex flex-wrap justify-between items-center px-2 py-2">
+    <header className={`sticky top-0 z-50 w-full bg-white border-b border-gray-100 flex flex-wrap justify-between items-center px-2 py-2 transition-transform duration-300 ease-in-out ${
+      isVisible ? 'translate-y-0' : '-translate-y-full'
+    }`}>
       <div className="w-full ">
         {/* Top bar: Logo, Search, Basket, User */}
         <div className="flex items-center justify-between w-full py-2 sm:py-0 gap-2">
@@ -69,15 +95,22 @@ export function Header() {
               <Image
                 src="/logo.svg"
                 alt="En Escobedo Logo"
-                width={36}
-                height={36}
+                width={40}
+                height={40}
               />
             </span>
             {/* Show brand name only on sm+ */}
             <span
-              className={`${aoboshiOne.className} text-md sm:text-2xl font-bold text-[#ff8800] tracking-tight group-hover:opacity-80 transition-opacity duration-200 hidden md:inline`}
+              className={`relative flex items-center justify-center w-auto h-8 sm:h-10 group-hover:scale-110 transition-transform duration-200 ${
+                isHydrated ? "hidden sm:block" : "hidden"
+              } mx-auto`}
             >
-              En Escobedo
+              <Image
+                src="/menufy.svg"
+                alt="Menufy Logo"
+                width={140}
+                height={50}
+              />
             </span>
           </Link>
 
@@ -93,25 +126,25 @@ export function Header() {
                   name="query"
                   placeholder="Estoy buscando..."
                   className="
-                    border-[#ff8800]
-                    text-[#ff8800]
+                    border-[#eb1901]
+                    text-[#eb1901]
                     px-4
                     py-2
                     rounded-2xl
                     focus:outline-none
                     focus:ring-2
-                    focus:ring-[#ff8800]
+                    focus:ring-[#eb1901]
                     focus:ring-opacity-50
                     focus:ring-offset-2
-                    focus:ring-offset-[#ff8800]
-                    placeholder:text-[#ff8800]
+                    focus:ring-offset-[#eb1901]
+                    placeholder:text-[#eb1901]
                     border
                     w-full
                     pr-10
                     text-base
                   "
                 />
-                <span className="absolute inset-y-0 right-3 flex items-center pointer-events-none text-[#ff8800]">
+                <span className="absolute inset-y-0 right-3 flex items-center pointer-events-none text-[#eb1901]">
                   <SearchIcon className="w-5 h-5" />
                 </span>
               </div>
@@ -122,12 +155,12 @@ export function Header() {
           <div className="flex items-center gap-2 ml-2">
             <Link
               href="/basket"
-              className="relative flex items-center justify-center bg-[#ff8800] hover:bg-[#ff8800]/80 text-gray-900 font-bold py-2 px-3 rounded"
+              className="relative flex items-center justify-center bg-[#eb1901] hover:bg-[#eb1901]/80 text-gray-50 font-bold py-2 px-3 rounded"
               aria-label="Ver carrito"
             >
               <TrolleyIcon className="w-6 h-6" />
               {isHydrated && itemCount !== 0 && (
-                <span className="absolute -top-1 -right-1 text-xs bg-[#ff8800] text-black rounded-full w-5 h-5 flex items-center justify-center font-bold animate-pulse">
+                <span className="absolute -top-1 -right-1 text-xs bg-[#eb1901] text-white rounded-full w-5 h-5 flex items-center justify-center font-bold animate-pulse">
                   {itemCount}
                 </span>
               )}
@@ -136,7 +169,7 @@ export function Header() {
 
             <Link
             href="/orders"
-            className="flex-1 relative flex justify-center sm:justify-start sm:flex-none items-center space-x-2 bg-[#ff8800] hover:bg-[#ff8800]/80 text-gray-900 font-bold py-2 px-4 rounded"
+            className="relative flex items-center justify-center bg-[#eb1901] hover:bg-[#eb1901]/80 text-gray-50 font-bold py-2 px-3 rounded"
           >
             <PackageIcon className="w-6 h-6" />
             <span className="hidden sm:block">Pedidos</span>
@@ -146,7 +179,7 @@ export function Header() {
           {isSingleStoreOwner ? (
             <Link
               href="/dashboard"
-              className="relative flex items-center justify-center bg-[#ff8800] hover:bg-[#ff8800]/80 text-gray-900 font-bold py-2 px-3 rounded"
+              className="relative flex items-center justify-center bg-[#eb1901] hover:bg-[#eb1901]/80 text-gray-50 font-bold py-2 px-3 rounded"
               aria-label="Panel del restaurante"
             >
               <LayoutDashboard className="w-6 h-6" />

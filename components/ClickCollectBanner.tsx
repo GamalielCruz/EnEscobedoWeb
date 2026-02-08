@@ -47,7 +47,7 @@ function ClickCollectBanner({ className = "", compact = false }: ClickCollectBan
       </div>
 
       {isExpanded && (
-        <div className="p-4 space-y-4">
+        <div className="p-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div className="flex items-start gap-2">
               <CheckCircle className="w-4 h-4 text-green-500 mt-0.5 flex-shrink-0" />

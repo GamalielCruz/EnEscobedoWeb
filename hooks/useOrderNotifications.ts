@@ -15,6 +15,7 @@ export type Order = {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+  deliveryMethod?: "click_collect" | "home_delivery";
 };
 
 interface UseOrderNotificationsOptions {
@@ -30,6 +31,7 @@ interface UseOrderNotificationsReturn {
   lastUpdate: Date | null;
   error: string | null;
   refresh: () => void;
+  updateOrderLocally: (orderId: string, updates: Partial<Order>) => void;
 }
 
 export function useOrderNotifications({
@@ -126,6 +128,7 @@ export function useOrderNotifications({
   }, [storeId, enabled, onNewOrder, playNotificationSound]);
 
   const refresh = useCallback(() => {
+    isFirstLoadRef.current = true; // Forzar sonido de notificación si hay nuevos
     fetchOrders();
   }, [fetchOrders]);
 
@@ -166,11 +169,18 @@ export function useOrderNotifications({
     };
   }, [enabled, storeId, fetchOrders, pollingInterval]); // Eliminado 'orders' de aquí para evitar bucle
 
+  const updateOrderLocally = useCallback((orderId: string, updates: Partial<Order>) => {
+    setOrders((prev) => 
+      prev.map((o) => (o._id === orderId ? { ...o, ...updates } : o))
+    );
+  }, []);
+
   return {
     orders,
     isLoading,
     lastUpdate,
     error,
     refresh,
+    updateOrderLocally,
   };
 }

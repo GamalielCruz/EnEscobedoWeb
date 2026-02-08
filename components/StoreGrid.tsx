@@ -55,9 +55,9 @@ export default function StoreGrid({ stores }: StoreGridProps) {
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mt-4 w-full">
       {stores.map((store) => {
-        // Solo calcular el estado después de montar en el cliente
-        const storeStatus = mounted ? getStoreStatusText(store.operatingHours) : "Cargando...";
-        const isOpen = storeStatus.includes("Abierto");
+        // Calculate status consistently - use a default on server, actual status on client
+        const storeStatus = mounted ? getStoreStatusText(store.operatingHours) : "Verificando...";
+        const isOpen = mounted ? storeStatus.includes("Abierto") : false;
 
         const deliveryTimeText =
           store.deliveryTimeMin != null && store.deliveryTimeMax != null
@@ -75,10 +75,10 @@ export default function StoreGrid({ stores }: StoreGridProps) {
           <Link
             key={store._id}
             href={`/store/${store._id}`}
-            className="group flex flex-col bg-white rounded-lg overflow-hidden hover:shadow-lg transition-shadow duration-200"
+            className="group flex flex-col bg-white rounded-lg shadow-md overflow-hidden hover:shadow-lg transition-shadow duration-200"
           >
             {/* Imagen de portada */}
-            <div className="relative w-full h-48 overflow-hidden bg-gray-200">
+            <div className="relative w-full h-48 overflow-hidden bg-black">
               {store.coverImage ? (
                 <Image
                   src={urlFor(store.coverImage).width(600).height(400).url()}
@@ -89,7 +89,7 @@ export default function StoreGrid({ stores }: StoreGridProps) {
                 />
               ) : (
                 <div className="w-full h-full bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center">
-                  <span className="text-4xl font-bold text-gray-400">
+                  <span className="text-4xl font-bold text-white">
                     {store.name?.charAt(0) || "T"}
                   </span>
                 </div>
@@ -111,13 +111,13 @@ export default function StoreGrid({ stores }: StoreGridProps) {
             {/* Contenido */}
             <div className="p-4 space-y-2">
               {/* Nombre de la tienda */}
-              <h3 className="text-lg font-semibold text-gray-900 line-clamp-1">
+              <h3 className="text-lg font-bold text-black line-clamp-1">
                 {store.name}
               </h3>
 
               {/* Dirección */}
               {store.address && (
-                <p className="text-xs text-gray-500 line-clamp-1">
+                <p className="text-xs text-black line-clamp-1">
                   {store.address.city}, {store.address.state}
                 </p>
               )}
@@ -133,8 +133,8 @@ export default function StoreGrid({ stores }: StoreGridProps) {
                   <span
                     className={
                       isOpen
-                        ? "text-green-600 font-medium"
-                        : "text-red-600 font-medium"
+                        ? "text-green-500 font-medium"
+                        : "text-red-500 font-medium"
                     }
                   >
                     {isOpen ? "Abierto" : "Cerrado"}
@@ -142,28 +142,15 @@ export default function StoreGrid({ stores }: StoreGridProps) {
                 </div>
                 {deliveryTimeText && (
                   <>
-                    <span className="text-gray-400">•</span>
-                    <span className="text-gray-600">{deliveryTimeText}</span>
+                    <span className="text-gray-900">Entrega:</span>
+                    <span className="text-gray-900">{deliveryTimeText}</span>
                   </>
                 )}
               </div>
 
               {/* Costo de entrega */}
               <div className="flex items-center gap-1 text-xs text-gray-600">
-                <svg
-                  className="h-3 w-3"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"
-                  />
-                </svg>
-                <span>{deliveryFeeText} entrega</span>
+                
               </div>
             </div>
           </Link>

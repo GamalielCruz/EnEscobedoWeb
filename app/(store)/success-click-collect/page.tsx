@@ -93,7 +93,7 @@ export default function SuccessClickCollectPage() {
 
   if (isLoading) {
     return (
-      <div className="container mx-auto px-4 py-8 max-w-4xl translate-y-[70px]">
+      <div className="container mx-auto px-4 py-8 max-w-4xl">
         <div className="flex items-center justify-center min-h-[400px]">
           <div className="text-center">
             <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-blue-600" />
@@ -105,7 +105,7 @@ export default function SuccessClickCollectPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-4xl translate-y-[70px]">
+    <div className="container mx-auto px-4 py-8 max-w-4xl">
       {/* Header de éxito */}
       <div className="text-center mb-8">
         <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />

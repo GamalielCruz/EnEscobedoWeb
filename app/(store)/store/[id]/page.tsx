@@ -55,7 +55,6 @@ export default async function StorePage({
 
   // Debug: ver qué categorías tienen los productos
   console.log('Products count:', products.length);
-  console.log('Sample product categories:', products[0]?.categories);
 
   // Extraer solo las categorías únicas de los productos de ESTA tienda
   const categoriesMap = new Map<string, { _id: string; title?: string; slug?: { current?: string } }>();
@@ -79,7 +78,7 @@ export default async function StorePage({
   console.log('Extracted categories:', categories);
 
   return (
-    <div className="min-h-screen bg-white translate-y-[70px]">
+    <div className="min-h-screen bg-white">
       <div className="max-w-7xl mx-auto">
         {/* Header de la tienda - estilo Uber Eats */}
         <div className="relative w-full h-48 md:h-64 bg-gradient-to-br from-gray-100 to-gray-200 overflow-hidden">
@@ -105,7 +104,7 @@ export default async function StorePage({
                     className="h-full w-full object-cover"
                   />
                 ) : (
-                  <span className="text-3xl md:text-4xl font-bold text-gray-800">
+                  <span className="text-3xl md:text-4xl font-bold text-white">
                     {store.name?.charAt(0) || "T"}
                   </span>
                 )}
@@ -126,24 +125,11 @@ export default async function StorePage({
               
               {/* Costo de entrega */}
               <div className="flex items-center gap-1 text-gray-600">
-                <svg
-                  className="h-4 w-4"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"
-                  />
-                </svg>
-                <span>{deliveryFeeText} entrega</span>
+                
               </div>
             </div>
             {store.address && (
-              <p className="mt-2 text-xs text-gray-500">
+              <p className="mt-2 text-xs text-black font-medium">
                  {store.address.city}
               </p>
             )}

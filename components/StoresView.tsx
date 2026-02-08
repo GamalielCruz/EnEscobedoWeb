@@ -81,14 +81,6 @@ export default function StoresView({
 
   return (
     <>
-      {/* Título */}
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-gray-900">Tiendas</h1>
-        <p className="text-gray-600 mt-2">
-          Explora nuestras tiendas y encuentra lo que necesitas
-        </p>
-      </div>
-
       {/* Filtro de categorías */}
       {storeCategories.length > 0 && (
         <div className="mb-6">

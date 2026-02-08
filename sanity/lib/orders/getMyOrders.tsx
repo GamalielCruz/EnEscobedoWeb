@@ -13,6 +13,14 @@ export async function getMyOrders(userId: string) {
       // For regular orders
       _type == "order" => {
         ...,
+        "isClickCollect": deliveryMethod == "click_collect",
+        "storeInfo": select(
+          deliveryMethod == "click_collect" => {
+            "storeName": pickupStore->name,
+            "storeAddress": pickupStore->address.street,
+            "storePhone": pickupStore->contact.phone
+          }
+        ),
         products[]{
           ...,
           product->

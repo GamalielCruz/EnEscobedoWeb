@@ -290,6 +290,13 @@ export const orderType = defineType({
       hidden: ({ document }) => document?.deliveryMethod !== "click_collect",
       description: "Código único que el cliente debe presentar para recoger su pedido",
     }),
+    defineField({
+      name: "affiliateStore",
+      title: "Tienda / Restaurante",
+      type: "reference",
+      to: [{ type: "affiliateStore" }],
+      description: "Tienda o restaurante al que pertenece este pedido",
+    }),
   ],
   preview: {
     select: {

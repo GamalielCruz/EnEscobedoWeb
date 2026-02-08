@@ -27,7 +27,13 @@ export function StoreCategoryFilter({
     useState<string>("");
   const [showSwipeIndicator, setShowSwipeIndicator] = useState(false);
   const [hasInteracted, setHasInteracted] = useState(false);
+  const [isClient, setIsClient] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  // Set isClient to true after mount
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
 
   // Use external state if provided, otherwise use internal state
   const selectedCategory =
@@ -35,8 +41,10 @@ export function StoreCategoryFilter({
       ? externalSelectedCategory
       : internalSelectedCategory;
 
-  // Check if content is scrollable and show swipe indicator
+  // Check if content is scrollable and show swipe indicator (only on client)
   useEffect(() => {
+    if (!isClient) return;
+    
     const checkScrollable = () => {
       if (scrollContainerRef.current) {
         const { scrollWidth, clientWidth } = scrollContainerRef.current;
@@ -49,7 +57,7 @@ export function StoreCategoryFilter({
     window.addEventListener("resize", checkScrollable);
 
     return () => window.removeEventListener("resize", checkScrollable);
-  }, [categories, hasInteracted]);
+  }, [categories, hasInteracted, isClient]);
 
   // Hide indicator after user interacts
   const handleScroll = () => {
@@ -84,8 +92,8 @@ export function StoreCategoryFilter({
           className={cn(
             "flex items-center gap-2 px-4 py-2 rounded-full border-2 transition-all whitespace-nowrap flex-shrink-0",
             selectedCategory === ""
-              ? "bg-black text-white border-black font-medium"
-              : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+              ? "bg-white text-[#eb1901] font-bold border-[#eb1901]"
+              : "bg-white text-black border-black hover:border-gray-400"
           )}
         >
           <span>🏪</span>
@@ -103,8 +111,8 @@ export function StoreCategoryFilter({
               className={cn(
                 "flex items-center gap-2 px-4 py-2 rounded-full border-2 transition-all whitespace-nowrap flex-shrink-0",
                 selectedCategory === category._id
-                  ? "bg-black text-white border-black font-medium"
-                  : "bg-white text-gray-700 border-gray-300 hover:border-gray-400"
+                  ? "bg-white text-[#eb1901] border-[#eb1901] font-bold"
+                  : "bg-white text-black border-black hover:border-gray-400"
               )}
             >
               {category.icon && <span>{category.icon}</span>}
@@ -115,7 +123,7 @@ export function StoreCategoryFilter({
       </div>
 
       {/* Gradient fade indicator */}
-      {showSwipeIndicator && (
+      {isClient && showSwipeIndicator && (
         <div className="absolute right-0 top-0 bottom-0 w-12 bg-gradient-to-l from-gray-100 to-transparent pointer-events-none" />
       )}
     </div>

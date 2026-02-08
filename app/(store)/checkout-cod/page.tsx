@@ -10,7 +10,7 @@ async function CashOnDeliveryPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 py-8 translate-y-[70px]">
+    <div className="container mx-auto px-4 py-8">
       <CashOnDeliveryCheckout />
     </div>
   );

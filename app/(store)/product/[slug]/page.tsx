@@ -138,7 +138,7 @@ export default async function ProductPage({
     .join(" • ");
 
   return (
-    <div className="min-h-screen bg-white translate-y-[70px]">
+    <div className="min-h-screen bg-white">
       <div className="max-w-xl mx-auto bg-white flex flex-col">
         {/* Imagen principal estilo tarjeta de delivery */}
         {allImages.length > 0 && (

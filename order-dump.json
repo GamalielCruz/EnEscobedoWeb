@@ -1,0 +1,44 @@
+{
+  "_createdAt": "2026-02-08T01:06:02Z",
+  "_id": "2t02yp6piNjowebjmdc5QM",
+  "_rev": "2t02yp6piNjowebjmdc5OH",
+  "_type": "order",
+  "_updatedAt": "2026-02-08T01:06:02Z",
+  "clerkUserId": "user_39KE3c0MdXkAxuta4OVvCPhEM9c",
+  "currency": "mxn",
+  "customerName": "CRUZ HERNANDEZ IGNACIO GAMALIEL (DOCENTE EMSAD 31 VALLE VERDE)",
+  "deliveryMethod": "home_delivery",
+  "email": "ignacio.ch@e.cobaq.edu.mx",
+  "orderDate": "2026-02-08T01:06:05.863Z",
+  "orderNumber": "COD-1770512765635-FZ39C",
+  "paymentMethod": "cash_on_delivery",
+  "phone": "01",
+  "pickupStore": {
+    "_ref": "491d7dff-8884-402e-8e2b-1bcb8630e8ec",
+    "_type": "reference"
+  },
+  "products": [
+    {
+      "_key": "item-0-1770512765863",
+      "product": {
+        "_ref": "70a5bb8d-10f5-4932-850c-38f5e1747d75",
+        "_type": "reference"
+      },
+      "quantity": 1
+    }
+  ],
+  "shippingAddress": {
+    "city": "Pedro Escobedo",
+    "country": "MX",
+    "line1": "Salon Verde, 76700, 76710 Pedro Escobedo, Qro., México",
+    "line2": "",
+    "postal_code": "76710",
+    "state": "Querétaro"
+  },
+  "shippingCost": 31,
+  "status": "pending_delivery",
+  "stripeCustomerId": "cod_user_39KE3c0MdXkAxuta4OVvCPhEM9c",
+  "stripePaymentIntentId": "cod_COD-1770512765635-FZ39C",
+  "subtotal": 1,
+  "totalPrice": 32
+}

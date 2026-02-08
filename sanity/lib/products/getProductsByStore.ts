@@ -17,6 +17,7 @@ export const getProductsByStore = async (storeId: string, categorySlug?: string)
         title,
         slug
       },
+      optionGroups,
       affiliateStore->{
         _id,
         name,

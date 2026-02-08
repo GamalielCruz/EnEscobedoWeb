@@ -7,19 +7,21 @@ import { CheckCircle, Package, Phone, MapPin, Clock, CreditCard } from "lucide-r
 export default function SuccessCODPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
+  const [isMounted, setIsMounted] = useState(false);
   const [orderNumber, setOrderNumber] = useState<string | null>(null);
 
   useEffect(() => {
+    setIsMounted(true);
     const orderNum = searchParams.get("orderNumber");
     if (orderNum) {
       setOrderNumber(orderNum);
-    } else {
-      // Si no hay número de orden, redirigir al inicio
+    } else if (isMounted) {
+      // Solo redirigir si ya montó y confirmamos que no hay número de orden
       router.push("/");
     }
-  }, [searchParams, router]);
+  }, [searchParams, router, isMounted]);
 
-  if (!orderNumber) {
+  if (!isMounted || !orderNumber) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-green-600"></div>
@@ -59,8 +61,8 @@ export default function SuccessCODPage() {
               <Package className="h-5 w-5 text-gray-400" />
               <div>
                 <p className="text-sm text-gray-600">Número de Orden</p>
-                <p className="font-mono text-sm font-medium text-gray-900">
-                  {orderNumber.slice(0, 8)}...{orderNumber.slice(-8)}
+                <p className="font-mono text-sm font-medium text-gray-900 break-all">
+                  {orderNumber.includes('COD-') ? orderNumber : `${orderNumber.slice(0, 8)}...${orderNumber.slice(-8)}`}
                 </p>
               </div>
             </div>

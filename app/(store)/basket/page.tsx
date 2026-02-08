@@ -13,7 +13,8 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { SafeLocationBasedStoreSelector } from '@/components/SafeLocationBasedStoreSelector';
 import { calculateDistance } from '@/lib/clickCollect';
-import { Truck, Store, CreditCard, Banknote, MapPin, X } from "lucide-react";
+import { Truck, Store, CreditCard, Banknote, MapPin, X, CheckCircle } from "lucide-react";
+import ModernDeliveryFlow from '@/components/ModernDeliveryFlow';
 
 interface SavedStoreInfo {
   storeId: string;
@@ -276,6 +277,8 @@ function BasketPage() {
                         onClick={() => {
                           setServiceType('delivery');
                           setShippingCost(null);
+                          setSelectedStore(null);
+                          setCustomerAddress(null);
                         }}
                         className={`p-3 rounded-lg border-2 transition-all ${
                           serviceType === 'delivery'
@@ -292,6 +295,8 @@ function BasketPage() {
                         onClick={() => {
                           setServiceType('pickup');
                           setShippingCost(0);
+                          setSelectedStore(null);
+                          setCustomerAddress(null);
                         }}
                         className={`p-3 rounded-lg border-2 transition-all ${
                           serviceType === 'pickup'
@@ -307,205 +312,116 @@ function BasketPage() {
                     </div>
                   </div>
 
-                  {/* Paso 2: Dirección (solo para delivery) */}
-                  {serviceType === 'delivery' && !customerAddress && (
+                  {/* Paso 2: Información de entrega (solo para delivery) */}
+                  {serviceType === 'delivery' && !selectedStore && (
                     <div className="space-y-3">
                       <h4 className="font-semibold text-gray-900 flex items-center gap-2">
                         <span className="w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm">2</span>
-                        Ingresa tu dirección
+                        Información de entrega
                       </h4>
-                      <div className="border-2 border-blue-200 rounded-lg bg-blue-50 p-4">
-                        <p className="text-sm text-blue-800 mb-3">
-                          📍 Necesitamos tu dirección para calcular el costo de envío y encontrar la tienda más cercana
-                        </p>
-                        <SafeLocationBasedStoreSelector
-                          onStoreSelected={() => {
-                            // No hacer nada aquí, solo queremos la dirección
-                          }}
-                          onAddressChange={(addr) => {
-                            console.log('📍 Dirección ingresada:', addr);
-                            setCustomerAddress(addr);
+                      <div className="border-2 border-blue-200 rounded-lg bg-white p-4 md:p-6">
+                        <ModernDeliveryFlow
+                          onComplete={(data) => {
+                            console.log('✅ Flujo de delivery completado:', data);
                             
-                            // Guardar dirección inmediatamente
-                            const newData = {
-                              deliveryMethod: serviceType,
-                              customerAddress: addr,
+                            setCustomerAddress(data.customerAddress);
+                            setSelectedStore(data.selectedStore);
+                            setShippingCost(data.shippingCost);
+                            
+                            const payload = {
+                              deliveryMethod: 'delivery',
+                              storeId: data.selectedStore._id,
+                              storeName: data.selectedStore.name,
+                              storeAddress: `${data.selectedStore.address.street}, ${data.selectedStore.address.city}`,
+                              storePhone: data.selectedStore.phone || '',
+                              estimatedDelivery: '30-45 minutos',
+                              customerAddress: data.customerAddress,
+                              shippingCost: data.shippingCost,
+                              distanceKm: data.distanceKm,
                             };
-                            localStorage.setItem('clickCollectStore', JSON.stringify(newData));
-                            console.log('✅ Dirección guardada');
+                            
+                            localStorage.setItem('clickCollectStore', JSON.stringify(payload));
+                            window.dispatchEvent(new Event('storeSelected'));
+                            
+                            console.log('💾 Datos guardados en localStorage:', payload);
                           }}
-                          apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
                           filterStoreId={cartStoreId}
                         />
                       </div>
                     </div>
                   )}
 
-                  {/* Paso 3: Selección de tienda */}
-                  {serviceType && (serviceType === 'pickup' || customerAddress) && (
+                  {/* Paso 2 alternativo: Selección de tienda para pickup */}
+                  {serviceType === 'pickup' && !selectedStore && (
                     <div className="space-y-3">
                       <h4 className="font-semibold text-gray-900 flex items-center gap-2">
-                        <span className="w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm">
-                          {serviceType === 'delivery' ? '3' : '2'}
-                        </span>
+                        <span className="w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm">2</span>
                         Selecciona tu tienda
                       </h4>
                       <div className="border-2 border-green-200 rounded-lg bg-green-50 p-4">
                         <p className="text-sm text-green-800 mb-3">
-                          {serviceType === 'delivery' 
-                            ? '🏪 Selecciona la tienda que preparará tu pedido' 
-                            : '🏪 Selecciona donde recogerás tu pedido'}
+                          🏪 Selecciona donde recogerás tu pedido
                         </p>
-                        {serviceType === 'pickup' ? (
-                          <SafeLocationBasedStoreSelector
-                                onStoreSelected={async (storeData: any) => {
-                                  console.log('🏪 Tienda seleccionada para pickup:', storeData);
-                                  setSelectedStore(storeData);
-                                  
-                                  // Para pickup, solo guardamos info de la tienda, NO del cliente
-                                  const payload: any = {
-                                    deliveryMethod: 'pickup',
-                                    storeId: storeData.store._id,
-                                    storeName: storeData.summary.storeName,
-                                    storeAddress: storeData.summary.address,
-                                    storePhone: storeData.summary.phone,
-                                    estimatedDelivery: storeData.summary.estimatedDelivery,
-                                    shippingCost: 0, // Gratis para pickup
-                                  };
-                                  
-                                  console.log('💾 Guardando info de pickup:', payload);
-                                  localStorage.setItem('clickCollectStore', JSON.stringify(payload));
-                                  window.dispatchEvent(new Event('storeSelected'));
-                                  setShippingCost(0);
-                                }}
-                                onAddressChange={() => {
-                                  // No hacer nada para pickup
-                                }}
-                            apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
-                            filterStoreId={cartStoreId}
-                          />
-                        ) : (
-                          <SafeLocationBasedStoreSelector
-                            onStoreSelected={async (storeData: any) => {
-                              console.log('🏪 Tienda seleccionada:', storeData);
+                        <SafeLocationBasedStoreSelector
+                          onStoreSelected={async (storeData: any) => {
+                            console.log('🏪 Tienda seleccionada para pickup:', storeData);
+                            setSelectedStore(storeData);
+                            
+                            const payload: any = {
+                              deliveryMethod: 'pickup',
+                              storeId: storeData.store._id,
+                              storeName: storeData.summary.storeName,
+                              storeAddress: storeData.summary.address,
+                              storePhone: storeData.summary.phone,
+                              estimatedDelivery: storeData.summary.estimatedDelivery,
+                              shippingCost: 0,
+                            };
+                            
+                            console.log('💾 Guardando info de pickup:', payload);
+                            localStorage.setItem('clickCollectStore', JSON.stringify(payload));
+                            window.dispatchEvent(new Event('storeSelected'));
+                            setShippingCost(0);
+                          }}
+                          onAddressChange={() => {}}
+                          apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
+                          filterStoreId={cartStoreId}
+                        />
                               
-                              // VALIDACIÓN: No permitir continuar sin ubicación del cliente
-                              if (!storeData.userLocation && !storeData.customerAddress && !customerAddress) {
-                                alert('⚠️ Por favor, detecta tu ubicación o ingresa tu dirección antes de seleccionar una tienda.');
-                                return;
-                              }
-                              
-                              setSelectedStore(storeData);
-                              
-                              // Esperar un momento para que la geocodificación termine
-                              await new Promise(resolve => setTimeout(resolve, 500));
-                              
-                              // Usar la dirección que viene del selector (ya geocodificada)
-                              let finalCustomerAddress = storeData.customerAddress || customerAddress;
-                              
-                              // Si aún no hay dirección pero hay coordenadas, crear una básica
-                              if (!finalCustomerAddress && storeData.userLocation) {
-                                console.log('⚠️ No hay dirección geocodificada, usando ubicación básica');
-                                finalCustomerAddress = {
-                                  street: "Dirección detectada automáticamente",
-                                  city: storeData.store.address?.city || "",
-                                  state: storeData.store.address?.state || "",
-                                  postalCode: "",
-                                  country: "México",
-                                  latitude: storeData.userLocation.lat,
-                                  longitude: storeData.userLocation.lng,
-                                };
-                              }
-                              
-                              // Si TODAVÍA no hay dirección, usar la de la tienda como referencia (último recurso)
-                              if (!finalCustomerAddress) {
-                                console.log('⚠️ Usando dirección de la tienda como referencia');
-                                finalCustomerAddress = {
-                                  street: "Por favor, ingresa tu dirección completa en el checkout",
-                                  city: storeData.store.address?.city || "",
-                                  state: storeData.store.address?.state || "",
-                                  postalCode: "",
-                                  country: "México",
-                                };
-                              }
-                              
-                              console.log('📍 Dirección final del cliente:', finalCustomerAddress);
-                              
-                              const payload: any = {
-                                deliveryMethod: serviceType,
-                                storeId: storeData.store._id,
-                                storeName: storeData.summary.storeName,
-                                storeAddress: storeData.summary.address,
-                                storePhone: storeData.summary.phone,
-                                estimatedDelivery: storeData.summary.estimatedDelivery,
-                                customerAddress: finalCustomerAddress,
-                              };
-
-                              const storeCoords = storeData.store.coordinates;
-                              const custCoords = (finalCustomerAddress && (finalCustomerAddress.latitude || finalCustomerAddress.lat)) ? {
-                                latitude: finalCustomerAddress.latitude || finalCustomerAddress.lat,
-                                longitude: finalCustomerAddress.longitude || finalCustomerAddress.lng || finalCustomerAddress.longitude,
-                              } : null;
-
-                              // Calcular costo de envío para delivery
-                              if (custCoords && storeCoords) {
-                                const dist = calculateDistance(custCoords.latitude, custCoords.longitude, storeCoords.latitude, storeCoords.longitude);
-                                const costPerKm = 6;
-                                const minCharge = 30;
-                                const shipping = Math.max(minCharge, Math.round(dist * costPerKm));
-                                setShippingCost(shipping);
-                                payload.distanceKm = dist;
-                                payload.shippingCost = shipping;
-                                console.log('💰 Costo de envío calculado:', shipping);
-                              }
-
-                              console.log('💾 Guardando en localStorage:', payload);
-                              localStorage.setItem('clickCollectStore', JSON.stringify(payload));
-                              window.dispatchEvent(new Event('storeSelected'));
-                            }}
-                            onAddressChange={(addr) => {
-                              console.log('📍 onAddressChange llamado con:', addr);
-                              setCustomerAddress(addr);
-                              
-                              // Guardar dirección inmediatamente en localStorage
-                              const currentStore = localStorage.getItem('clickCollectStore');
-                              if (currentStore) {
-                                try {
-                                  const storeData = JSON.parse(currentStore);
-                                  storeData.customerAddress = addr;
-                                  localStorage.setItem('clickCollectStore', JSON.stringify(storeData));
-                                  console.log('💾 Dirección actualizada en localStorage:', addr);
-                                } catch (e) {
-                                  console.error('❌ Error actualizando dirección:', e);
-                                }
-                              } else {
-                                // Si no hay datos previos, crear un objeto básico con la dirección
-                                console.log('💾 Creando nuevo registro con dirección del cliente');
-                                const newData = {
-                                  deliveryMethod: serviceType,
-                                  customerAddress: addr,
-                                };
-                                localStorage.setItem('clickCollectStore', JSON.stringify(newData));
-                                console.log('✅ Dirección guardada:', newData);
-                              }
-                            }}
-                            apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
-                            filterStoreId={cartStoreId}
-                          />
-                        )}
                       </div>
                     </div>
                   )}
 
-                  {/* Paso 4: Método de pago */}
+                  {/* Paso 3: Método de pago */}
                   {serviceType && selectedStore && (
                     <div className="space-y-3">
                       <h4 className="font-semibold text-gray-900 flex items-center gap-2">
-                        <span className="w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm">
-                          {serviceType === 'delivery' ? '4' : '3'}
-                        </span>
+                        <span className="w-6 h-6 bg-blue-600 text-white rounded-full flex items-center justify-center text-sm">3</span>
                         Método de pago
                       </h4>
+                      
+                      {/* Resumen de entrega para delivery */}
+                      {serviceType === 'delivery' && customerAddress && (
+                        <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+                          <div className="flex items-start gap-2">
+                            <CheckCircle className="w-5 h-5 text-green-600 flex-shrink-0 mt-0.5" />
+                            <div className="flex-1">
+                              <p className="text-sm font-semibold text-green-900">Entrega confirmada</p>
+                              <p className="text-sm text-green-700 mt-1">
+                                {customerAddress.street}, {customerAddress.city}
+                              </p>
+                              <p className="text-sm text-green-700">
+                                Desde: {selectedStore.store?.name || selectedStore.name}
+                              </p>
+                              {shippingCost !== null && (
+                                <p className="text-sm font-semibold text-green-900 mt-1">
+                                  Costo de envío: ${shippingCost} MXN
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                      
                       <div className="space-y-2">
                         <button
                           onClick={handleCheckout}

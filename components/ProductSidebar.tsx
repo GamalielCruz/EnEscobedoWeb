@@ -6,6 +6,7 @@ import { X, ArrowLeft } from 'lucide-react';
 import Image from 'next/image';
 import { urlFor } from '@/sanity/lib/image';
 import AddToBasketButtonNew from './AddToBasketButtonNew';
+import AddToBasketWithCustomization from './AddToBasketWithCustomization';
 import useBasketStore from '@/store/store';
 import { Product } from '@/sanity.types';
 
@@ -223,10 +224,18 @@ export default function ProductSidebar({ product, isOpen, onClose }: ProductSide
 
             {/* Botón Agregar - Posición prominente */}
             <div className="pt-2 pb-2">
-              <AddToBasketButtonNew 
-                product={product} 
-                disabled={isOutOfStock}
-              />
+              {product.optionGroups && product.optionGroups.length > 0 ? (
+                <AddToBasketWithCustomization 
+                  product={product} 
+                  disabled={isOutOfStock}
+                  onClose={handleClose}
+                />
+              ) : (
+                <AddToBasketButtonNew 
+                  product={product} 
+                  disabled={isOutOfStock}
+                />
+              )}
             </div>
 
             {/* Cart Counter */}

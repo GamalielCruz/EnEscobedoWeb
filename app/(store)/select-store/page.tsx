@@ -181,7 +181,7 @@ export default function SelectStorePage() {
   );
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-4xl translate-y-[70px]">
+    <div className="container mx-auto px-4 py-8 max-w-4xl">
       {/* Header */}
       <div className="flex items-center gap-4 mb-6">
         <Button 

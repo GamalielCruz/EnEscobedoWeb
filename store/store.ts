@@ -5,6 +5,8 @@ import { persist } from "zustand/middleware";
 export interface BasketItem {
   product: Product;
   quantity: number;
+  customizations?: { [key: string]: string | string[] };
+  customPrice?: number;
 }
 
 interface BasketState {
@@ -106,13 +108,13 @@ const useBasketStore = create<BasketState>()(
       
       getSubtotalPrice: () => {
         return get().items.reduce(
-          (total, item) => total + (item.product.price ?? 0) * item.quantity,
+          (total, item) => total + (item.customPrice ?? item.product.price ?? 0) * item.quantity,
           0
         );
       },
       getTotalPrice: () => {
         return get().items.reduce(
-          (total, item) => total + (item.product.price ?? 0) * item.quantity,
+          (total, item) => total + (item.customPrice ?? item.product.price ?? 0) * item.quantity,
           0
         );
       },

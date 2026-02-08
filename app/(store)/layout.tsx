@@ -1,6 +1,4 @@
 import type { Metadata } from "next";
-import "@/app/globals.css";
-import { ClerkProvider } from "@clerk/nextjs";
 import { Header } from "@/components/Header";
 import { SanityLive } from "@/sanity/lib/live";
 import { SanityErrorBoundary } from "@/components/SanityErrorBoundary";
@@ -8,7 +6,6 @@ import { draftMode } from "next/headers";
 import { VisualEditing } from "next-sanity";
 import { DisableDraftMode } from "@/components/DisableDraftMode";
 import Footer from "./Footer";
-import { esMX } from '@clerk/localizations'
 import CookieConsent from "@/components/cookie-consent";
 import HydrationErrorSuppressor from "@/components/HydrationErrorSuppressor";
 
@@ -24,37 +21,31 @@ export const metadata: Metadata = {
   },
 };
 
-export default async function RootLayout({
+export default async function StoreLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <ClerkProvider dynamic
-        localization={esMX}   
-    >
-      <html lang="es">
-        <body>
-          <HydrationErrorSuppressor />
-          {(await draftMode()).isEnabled && (
-            <>
-              <DisableDraftMode />
-              <VisualEditing />
-            </>
-          )}
-          <main>
-            <Header />
-            {children}
-          </main>
-          {process.env.NODE_ENV === 'development' && (
-            <SanityErrorBoundary>
-              <SanityLive />
-            </SanityErrorBoundary>
-          )}
-          <Footer />
-          <CookieConsent variant="mini"/>
-        </body>
-      </html>
-    </ClerkProvider>
+    <>
+      <HydrationErrorSuppressor />
+      {(await draftMode()).isEnabled && (
+        <>
+          <DisableDraftMode />
+          <VisualEditing />
+        </>
+      )}
+      <main>
+        <Header />
+        {children}
+      </main>
+      {process.env.NODE_ENV === 'development' && (
+        <SanityErrorBoundary>
+          <SanityLive />
+        </SanityErrorBoundary>
+      )}
+      <Footer />
+      <CookieConsent variant="mini"/>
+    </>
   );
 }

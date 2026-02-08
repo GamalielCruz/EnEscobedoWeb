@@ -1,9 +1,9 @@
-import ClickCollectBanner from "@/components/ClickCollectBanner";
 import { Button } from "@/components/ui/button";
 import { getAllAffiliateStores } from "@/sanity/lib/products/getAllAffiliateStores";
 import { getAllStoreCategories } from "@/sanity/lib/products/getAllStoreCategories";
 import { redirect } from "next/navigation";
 import StoresView from "@/components/StoresView";
+import BuenFinBanner from "@/components/BuenFinBanner";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 60;
@@ -91,16 +91,16 @@ export default async function Home(props: NextPageProps) {
   }));
 
   return (
-    <div className="translate-y-[70px]">
+    <div className="">
       
       {/* Click & Collect Banner - Solo en la primera página */}
       {currentPage === 1 && (
-        <div className="max-w-6xl mx-auto px-4 py-4">
-          <ClickCollectBanner compact={true} />
+        <div className="">
+          <BuenFinBanner />
         </div>
       )}
 
-      <div className="flex flex-col min-h-screen bg-gray-100 p-4 w-full">
+      <div className="flex flex-col min-h-screen bg-white p-4 w-full">
         <div className="w-full max-w-7xl mx-auto">
           <StoresView
             stores={paginatedStores as any}
