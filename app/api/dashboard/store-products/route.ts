@@ -71,7 +71,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const ownedStores = await client.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
+    const ownedStores = await writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
       userId,
     });
     const ownsStore = ownedStores?.some((s) => s._id === storeId);

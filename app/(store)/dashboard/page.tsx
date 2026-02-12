@@ -80,12 +80,10 @@ const statusConfig: Record<string, { label: string; color: string }> = {
 export default function DashboardPage() {
   const { user } = useUser();
   const [ownedStores, setOwnedStores] = useState<OwnedStore[] | null>(null);
+  const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
+  const [allStores, setAllStores] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"productos" | "pedidos" | "configuracion">("pedidos");
-  const [storeConfig, setStoreConfig] = useState<any>(null);
-  const [configLoading, setConfigLoading] = useState(false);
-  const [pendingStoreUpdate, setPendingStoreUpdate] = useState<any>(null);
-  const [storeImageUploading, setStoreImageUploading] = useState<"image" | "coverImage" | null>(null);
+  const [tab, setTab] = useState<"productos" | "pedidos">("pedidos");
   const [products, setProducts] = useState<Product[]>([]);
   const [productsLoading, setProductsLoading] = useState(false);
   const [addingProduct, setAddingProduct] = useState(false);
@@ -94,10 +92,9 @@ export default function DashboardPage() {
   const [uploadingImage, setUploadingImage] = useState(false);
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
   const [refreshingProducts, setRefreshingProducts] = useState(false);
-  const [submittingStoreUpdate, setSubmittingStoreUpdate] = useState(false);
   const [pendingChanges, setPendingChanges] = useState<Record<string, boolean>>({});
 
-  const store = ownedStores && ownedStores.length === 1 ? ownedStores[0] : null;
+  const store = ownedStores?.find(s => s._id === selectedStoreId) || null;
 
   // Función para refrescar productos
   const refreshProducts = async () => {
@@ -199,6 +196,42 @@ export default function DashboardPage() {
   }, [user?.id]);
 
   useEffect(() => {
+    if (ownedStores && ownedStores?.length > 0 && !selectedStoreId) {
+      setSelectedStoreId(ownedStores[0]._id);
+    }
+  }, [ownedStores, selectedStoreId]);
+
+  const fetchAllStores = async () => {
+    try {
+      const res = await fetch("/api/dashboard/all-stores");
+      const data = await res.json();
+      if (data.stores) setAllStores(data.stores);
+    } catch (error) {
+      console.error("Error fetching all stores:", error);
+    }
+  };
+
+  const claimStore = async (storeId: string) => {
+    if (!confirm("¿Estás seguro de que eres el dueño de esta tienda?")) return;
+    try {
+      const res = await fetch("/api/dashboard/claim-store", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storeId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        alert("Tienda asignada correctamente. Recargando...");
+        window.location.reload();
+      } else {
+        alert(data.error || "Error al reclamar tienda");
+      }
+    } catch (error) {
+      alert("Error de conexión");
+    }
+  };
+
+  useEffect(() => {
     if (!store?._id) return;
     if (tab === "productos") {
       setProductsLoading(true);
@@ -256,7 +289,7 @@ export default function DashboardPage() {
 
   // Cargar categorías cuando se abre el modal
   useEffect(() => {
-    if (modalOpen && availableCategories.length === 0) {
+    if (modalOpen && availableCategories?.length === 0) {
       fetch("/api/dashboard/categories")
         .then((res) => res.json())
         .then((data) => {
@@ -269,100 +302,6 @@ export default function DashboardPage() {
   }, [modalOpen, availableCategories.length]);
 
   // Load Store Configuration
-  useEffect(() => {
-    if (!store?._id || tab !== "configuracion") return;
-
-    setConfigLoading(true);
-    // Fetch current store config and any pending update requests
-    Promise.all([
-      fetch(`/api/dashboard/store-config?storeId=${store._id}`).then((res) => res.json()),
-      fetch(`/api/dashboard/store-update-requests?storeId=${store._id}`).then((res) => res.json())
-    ])
-    .then(([configData, requestsData]) => {
-      if (configData.store) {
-        setStoreConfig(configData.store);
-      }
-      if (requestsData.items && requestsData.items.length > 0) {
-        // Assuming the most recent pending request is relevant
-        setPendingStoreUpdate(requestsData.items[0]);
-      } else {
-        setPendingStoreUpdate(null);
-      }
-    })
-    .catch((err) => console.error("Error loading store config:", err))
-    .finally(() => setConfigLoading(false));
-
-  }, [store?._id, tab]);
-
-  const handleStoreUpdateSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!store?._id || !storeConfig || submittingStoreUpdate) return;
-
-    setSubmittingStoreUpdate(true);
-
-    // Identify changes
-    // simplified: send the whole object as changes for now, or diff it. 
-    // For this implementation, we'll send the editable fields.
-    const changes = {
-      name: storeConfig.name,
-      contact: storeConfig.contact,
-      operatingHours: storeConfig.operatingHours,
-      serviceTypes: storeConfig.serviceTypes,
-      address: storeConfig.address,
-      image: storeConfig.image,
-      coverImage: storeConfig.coverImage,
-    };
-
-    try {
-      const res = await fetch("/api/dashboard/store-update-requests", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storeId: store._id, changes }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setSubmitMessage("Solicitud de actualización enviada. Un administrador revisará los cambios.");
-        setPendingStoreUpdate(data.request);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        setTimeout(() => setSubmitMessage(null), 5000);
-      } else {
-        alert(data.error || "Error al enviar solicitud");
-      }
-    } catch (err) {
-      console.error(err);
-      alert("Error de conexión");
-    } finally {
-        setSubmittingStoreUpdate(false);
-    }
-  };
-
-  const handleStoreImageUpload = async (e: React.ChangeEvent<HTMLInputElement>, field: "image" | "coverImage") => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setStoreImageUploading(field);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const res = await fetch("/api/dashboard/upload-image", {
-        method: "POST",
-        body: formData,
-      });
-
-      const data = await res.json();
-      if (data.success) {
-        setStoreConfig((prev: any) => ({ ...prev, [field]: data.asset }));
-      } else {
-        alert(data.error || "Error al subir imagen");
-      }
-    } catch (err) {
-      console.error(err);
-      alert("Error al subir imagen");
-    } finally {
-      setStoreImageUploading(null);
-    }
-  };
 
 
   const handleAddProduct = async (e: React.FormEvent) => {
@@ -386,8 +325,8 @@ export default function DashboardPage() {
           },
         ];
         if (newProduct.image) changes.image = newProduct.image;
-        if (newProduct.categories.length > 0) changes.categories = newProduct.categories.map((c) => ({ _type: "reference", _ref: c }));
-        if (newProduct.optionGroups.length > 0) changes.optionGroups = newProduct.optionGroups;
+        if (newProduct.categories?.length > 0) changes.categories = newProduct.categories.map((c) => ({ _type: "reference", _ref: c }));
+        if (newProduct.optionGroups?.length > 0) changes.optionGroups = newProduct.optionGroups;
 
         const body = { productId: editingProductId, changes };
         console.log('[dashboard] create update request', body);
@@ -414,8 +353,8 @@ export default function DashboardPage() {
           description: newProduct.description.trim() || undefined,
           stock: newProduct.stock ? parseInt(newProduct.stock, 10) : undefined,
           image: newProduct.image,
-          categories: newProduct.categories.length > 0 ? newProduct.categories : undefined,
-          optionGroups: newProduct.optionGroups.length > 0 ? newProduct.optionGroups : undefined,
+          categories: newProduct.categories?.length > 0 ? newProduct.categories : undefined,
+          optionGroups: newProduct.optionGroups?.length > 0 ? newProduct.optionGroups : undefined,
         } as any;
 
         const res = await fetch("/api/dashboard/store-products", {
@@ -527,7 +466,7 @@ export default function DashboardPage() {
     return (
       <div className="container mx-auto px-4 py-20 max-w-lg text-center">
         <div className="bg-white rounded-xl shadow-sm border p-8">
-          <Store className="w-16 h-16 text-[#ff8800] mx-auto mb-4" />
+          <Store className="w-16 h-16 text-gray-400 mx-auto mb-4" />
           <h1 className="text-2xl font-bold text-gray-900 mb-2">Panel del Restaurante</h1>
           <p className="text-gray-600 mb-6">
             Inicia sesión para gestionar tu restaurante, productos y pedidos.
@@ -556,40 +495,81 @@ export default function DashboardPage() {
         <div className="bg-white rounded-xl shadow-sm border p-8">
           <LayoutDashboard className="w-16 h-16 text-gray-400 mx-auto mb-4" />
           <h1 className="text-2xl font-bold text-gray-900 mb-2">Sin restaurante asignado</h1>
-          <p className="text-gray-600 mb-4">
-            Tu cuenta no tiene un restaurante asignado como dueño. En Sanity Studio, abre tu tienda
-            (ej: Tienda de Crepas) y pega <strong>exactamente</strong> este ID en el campo &quot;Usuario
-            Dueño (ID de Clerk)&quot;:
+          <p className="text-gray-600 mb-8">
+            Tu cuenta no tiene un restaurante asociado. Selecciona uno de la lista para reclamarlo como tuyo.
           </p>
-          <div className="mb-6 p-3 bg-gray-100 rounded-lg text-left">
-            <p className="text-xs text-gray-500 mb-1">Tu Clerk User ID (cópialo completo):</p>
-            <code
-              className="text-sm font-mono text-gray-900 break-all cursor-pointer select-all"
-              onClick={(e) => {
-                const target = e.target as HTMLElement;
-                navigator.clipboard.writeText(user?.id ?? "");
-                const original = target.textContent;
-                target.textContent = "¡Copiado!";
-                setTimeout(() => { target.textContent = original; }, 1500);
-              }}
-              title="Clic para copiar"
-            >
-              {user?.id}
-            </code>
+
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3 text-left">
+            {allStores.map((s) => {
+              const isOwner = user?.id === s.ownerClerkUserId;
+              return (
+              <div key={s._id} className="border rounded-lg p-4 hover:border-[#ff8800] transition-colors relative">
+                <h3 className="font-semibold text-lg mb-1">{s.name}</h3>
+                <p className="text-xs text-gray-500 mb-3">ID: {s._id.slice(0, 8)}...</p>
+                
+                {s.ownerClerkUserId ? (
+                  <div className="mt-2">
+                    <span className={`text-xs px-2 py-1 rounded ${isOwner ? 'bg-green-200 text-green-800' : 'bg-gray-100 text-gray-600'}`}>
+                      {isOwner ? '¡Eres el dueño!' : `Dueño: ${s.ownerClerkUserId.slice(0, 10)}...`}
+                    </span>
+                    
+                    {isOwner ? (
+                        <Button 
+                          className="w-full mt-2 bg-green-600 hover:bg-green-700 text-white"
+                          onClick={() => {
+                              // Manually set as owned store to bypass API lag if any
+                              setOwnedStores([s]);
+                              setSelectedStoreId(s._id);
+                          }}
+                        >
+                          Acceder al Panel
+                        </Button>
+                    ) : (
+                    <Button 
+                      variant="destructive" 
+                      size="sm" 
+                      className="w-full mt-2"
+                      onClick={() => {
+                        if (confirm(`¿FORZAR reclamo de ${s.name}? Esto eliminará al dueño actual.`)) {
+                           // Force claim logic
+                           fetch("/api/dashboard/claim-store", {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ storeId: s._id, force: true }),
+                           })
+                           .then(res => res.json())
+                           .then(data => {
+                              if (data.success) {
+                                alert("Tienda reclamada forzosamente. Recargando...");
+                                window.location.reload();
+                              } else {
+                                alert(data.error || "Error");
+                              }
+                           });
+                        }
+                      }}
+                    >
+                      Forzar Reclamo (Debug)
+                    </Button>
+                    )}
+                  </div>
+                ) : (
+                  <Button 
+                    className="w-full bg-[#ff8800] hover:bg-[#ff8800]/90 text-white"
+                    onClick={() => claimStore(s._id)}
+                  >
+                    Reclamar Tienda
+                  </Button>
+                )}
+              </div>
+            ); })}
           </div>
-          <p className="text-sm text-gray-500 mb-6">
-            Luego guarda la tienda y recarga esta página. No añadas espacios ni caracteres extra.
-          </p>
-          <div className="flex gap-3 justify-center flex-wrap">
-            <Link href="/studio" target="_blank" rel="noopener">
-              <Button variant="outline">Abrir Sanity Studio</Button>
-            </Link>
-            <Button variant="outline" onClick={() => window.location.reload()}>
-              Recargar
+          
+          <div className="mt-8">
+            <Button variant="outline" onClick={() => { fetchAllStores(); }}>
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Actualizar lista
             </Button>
-            <Link href="/">
-              <Button variant="outline">Volver al inicio</Button>
-            </Link>
           </div>
         </div>
       </div>
@@ -598,6 +578,36 @@ export default function DashboardPage() {
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-6xl">
+      {/* DEBUG PANEL - REMOVE AFTER FIXING */}
+      <div className="bg-slate-100 p-4 mb-4 rounded border border-slate-300 text-xs font-mono">
+        <div className="flex justify-between items-start">
+            <div>
+                <p><strong>Debug Info:</strong></p>
+                <p>User ID: {user?.id || 'Not logged in'}</p>
+                <p>Selected Store: {selectedStoreId}</p>
+                <p>Owned Stores: {ownedStores?.length}</p>
+            </div>
+            {ownedStores && ownedStores.length > 1 && (
+                <div>
+                    <Label>Cambiar tienda:</Label>
+                    <Select 
+                        value={selectedStoreId || ""} 
+                        onValueChange={(val) => setSelectedStoreId(val)}
+                    >
+                        <SelectTrigger className="w-[200px]">
+                            <SelectValue placeholder="Seleccionar tienda" />
+                        </SelectTrigger>
+                        <SelectContent>
+                            {(ownedStores || []).map(s => (
+                                <SelectItem key={s._id} value={s._id}>{s.name}</SelectItem>
+                            ))}
+                        </SelectContent>
+                    </Select>
+                </div>
+            )}
+        </div>
+      </div>
+
       <div className="mb-8">
         <div className="flex items-center gap-2 text-sm text-gray-500 mb-1">
           <Link href="/" className="hover:text-[#ff8800]">
@@ -636,14 +646,6 @@ export default function DashboardPage() {
         >
           <Package className="w-4 h-4 mr-2" />
           Productos
-        </Button>
-        <Button
-          variant={tab === "configuracion" ? "default" : "outline"}
-          onClick={() => setTab("configuracion")}
-          className={tab === "configuracion" ? "bg-[#ff8800] hover:bg-[#ff8800]/90 text-gray-900" : ""}
-        >
-          <Settings className="w-4 h-4 mr-2" />
-          Configuración
         </Button>
       </div>
 
@@ -743,7 +745,7 @@ export default function DashboardPage() {
                                 <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 mb-3">
                                     <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Detalle del pedido</p>
                                     <ul className="space-y-1">
-                                        {order.items.map((i, idx) => (
+                                        {(order.items || []).map((i, idx) => (
                                             <li key={idx} className="text-sm text-gray-800 flex justify-between">
                                                 <span>{i.quantity}x {i.productName}</span>
                                                 <span className="text-gray-500">{formatCurrency(i.price)}</span>
@@ -833,7 +835,7 @@ export default function DashboardPage() {
                                     </Badge>
                                 </div>
                                 <p className="text-sm text-gray-500 mt-1">
-                                    {order.customerInfo.name} • {order.items.length} productos • {formatCurrency(order.totalAmount)}
+                                    {order.customerInfo.name} • {order.items?.length || 0} productos • {formatCurrency(order.totalAmount)}
                                 </p>
                             </div>
                             <div className="text-right text-xs text-gray-400">
@@ -1006,7 +1008,7 @@ export default function DashboardPage() {
                         </Label>
                         {availableCategories.length > 0 ? (
                           <div className="space-y-2 max-h-48 overflow-y-auto border rounded-lg p-3">
-                            {availableCategories.map((cat) => (
+                            {(availableCategories || []).map((cat) => (
                               <div key={cat._id} className="flex items-center space-x-2">
                                 <Checkbox
                                   id={`cat-${cat._id}`}
@@ -1084,7 +1086,7 @@ export default function DashboardPage() {
                         </div>
                       ) : (
                         <div className="space-y-4 max-h-96 overflow-y-auto">
-                          {newProduct.optionGroups.map((group, groupIdx) => (
+                          {(newProduct.optionGroups || []).map((group, groupIdx) => (
                             <Card key={group._key} className="p-4">
                               <div className="space-y-3">
                                 <div className="flex items-start justify-between">
@@ -1452,324 +1454,6 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      {tab === "configuracion" && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Configuración de la Tienda</CardTitle>
-            <CardDescription>
-              Edita la información de tu tienda. Los cambios requieren aprobación de un administrador.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {configLoading ? (
-              <div className="py-12 flex justify-center">
-                <Loader2 className="w-8 h-8 animate-spin text-[#ff8800]" />
-              </div>
-            ) : !storeConfig ? (
-              <div className="text-center py-8 text-gray-500">
-                No se pudo cargar la configuración de la tienda.
-              </div>
-            ) : (
-              <div className="space-y-6">
-                {pendingStoreUpdate && (
-                   <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-800 flex items-start gap-3">
-                     <Clock className="w-5 h-5 mt-0.5" />
-                     <div>
-                       <p className="font-semibold">Tienes cambios pendientes de aprobación</p>
-                       <p className="text-sm mt-1">
-                         Has enviado una solicitud de actualización el {new Date(pendingStoreUpdate.submittedAt).toLocaleDateString()}. 
-                         Un administrador revisará tus cambios pronto.
-                       </p>
-                     </div>
-                   </div>
-                )}
-                
-                <form onSubmit={handleStoreUpdateSubmit} className="space-y-6">
-                  {/* Basic Info */}
-                  <div className="grid md:grid-cols-2 gap-6">
-                    <div className="space-y-4">
-                      <h3 className="font-medium text-gray-900 flex items-center gap-2">
-                        <Store className="w-4 h-4" /> Información Básica
-                      </h3>
-                      <div>
-                        <Label htmlFor="store-name">Nombre de la Tienda</Label>
-                        <Input 
-                          id="store-name" 
-                          value={storeConfig.name || ''} 
-                          onChange={(e) => setStoreConfig({...storeConfig, name: e.target.value})}
-                          required 
-                        />
-                      </div>
-                      
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                           <Label htmlFor="contact-phone">Teléfono</Label>
-                           <Input 
-                             id="contact-phone" 
-                             value={storeConfig.contact?.phone || ''} 
-                             onChange={(e) => setStoreConfig({
-                               ...storeConfig, 
-                               contact: { ...storeConfig.contact, phone: e.target.value } 
-                             })}
-                           />
-                        </div>
-                        <div>
-                           <Label htmlFor="contact-email">Email</Label>
-                           <Input 
-                             id="contact-email" 
-                             value={storeConfig.contact?.email || ''} 
-                             onChange={(e) => setStoreConfig({
-                               ...storeConfig, 
-                               contact: { ...storeConfig.contact, email: e.target.value } 
-                             })}
-                           />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="space-y-4">
-                       <h3 className="font-medium text-gray-900 flex items-center gap-2">
-                        <ImageIcon className="w-4 h-4" /> Imágenes
-                      </h3>
-                      
-                      {/* Main Image */}
-                      <div>
-                        <Label className="mb-2 block text-xs">Logo / Imagen Principal</Label>
-                        <div className="flex items-center gap-4">
-                           <div className="w-20 h-20 bg-gray-100 rounded-lg border overflow-hidden flex items-center justify-center shrink-0">
-                              {storeConfig.image ? (
-                                <Image 
-                                  src={imageUrl(storeConfig.image).url()} 
-                                  alt="Logo" 
-                                  width={80} 
-                                  height={80} 
-                                  className="w-full h-full object-cover"
-                                />
-                              ) : (
-                                <Store className="w-8 h-8 text-gray-300" />
-                              )}
-                           </div>
-                           <div>
-                              <Label htmlFor="upload-logo" className="cursor-pointer inline-flex items-center gap-2 text-sm text-[#ff8800] hover:underline">
-                                 {storeImageUploading === 'image' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                                 Cambiar Logo
-                              </Label>
-                              <input 
-                                id="upload-logo" 
-                                type="file" 
-                                accept="image/*" 
-                                className="hidden" 
-                                onChange={(e) => handleStoreImageUpload(e, 'image')}
-                                disabled={!!storeImageUploading}
-                              />
-                           </div>
-                        </div>
-                      </div>
-
-                      {/* Cover Image */}
-                      <div>
-                        <Label className="mb-2 block text-xs">Imagen de Portada</Label>
-                         <div className="w-full h-24 bg-gray-100 rounded-lg border overflow-hidden flex items-center justify-center relative">
-                              {storeConfig.coverImage ? (
-                                <Image 
-                                  src={imageUrl(storeConfig.coverImage).url()} 
-                                  alt="Cover" 
-                                  width={300} 
-                                  height={100} 
-                                  className="w-full h-full object-cover"
-                                />
-                              ) : (
-                                <span className="text-gray-400 text-xs">Sin portada</span>
-                              )}
-                              
-                              <div className="absolute inset-0 bg-black/30 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
-                                  <Label htmlFor="upload-cover" className="cursor-pointer text-white text-xs font-medium hover:underline p-2">
-                                     Cambiar Portada
-                                  </Label>
-                                  <input 
-                                    id="upload-cover" 
-                                    type="file" 
-                                    accept="image/*" 
-                                    className="hidden" 
-                                    onChange={(e) => handleStoreImageUpload(e, 'coverImage')}
-                                    disabled={!!storeImageUploading}
-                                  />
-                              </div>
-                           </div>
-                           {storeImageUploading === 'coverImage' && <p className="text-xs text-[#ff8800] mt-1">Subiendo...</p>}
-                      </div>
-                    </div>
-                  </div>
-
-                  <Separator />
-
-                  {/* Address */}
-                  <div className="space-y-4">
-                     <h3 className="font-medium text-gray-900">Dirección</h3>
-                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="md:col-span-2">
-                           <Label htmlFor="addr-street">Calle y Número</Label>
-                           <Input 
-                             id="addr-street" 
-                             value={storeConfig.address?.street || ''} 
-                             onChange={(e) => setStoreConfig({
-                               ...storeConfig, 
-                               address: { ...storeConfig.address, street: e.target.value } 
-                             })}
-                           />
-                        </div>
-                        <div>
-                           <Label htmlFor="addr-city">Ciudad</Label>
-                           <Input 
-                             id="addr-city" 
-                             value={storeConfig.address?.city || ''} 
-                             onChange={(e) => setStoreConfig({
-                               ...storeConfig, 
-                               address: { ...storeConfig.address, city: e.target.value } 
-                             })}
-                           />
-                        </div>
-                        <div>
-                           <Label htmlFor="addr-colonia">Colonia / Estado</Label>
-                           <Input 
-                             id="addr-state" 
-                             value={storeConfig.address?.state || ''} 
-                             onChange={(e) => setStoreConfig({
-                               ...storeConfig, 
-                               address: { ...storeConfig.address, state: e.target.value } 
-                             })}
-                           />
-                        </div>
-                        <div>
-                            <Label htmlFor="addr-cp">Código Postal</Label>
-                           <Input 
-                             id="addr-cp" 
-                             value={storeConfig.address?.postalCode || ''} 
-                             onChange={(e) => setStoreConfig({
-                               ...storeConfig, 
-                               address: { ...storeConfig.address, postalCode: e.target.value } 
-                             })}
-                           />
-                        </div>
-                     </div>
-                  </div>
-
-                  <Separator />
-
-                  {/* Operating Hours */}
-                  <div className="space-y-4">
-                     <h3 className="font-medium text-gray-900 flex items-center gap-2">
-                       <Clock className="w-4 h-4" /> Horarios de Atención
-                     </h3>
-                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                        {['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'].map((day) => {
-                          const label = { 'monday': 'Lunes', 'tuesday': 'Martes', 'wednesday': 'Miércoles', 'thursday': 'Jueves', 'friday': 'Viernes', 'saturday': 'Sábado', 'sunday': 'Domingo' }[day];
-                          return (
-                            <div key={day}>
-                              <Label htmlFor={`hours-${day}`} className="text-xs text-gray-500">{label}</Label>
-                              <Input 
-                                id={`hours-${day}`}
-                                className="h-8 text-sm"
-                                value={storeConfig.operatingHours?.[day] || ''}
-                                onChange={(e) => setStoreConfig({
-                                  ...storeConfig,
-                                  operatingHours: { ...storeConfig.operatingHours, [day]: e.target.value }
-                                })}
-                                placeholder="9:00 - 18:00"
-                              />
-                            </div>
-                          );
-                        })}
-                     </div>
-                  </div>
-
-                  <Separator />
-
-                  {/* Service Types */}
-                  <div className="space-y-4">
-                     <h3 className="font-medium text-gray-900 flex items-center gap-2">
-                       <Package className="w-4 h-4" /> Tipos de Servicio
-                     </h3>
-                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div className="flex items-center gap-2 border p-3 rounded bg-gray-50">
-                            <Checkbox 
-                                id="service-delivery"
-                                checked={storeConfig.serviceTypes?.delivery || false}
-                                onCheckedChange={(checked) => setStoreConfig({
-                                  ...storeConfig,
-                                  serviceTypes: { ...storeConfig.serviceTypes, delivery: !!checked }
-                                })}
-                            />
-                            <Label htmlFor="service-delivery">Entrega a Domicilio</Label>
-                        </div>
-                        <div className="flex items-center gap-2 border p-3 rounded bg-gray-50">
-                             <Checkbox 
-                                id="service-pickup"
-                                checked={storeConfig.serviceTypes?.pickup || false}
-                                onCheckedChange={(checked) => setStoreConfig({
-                                  ...storeConfig,
-                                  serviceTypes: { ...storeConfig.serviceTypes, pickup: !!checked }
-                                })}
-                            />
-                            <Label htmlFor="service-pickup">Recoger en Tienda</Label>
-                        </div>
-                     </div>
-
-                     {storeConfig.serviceTypes?.delivery && (
-                        <div className="grid grid-cols-2 gap-4 mt-2 p-4 border rounded-lg">
-                           <div>
-                              <Label htmlFor="delivery-radius">Radio de Entrega (km)</Label>
-                              <Input 
-                                id="delivery-radius"
-                                type="number"
-                                value={storeConfig.serviceTypes?.deliveryRadius || ''}
-                                onChange={(e) => setStoreConfig({
-                                  ...storeConfig,
-                                  serviceTypes: { ...storeConfig.serviceTypes, deliveryRadius: parseFloat(e.target.value) }
-                                })}
-                              />
-                           </div>
-                           <div>
-                              <Label htmlFor="min-order">Pedido Mínimo (MXN)</Label>
-                              <Input 
-                                id="min-order"
-                                type="number"
-                                value={storeConfig.serviceTypes?.minimumOrderDelivery || ''}
-                                onChange={(e) => setStoreConfig({
-                                  ...storeConfig,
-                                  serviceTypes: { ...storeConfig.serviceTypes, minimumOrderDelivery: parseFloat(e.target.value) }
-                                })}
-                              />
-                           </div>
-                        </div>
-                     )}
-                  </div>
-
-                  <div className="flex justify-end pt-4">
-                     <Button 
-                       type="submit" 
-                       className="bg-[#ff8800] hover:bg-[#ff8800]/90 text-gray-900"
-                       disabled={!!pendingStoreUpdate || submittingStoreUpdate}
-                     >
-                       {submittingStoreUpdate ? (
-                          <>
-                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                            Enviando...
-                          </>
-                       ) : pendingStoreUpdate ? (
-                          "Solicitud Pendiente"
-                       ) : (
-                          "Guardar y Solicitar Aprobación"
-                       )}
-                     </Button>
-                  </div>
-                </form>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
-
       <div className="mt-6 text-center text-sm text-gray-500">
         <Link href="/" className="hover:text-[#ff8800]">
           ← Volver a la tienda
@@ -1778,3 +1462,10 @@ export default function DashboardPage() {
     </div>
   );
 }
+
+
+
+
+
+
+

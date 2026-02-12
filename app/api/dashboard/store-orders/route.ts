@@ -28,13 +28,23 @@ const ORDERS_QUERY = `*[
     }
   ),
   "items": select(
-    _type == "clickCollectOrder" => items,
+    _type == "clickCollectOrder" => items{
+      _key,
+      productName,
+      product->{_id, name},
+      quantity,
+      price,
+      customizations,
+      notes
+    },
     _type == "order" => products[]{ 
       _key, 
       "productName": product->name,
       "productId": product->_id,
       "quantity": quantity, 
-      "price": product->price
+      "price": product->price,
+      customizations,
+      notes
     }
   ),
   "totalAmount": coalesce(totalAmount, totalPrice),
@@ -75,6 +85,26 @@ export async function GET(request: NextRequest) {
     }
 
     const orders = await writeClient.fetch(ORDERS_QUERY, { storeId });
+    
+    console.log('[store-orders API] StoreId:', storeId);
+    console.log('[store-orders API] Orders found:', orders.length);
+    console.log('[store-orders API] Orders data:', orders);
+    
+    // Log detallado del último pedido para verificar customizations
+    if (orders.length > 0) {
+      const latestOrder = orders[0];
+      console.log('[store-orders API] Latest order:', latestOrder._id);
+      console.log('[store-orders API] Latest order items:', latestOrder.items);
+      if (latestOrder.items && latestOrder.items.length > 0) {
+        latestOrder.items.forEach((item: any, index: number) => {
+          console.log(`[store-orders API] Item ${index}:`, {
+            productName: item.productName,
+            customizations: item.customizations,
+            notes: item.notes
+          });
+        });
+      }
+    }
     
     return NextResponse.json({ success: true, orders: orders ?? [] }, {
       headers: {

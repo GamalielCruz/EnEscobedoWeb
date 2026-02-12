@@ -62,9 +62,17 @@ export async function createCheckoutSession(
     );
     const cancel_url = buildUrl("/basket");
 
+    // Stripe metadata only accepts string values, so convert all values
+    const stripeMetadata: Record<string, string> = {};
+    for (const [key, value] of Object.entries(metadata)) {
+      if (value !== undefined && value !== null) {
+        stripeMetadata[key] = String(value);
+      }
+    }
+
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
-      metadata,
+      metadata: stripeMetadata,
       mode: "payment",
       allow_promotion_codes: true,
       payment_method_types: ["card"], // Solo tarjeta

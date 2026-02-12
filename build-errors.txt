@@ -1,0 +1,22 @@
+﻿ ÔÜá Linting is disabled.
+   Ôû▓ Next.js 15.4.4
+   - Environments: .env.production, .env
+   - Experiments (use with caution):
+     Ô£ô scrollRestoration
+
+   Creating an optimized production build ...
+ Ô£ô Compiled successfully in 26.0s
+   Checking validity of types ...
+Failed to compile.
+System.Management.Automation.RemoteException
+./app/(store)/dashboard/page.tsx:216:76
+Type error: Parameter 's' implicitly has an 'any' type.
+System.Management.Automation.RemoteException
+[0m [90m 214 |[39m         [90m// Validaci├│n adicional: asegurarse de que las tiendas realmente pertenecen al usuario[39m
+ [90m 215 |[39m         [36mif[39m (stores[33m.[39mlength [33m>[39m [35m0[39m) {
+[31m[1m>[22m[39m[90m 216 |[39m           console[33m.[39mlog([32m"[Dashboard] User has access to stores:"[39m[33m,[39m stores[33m.[39mmap(s [33m=>[39m ({ id[33m:[39m s[33m.[39m_id[33m,[39m name[33m:[39m s[33m.[39mname })))[33m;[39m
+ [90m     |[39m                                                                            [31m[1m^[22m[39m
+ [90m 217 |[39m         }
+ [90m 218 |[39m         
+ [90m 219 |[39m         setOwnedStores(stores)[33m;[39m[0m
+Next.js build worker exited with code: 1 and signal: null

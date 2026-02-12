@@ -27,7 +27,7 @@ type OwnedStore = { _id: string; name: string; storeId?: string };
 export function Header() {
   const { user } = useUser();
   const isHydrated = useHydration();
-  const [ownedStores, setOwnedStores] = useState<OwnedStore[] | null>(null);
+  const [ownedStores, setOwnedStores] = useState<OwnedStore[]>([]);
   const [isVisible, setIsVisible] = useState(true);
   const [lastScrollY, setLastScrollY] = useState(0);
   const itemCount = useBasketStore((state) => 
@@ -35,14 +35,33 @@ export function Header() {
   );
 
   useEffect(() => {
+    console.log('🔥 [Header] useEffect triggered');
+    console.log('🔥 [Header] User ID:', user?.id);
+    
     if (!user?.id) {
+      console.log('🔥 [Header] No user ID, setting ownedStores to []');
       setOwnedStores([]);
       return;
     }
+    
+    console.log('🔥 [Header] Fetching stores for user:', user.id);
+    
     fetch("/api/my-stores")
-      .then((res) => res.json())
-      .then((data) => setOwnedStores(data.stores ?? []))
-      .catch(() => setOwnedStores([]));
+      .then((res) => {
+        console.log('🔥 [Header] API response status:', res.status);
+        console.log('🔥 [Header] API response headers:', res.headers);
+        return res.json();
+      })
+      .then((data) => {
+        console.log('🔥 [Header] Stores data received:', data);
+        const stores = data.stores ?? [];
+        console.log('🔥 [Header] Setting ownedStores to:', stores);
+        setOwnedStores(stores);
+      })
+      .catch((error) => {
+        console.error('🔥 [Header] Error fetching stores:', error);
+        setOwnedStores([]);
+      });
   }, [user?.id]);
 
   useEffect(() => {
@@ -67,7 +86,11 @@ export function Header() {
     };
   }, [lastScrollY]);
 
-  const isSingleStoreOwner = ownedStores !== null && ownedStores.length === 1;
+  // Solo mostrar el ícono si está hidratado Y tiene tiendas Y los datos son consistentes
+  const shouldShowManagerIcon = isHydrated && user && ownedStores.length > 0 && 
+    // Verificación adicional: asegurar que no haya caracteres invisibles en los nombres
+    ownedStores.every(store => store.name && store.name.trim().length > 0 && 
+      !store.name.includes('\u200B') && !store.name.includes('\u200D') && !store.name.includes('\uFEFF'));
 
   const createClerkPasskey = async () => {
     try {
@@ -176,7 +199,7 @@ export function Header() {
           </Link>
 
 
-          {isSingleStoreOwner ? (
+          {shouldShowManagerIcon ? (
             <Link
               href="/dashboard"
               className="relative flex items-center justify-center bg-[#eb1901] hover:bg-[#eb1901]/80 text-gray-50 font-bold py-2 px-3 rounded"

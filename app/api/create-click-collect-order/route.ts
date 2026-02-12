@@ -66,11 +66,12 @@ export async function POST(request: NextRequest) {
         console.log("📦 Procesando item:", JSON.stringify(item, null, 2));
         return {
           _key: crypto.randomUUID(),
-          // Guardar información del producto directamente (sin referencia)
           productName: item.product.name,
           productId: item.product._id || item.product.id,
           quantity: item.quantity,
           price: item.product.price,
+          customizations: item.customizations || [],
+          notes: item.notes || "",
         };
       }),
       totalAmount: total,

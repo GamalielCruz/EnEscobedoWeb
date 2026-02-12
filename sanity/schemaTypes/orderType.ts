@@ -87,6 +87,50 @@ export const orderType = defineType({
               title: "Quantity Purchased",
               type: "number",
             }),
+            defineField({
+              name: "customizations",
+              title: "Customization Options",
+              type: "array",
+              of: [
+                {
+                  type: "object",
+                  fields: [
+                    defineField({
+                      name: "title",
+                      title: "Option Group Title",
+                      type: "string",
+                    }),
+                    defineField({
+                      name: "options",
+                      title: "Selected Options",
+                      type: "array",
+                      of: [
+                        {
+                          type: "object",
+                          fields: [
+                            defineField({
+                              name: "label",
+                              title: "Option Label",
+                              type: "string",
+                            }),
+                            defineField({
+                              name: "priceDelta",
+                              title: "Price Difference",
+                              type: "number",
+                            }),
+                          ],
+                        },
+                      ],
+                    }),
+                  ],
+                },
+              ],
+            }),
+            defineField({
+              name: "notes",
+              title: "Item Notes",
+              type: "text",
+            }),
           ],
           preview: {
             select: {

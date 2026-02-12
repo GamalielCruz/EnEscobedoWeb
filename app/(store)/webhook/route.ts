@@ -398,7 +398,8 @@ async function createOrderInSanity(session: Stripe.Checkout.Session) {
     }
   }
 
-  const order = await backendClient.create({
+  // Build order data
+  const orderData: { _type: string; [key: string]: unknown } = {
     _type: "order",
     orderNumber,
     stripeCheckoutSessionId: id,
@@ -420,7 +421,51 @@ async function createOrderInSanity(session: Stripe.Checkout.Session) {
     totalPrice: amount_total ? amount_total / 100 : 0,
     status: session.payment_status === "paid" ? "paid" : "pending",
     orderDate: new Date().toISOString(),
-  });
+  };
+
+  // Add delivery method and store references from metadata
+  if (deliveryMethod) {
+    orderData.deliveryMethod = deliveryMethod;
+  }
+
+  // Associate the order with the store (affiliateStore for delivery, pickupStore for click_collect)
+  if (pickupStoreId) {
+    if (deliveryMethod === 'click_collect') {
+      orderData.pickupStore = {
+        _type: "reference",
+        _ref: pickupStoreId,
+      };
+    }
+    // Always set affiliateStore so the dashboard can find it
+    orderData.affiliateStore = {
+      _type: "reference",
+      _ref: pickupStoreId,
+    };
+  }
+
+  // Add shipping cost if present
+  const shippingCostValue = metadata?.shippingCost;
+  if (shippingCostValue && Number(shippingCostValue) > 0) {
+    orderData.shippingCost = Number(shippingCostValue);
+  }
+
+  // Add customer/shipping address if present
+  if (customerAddress) {
+    orderData.shippingAddress = {
+      line1: customerAddress,
+    };
+  }
+
+  console.log("Creating order with data:", JSON.stringify({
+    orderNumber,
+    deliveryMethod,
+    pickupStoreId,
+    affiliateStore: orderData.affiliateStore,
+    shippingCost: orderData.shippingCost,
+    status: orderData.status,
+  }));
+
+  const order = await backendClient.create(orderData);
 
   return order;
 }

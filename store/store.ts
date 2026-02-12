@@ -12,7 +12,7 @@ export interface BasketItem {
 interface BasketState {
   items: BasketItem[];
   currentStoreId: string | null; // Nueva propiedad para rastrear la tienda actual
-  addItem: (product: Product) => void;
+  addItem: (product: BasketItem) => void;
   removeItem: (productId: string) => void;
   clearBasket: () => void;
   getTotalPrice: () => number;
@@ -52,34 +52,52 @@ const useBasketStore = create<BasketState>()(
       
       addItem: (product) =>
         set((state) => {
-          const productStoreId = product.affiliateStore && 
-            typeof product.affiliateStore === 'object' && 
-            '_id' in product.affiliateStore 
-            ? (product.affiliateStore as { _id: string })._id 
+          const productStoreId = product.product.affiliateStore && 
+            typeof product.product.affiliateStore === 'object' && 
+            '_id' in product.product.affiliateStore 
+            ? (product.product.affiliateStore as { _id: string })._id 
             : null;
           
           // Verificar si se puede agregar el producto
-          if (!get().canAddProduct(product)) {
+          if (!get().canAddProduct(product.product)) {
             console.warn('No se puede agregar producto de diferente tienda');
             return state; // No hacer cambios si no se puede agregar
           }
           
+          // Función para comparar personalizaciones
+          const areCustomizationsEqual = (a: any, b: any) => {
+            if (!a && !b) return true;
+            if (!a || !b) return false;
+            return JSON.stringify(a) === JSON.stringify(b);
+          };
+
           const existingItem = state.items.find(
-            (item) => item.product._id === product._id
+            (item) =>
+              item.product._id === product.product._id &&
+              areCustomizationsEqual(item.customizations, product.customizations)
           );
-          
+
           if (existingItem) {
             return {
               items: state.items.map((item) =>
-                item.product._id === product._id
+                item.product._id === product.product._id &&
+                areCustomizationsEqual(item.customizations, product.customizations)
                   ? { ...item, quantity: item.quantity + 1 }
                   : item
               ),
             };
           } else {
-            return { 
-              items: [...state.items, { product, quantity: 1 }],
-              currentStoreId: productStoreId || null
+            return {
+              items: [
+                ...state.items,
+                {
+                  product: product.product,
+                  quantity: 1,
+                  customizations: product.customizations,
+                  customPrice: product.customPrice,
+                },
+              ],
+              currentStoreId: productStoreId || null,
             };
           }
         }),

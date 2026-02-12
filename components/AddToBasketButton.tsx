@@ -56,7 +56,7 @@ function AddToBasketButton({ product, disabled }: AddBasketButtonProps ) {
         setIsLoading(true);
         try {
             await new Promise((resolve) => {
-                store.addItem(product);
+                store.addItem({ product, quantity: 1 });
                 setTimeout(resolve, 500); // medio segundo de loader
             });
         } finally {
@@ -71,7 +71,7 @@ function AddToBasketButton({ product, disabled }: AddBasketButtonProps ) {
         setIsLoading(true);
         try {
             await new Promise((resolve) => {
-                store.addItem(product);
+                store.addItem({ product, quantity: 1 });
                 setTimeout(resolve, 500);
             });
         } finally {

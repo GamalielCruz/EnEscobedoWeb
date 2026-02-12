@@ -1,6 +1,19 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
-export type OrderItem = { productName: string; productId: string; quantity: number; price: number };
+export type OrderItem = { 
+  productName: string; 
+  productId: string; 
+  quantity: number; 
+  price: number;
+  customizations?: Array<{
+    title?: string;
+    options?: Array<{
+      label?: string;
+      priceDelta?: number;
+    }>;
+  }>;
+  notes?: string;
+};
 
 export type Order = {
   _id: string;
@@ -36,21 +49,31 @@ interface UseOrderNotificationsReturn {
 
 export function useOrderNotifications({
   storeId,
-  enabled,
+  enabled = true,
+  pollingInterval = 30000,
   onNewOrder,
-  pollingInterval = 15000,
-}: UseOrderNotificationsOptions): UseOrderNotificationsReturn {
+}: {
+  storeId: string | null;
+  enabled?: boolean;
+  pollingInterval?: number;
+  onNewOrder?: (order: Order) => void;
+}): UseOrderNotificationsReturn {
   const [orders, setOrders] = useState<Order[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   
-  const previousOrderIdsRef = useRef<Set<string>>(new Set());
+  // Referencia para el audio
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // Referencias para tracking de pedidos y actualizaciones locales
+  const previousOrderIdsRef = useRef<Set<string>>(new Set());
   const isFirstLoadRef = useRef(true);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const retryCountRef = useRef(0);
-  const maxRetries = 3;
+  
+  // Referencia para tracking de actualizaciones locales recientes
+  const recentLocalUpdatesRef = useRef<Map<string, { timestamp: number; updates: Partial<Order> }>>(new Map());
 
   // Inicializar el audio
   useEffect(() => {
@@ -73,7 +96,12 @@ export function useOrderNotifications({
   }, []);
 
   const fetchOrders = useCallback(async () => {
-    if (!storeId || !enabled) return;
+    if (!storeId || !enabled) {
+      console.log('[useOrderNotifications] Not fetching orders - storeId:', storeId, 'enabled:', enabled);
+      return;
+    }
+
+    console.log('[useOrderNotifications] Starting to fetch orders for storeId:', storeId);
 
     try {
       setIsLoading(true);
@@ -87,6 +115,9 @@ export function useOrderNotifications({
 
       const data = await res.json();
       const fetchedOrders: Order[] = data.orders ?? [];
+      
+      console.log('[useOrderNotifications] Orders fetched:', fetchedOrders.length);
+      console.log('[useOrderNotifications] Orders data:', fetchedOrders);
 
       // Detectar nuevos pedidos comparando IDs
       if (!isFirstLoadRef.current) {
@@ -111,7 +142,28 @@ export function useOrderNotifications({
       previousOrderIdsRef.current = new Set(fetchedOrders.map((o) => o._id));
       isFirstLoadRef.current = false;
       
-      setOrders(fetchedOrders);
+      // Mezclar datos del servidor con cambios locales recientes
+      const now = Date.now();
+      const mergedOrders = fetchedOrders.map(fetchedOrder => {
+        const localUpdate = recentLocalUpdatesRef.current.get(fetchedOrder._id);
+        
+        // Si hay una actualización local reciente (menos de 10 segundos), preservarla
+        if (localUpdate && (now - localUpdate.timestamp) < 10000) {
+          console.log(`[useOrderNotifications] Preservando actualización local para orden ${fetchedOrder._id}`);
+          return { ...fetchedOrder, ...localUpdate.updates };
+        }
+        
+        return fetchedOrder;
+      });
+      
+      // Limpiar actualizaciones locales antiguas
+      recentLocalUpdatesRef.current.forEach((update, orderId) => {
+        if ((now - update.timestamp) >= 10000) {
+          recentLocalUpdatesRef.current.delete(orderId);
+        }
+      });
+      
+      setOrders(mergedOrders);
       setLastUpdate(new Date());
       retryCountRef.current = 0; // Reset retry count on success
       
@@ -146,19 +198,8 @@ export function useOrderNotifications({
     // Fetch inicial
     fetchOrders();
 
-    // Calcular intervalo
-    const getPollingInterval = () => {
-      // Si hay errores recientes, aumentar el intervalo para proteger la red
-      if (retryCountRef.current >= maxRetries) {
-        return 30000; // 30 segundos si hay problemas de conexión
-      }
-      
-      return pollingInterval; // Usar el intervalo solicitado (default 15s)
-    };
-
     // Configurar intervalo
-    const intervalValue = getPollingInterval();
-    intervalRef.current = setInterval(fetchOrders, intervalValue);
+    intervalRef.current = setInterval(fetchOrders, pollingInterval);
 
     // Limpiar al desmontar
     return () => {
@@ -167,9 +208,17 @@ export function useOrderNotifications({
         intervalRef.current = null;
       }
     };
-  }, [enabled, storeId, fetchOrders, pollingInterval]); // Eliminado 'orders' de aquí para evitar bucle
+  }, [enabled, storeId, fetchOrders, pollingInterval]);
 
   const updateOrderLocally = useCallback((orderId: string, updates: Partial<Order>) => {
+    // Registrar la actualización local con timestamp
+    recentLocalUpdatesRef.current.set(orderId, {
+      timestamp: Date.now(),
+      updates
+    });
+    
+    console.log(`[useOrderNotifications] Registrando actualización local para orden ${orderId}:`, updates);
+    
     setOrders((prev) => 
       prev.map((o) => (o._id === orderId ? { ...o, ...updates } : o))
     );

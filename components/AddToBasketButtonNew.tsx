@@ -30,7 +30,7 @@ function AddToBasketButtonNew({ product, disabled }: AddBasketButtonProps ) {
 
         setIsLoading(true);
         try {
-            store.addItem(product);
+            store.addItem({ product, quantity: 1 });
             await new Promise((resolve) => setTimeout(resolve, 500));
         } finally {
             setIsLoading(false);
@@ -44,7 +44,7 @@ function AddToBasketButtonNew({ product, disabled }: AddBasketButtonProps ) {
         setIsLoading(true);
         try {
             if (store && typeof store.addItem === 'function') {
-                store.addItem(product);
+                store.addItem({ product, quantity: 1 });
             }
             await new Promise((resolve) => setTimeout(resolve, 500));
         } finally {

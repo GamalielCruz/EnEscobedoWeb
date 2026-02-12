@@ -119,12 +119,33 @@ function BasketPage() {
     setIsLoading(true);
 
     try {
+      // Build base metadata
       const metadata: Metadata = {
         orderNumber: crypto.randomUUID(),
         customerName: user?.fullName ?? "Unknown",
         customerEmail: user?.emailAddresses[0].emailAddress ?? "Unknown",
         clerkUserId: user!.id,
       };
+
+      // Add delivery/pickup info if available
+      if (serviceType === 'delivery' && selectedStore) {
+        metadata.deliveryMethod = 'home_delivery';
+        metadata.pickupStoreId = selectedStore.store?._id || selectedStore._id || selectedStore.storeId;
+        metadata.pickupStoreName = selectedStore.store?.name || selectedStore.name || selectedStore.storeName;
+        metadata.shippingCost = shippingCost ?? undefined;
+        if (customerAddress) {
+          metadata.customerAddress = typeof customerAddress === 'string'
+            ? customerAddress
+            : `${customerAddress.street || ''}, ${customerAddress.postalCode || ''} ${customerAddress.city || ''}, ${customerAddress.state || ''}`;
+        }
+      } else if (serviceType === 'pickup' && selectedStore) {
+        metadata.deliveryMethod = 'click_collect';
+        metadata.pickupStoreId = selectedStore.store?._id || selectedStore._id || selectedStore.storeId;
+        metadata.pickupStoreName = selectedStore.store?.name || selectedStore.name || selectedStore.storeName;
+        metadata.shippingCost = 0;
+      }
+
+      console.log('📦 Checkout metadata:', metadata);
 
       const checkoutUrl = await createCheckoutSession(groupedItems, metadata);
 
@@ -227,7 +248,7 @@ function BasketPage() {
                         {item.quantity}
                       </span>
                       <button
-                        onClick={() => useBasketStore.getState().addItem(item.product)}
+                        onClick={() => useBasketStore.getState().addItem(item)}
                         className="px-3 py-2 text-gray-700 hover:text-gray-900 font-semibold"
                       >
                         +

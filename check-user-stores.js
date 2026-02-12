@@ -11,7 +11,7 @@ const client = createClient({
 });
 
 async function checkStores() {
-  const userId = "user_39KE3c0MdXkAxuta4OVvCPhEM9c"; // The clerk ID from the order dump
+  const userId = "user_39PJAdoHsbEvxZpKcZEmhIVzNHL"; // El usuario actual del dashboard
   const stores = await client.fetch(`*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id, name }`, { userId });
   console.log("Owned Stores:", JSON.stringify(stores, null, 2));
 }

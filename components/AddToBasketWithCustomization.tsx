@@ -92,13 +92,14 @@ function AddToBasketWithCustomization({
     setIsLoading(true);
     try {
       // Crear producto con personalizaciones
-      const productWithCustomizations = {
-        ...product,
+      const itemToAdd = {
+        product: product,
+        quantity: 1,
         customizations,
-        customPrice: calculateTotalPrice()
+        customPrice: calculateTotalPrice(),
       };
       
-      store.addItem(productWithCustomizations as any);
+      store.addItem(itemToAdd);
       
       // Cerrar el sidebar después de añadir
       setTimeout(() => {
@@ -115,16 +116,16 @@ function AddToBasketWithCustomization({
     }
     setIsLoading(true);
     try {
-      const productWithCustomizations = {
-        ...product,
+      const itemToAdd = {
+        product: product,
+        quantity: 1,
         customizations,
-        customPrice: calculateTotalPrice()
+        customPrice: calculateTotalPrice(),
       };
       
-      if (store && typeof store.addItem === 'function') {
-        store.addItem(productWithCustomizations as any);
-      }
+      store.addItem(itemToAdd);
       
+      // Cerrar el sidebar después de añadir
       setTimeout(() => {
         onClose?.();
       }, 500);
