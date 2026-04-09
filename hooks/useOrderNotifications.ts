@@ -5,6 +5,9 @@ export type OrderItem = {
   productId: string; 
   quantity: number; 
   price: number;
+  productOptionGroups?: Array<{
+    title?: string;
+  }>;
   customizations?: Array<{
     title?: string;
     options?: Array<{
@@ -20,6 +23,14 @@ export type Order = {
   orderNumber: string;
   pickupCode: string;
   customerInfo: { name: string; email: string; phone: string };
+  deliveryAddress?: {
+    line1?: string;
+    line2?: string;
+    city?: string;
+    state?: string;
+    postal_code?: string;
+    country?: string;
+  };
   storeInfo: { storeName: string; storeAddress: string; storePhone?: string };
   items: OrderItem[];
   totalAmount: number;
@@ -96,21 +107,46 @@ export function useOrderNotifications({
   }, []);
 
   const fetchOrders = useCallback(async () => {
-    if (!storeId || !enabled) {
+    const normalizedStoreId =
+      typeof storeId === "string" &&
+      storeId.trim() !== "" &&
+      storeId !== "null" &&
+      storeId !== "undefined"
+        ? storeId
+        : null;
+
+    if (!normalizedStoreId || !enabled) {
       console.log('[useOrderNotifications] Not fetching orders - storeId:', storeId, 'enabled:', enabled);
       return;
     }
 
-    console.log('[useOrderNotifications] Starting to fetch orders for storeId:', storeId);
+    console.log('[useOrderNotifications] Starting to fetch orders for storeId:', normalizedStoreId);
 
     try {
       setIsLoading(true);
       setError(null);
 
-      const res = await fetch(`/api/dashboard/store-orders?storeId=${storeId}`);
+      const res = await fetch(`/api/dashboard/store-orders?storeId=${normalizedStoreId}`);
       
       if (!res.ok) {
-        throw new Error('Error al cargar pedidos');
+        const errorText = await res.text();
+        let errorDetails: string | undefined = errorText;
+        try {
+          const parsed = JSON.parse(errorText);
+          if (parsed?.details && typeof parsed.details === 'object') {
+            errorDetails = JSON.stringify(parsed.details);
+          } else {
+            errorDetails = parsed?.error || parsed?.details || errorText;
+          }
+        } catch {
+          errorDetails = errorText;
+        }
+
+        console.error('🚨 [useOrderNotifications] API Error:', res.status, res.statusText, errorDetails);
+        if (res.status === 401) {
+          console.error('🚨 [useOrderNotifications] Unauthorized - Session may have expired');
+        }
+        throw new Error(`Error al cargar pedidos: ${res.status} ${res.statusText}${errorDetails ? ` - ${errorDetails}` : ''}`);
       }
 
       const data = await res.json();

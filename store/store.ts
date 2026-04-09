@@ -12,7 +12,7 @@ export interface BasketItem {
 interface BasketState {
   items: BasketItem[];
   currentStoreId: string | null; // Nueva propiedad para rastrear la tienda actual
-  addItem: (product: BasketItem) => void;
+  addItem: (product: BasketItem | Product) => void;
   removeItem: (productId: string) => void;
   clearBasket: () => void;
   getTotalPrice: () => number;
@@ -52,14 +52,19 @@ const useBasketStore = create<BasketState>()(
       
       addItem: (product) =>
         set((state) => {
-          const productStoreId = product.product.affiliateStore && 
-            typeof product.product.affiliateStore === 'object' && 
-            '_id' in product.product.affiliateStore 
-            ? (product.product.affiliateStore as { _id: string })._id 
+          const normalizedItem: BasketItem =
+            "product" in product
+              ? product
+              : { product, quantity: 1 };
+
+          const productStoreId = normalizedItem.product.affiliateStore && 
+            typeof normalizedItem.product.affiliateStore === 'object' && 
+            '_id' in normalizedItem.product.affiliateStore 
+            ? (normalizedItem.product.affiliateStore as { _id: string })._id 
             : null;
           
           // Verificar si se puede agregar el producto
-          if (!get().canAddProduct(product.product)) {
+          if (!get().canAddProduct(normalizedItem.product)) {
             console.warn('No se puede agregar producto de diferente tienda');
             return state; // No hacer cambios si no se puede agregar
           }
@@ -73,16 +78,16 @@ const useBasketStore = create<BasketState>()(
 
           const existingItem = state.items.find(
             (item) =>
-              item.product._id === product.product._id &&
-              areCustomizationsEqual(item.customizations, product.customizations)
+              item.product._id === normalizedItem.product._id &&
+              areCustomizationsEqual(item.customizations, normalizedItem.customizations)
           );
 
           if (existingItem) {
             return {
               items: state.items.map((item) =>
-                item.product._id === product.product._id &&
-                areCustomizationsEqual(item.customizations, product.customizations)
-                  ? { ...item, quantity: item.quantity + 1 }
+                item.product._id === normalizedItem.product._id &&
+                areCustomizationsEqual(item.customizations, normalizedItem.customizations)
+                  ? { ...item, quantity: item.quantity + (normalizedItem.quantity || 1) }
                   : item
               ),
             };
@@ -91,10 +96,10 @@ const useBasketStore = create<BasketState>()(
               items: [
                 ...state.items,
                 {
-                  product: product.product,
-                  quantity: 1,
-                  customizations: product.customizations,
-                  customPrice: product.customPrice,
+                  product: normalizedItem.product,
+                  quantity: normalizedItem.quantity || 1,
+                  customizations: normalizedItem.customizations,
+                  customPrice: normalizedItem.customPrice,
                 },
               ],
               currentStoreId: productStoreId || null,
@@ -137,8 +142,9 @@ const useBasketStore = create<BasketState>()(
         );
       },
       getItemCount: (productId) => {
-        const item = get().items.find((item) => item.product._id === productId);
-        return item ? item.quantity : 0;
+        return get().items
+          .filter((item) => item.product._id === productId)
+          .reduce((total, item) => total + item.quantity, 0);
       },
       getGroupedItems: () => get().items,
     }),

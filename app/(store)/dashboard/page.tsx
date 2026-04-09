@@ -46,6 +46,9 @@ import {
   Settings,
   Trash2,
   Volume2,
+  Copy,
+  MapPinned,
+  ExternalLink,
 } from "lucide-react";
 import { imageUrl } from "@/lib/imageUrl";
 import Image from "next/image";
@@ -78,7 +81,43 @@ const statusConfig: Record<string, { label: string; color: string }> = {
 };
 
 export default function DashboardPage() {
-  const { user } = useUser();
+  const { user, isLoaded } = useUser();
+  
+  // Add global error handlers to catch redirect triggers
+  useEffect(() => {
+    const handleError = (event: ErrorEvent) => {
+      console.error('🚨 [Dashboard] Global Error:', event.error);
+      console.error('🚨 [Dashboard] Error message:', event.message);
+      console.error('🚨 [Dashboard] Error stack:', event.error?.stack);
+    };
+    
+    const handleRejection = (event: PromiseRejectionEvent) => {
+      console.error('🚨 [Dashboard] Unhandled Promise Rejection:', event.reason);
+    };
+    
+    // DEBUG: Log all clicks to identify redirect source
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      console.log('🖱️ [Dashboard] Click detected on:', target.tagName, target.className, target.id);
+      console.log('🖱️ [Dashboard] Click target element:', target);
+      console.log('🖱️ [Dashboard] Parent element:', target.parentElement?.tagName);
+      
+      // Check if element has click handlers
+      const hasOnClick = target.onclick !== null || target.getAttribute('onclick') !== null;
+      console.log('🖱️ [Dashboard] Has onclick handler:', hasOnClick);
+    };
+    
+    window.addEventListener('error', handleError);
+    window.addEventListener('unhandledrejection', handleRejection);
+    document.addEventListener('click', handleClick, true); // Capture phase
+    
+    return () => {
+      window.removeEventListener('error', handleError);
+      window.removeEventListener('unhandledrejection', handleRejection);
+      document.removeEventListener('click', handleClick, true);
+    };
+  }, []);
+  
   const [ownedStores, setOwnedStores] = useState<OwnedStore[] | null>(null);
   const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
   const [allStores, setAllStores] = useState<any[]>([]);
@@ -113,7 +152,10 @@ export default function DashboardPage() {
       setProducts(data.products ?? []);
       console.log(`[Dashboard] Refreshed ${data.products?.length ?? 0} products`);
     } catch (err) {
-      console.error("Error refrescando productos:", err);
+      console.error('🚨 [Dashboard] Error refrescando productos:', err);
+      if (err instanceof Error && err.message.includes('401')) {
+        console.error('🚨 [Dashboard] Sesión expirada al cargar productos');
+      }
     } finally {
       setRefreshingProducts(false);
     }
@@ -178,26 +220,43 @@ export default function DashboardPage() {
   }, [modalOpen]);
 
   useEffect(() => {
+    if (!isLoaded) return;
+
     if (!user?.id) {
       setLoading(false);
       setOwnedStores([]);
       return;
     }
+    console.log('🔥 [Dashboard] Fetching stores for user:', user.id);
     fetch("/api/my-stores")
-      .then((res) => res.json())
+      .then((res) => {
+        console.log('🔥 [Dashboard] API response status:', res.status);
+        if (!res.ok) {
+          console.error('🚨 [Dashboard] API Error - Status:', res.status, res.statusText);
+        }
+        return res.json();
+      })
       .then((data) => {
-        setOwnedStores(data.stores ?? []);
+        console.log('🔥 [Dashboard] Stores data received:', data);
+        const stores = data.stores ?? [];
+        console.log('🔥 [Dashboard] Setting ownedStores to:', stores);
+        setOwnedStores(stores);
         setLoading(false);
       })
-      .catch(() => {
+      .catch((error) => {
+        console.error('� [Dashboard] Error fetching stores:', error);
+        console.error('🚨 [Dashboard] Error stack:', error?.stack);
         setOwnedStores([]);
         setLoading(false);
       });
-  }, [user?.id]);
+  }, [isLoaded, user?.id]);
 
   useEffect(() => {
     if (ownedStores && ownedStores?.length > 0 && !selectedStoreId) {
-      setSelectedStoreId(ownedStores[0]._id);
+      const firstStoreWithId = ownedStores.find((s) => !!s._id);
+      if (firstStoreWithId?._id) {
+        setSelectedStoreId(firstStoreWithId._id);
+      }
     }
   }, [ownedStores, selectedStoreId]);
 
@@ -462,6 +521,55 @@ export default function DashboardPage() {
   const formatCurrency = (n: number) =>
     new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(n);
 
+  const copyToClipboard = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      alert(`${label} copiado`);
+    } catch (error) {
+      console.error(`Error copiando ${label}:`, error);
+      alert(`No se pudo copiar ${label.toLowerCase()}`);
+    }
+  };
+
+  const buildAddressLabel = (order: Order) => {
+    const address = order.deliveryAddress;
+    if (!address) return "";
+
+    return [
+      address.line1,
+      address.line2,
+      [address.postal_code, address.city].filter(Boolean).join(" "),
+      address.state,
+      address.country,
+    ]
+      .filter(Boolean)
+      .join(", ");
+  };
+
+  const getCustomizationTitle = (
+    custom: NonNullable<OrderItem["customizations"]>[number],
+    item: OrderItem
+  ) => {
+    if (custom.title && !/^group-\d+$/.test(custom.title)) {
+      return custom.title;
+    }
+
+    const match = custom.title?.match(/^group-(\d+)$/);
+    const index = match ? Number(match[1]) : -1;
+    const fallbackTitle =
+      index >= 0 ? item.productOptionGroups?.[index]?.title : undefined;
+
+    return fallbackTitle || custom.title || "Opcion";
+  };
+
+  if (!isLoaded || loading) {
+    return (
+      <div className="container mx-auto px-4 py-20 flex justify-center">
+        <Loader2 className="w-10 h-10 animate-spin text-[#ff8800]" />
+      </div>
+    );
+  }
+
   if (!user) {
     return (
       <div className="container mx-auto px-4 py-20 max-w-lg text-center">
@@ -481,15 +589,14 @@ export default function DashboardPage() {
     );
   }
 
-  if (loading) {
-    return (
-      <div className="container mx-auto px-4 py-20 flex justify-center">
-        <Loader2 className="w-10 h-10 animate-spin text-[#ff8800]" />
-      </div>
-    );
-  }
+  console.log('[Dashboard] Access Check:', {
+  store: store ? store.name : 'null',
+  ownedStoresLength: ownedStores?.length || 0,
+  ownedStores: ownedStores,
+  userId: user?.id
+});
 
-  if (!store || ownedStores?.length !== 1) {
+if (!store || ownedStores?.length !== 1) {
     return (
       <div className="container mx-auto px-4 py-20 max-w-lg text-center">
         <div className="bg-white rounded-xl shadow-sm border p-8">
@@ -738,17 +845,105 @@ export default function DashboardPage() {
                                   {order.customerInfo.name}
                                 </h4>
                                 <div className="text-sm text-gray-600 mb-3 flex flex-col gap-1">
-                                    <span className="flex items-center gap-1"><span className="opacity-50">📞</span> {order.customerInfo.phone}</span>
+                                    <span className="flex items-center gap-2">
+                                      <span className="opacity-50">📞</span>
+                                      <span>{order.customerInfo.phone || "Sin telefono"}</span>
+                                      {order.customerInfo.phone && (
+                                        <button
+                                          type="button"
+                                          onClick={() => copyToClipboard(order.customerInfo.phone, "Telefono")}
+                                          className="inline-flex items-center gap-1 rounded border border-gray-200 bg-white px-2 py-0.5 text-xs text-gray-600 hover:bg-gray-100"
+                                        >
+                                          <Copy className="h-3 w-3" />
+                                          Copiar
+                                        </button>
+                                      )}
+                                    </span>
                                     <span className="flex items-center gap-1"><span className="opacity-50">📧</span> {order.customerInfo.email}</span>
                                 </div>
                                 
+                                {order.deliveryMethod === "home_delivery" && buildAddressLabel(order) && (
+                                  <div className="mb-3 rounded-lg border border-blue-100 bg-blue-50 p-3">
+                                    <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-blue-700">
+                                      Ubicacion del pedido
+                                    </p>
+                                    <p className="text-sm text-blue-900">
+                                      {buildAddressLabel(order)}
+                                    </p>
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => copyToClipboard(buildAddressLabel(order), "Ubicacion")}
+                                        className="inline-flex items-center gap-1 rounded border border-blue-200 bg-white px-2.5 py-1 text-xs text-blue-700 hover:bg-blue-100"
+                                      >
+                                        <Copy className="h-3 w-3" />
+                                        Copiar ubicacion
+                                      </button>
+                                      <a
+                                        href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(buildAddressLabel(order))}`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="inline-flex items-center gap-1 rounded border border-blue-200 bg-white px-2.5 py-1 text-xs text-blue-700 hover:bg-blue-100"
+                                      >
+                                        <MapPinned className="h-3 w-3" />
+                                        Ver en Google Maps
+                                        <ExternalLink className="h-3 w-3" />
+                                      </a>
+                                    </div>
+                                  </div>
+                                )}
+                                
                                 <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 mb-3">
                                     <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Detalle del pedido</p>
-                                    <ul className="space-y-1">
+                                    {/* DEBUG: Log raw order items data */}
+                                    {(() => {
+                                      console.log('[Dashboard Render] Order items:', order.items);
+                                      return null;
+                                    })()}
+                                    {/* DEBUG: Mostrar mensaje visible si no hay items */}
+                                    {(!order.items || order.items.length === 0) && (
+                                        <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded text-xs mb-2">
+                                            ⚠️ DEBUG: No hay items en este pedido. order.items = {JSON.stringify(order.items)}
+                                        </div>
+                                    )}
+                                    <ul className="space-y-2">
                                         {(order.items || []).map((i, idx) => (
-                                            <li key={idx} className="text-sm text-gray-800 flex justify-between">
-                                                <span>{i.quantity}x {i.productName}</span>
-                                                <span className="text-gray-500">{formatCurrency(i.price)}</span>
+                                            <li key={idx} className="text-sm">
+                                                <div className="flex justify-between items-start">
+                                                    <span className="text-gray-800">{i.quantity}x {i.productName}</span>
+                                                    <span className="text-gray-500">{formatCurrency(i.price)}</span>
+                                                </div>
+                                                {/* Mostrar personalizaciones - DEBUG VERSION */}
+                                                {(() => {
+                                                  console.log(`[Dashboard] Item ${idx} customizations:`, i.customizations);
+                                                  console.log(`[Dashboard] Item ${idx} all keys:`, Object.keys(i));
+                                                  return null;
+                                                })()}
+                                                {i.customizations && i.customizations.length > 0 && (
+                                                    <div className="mt-1 ml-4 space-y-0.5">
+                                                        {i.customizations.map((custom, cidx) => (
+                                                            <div key={cidx} className="text-xs text-gray-600">
+                                                                <span className="font-medium text-gray-500">{getCustomizationTitle(custom, i)}:</span>
+                                                                <span className="ml-1">
+                                                                    {custom.options?.map((opt, oidx) => (
+                                                                        <span key={oidx}>
+                                                                            {opt.label}
+                                                                            {opt.priceDelta && opt.priceDelta > 0 ? (
+                                                                                <span className="text-green-600"> (+{formatCurrency(opt.priceDelta)})</span>
+                                                                            ) : null}
+                                                                            {oidx < (custom.options?.length || 0) - 1 ? ", " : ""}
+                                                                        </span>
+                                                                    ))}
+                                                                </span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                                {i.notes && (
+                                                    <p className="mt-1 ml-4 text-xs text-amber-600 italic">
+                                                        📝 {i.notes}
+                                                    </p>
+                                                )}
                                             </li>
                                         ))}
                                     </ul>
@@ -1462,10 +1657,3 @@ export default function DashboardPage() {
     </div>
   );
 }
-
-
-
-
-
-
-

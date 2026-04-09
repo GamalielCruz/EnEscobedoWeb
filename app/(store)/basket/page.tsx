@@ -1,9 +1,6 @@
 "use client";
 
-import {
-  createCheckoutSession,
-  Metadata,
-} from "@/actions/createCheckoutSession";
+import type { Metadata } from "@/actions/createCheckoutSession";
 import Loader from "@/components/Loader";
 import { imageUrl } from "@/lib/imageUrl";
 import Image from "next/image";
@@ -147,10 +144,23 @@ function BasketPage() {
 
       console.log('📦 Checkout metadata:', metadata);
 
-      const checkoutUrl = await createCheckoutSession(groupedItems, metadata);
+      const response = await fetch("/api/checkout-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: groupedItems, metadata }),
+      });
 
-      if (checkoutUrl) {
-        window.location.href = checkoutUrl;
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        console.error("Error en /api/checkout-session", data);
+        throw new Error(data?.error || "Error al crear la sesión de checkout");
+      }
+
+      if (data?.url) {
+        window.location.href = data.url;
+      } else {
+        throw new Error("No se recibió URL de checkout");
       }
     } catch (error) {
       console.error("Error al crear la sesión de checkout", error);
@@ -185,9 +195,9 @@ function BasketPage() {
         <div className="flex flex-col lg:flex-row gap-6">
           {/* Lista de productos */}
           <div className="flex-1 space-y-3">
-            {groupedItems?.map((item) => (
+            {groupedItems?.map((item, index) => (
               <div
-                key={item.product._id}
+                key={`${item.product._id}-${index}`}
                 className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 hover:shadow-md transition-shadow"
               >
                 <div className="flex gap-4">

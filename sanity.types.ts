@@ -651,7 +651,7 @@ export type AllSanitySchemaTypes = StoreCategory | ClickCollectOrder | Sale | Or
 export declare const internalGroqTypeReferenceTo: unique symbol;
 // Source: ./sanity/lib/orders/getMyOrders.tsx
 // Variable: MY_ORDERS_QUERY
-// Query: *[(_type == "order" || _type == "clickCollectOrder") && (clerkUserId == $userId || customerInfo.clerkUserId == $userId)] | order(coalesce(orderDate, createdAt) desc) {      ...,      // For regular orders      _type == "order" => {        ...,        products[]{          ...,          product->        }      },      // For click & collect orders      _type == "clickCollectOrder" => {        ...,        "orderDate": createdAt,        "totalPrice": totalAmount,        "currency": "mxn",        "customerName": customerInfo.name,        "email": customerInfo.email,        "phone": customerInfo.phone,        "clerkUserId": customerInfo.clerkUserId,        "products": items[]{          "quantity": quantity,          "product": {            "_id": productId,            "name": productName,            "price": price          }        },        "isClickCollect": true,        "pickupCode": pickupCode,        "storeInfo": storeInfo      }    }
+// Query: *[(_type == "order" || _type == "clickCollectOrder") && (clerkUserId == $userId || customerInfo.clerkUserId == $userId)] | order(coalesce(orderDate, createdAt) desc) {      ...,      // For regular orders      _type == "order" => {        ...,        "isClickCollect": deliveryMethod == "click_collect",        "storeInfo": select(          deliveryMethod == "click_collect" => {            "storeName": pickupStore->name,            "storeAddress": pickupStore->address.street,            "storePhone": pickupStore->contact.phone          }        ),        products[]{          ...,          product->        }      },      // For click & collect orders      _type == "clickCollectOrder" => {        ...,        "orderDate": createdAt,        "totalPrice": totalAmount,        "currency": "mxn",        "customerName": customerInfo.name,        "email": customerInfo.email,        "phone": customerInfo.phone,        "clerkUserId": customerInfo.clerkUserId,        "products": items[]{          "quantity": quantity,          "product": {            "_id": productId,            "name": productName,            "price": price          }        },        "isClickCollect": true,        "pickupCode": pickupCode,        "storeInfo": storeInfo      }    }
 export type MY_ORDERS_QUERYResult = Array<{
   _id: string;
   _type: "clickCollectOrder";
@@ -918,6 +918,12 @@ export type MY_ORDERS_QUERYResult = Array<{
   estimatedPickupDate?: string;
   pickupStatus?: "expired" | "in_transit" | "picked_up" | "ready_for_pickup";
   pickupCode?: string;
+  isClickCollect: false | true;
+  storeInfo: {
+    storeName: string | null;
+    storeAddress: string | null;
+    storePhone: string | null;
+  };
 }>;
 
 // Source: ./sanity/lib/products/getAllAffiliateStores.ts
@@ -1540,7 +1546,7 @@ export type PRODUCTS_BY_CATEGORY_QUERYResult = Array<{
 
 // Source: ./sanity/lib/products/getProductsByStore.ts
 // Variable: PRODUCTS_BY_STORE_QUERY
-// Query: *[_type == "product" && affiliateStore._ref == $storeId] | order(name asc) {      _id,      _createdAt,      name,      slug,      image,      price,      stock,      description,      categories[]->{        _id,        title,        slug      },      affiliateStore->{        _id,        name,        categories,        averageDeliveryTime,        deliveryFee,        deliveryTimeMin,        deliveryTimeMax      }    }
+// Query: *[_type == "product" && affiliateStore._ref == $storeId] | order(name asc) {      _id,      _createdAt,      name,      slug,      image,      price,      stock,      description,      categories[]->{        _id,        title,        slug      },      optionGroups,      affiliateStore->{        _id,        name,        categories,        averageDeliveryTime,        deliveryFee,        deliveryTimeMin,        deliveryTimeMax      }    }
 export type PRODUCTS_BY_STORE_QUERYResult = Array<{
   _id: string;
   _createdAt: string;
@@ -1595,6 +1601,22 @@ export type PRODUCTS_BY_STORE_QUERYResult = Array<{
     _id: string;
     title: string | null;
     slug: Slug | null;
+  }> | null;
+  optionGroups: Array<{
+    title?: string;
+    description?: string;
+    required?: boolean;
+    selectionType?: "multiple" | "single";
+    options?: Array<{
+      label?: string;
+      description?: string;
+      priceDelta?: number;
+      isDefault?: boolean;
+      _type: "option";
+      _key: string;
+    }>;
+    _type: "optionGroup";
+    _key: string;
   }> | null;
   affiliateStore: {
     _id: string;
@@ -1871,14 +1893,14 @@ export type ACTIVE_SALE_BY_COUPON_QUERYResult = {
 import "@sanity/client";
 declare module "@sanity/client" {
   interface SanityQueries {
-    "\n    *[(_type == \"order\" || _type == \"clickCollectOrder\") && (clerkUserId == $userId || customerInfo.clerkUserId == $userId)] | order(coalesce(orderDate, createdAt) desc) {\n      ...,\n      // For regular orders\n      _type == \"order\" => {\n        ...,\n        products[]{\n          ...,\n          product->\n        }\n      },\n      // For click & collect orders\n      _type == \"clickCollectOrder\" => {\n        ...,\n        \"orderDate\": createdAt,\n        \"totalPrice\": totalAmount,\n        \"currency\": \"mxn\",\n        \"customerName\": customerInfo.name,\n        \"email\": customerInfo.email,\n        \"phone\": customerInfo.phone,\n        \"clerkUserId\": customerInfo.clerkUserId,\n        \"products\": items[]{\n          \"quantity\": quantity,\n          \"product\": {\n            \"_id\": productId,\n            \"name\": productName,\n            \"price\": price\n          }\n        },\n        \"isClickCollect\": true,\n        \"pickupCode\": pickupCode,\n        \"storeInfo\": storeInfo\n      }\n    }\n ": MY_ORDERS_QUERYResult;
+    "\n    *[(_type == \"order\" || _type == \"clickCollectOrder\") && (clerkUserId == $userId || customerInfo.clerkUserId == $userId)] | order(coalesce(orderDate, createdAt) desc) {\n      ...,\n      // For regular orders\n      _type == \"order\" => {\n        ...,\n        \"isClickCollect\": deliveryMethod == \"click_collect\",\n        \"storeInfo\": select(\n          deliveryMethod == \"click_collect\" => {\n            \"storeName\": pickupStore->name,\n            \"storeAddress\": pickupStore->address.street,\n            \"storePhone\": pickupStore->contact.phone\n          }\n        ),\n        products[]{\n          ...,\n          product->\n        }\n      },\n      // For click & collect orders\n      _type == \"clickCollectOrder\" => {\n        ...,\n        \"orderDate\": createdAt,\n        \"totalPrice\": totalAmount,\n        \"currency\": \"mxn\",\n        \"customerName\": customerInfo.name,\n        \"email\": customerInfo.email,\n        \"phone\": customerInfo.phone,\n        \"clerkUserId\": customerInfo.clerkUserId,\n        \"products\": items[]{\n          \"quantity\": quantity,\n          \"product\": {\n            \"_id\": productId,\n            \"name\": productName,\n            \"price\": price\n          }\n        },\n        \"isClickCollect\": true,\n        \"pickupCode\": pickupCode,\n        \"storeInfo\": storeInfo\n      }\n    }\n ": MY_ORDERS_QUERYResult;
     "\n        *[_type == \"affiliateStore\" && isActive == true] | order(name asc) {\n            _id,\n            _type,\n            _createdAt,\n            _updatedAt,\n            _rev,\n            name,\n            storeId,\n            image,\n            coverImage,\n            storeCategories[]->{\n                _id,\n                title,\n                slug,\n                icon\n            },\n            address,\n            coordinates,\n            contact,\n            operatingHours,\n            isActive,\n            capacity,\n            averageDeliveryTime,\n            deliveryFee,\n            deliveryTimeMin,\n            deliveryTimeMax\n        }\n    ": ALL_STORES_QUERYResult;
     "\n        *[_type == \"category\"] | order(name asc)\n        ": ALL_CATEGORIES_QUERYResult;
     "\n       *[\n           _type == \"product\"\n        ] | order(name asc) {\n           ...,\n           affiliateStore->{\n               _id,\n               name,\n               storeId,\n               deliveryFee,\n               deliveryTimeMin,\n               deliveryTimeMax,\n               averageDeliveryTime\n           }\n        }\n    ": ALL_PRODUCTS_QUERYResult;
     "\n    *[_type == \"storeCategory\"] | order(order asc, title asc) {\n      _id,\n      title,\n      slug,\n      description,\n      icon,\n      order\n    }\n  ": ALL_STORE_CATEGORIES_QUERYResult;
     "\n        *[\n            _type == \"product\" && slug.current == $slug\n        ] | order(name asc) [0]{\n          ...,\n          affiliateStore->{\n            _id,\n            name,\n            image,\n            averageDeliveryTime,\n            deliveryFee,\n            deliveryTimeMin,\n            deliveryTimeMax\n          },\n          optionGroups\n        }\n        ": PRODUCT_BY_ID_QUERYResult;
     "\n        *[\n            _type == \"product\"\n            && references(*[_type == \"category\" && slug.current == $categorySlug]._id)\n            ] | order(name asc)\n        ": PRODUCTS_BY_CATEGORY_QUERYResult;
-    "\n    *[_type == \"product\" && affiliateStore._ref == $storeId] | order(name asc) {\n      _id,\n      _createdAt,\n      name,\n      slug,\n      image,\n      price,\n      stock,\n      description,\n      categories[]->{\n        _id,\n        title,\n        slug\n      },\n      affiliateStore->{\n        _id,\n        name,\n        categories,\n        averageDeliveryTime,\n        deliveryFee,\n        deliveryTimeMin,\n        deliveryTimeMax\n      }\n    }\n  ": PRODUCTS_BY_STORE_QUERYResult;
+    "\n    *[_type == \"product\" && affiliateStore._ref == $storeId] | order(name asc) {\n      _id,\n      _createdAt,\n      name,\n      slug,\n      image,\n      price,\n      stock,\n      description,\n      categories[]->{\n        _id,\n        title,\n        slug\n      },\n      optionGroups,\n      affiliateStore->{\n        _id,\n        name,\n        categories,\n        averageDeliveryTime,\n        deliveryFee,\n        deliveryTimeMin,\n        deliveryTimeMax\n      }\n    }\n  ": PRODUCTS_BY_STORE_QUERYResult;
     "\n    *[_type == \"affiliateStore\" && _id == $storeId][0] {\n      _id,\n      name,\n      storeId,\n      image,\n      coverImage,\n      categories,\n      address,\n      coordinates,\n      contact,\n      operatingHours,\n      isActive,\n      capacity,\n      averageDeliveryTime,\n      deliveryFee,\n      deliveryTimeMin,\n      deliveryTimeMax\n    }\n  ": STORE_BY_ID_QUERYResult;
     "\n     *[\n        _type == \"product\"\n        && name match $searchParam\n     ] | order(name asc)\n    ": PRODUCT_SEARCH_QUERYResult;
     "\n        *[\n            _type == \"sale\"\n            && isActive == true \n            && couponCode == $couponCode\n        ] | order(validFrom desc)[0]\n        ": ACTIVE_SALE_BY_COUPON_QUERYResult;

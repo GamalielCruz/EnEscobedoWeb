@@ -1,4 +1,5 @@
 {
     "typescript.tsdk": "node_modules\\typescript\\lib",
-    "typescript.autoClosingTags": false
+    "typescript.autoClosingTags": false,
+    "chatgpt.openOnStartup": false
 }

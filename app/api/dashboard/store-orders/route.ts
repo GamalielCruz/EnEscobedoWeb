@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { client, writeClient } from "@/sanity/lib/client";
+import { createClient } from "next-sanity";
 
 const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
 // Soporta documentos tipo `clickCollectOrder` y `order` (cuando deliveryMethod == 'click_collect')
@@ -18,6 +18,10 @@ const ORDERS_QUERY = `*[
     _type == "clickCollectOrder" => customerInfo,
     _type == "order" => { "name": customerName, "email": email, "clerkUserId": clerkUserId, "phone": phone }
   ),
+  "deliveryAddress": select(
+    _type == "order" => shippingAddress,
+    null
+  ),
   "storeInfo": select(
     _type == "clickCollectOrder" => storeInfo,
     _type == "order" => { 
@@ -28,13 +32,21 @@ const ORDERS_QUERY = `*[
     }
   ),
   "items": select(
-    _type == "clickCollectOrder" => items{
+    _type == "clickCollectOrder" => items[]{
       _key,
-      productName,
-      product->{_id, name},
+      "productName": coalesce(productName, product->name),
+      "productId": coalesce(productId, product->_id),
       quantity,
       price,
-      customizations,
+      "customizations": customizations[]{
+        _key,
+        title,
+        "options": options[]{
+          _key,
+          label,
+          priceDelta
+        }
+      },
       notes
     },
     _type == "order" => products[]{ 
@@ -43,7 +55,18 @@ const ORDERS_QUERY = `*[
       "productId": product->_id,
       "quantity": quantity, 
       "price": product->price,
-      customizations,
+      "productOptionGroups": product->optionGroups[]{
+        title
+      },
+      "customizations": customizations[]{
+        _key,
+        title,
+        "options": options[]{
+          _key,
+          label,
+          priceDelta
+        }
+      },
       notes
     }
   ),
@@ -63,6 +86,43 @@ const ORDER_BY_NUMBER = `*[
   || (_type == "order" && orderNumber == $orderNumber)
 ][0]`;
 
+function getSanityClients() {
+  const projectId = process.env.NEXT_PUBLIC_SANITY_PROJECT_ID;
+  const dataset = process.env.NEXT_PUBLIC_SANITY_DATASET;
+  const apiVersion = process.env.NEXT_PUBLIC_SANITY_API_VERSION || "2024-07-25";
+
+  if (!projectId || !dataset) {
+    return {
+      error: {
+        message: "Missing Sanity environment variables",
+        projectId: !!projectId,
+        dataset: !!dataset,
+      },
+    };
+  }
+
+  const base = {
+    projectId,
+    dataset,
+    apiVersion,
+    perspective: "published" as const,
+  };
+
+  return {
+    client: createClient({ ...base, useCdn: false }),
+    readClient: createClient({
+      ...base,
+      useCdn: true,
+      token: process.env.SANITY_API_READ_TOKEN,
+    }),
+    writeClient: createClient({
+      ...base,
+      useCdn: false,
+      token: process.env.SANITY_API_TOKEN,
+    }),
+  };
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { userId } = await auth();
@@ -71,12 +131,27 @@ export async function GET(request: NextRequest) {
     }
 
     const { searchParams } = new URL(request.url);
-    const storeId = searchParams.get("storeId");
+    const storeIdRaw = searchParams.get("storeId");
+    const storeId =
+      storeIdRaw && storeIdRaw.trim() !== "" && storeIdRaw !== "null" && storeIdRaw !== "undefined"
+        ? storeIdRaw
+        : null;
     if (!storeId) {
       return NextResponse.json({ error: "storeId requerido" }, { status: 400 });
     }
 
-    const ownedStores = await writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
+    const sanity = getSanityClients();
+    if ("error" in sanity) {
+      return NextResponse.json(
+        { error: "Error al cargar pedidos", details: sanity.error },
+        { status: 500 }
+      );
+    }
+
+    const readSanity =
+      process.env.SANITY_API_READ_TOKEN ? sanity.readClient : process.env.SANITY_API_TOKEN ? sanity.writeClient : sanity.client;
+
+    const ownedStores = await readSanity.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
       userId,
     });
     const ownsStore = ownedStores?.some((s) => s._id === storeId);
@@ -84,25 +159,22 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "No tienes permiso para esta tienda" }, { status: 403 });
     }
 
-    const orders = await writeClient.fetch(ORDERS_QUERY, { storeId });
+    const orders = await readSanity.fetch(ORDERS_QUERY, { storeId });
     
     console.log('[store-orders API] StoreId:', storeId);
     console.log('[store-orders API] Orders found:', orders.length);
-    console.log('[store-orders API] Orders data:', orders);
     
-    // Log detallado del último pedido para verificar customizations
+    // Log detallado del primer pedido para depurar
     if (orders.length > 0) {
-      const latestOrder = orders[0];
-      console.log('[store-orders API] Latest order:', latestOrder._id);
-      console.log('[store-orders API] Latest order items:', latestOrder.items);
-      if (latestOrder.items && latestOrder.items.length > 0) {
-        latestOrder.items.forEach((item: any, index: number) => {
-          console.log(`[store-orders API] Item ${index}:`, {
-            productName: item.productName,
-            customizations: item.customizations,
-            notes: item.notes
-          });
-        });
+      console.log('[store-orders API] RAW first order:', JSON.stringify(orders[0], null, 2));
+      console.log('[store-orders API] First order items field:', orders[0].items);
+      console.log('[store-orders API] First order _type:', orders[0]._type);
+      
+      // Verificar específicamente el campo items para clickCollectOrder
+      if (orders[0]._type === 'clickCollectOrder') {
+        console.log('[store-orders API] ClickCollectOrder items structure:', JSON.stringify(orders[0].items, null, 2));
+        console.log('[store-orders API] ClickCollectOrder items length:', orders[0].items?.length);
+        console.log('[store-orders API] ClickCollectOrder first item:', JSON.stringify(orders[0].items?.[0], null, 2));
       }
     }
     
@@ -115,7 +187,35 @@ export async function GET(request: NextRequest) {
     });
   } catch (e) {
     console.error("[dashboard/store-orders GET]", e);
-    return NextResponse.json({ error: "Error al cargar pedidos" }, { status: 500 });
+    const baseError =
+      e instanceof Error
+        ? {
+            name: e.name,
+            message: e.message,
+            stack: e.stack,
+          }
+        : { message: String(e) };
+
+    const statusCode =
+      typeof e === "object" && e !== null && typeof (e as { statusCode?: unknown }).statusCode === "number"
+        ? (e as { statusCode: number }).statusCode
+        : undefined;
+    const status =
+      typeof e === "object" && e !== null && typeof (e as { status?: unknown }).status === "number"
+        ? (e as { status: number }).status
+        : undefined;
+
+    return NextResponse.json(
+      {
+        error: "Error al cargar pedidos",
+        details: {
+          ...baseError,
+          ...(statusCode ? { statusCode } : {}),
+          ...(status ? { status } : {}),
+        },
+      },
+      { status: 500 }
+    );
   }
 }
 
@@ -136,12 +236,30 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const order = await client.fetch(ORDER_BY_NUMBER, { orderNumber });
+    const sanity = getSanityClients();
+    if ("error" in sanity) {
+      return NextResponse.json(
+        { error: "Error al actualizar pedido", details: sanity.error },
+        { status: 500 }
+      );
+    }
+
+    if (!process.env.SANITY_API_TOKEN) {
+      return NextResponse.json(
+        {
+          error: "Error al actualizar pedido",
+          details: { message: "Missing SANITY_API_TOKEN" },
+        },
+        { status: 500 }
+      );
+    }
+
+    const order = await sanity.client.fetch(ORDER_BY_NUMBER, { orderNumber });
     if (!order) {
       return NextResponse.json({ error: "Orden no encontrada" }, { status: 404 });
     }
 
-    const ownedStores = await writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
+    const ownedStores = await sanity.writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
       userId,
     });
     
@@ -171,7 +289,7 @@ export async function PATCH(request: NextRequest) {
       updateData.deliveredAt = new Date().toISOString();
     }
 
-    const updated = await writeClient.patch(order._id).set(updateData).commit();
+    const updated = await sanity.writeClient.patch(order._id).set(updateData).commit();
 
     return NextResponse.json({
       success: true,

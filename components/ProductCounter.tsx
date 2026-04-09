@@ -21,7 +21,13 @@ export default function ProductCounter({ product, onAddComplete, onOpenSidebar }
   const hasRequiredOptions = product.optionGroups?.some((group: any) => group.required === true) || false;
 
   const handleAdd = () => {
-    addItem(product);
+    // Si el producto tiene opciones obligatorias, abrir sidebar para nueva personalización
+    if (hasRequiredOptions) {
+      onOpenSidebar?.();
+      return;
+    }
+    
+    addItem({ product, quantity: 1 });
   };
 
   const handleRemove = () => {
@@ -38,7 +44,7 @@ export default function ProductCounter({ product, onAddComplete, onOpenSidebar }
     }
     
     // Si no tiene opciones obligatorias, añadir directamente
-    addItem(product);
+    addItem({ product, quantity: 1 });
     
     // Mostrar el mini-componente inmediatamente después de añadir
     setIsVisible(true);

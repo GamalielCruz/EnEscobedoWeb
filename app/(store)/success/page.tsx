@@ -1,92 +1,161 @@
 'use client';
 
-import { useEffect } from "react";
-import { useSearchParams } from "next/navigation";
-import  useBasketStore  from "@/store/store";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+
 import { Button } from "@/components/ui/button";
+import useBasketStore from "@/store/store";
 
-function SuccessPage() {
-    const searchParams = useSearchParams();
-    const orderNumber = searchParams.get("orderNumber");
-    const clearBasket = useBasketStore((state) => state.clearBasket);
-    const sessionId = searchParams.get("session_id");
+export default function SuccessPage() {
+  const searchParams = useSearchParams();
+  const orderNumber = searchParams.get("orderNumber");
+  const sessionId = searchParams.get("session_id");
+  const clearBasket = useBasketStore((state) => state.clearBasket);
+  const [confirmationError, setConfirmationError] = useState<string | null>(
+    null
+  );
+  const [isConfirming, setIsConfirming] = useState(false);
 
-    useEffect(() => {
-        if (orderNumber) {
-            clearBasket();
+  useEffect(() => {
+    if (orderNumber) {
+      clearBasket();
+    }
+  }, [orderNumber, clearBasket]);
+
+  useEffect(() => {
+    if (!sessionId) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const confirmOrder = async () => {
+      try {
+        setIsConfirming(true);
+        setConfirmationError(null);
+
+        const response = await fetch("/api/checkout/confirm", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            sessionId,
+            orderNumber,
+          }),
+        });
+
+        const data = await response.json();
+
+        if (!response.ok || !data.success) {
+          throw new Error(data?.error || "No se pudo confirmar la orden");
         }
-    }, [orderNumber, clearBasket]);
+      } catch (error) {
+        if (!cancelled) {
+          setConfirmationError(
+            error instanceof Error
+              ? error.message
+              : "No se pudo confirmar la orden"
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setIsConfirming(false);
+        }
+      }
+    };
 
-    return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-gray-50">
-        <div className="bg-white p-12 rounded-xl shadow-lg max-w-2xl w-full mx-4">
-          <div className="flex justify-center mb-8">
-            <div className="h-16 w-16 bg-green-100 rounded-full flex items-center justify-center">
-              <svg
-                className="h-8 w-8 text-green-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M5 13l4 4L19 7"
-                />
-              </svg>
+    void confirmOrder();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, orderNumber]);
+
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50">
+      <div className="mx-4 w-full max-w-2xl rounded-xl bg-white p-12 shadow-lg">
+        <div className="mb-8 flex justify-center">
+          <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-100">
+            <svg
+              className="h-8 w-8 text-green-600"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M5 13l4 4L19 7"
+              />
+            </svg>
+          </div>
+        </div>
+
+        <div className="text-center">
+          <h1 className="mb-2 text-2xl font-bold text-gray-800">
+            Compra exitosa
+          </h1>
+
+          <div className="mb-6 border-y border-gray-200 py-6">
+            <p className="mb-4 text-lg text-gray-600">
+              Tu pedido ha sido procesado con exito y pronto sera enviado.
+            </p>
+
+            <div className="space-y-2">
+              {orderNumber && (
+                <p className="flex items-center space-x-5 text-lg">
+                  <span>Numero de orden:</span>
+                  <span className="font-mono text-sm text-green-600">
+                    {orderNumber}
+                  </span>
+                </p>
+              )}
             </div>
           </div>
-          <div className="text-center">
-            <h1 className="text-2xl font-bold text-gray-800 mb-2">
-              Compra exitosa
-            </h1>
-            <div className="border-t border-b border-gray-200 py-6 mb-6">
-              <p className="text-gray-600 text-lg mb-4">
-                Tu pedido ha sido procesado con éxito y pronto será enviado.
+
+          <div className="space-y-4">
+            <p className="text-gray-600">
+              Un mensaje de confirmacion ha sido enviado a tu correo
+              electronico.
+            </p>
+
+            {sessionId && isConfirming && (
+              <p className="text-sm text-amber-700">
+                Confirmando tu pedido y sincronizando con la tienda...
               </p>
-              <div className="space-y-2">
-                {orderNumber && (
-                  <p className="text-lg flex items-center space-x-5">
-                    <span>Número de orden:</span>
-                    <span className="font-mono text-sm text-green-600">
-                      {orderNumber}
-                    </span>
-                  </p>
-                )}
-                {/*{sessionId && (
-                  <p className="text-gray-600 flex justify-between">
-                    <span>Numero de seguimiento:</span>
-                    <span className="font-mono text-sm text-green-600">
-                      {sessionId}
-                    </span>
-                  </p>
-                )}
-                  */}
-              </div>
-            </div>
-            <div className="space-y-4">
-              <p className="text-gray-600">
-                Un mensaje de confirmación ha sido enviado a tu correo
-                electrónico.
+            )}
+
+            {sessionId && !isConfirming && !confirmationError && (
+              <p className="text-sm text-green-700">
+                Pedido confirmado y sincronizado con la tienda.
               </p>
-              <div className="flex flex-col sm:flex-row gap-4 justify-center">
-                <Button
-                  asChild
-                  className="bg-green-600 hover:bg-green-700 text-white font-medium py-3 px-6 rounded-lg transition-colors"
-                >
-                  <Link href="orders"> Ver mis pedidos </Link>
-                </Button>
-                <Button asChild variant="outline">
-                  <Link href="/"> Volver a la tienda </Link>
-                </Button>
-              </div>
+            )}
+
+            {confirmationError && (
+              <p className="text-sm text-red-600">
+                El pago fue exitoso, pero hubo un problema al sincronizar el
+                pedido: {confirmationError}
+              </p>
+            )}
+
+            <div className="flex flex-col justify-center gap-4 sm:flex-row">
+              <Button
+                asChild
+                className="rounded-lg bg-green-600 px-6 py-3 font-medium text-white transition-colors hover:bg-green-700"
+              >
+                <Link href="orders">Ver mis pedidos</Link>
+              </Button>
+
+              <Button asChild variant="outline">
+                <Link href="/">Volver a la tienda</Link>
+              </Button>
             </div>
           </div>
         </div>
       </div>
-    );
+    </div>
+  );
 }
-
-export default SuccessPage;

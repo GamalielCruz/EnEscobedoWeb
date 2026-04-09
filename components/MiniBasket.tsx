@@ -32,7 +32,7 @@ export default function MiniBasket() {
               <div className="flex -space-x-2">
                 {items.slice(0, 3).map((item, index) => (
                   <div
-                    key={item.product._id}
+                    key={`${item.product._id}-${index}`}
                     className="relative w-8 h-8 rounded-full overflow-hidden border-2 border-white"
                     style={{ zIndex: 3 - index }}
                   >

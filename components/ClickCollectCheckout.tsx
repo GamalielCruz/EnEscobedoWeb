@@ -35,6 +35,15 @@ function ClickCollectCheckout() {
     notes: "",
   });
 
+  // DEBUG: Log forzado al inicio
+  console.log("🔥 ClickCollectCheckout COMPONENT MOUNTED!");
+  console.log("🔥 Current items from store:", items);
+  console.log("🔥 Items length:", items.length);
+  
+  // DEBUG: Log items cuando se carga el componente
+  console.log("[ClickCollectCheckout] Component loaded - Items:", items);
+  console.log("[ClickCollectCheckout] Component loaded - Items length:", items.length);
+
   const subtotal = getTotalPrice();
   const shippingCost = 0; // Siempre gratis para Click & Collect
   const total = subtotal + shippingCost;
@@ -53,6 +62,10 @@ function ClickCollectCheckout() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    // DEBUG: Checkpoint antes de enviar
+    console.log("🔥 CHECKPOINT handleSubmit - Items count:", items.length);
+    console.log("🔥 CHECKPOINT handleSubmit - Items:", items);
+
     if (!user) {
       alert("Debes iniciar sesión para continuar");
       return;
@@ -70,8 +83,21 @@ function ClickCollectCheckout() {
 
     setIsLoading(true);
 
+    // DEBUG: Verificar items antes de enviar
+    console.log("[ClickCollectCheckout] About to submit - Items count:", items.length);
+    console.log("[ClickCollectCheckout] About to submit - Items:", items);
+
     try {
       const orderNumber = crypto.randomUUID();
+
+      // DEBUG: Log items with customizations before sending
+      console.log("[ClickCollectCheckout] Items to send:", items.map(item => ({
+        productId: item.product._id,
+        productName: item.product.name,
+        quantity: item.quantity,
+        customizations: item.customizations,
+        customPrice: item.customPrice,
+      })));
 
       // Crear orden Click & Collect
       const response = await fetch("/api/create-click-collect-order", {
@@ -94,6 +120,8 @@ function ClickCollectCheckout() {
           items: items.map((item) => ({
             product: item.product,
             quantity: item.quantity,
+            customizations: item.customizations,
+            customPrice: item.customPrice,
           })),
           total: total,
           paymentMethod: "cash_on_pickup", // Pago contraentrega en tienda
@@ -101,8 +129,13 @@ function ClickCollectCheckout() {
       });
 
       const result = await response.json();
+      
+      // DEBUG: Log API response
+      console.log("[ClickCollectCheckout] API response:", result);
 
       if (result.success) {
+        // Solo limpiar el carrito si la orden se creó exitosamente
+        console.log("[ClickCollectCheckout] Order successful, clearing basket");
         clearBasket();
         localStorage.removeItem("clickCollectStore"); // Limpiar información de tienda
 

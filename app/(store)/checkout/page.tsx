@@ -3,10 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth, useUser } from "@clerk/nextjs";
-import {
-  createCheckoutSession,
-  Metadata,
-} from "@/actions/createCheckoutSession";
+import type { Metadata } from "@/actions/createCheckoutSession";
 import useBasketStore from "@/store/store";
 import { Button } from "@/components/ui/button";
 import {
@@ -92,22 +89,32 @@ export default function CheckoutPage() {
 
       // Si es Click & Collect, agregar metadata adicional
       if (isClickCollectMode && clickCollectStore) {
-        (metadata as any).deliveryMethod = "click_collect";
-        (metadata as any).pickupStoreId = clickCollectStore.storeId;
-        (metadata as any).pickupStoreName = clickCollectStore.storeName;
-        (metadata as any).customerAddress = JSON.stringify(
-          clickCollectStore.customerAddress
-        );
+        metadata.deliveryMethod = "click_collect";
+        metadata.pickupStoreId = clickCollectStore.storeId;
+        metadata.pickupStoreName = clickCollectStore.storeName;
+        metadata.customerAddress = JSON.stringify(clickCollectStore.customerAddress);
       }
 
-      const checkoutUrl = await createCheckoutSession(groupedItems, metadata);
+      const response = await fetch("/api/checkout-session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: groupedItems, metadata }),
+      });
 
-      if (checkoutUrl) {
-        // Limpiar datos de localStorage antes de redirigir
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        console.error("Error en /api/checkout-session", data);
+        throw new Error(data?.error || "Error al crear la sesión de checkout");
+      }
+
+      if (data?.url) {
         if (isClickCollectMode) {
           localStorage.removeItem("clickCollectStore");
         }
-        window.location.href = checkoutUrl;
+        window.location.href = data.url;
+      } else {
+        throw new Error("No se recibió URL de checkout");
       }
     } catch (error) {
       console.error("Error al crear la sesión de checkout", error);

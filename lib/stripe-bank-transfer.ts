@@ -1,4 +1,4 @@
-import stripe from "./stripe";
+import { getStripe } from "./stripe";
 import { ExtendedPaymentIntent, BankTransferInstructions } from "@/types/stripe-extended";
 
 export interface BankTransferDetails {
@@ -14,6 +14,7 @@ export interface BankTransferDetails {
  */
 export async function getBankTransferDetails(paymentIntentId: string): Promise<BankTransferDetails | null> {
   try {
+    const stripe = getStripe();
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId, {
       expand: ['next_action.display_bank_transfer_instructions']
     }) as ExtendedPaymentIntent;

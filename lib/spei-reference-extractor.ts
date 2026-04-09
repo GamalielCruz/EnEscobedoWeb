@@ -1,4 +1,4 @@
-import stripe from "./stripe"; // Aquí debe estar tu instancia inicializada de Stripe
+import { getStripe } from "./stripe";
 import type Stripe from "stripe";
 
 export interface SpeiDetails {
@@ -40,6 +40,7 @@ export async function extractSpeiDetails(
   const details: SpeiDetails = {};
 
   try {
+    const stripe = getStripe();
     // Obtener PaymentIntent con expansiones
     const pi = (await stripe.paymentIntents.retrieve(paymentIntentId, {
       expand: [

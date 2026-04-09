@@ -1,11 +1,18 @@
 import Stripe from "stripe";
 
-if (!process.env.STRIPE_SECRET_KEY) {
+let stripeInstance: Stripe | null = null;
+
+export function getStripe() {
+  const secretKey = process.env.STRIPE_SECRET_KEY;
+  if (!secretKey) {
     throw new Error("STRIPE_SECRET_KEY is not set");
+  }
+  if (!stripeInstance) {
+    stripeInstance = new Stripe(secretKey, {
+      apiVersion: "2025-07-30.basil",
+    });
+  }
+  return stripeInstance;
 }
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-    apiVersion: '2025-07-30.basil',
-})
-
-export default stripe;
+export default getStripe;

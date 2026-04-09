@@ -1,7 +1,5 @@
 import type { Metadata } from "next";
 import { Header } from "@/components/Header";
-import { SanityLive } from "@/sanity/lib/live";
-import { SanityErrorBoundary } from "@/components/SanityErrorBoundary";
 import { draftMode } from "next/headers";
 import { VisualEditing } from "next-sanity";
 import { DisableDraftMode } from "@/components/DisableDraftMode";
@@ -39,11 +37,6 @@ export default async function StoreLayout({
         <Header />
         {children}
       </main>
-      {process.env.NODE_ENV === 'development' && (
-        <SanityErrorBoundary>
-          <SanityLive />
-        </SanityErrorBoundary>
-      )}
       <Footer />
       <CookieConsent variant="mini"/>
     </>

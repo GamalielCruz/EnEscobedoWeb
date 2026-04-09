@@ -5,7 +5,8 @@ import { client } from "@/sanity/lib/client";
 const MY_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] {
   _id,
   name,
-  storeId
+  storeId,
+  ownerClerkUserId
 }`;
 
 export async function GET() {
@@ -18,15 +19,27 @@ export async function GET() {
     
     if (!userId) {
       console.log('🔥 [api/my-stores] No userId found, returning empty array');
-      return NextResponse.json({ stores: [] });
+      return NextResponse.json({ 
+        stores: [],
+        debug: { 
+          message: "No authenticated user found",
+          userId: userId 
+        }
+      });
     }
     
     console.log('🔥 [api/my-stores] Executing query for userId:', userId);
     console.log('🔥 [api/my-stores] Query:', MY_STORES_QUERY);
     
-    const stores = await client.fetch<{ _id: string; name: string; storeId?: string }[]>(
+    const stores = await client.fetch<{ _id: string; name: string; storeId?: string; ownerClerkUserId?: string }[]>(
       MY_STORES_QUERY,
-      { userId }
+      { userId },
+      { 
+        // Forzar refresh para evitar caché
+        perspective: 'published',
+        useCdn: false,
+        cache: 'no-store'
+      }
     );
     
     console.log('🔥 [api/my-stores] Raw query result:', stores);
@@ -35,18 +48,31 @@ export async function GET() {
     // Validación adicional: limpiar caracteres invisibles y verificar owner
     const cleanedStores = (stores ?? []).map(store => ({
       ...store,
-      name: store.name.replace(/[\u200B-\u200D\uFEFF\u2060\uFE00-\uFE0F\uE000-\uF8FF\uFFF0-\uFFFF]/g, '').trim()
+      name: store.name
+        .replace(/[\u200B-\u200D\uFEFF\u2060\uFE00-\uFE0F\uE000-\uF8FF\uFFF0-\uFFFF]/g, '') // Caracteres invisibles
+        .replace(/\uFEFF/g, '') // BOM específico
+        .replace(/[\u0000-\u001F\u007F-\u009F]/g, '') // Caracteres de control
+        .trim()
     }));
     
     console.log('🔥 [api/my-stores] Cleaned stores:', cleanedStores);
     
     // Verificación de seguridad: asegurar que solo devolvamos tiendas del usuario correcto
     const verifiedStores = cleanedStores.filter(store => {
-      // Esta es una verificación adicional por si hay problemas con la consulta
-      return true; // La consulta GROQ ya debería filtrar correctamente
+      // Verificación explícita del ownerClerkUserId
+      console.log('🔍 Verifying store:', store.name, 'owner:', store.ownerClerkUserId, 'expected:', userId);
+      return store.ownerClerkUserId === userId;
     });
     
-    const response = { stores: verifiedStores };
+    const response = { 
+      stores: verifiedStores,
+      debug: {
+        userId: userId,
+        queryResult: stores,
+        cleanedStores: cleanedStores,
+        verifiedCount: verifiedStores.length
+      }
+    };
     console.log('🔥 [api/my-stores] Final response:', response);
     console.log('🔥 [api/my-stores] API CALLED - END');
     

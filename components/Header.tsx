@@ -2,7 +2,6 @@
 
 import {
   ClerkLoaded,
-  SignedIn,
   SignInButton,
   UserButton,
   useUser,
@@ -13,136 +12,112 @@ import { SearchIcon, LayoutDashboard } from "lucide-react";
 import { PackageIcon, TrolleyIcon } from "@sanity/icons";
 import useBasketStore from "@/store/store";
 import Image from "next/image";
-import { Aoboshi_One } from "next/font/google";
 import { useHydration } from "@/hooks/useHydration";
 import { useEffect, useState } from "react";
-
-const aoboshiOne = Aoboshi_One({
-  subsets: ["latin"],
-  weight: ["400"],
-});
 
 type OwnedStore = { _id: string; name: string; storeId?: string };
 
 export function Header() {
-  const { user } = useUser();
+  const { user, isLoaded } = useUser();
   const isHydrated = useHydration();
   const [ownedStores, setOwnedStores] = useState<OwnedStore[]>([]);
   const [isVisible, setIsVisible] = useState(true);
   const [lastScrollY, setLastScrollY] = useState(0);
-  const itemCount = useBasketStore((state) => 
-   state.items.reduce((total, item) => total + item.quantity, 0)
+  const itemCount = useBasketStore((state) =>
+    state.items.reduce((total, item) => total + item.quantity, 0)
   );
 
   useEffect(() => {
-    console.log('🔥 [Header] useEffect triggered');
-    console.log('🔥 [Header] User ID:', user?.id);
-    
+    if (!isLoaded) {
+      return;
+    }
+
+    console.log("🔥 [Header] useEffect triggered");
+    console.log("🔥 [Header] User ID:", user?.id);
+
     if (!user?.id) {
-      console.log('🔥 [Header] No user ID, setting ownedStores to []');
+      console.log("🔥 [Header] No user ID, setting ownedStores to []");
       setOwnedStores([]);
       return;
     }
-    
-    console.log('🔥 [Header] Fetching stores for user:', user.id);
-    
+
+    console.log("🔥 [Header] Fetching stores for user:", user.id);
+
     fetch("/api/my-stores")
       .then((res) => {
-        console.log('🔥 [Header] API response status:', res.status);
-        console.log('🔥 [Header] API response headers:', res.headers);
+        console.log("🔥 [Header] API response status:", res.status);
+        console.log("🔥 [Header] API response headers:", res.headers);
         return res.json();
       })
       .then((data) => {
-        console.log('🔥 [Header] Stores data received:', data);
+        console.log("🔥 [Header] Stores data received:", data);
         const stores = data.stores ?? [];
-        console.log('🔥 [Header] Setting ownedStores to:', stores);
+        console.log("🔥 [Header] Setting ownedStores to:", stores);
         setOwnedStores(stores);
       })
       .catch((error) => {
-        console.error('🔥 [Header] Error fetching stores:', error);
+        console.error("🔥 [Header] Error fetching stores:", error);
         setOwnedStores([]);
       });
-  }, [user?.id]);
+  }, [isLoaded, user?.id]);
 
   useEffect(() => {
     const handleScroll = () => {
       const currentScrollY = window.scrollY;
-      
+
       if (currentScrollY > lastScrollY && currentScrollY > 100) {
-        // Scrolling down and past 100px
         setIsVisible(false);
       } else if (currentScrollY < lastScrollY) {
-        // Scrolling up
         setIsVisible(true);
       }
-      
+
       setLastScrollY(currentScrollY);
     };
 
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    
+    window.addEventListener("scroll", handleScroll, { passive: true });
+
     return () => {
-      window.removeEventListener('scroll', handleScroll);
+      window.removeEventListener("scroll", handleScroll);
     };
   }, [lastScrollY]);
 
-  // Solo mostrar el ícono si está hidratado Y tiene tiendas Y los datos son consistentes
-  const shouldShowManagerIcon = isHydrated && user && ownedStores.length > 0 && 
-    // Verificación adicional: asegurar que no haya caracteres invisibles en los nombres
-    ownedStores.every(store => store.name && store.name.trim().length > 0 && 
-      !store.name.includes('\u200B') && !store.name.includes('\u200D') && !store.name.includes('\uFEFF'));
-
-  const createClerkPasskey = async () => {
-    try {
-      const response = await user?.createPasskey();
-      console.log(response);
-    } catch (err) {
-      console.log("Error:", JSON.stringify(err, null, 2));
-    }
-  };
+  const shouldShowManagerIcon =
+    isHydrated &&
+    isLoaded &&
+    user &&
+    ownedStores.length > 0 &&
+    ownedStores.every(
+      (store) =>
+        store.name &&
+        store.name.trim().length > 0 &&
+        !store.name.includes("\u200B") &&
+        !store.name.includes("\u200D") &&
+        !store.name.includes("\uFEFF")
+    );
 
   return (
-    <header className={`sticky top-0 z-50 w-full bg-white border-b border-gray-100 flex flex-wrap justify-between items-center px-2 py-2 transition-transform duration-300 ease-in-out ${
-      isVisible ? 'translate-y-0' : '-translate-y-full'
-    }`}>
+    <header
+      className={`sticky top-0 z-50 w-full bg-white border-b border-gray-100 flex flex-wrap justify-between items-center px-2 py-2 transition-transform duration-300 ease-in-out ${
+        isVisible ? "translate-y-0" : "-translate-y-full"
+      }`}
+    >
       <div className="w-full ">
-        {/* Top bar: Logo, Search, Basket, User */}
         <div className="flex items-center justify-between w-full py-2 sm:py-0 gap-2">
-          {/* Logo */}
-          <Link
-            href="/"
-            className="flex items-center gap-2 group"
-            aria-label="En Escobedo"
-          >
+          <Link href="/" className="flex items-center gap-2 group" aria-label="En Escobedo">
             <span className="relative flex items-center justify-center w-10 h-10 group-hover:scale-110 transition-transform duration-200 overflow-hidden">
-              <Image
-                src="/logo.svg"
-                alt="En Escobedo Logo"
-                width={40}
-                height={40}
-              />
+              <Image src="/logo.svg" alt="En Escobedo Logo" width={40} height={40} />
             </span>
-            {/* Show brand name only on sm+ */}
             <span
               className={`relative flex items-center justify-center w-auto h-8 sm:h-10 group-hover:scale-110 transition-transform duration-200 ${
                 isHydrated ? "hidden sm:block" : "hidden"
               } mx-auto`}
             >
-              <Image
-                src="/menufy.svg"
-                alt="Menufy Logo"
-                width={140}
-                height={50}
-              />
+              <Image src="/menufy.svg" alt="Menufy Logo" width={140} height={50} />
             </span>
           </Link>
 
-          {/* Search bar: move to the right side on desktop, below on mobile */}
           <div className="flex-1 flex justify-center sm:justify-end mx-2 lg:max-w-2xl lg:mx-auto">
-            <Form
-              action="/search"
-              className="w-full sm:w-80 lg:w-full max-w-lg lg:max-w-full"
-            >
+            <Form action="/search" className="w-full sm:w-80 lg:w-full max-w-lg lg:max-w-full">
               <div className="relative w-full">
                 <input
                   type="text"
@@ -174,7 +149,6 @@ export function Header() {
             </Form>
           </div>
 
-          {/* Basket & User/SignIn */}
           <div className="flex items-center gap-2 ml-2">
             <Link
               href="/basket"
@@ -191,24 +165,23 @@ export function Header() {
             </Link>
 
             <Link
-            href="/orders"
-            className="relative flex items-center justify-center bg-[#eb1901] hover:bg-[#eb1901]/80 text-gray-50 font-bold py-2 px-3 rounded"
-          >
-            <PackageIcon className="w-6 h-6" />
-            <span className="hidden sm:block">Pedidos</span>
-          </Link>
-
-
-          {shouldShowManagerIcon ? (
-            <Link
-              href="/dashboard"
+              href="/orders"
               className="relative flex items-center justify-center bg-[#eb1901] hover:bg-[#eb1901]/80 text-gray-50 font-bold py-2 px-3 rounded"
-              aria-label="Panel del restaurante"
             >
-              <LayoutDashboard className="w-6 h-6" />
-              <span className="hidden sm:block">Manager</span>
+              <PackageIcon className="w-6 h-6" />
+              <span className="hidden sm:block">Pedidos</span>
             </Link>
-          ) : null}
+
+            {shouldShowManagerIcon ? (
+              <Link
+                href="/dashboard"
+                className="relative flex items-center justify-center bg-[#eb1901] hover:bg-[#eb1901]/80 text-gray-50 font-bold py-2 px-3 rounded"
+                aria-label="Panel del restaurante"
+              >
+                <LayoutDashboard className="w-6 h-6" />
+                <span className="hidden sm:block">Manager</span>
+              </Link>
+            ) : null}
 
             <ClerkLoaded>
               {user ? (
@@ -223,28 +196,24 @@ export function Header() {
                     viewBox="0 0 24 24"
                     fill="currentColor"
                   >
-                    <path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z"/>
+                    <path d="M12 12c2.7 0 5-2.3 5-5s-2.3-5-5-5-5 2.3-5 5 2.3 5 5 5zm0 2c-3.3 0-10 1.7-10 5v3h20v-3c0-3.3-6.7-5-10-5z" />
                   </svg>
                 </SignInButton>
               )}
             </ClerkLoaded>
 
             <ClerkLoaded>
-            {user && (
-              <div className="flex items-center space-x-2">
-                {/* UserButton already shown above, so only show name here */}
-                <div className="hidden sm:block text-xs">
-                  <p className="text-gray-900">Buen dia,</p>
-                  <p className="font-bold text-gray-900">{user.firstName}!</p>
+              {user && (
+                <div className="flex items-center space-x-2">
+                  <div className="hidden sm:block text-xs">
+                    <p className="text-gray-900">Buen dia,</p>
+                    <p className="font-bold text-gray-900">{user.firstName}!</p>
+                  </div>
                 </div>
-              </div>
-            )}
-            
-          </ClerkLoaded>
+              )}
+            </ClerkLoaded>
           </div>
         </div>
-
-      
       </div>
     </header>
   );

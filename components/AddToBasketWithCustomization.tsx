@@ -91,15 +91,12 @@ function AddToBasketWithCustomization({
 
     setIsLoading(true);
     try {
-      // Crear producto con personalizaciones
-      const itemToAdd = {
-        product: product,
+      store.addItem({
+        product,
         quantity: 1,
         customizations,
         customPrice: calculateTotalPrice(),
-      };
-      
-      store.addItem(itemToAdd);
+      });
       
       // Cerrar el sidebar después de añadir
       setTimeout(() => {

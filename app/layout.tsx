@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { esMX } from '@clerk/localizations';
 import "./globals.css";
+import { ClerkRedirectInterceptor } from "@/components/ClerkRedirectInterceptor";
 
 export const metadata: Metadata = {
   title: "Store - Delivery & Pickup",
@@ -14,12 +15,18 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <ClerkProvider localization={esMX}>
-      <html lang="es">
-        <body>
-          {children}
-        </body>
-      </html>
+    <ClerkProvider 
+      localization={esMX}
+      signInFallbackRedirectUrl="/"
+      signUpFallbackRedirectUrl="/"
+    >
+      <ClerkRedirectInterceptor>
+        <html lang="es">
+          <body>
+            {children}
+          </body>
+        </html>
+      </ClerkRedirectInterceptor>
     </ClerkProvider>
   );
 }

@@ -4,7 +4,6 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import useBasketStore from "@/store/store";
 import { useUser } from "@clerk/nextjs";
-import { createCashOnDeliveryOrder } from "@/actions/createCashOnDeliveryOrder";
 import { formatCurrency } from "@/lib/formatCurrency";
 import { Truck, MapPin, DollarSign, CheckCircle } from "lucide-react";
 
@@ -122,29 +121,52 @@ function CashOnDeliveryCheckout() {
       // Buscar tienda del primer producto si no hay una seleccionada explícitamente
       const productStoreId = items[0]?.product?.affiliateStore?._ref || (items[0]?.product?.affiliateStore as any)?._id;
 
-      const result = await createCashOnDeliveryOrder(
-        items.map((item) => ({
-          product: item.product,
-          quantity: item.quantity,
-        })),
-        {
-          orderNumber,
-          customerName: user.fullName || user.firstName || "Cliente",
-          customerEmail: user.emailAddresses[0]?.emailAddress || "",
-          clerkUserId: user.id,
-          phone: formData.phone,
-          shippingAddress: formData.address,
-          storeInfo: {
-            storeId: savedStoreData?.storeId || productStoreId,
-            storeName: savedStoreData?.storeName || "Tienda Afiliada",
-            storeAddress: savedStoreData?.storeAddress || "",
-            storePhone: savedStoreData?.storePhone || "",
-            deliveryMethod: savedStoreData?.deliveryMethod || 'delivery',
-            estimatedDelivery: savedStoreData?.estimatedDelivery || ''
-          }
-        },
-        shippingCost
-      );
+      // Leer directamente del store en el momento del submit para garantizar datos frescos
+      const freshItems = useBasketStore.getState().items;
+      console.log("🛒 FRESH ITEMS FROM STORE:", JSON.stringify(freshItems.map(i => ({
+        id: i.product._id,
+        customizations: i.customizations,
+        customPrice: i.customPrice,
+      })), null, 2));
+
+      const payloadItems = freshItems.map((item) => ({
+        product: {
+          _id: item.product._id,
+          name: item.product.name,
+          price: item.product.price,
+          optionGroups: item.product.optionGroups,
+        } as any,
+        quantity: item.quantity,
+        customizations: item.customizations ?? {},
+        customPrice: item.customPrice ?? item.product.price,
+      }));
+
+      const response = await fetch("/api/create-cod-order", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: payloadItems,
+          metadata: {
+            orderNumber,
+            customerName: user.fullName || user.firstName || "Cliente",
+            customerEmail: user.emailAddresses[0]?.emailAddress || "",
+            clerkUserId: user.id,
+            phone: formData.phone,
+            shippingAddress: formData.address,
+            storeInfo: {
+              storeId: savedStoreData?.storeId || productStoreId,
+              storeName: savedStoreData?.storeName || "Tienda Afiliada",
+              storeAddress: savedStoreData?.storeAddress || "",
+              storePhone: savedStoreData?.storePhone || "",
+              deliveryMethod: savedStoreData?.deliveryMethod || "delivery",
+              estimatedDelivery: savedStoreData?.estimatedDelivery || "",
+            },
+          },
+          shippingCost,
+        }),
+      });
+
+      const result = await response.json();
 
       if (result.success) {
         clearBasket();

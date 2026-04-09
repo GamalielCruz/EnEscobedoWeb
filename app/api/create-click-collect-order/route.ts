@@ -64,13 +64,28 @@ export async function POST(request: NextRequest) {
       },
       items: items.map((item: any) => {
         console.log("📦 Procesando item:", JSON.stringify(item, null, 2));
+        
+        // DEBUG: Verificar estructura de customizaciones y optionGroups
+        console.log("[DEBUG] item.customizations:", JSON.stringify(item.customizations, null, 2));
+        console.log("[DEBUG] item.product.optionGroups:", JSON.stringify(item.product?.optionGroups, null, 2));
+        console.log("[DEBUG] item.product._id:", item.product?._id);
+        console.log("[DEBUG] item.product.name:", item.product?.name);
+        
+        // Transformar customizaciones al formato de Sanity
+        const transformedCustomizations = transformCustomizations(
+          item.customizations,
+          item.product?.optionGroups
+        );
+        
+        console.log("[DEBUG] transformedCustomizations:", JSON.stringify(transformedCustomizations, null, 2));
+        
         return {
           _key: crypto.randomUUID(),
-          productName: item.product.name,
-          productId: item.product._id || item.product.id,
+          productName: item.product?.name || "Producto sin nombre",
+          productId: item.product?._id || item.product?.id,
           quantity: item.quantity,
-          price: item.product.price,
-          customizations: item.customizations || [],
+          price: item.customPrice || item.product?.price,
+          customizations: transformedCustomizations,
           notes: item.notes || "",
         };
       }),
@@ -108,6 +123,12 @@ export async function POST(request: NextRequest) {
         total,
         itemCount: items.length,
       });
+      
+      // VERIFICACIÓN: Leer el documento recién creado para confirmar items
+      const verifyOrder = await writeClient.getDocument(order._id);
+      console.log("🔍 VERIFICACIÓN - Documento leído de Sanity:", JSON.stringify(verifyOrder, null, 2));
+      console.log("🔍 VERIFICACIÓN - Items en documento:", verifyOrder?.items);
+      
     } catch (sanityError) {
       console.error("❌ Error guardando en Sanity:", sanityError);
       console.error(
@@ -219,4 +240,58 @@ function generatePickupCode(): string {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return result;
+}
+
+// Transformar customizaciones del formato del store al formato de Sanity
+function transformCustomizations(
+  customizations: { [key: string]: string | string[] } | undefined,
+  optionGroups: Array<{
+    title?: string;
+    description?: string;
+    required?: boolean;
+    selectionType?: "single" | "multiple";
+    options?: Array<{
+      label?: string;
+      description?: string;
+      priceDelta?: number;
+      isDefault?: boolean;
+    }>;
+  }> | undefined
+): Array<{
+  title?: string;
+  options?: Array<{
+    label?: string;
+    priceDelta?: number;
+  }>;
+}> {
+  if (!customizations || Object.keys(customizations).length === 0) {
+    return [];
+  }
+
+  return Object.entries(customizations).map(([groupKey, selection]) => {
+    // Extraer el índice del grupo (e.g., "group-0" -> 0)
+    const groupIndex = parseInt(groupKey.replace("group-", ""), 10);
+    const group = optionGroups?.[groupIndex];
+
+    // Convertir la selección a array
+    const selectedOptions = Array.isArray(selection) ? selection : [selection];
+
+    // Buscar las opciones seleccionadas en el grupo (si hay optionGroups disponibles)
+    const options = selectedOptions
+      .filter((label) => !!label)
+      .map((selectedLabel) => {
+        const option = group?.options?.find((opt) => opt.label === selectedLabel);
+        return {
+          label: selectedLabel,
+          priceDelta: option?.priceDelta || 0,
+        };
+      });
+
+    return {
+      _key: crypto.randomUUID(),
+      // Usar el título del grupo si está disponible, sino usar el groupKey como fallback
+      title: group?.title || groupKey,
+      options: options.map((opt) => ({ _key: crypto.randomUUID(), ...opt })),
+    };
+  });
 }

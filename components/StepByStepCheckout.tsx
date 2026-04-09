@@ -6,7 +6,7 @@ import { useAuth, useUser, SignInButton } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
 import SimpleAddressInputFixed from './SimpleAddressInputFixed';
 import { SafeLocationBasedStoreSelector } from './SafeLocationBasedStoreSelector';
-import { createCheckoutSession, Metadata } from "@/actions/createCheckoutSession";
+import type { Metadata } from "@/actions/createCheckoutSession";
 import InteractiveLocationPicker from './InteractiveLocationPicker';
 import ServiceTypeSelector from './ServiceTypeSelector';
 
@@ -390,10 +390,11 @@ export default function StepByStepCheckout({
             deliveryMethod = parsed.deliveryMethod || 'delivery';
             shippingCostForStripe = parsed.shippingCost || 0;
             if (parsed.deliveryMethod === 'pickup') {
+              deliveryMethod = 'click_collect';
               pickupStoreId = parsed.storeId;
               pickupStoreName = parsed.storeName;
             }
-            if (parsed.customerAddress) {
+            if (parsed.customerAddress && parsed.deliveryMethod !== 'pickup') {
               customerAddress = parsed.customerAddress.formatted_address || parsed.customerAddress.address;
             }
           } catch (error) {
@@ -415,15 +416,23 @@ export default function StepByStepCheckout({
 
         console.log('📦 Metadata para Stripe:', metadata);
 
-        const checkoutUrl = await createCheckoutSession(
-          groupedItems.map(item => ({
-            product: item.product as any, // Temporal fix para compatibilidad de tipos
-            quantity: item.quantity
-          })), 
-          metadata
-        );
-        if (checkoutUrl) {
-          window.location.href = checkoutUrl;
+        const response = await fetch("/api/checkout-session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ items: groupedItems, metadata }),
+        });
+
+        const data = await response.json().catch(() => null);
+
+        if (!response.ok) {
+          console.error("Error en /api/checkout-session", data);
+          throw new Error(data?.error || "Error al crear la sesión de checkout");
+        }
+
+        if (data?.url) {
+          window.location.href = data.url;
+        } else {
+          throw new Error("No se recibió URL de checkout");
         }
       } else if (paymentMethod === 'cod') {
         console.log('💵 Procesando pago en efectivo...');

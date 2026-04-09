@@ -31,6 +31,8 @@ export type CashOnDeliveryMetadata = {
 export type GroupedBasketItem = {
   product: BasketItem["product"];
   quantity: number;
+  customizations?: { [key: string]: string | string[] };
+  customPrice?: number;
 };
 
 export async function createCashOnDeliveryOrder(
@@ -58,14 +60,30 @@ export async function createCashOnDeliveryOrder(
     const totalPrice = subtotal + shippingCost;
 
     // Prepare products for Sanity with explicit keys
-    const sanityProducts = items.map((item, index) => ({
-      _key: `item-${index}-${Date.now()}`, // Key más segura
-      product: {
-        _type: "reference",
-        _ref: item.product._id,
-      },
-      quantity: item.quantity,
-    }));
+    console.log("🔥 COD ITEMS:", JSON.stringify(items, null, 2));
+    console.log("🔥 FIRST ITEM:", JSON.stringify(items[0], null, 2));
+    console.log("🔥 CUSTOMIZATIONS RAW:", items[0]?.customizations);
+    console.log("🔥 OPTION GROUPS RAW:", items[0]?.product?.optionGroups);
+    console.log("🔥 TRANSFORMED CUSTOMIZATIONS:", JSON.stringify(
+      transformCustomizations(items[0]?.customizations, items[0]?.product?.optionGroups as any),
+      null, 2
+    ));
+
+    const sanityProducts = items.map((item, index) => {
+      const transformedCustomizations = transformCustomizations(
+        item.customizations,
+        item.product?.optionGroups as any
+      );
+      return {
+        _key: `item-${index}-${Date.now()}`,
+        product: {
+          _type: "reference",
+          _ref: item.product._id,
+        },
+        quantity: item.quantity,
+        customizations: transformedCustomizations,
+      };
+    });
 
     // Cleaning logic
     const clean = (text: any): string => String(text || "").trim();
@@ -134,4 +152,32 @@ export async function createCashOnDeliveryOrder(
       error: error.message || "Error desconocido al crear la orden"
     };
   }
+}
+
+function transformCustomizations(
+  customizations: { [key: string]: string | string[] } | undefined,
+  optionGroups?: Array<{
+    title?: string;
+    options?: Array<{ label?: string; priceDelta?: number }>;
+  }>
+): Array<{ _key: string; title?: string; options?: Array<{ _key: string; label?: string; priceDelta?: number }> }> {
+  if (!customizations || Object.keys(customizations).length === 0) return [];
+
+  return Object.entries(customizations).map(([groupKey, selection]) => {
+    const groupIndex = parseInt(groupKey.replace("group-", ""), 10);
+    const group = optionGroups?.[groupIndex];
+    const selectedOptions = Array.isArray(selection) ? selection : [selection];
+
+    return {
+      _key: randomUUID(),
+      title: group?.title || groupKey,
+      options: selectedOptions
+        .filter((label) => !!label)
+        .map((label) => ({
+          _key: randomUUID(),
+          label,
+          priceDelta: group?.options?.find((o) => o.label === label)?.priceDelta || 0,
+        })),
+    };
+  });
 }

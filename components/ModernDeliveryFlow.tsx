@@ -195,6 +195,135 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
     });
   }, [loadGoogleMaps]);
 
+  const reverseGeocodeCoordinates = useCallback(async (
+    latitude: number,
+    longitude: number
+  ): Promise<CustomerAddressWithCoords | null> => {
+    try {
+      await loadGoogleMaps();
+    } catch (err) {
+      console.error('Error cargando Google Maps:', err);
+      return null;
+    }
+
+    if (!window.google || !window.google.maps) {
+      return null;
+    }
+
+    const geocoder = new google.maps.Geocoder();
+
+    return new Promise((resolve) => {
+      geocoder.geocode(
+        { location: { lat: latitude, lng: longitude } },
+        (results, status) => {
+          if (status === 'OK' && results && results[0]) {
+            const place = results[0];
+            const components = place.address_components || [];
+
+            let street = '';
+            let city = '';
+            let state = '';
+            let postalCode = '';
+
+            components.forEach((component: any) => {
+              const types = component.types;
+              if (types.includes('street_number') || types.includes('route')) {
+                street += component.long_name + ' ';
+              }
+              if (types.includes('locality')) {
+                city = component.long_name;
+              }
+              if (types.includes('administrative_area_level_1')) {
+                state = component.long_name;
+              }
+              if (types.includes('postal_code')) {
+                postalCode = component.long_name;
+              }
+            });
+
+            resolve({
+              street: street.trim() || place.formatted_address || `${latitude}, ${longitude}`,
+              city: city || '',
+              state: state || '',
+              country: 'México',
+              postalCode: postalCode || '',
+              latitude,
+              longitude,
+            });
+            return;
+          }
+
+          resolve({
+            street: `${latitude}, ${longitude}`,
+            city: '',
+            state: '',
+            country: 'México',
+            postalCode: '',
+            latitude,
+            longitude,
+          });
+        }
+      );
+    });
+  }, [loadGoogleMaps]);
+
+  useEffect(() => {
+    if (
+      currentStep !== 'map-confirm' ||
+      !customerAddress?.latitude ||
+      !customerAddress?.longitude
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const syncAddressFromCoordinates = async () => {
+      const updatedAddress = await reverseGeocodeCoordinates(
+        customerAddress.latitude!,
+        customerAddress.longitude!
+      );
+
+      if (!updatedAddress || cancelled) {
+        return;
+      }
+
+      const currentLabel = [
+        customerAddress.street,
+        customerAddress.city,
+        customerAddress.state,
+        customerAddress.postalCode,
+      ]
+        .filter(Boolean)
+        .join(', ');
+
+      const updatedLabel = [
+        updatedAddress.street,
+        updatedAddress.city,
+        updatedAddress.state,
+        updatedAddress.postalCode,
+      ]
+        .filter(Boolean)
+        .join(', ');
+
+      if (currentLabel !== updatedLabel) {
+        setCustomerAddress(updatedAddress);
+        setAddressInput(updatedLabel);
+      }
+    };
+
+    void syncAddressFromCoordinates();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    currentStep,
+    customerAddress?.latitude,
+    customerAddress?.longitude,
+    reverseGeocodeCoordinates,
+  ]);
+
   // Buscar tiendas cercanas
   const findNearbyStores = useCallback(async (address: CustomerAddressWithCoords) => {
     try {
