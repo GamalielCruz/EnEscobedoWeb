@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SignInButton, useUser } from "@clerk/nextjs";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -54,6 +54,15 @@ import { imageUrl } from "@/lib/imageUrl";
 import Image from "next/image";
 import { useOrderNotifications, type Order, type OrderItem } from "@/hooks/useOrderNotifications";
 
+type StoreServiceTypes = {
+  delivery?: boolean;
+  pickup?: boolean;
+  deliveryRadius?: number;
+  minimumOrderDelivery?: number;
+  onDemand?: boolean;
+  onDemandExtraMinutes?: number;
+};
+
 type OwnedStore = { _id: string; name: string; storeId?: string };
 type Product = {
   _id: string;
@@ -80,6 +89,22 @@ const statusConfig: Record<string, { label: string; color: string }> = {
   failed: { label: "Fallido", color: "bg-red-100 text-red-800" },
 };
 
+const finalStatuses = ["completed", "cancelled", "delivered", "picked_up", "failed"];
+
+const getLocalDayBounds = () => {
+  const now = new Date();
+  const start = new Date(now);
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+
+  return {
+    startAt: start.toISOString(),
+    endAt: end.toISOString(),
+  };
+};
+
 export default function DashboardPage() {
   const { user, isLoaded } = useUser();
   
@@ -95,26 +120,13 @@ export default function DashboardPage() {
       console.error('🚨 [Dashboard] Unhandled Promise Rejection:', event.reason);
     };
     
-    // DEBUG: Log all clicks to identify redirect source
-    const handleClick = (event: MouseEvent) => {
-      const target = event.target as HTMLElement;
-      console.log('🖱️ [Dashboard] Click detected on:', target.tagName, target.className, target.id);
-      console.log('🖱️ [Dashboard] Click target element:', target);
-      console.log('🖱️ [Dashboard] Parent element:', target.parentElement?.tagName);
-      
-      // Check if element has click handlers
-      const hasOnClick = target.onclick !== null || target.getAttribute('onclick') !== null;
-      console.log('🖱️ [Dashboard] Has onclick handler:', hasOnClick);
-    };
     
     window.addEventListener('error', handleError);
     window.addEventListener('unhandledrejection', handleRejection);
-    document.addEventListener('click', handleClick, true); // Capture phase
     
     return () => {
       window.removeEventListener('error', handleError);
       window.removeEventListener('unhandledrejection', handleRejection);
-      document.removeEventListener('click', handleClick, true);
     };
   }, []);
   
@@ -122,7 +134,8 @@ export default function DashboardPage() {
   const [selectedStoreId, setSelectedStoreId] = useState<string | null>(null);
   const [allStores, setAllStores] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"productos" | "pedidos">("pedidos");
+  const [tab, setTab] = useState<"productos" | "pedidos" | "configuracion">("pedidos");
+  const [ordersView, setOrdersView] = useState<"today" | "history">("today");
   const [products, setProducts] = useState<Product[]>([]);
   const [productsLoading, setProductsLoading] = useState(false);
   const [addingProduct, setAddingProduct] = useState(false);
@@ -132,6 +145,9 @@ export default function DashboardPage() {
   const [submitMessage, setSubmitMessage] = useState<string | null>(null);
   const [refreshingProducts, setRefreshingProducts] = useState(false);
   const [pendingChanges, setPendingChanges] = useState<Record<string, boolean>>({});
+  const [storeConfig, setStoreConfig] = useState<any | null>(null);
+  const [storeConfigLoading, setStoreConfigLoading] = useState(false);
+  const [savingStoreConfig, setSavingStoreConfig] = useState(false);
 
   const store = ownedStores?.find(s => s._id === selectedStoreId) || null;
 
@@ -150,7 +166,6 @@ export default function DashboardPage() {
       });
       const data = await res.json();
       setProducts(data.products ?? []);
-      console.log(`[Dashboard] Refreshed ${data.products?.length ?? 0} products`);
     } catch (err) {
       console.error('🚨 [Dashboard] Error refrescando productos:', err);
       if (err instanceof Error && err.message.includes('401')) {
@@ -161,17 +176,50 @@ export default function DashboardPage() {
     }
   };
 
-  // Hook de notificaciones de pedidos
+  const [dayBounds] = useState(() => getLocalDayBounds());
+  const { startAt: todayStartAt, endAt: todayEndAt } = dayBounds;
+  const todayQueryParams = useMemo(
+    () => ({
+      scope: "today",
+      startAt: todayStartAt,
+      endAt: todayEndAt,
+    }),
+    [todayStartAt, todayEndAt]
+  );
+  const historyQueryParams = useMemo(
+    () => ({
+      scope: "history",
+      beforeAt: todayStartAt,
+    }),
+    [todayStartAt]
+  );
+
+  // Hook de pedidos del dia
   const {
-    orders,
-    isLoading: ordersLoading,
-    lastUpdate,
-    refresh: refreshOrders,
-    updateOrderLocally,
+    orders: todayOrders,
+    isLoading: todayOrdersLoading,
+    lastUpdate: todayLastUpdate,
+    refresh: refreshTodayOrders,
+    updateOrderLocally: updateTodayOrderLocally,
   } = useOrderNotifications({
     storeId: store?._id ?? null,
-    enabled: !!store?._id && tab === "pedidos",
-    pollingInterval: 49000, // Cada 49s constantes
+    enabled: !!store?._id && tab === "pedidos" && ordersView === "today",
+    pollingInterval: 49000,
+    queryParams: todayQueryParams,
+  });
+
+  // Historial bajo demanda para no cargarlo siempre
+  const {
+    orders: historyOrders,
+    isLoading: historyOrdersLoading,
+    lastUpdate: historyLastUpdate,
+    refresh: refreshHistoryOrders,
+    updateOrderLocally: updateHistoryOrderLocally,
+  } = useOrderNotifications({
+    storeId: store?._id ?? null,
+    enabled: !!store?._id && tab === "pedidos" && ordersView === "history",
+    pollingInterval: 0,
+    queryParams: historyQueryParams,
   });
 
   // Estado completo del producto
@@ -227,19 +275,15 @@ export default function DashboardPage() {
       setOwnedStores([]);
       return;
     }
-    console.log('🔥 [Dashboard] Fetching stores for user:', user.id);
     fetch("/api/my-stores")
       .then((res) => {
-        console.log('🔥 [Dashboard] API response status:', res.status);
         if (!res.ok) {
           console.error('🚨 [Dashboard] API Error - Status:', res.status, res.statusText);
         }
         return res.json();
       })
       .then((data) => {
-        console.log('🔥 [Dashboard] Stores data received:', data);
         const stores = data.stores ?? [];
-        console.log('🔥 [Dashboard] Setting ownedStores to:', stores);
         setOwnedStores(stores);
         setLoading(false);
       })
@@ -361,6 +405,51 @@ export default function DashboardPage() {
   }, [modalOpen, availableCategories.length]);
 
   // Load Store Configuration
+  useEffect(() => {
+    if (!store?._id || tab !== "configuracion") return;
+
+    setStoreConfigLoading(true);
+    fetch(`/api/dashboard/store-config?storeId=${store._id}&t=${Date.now()}`, { cache: "no-store" })
+      .then((res) => res.json())
+      .then((data) => {
+        setStoreConfig(data.store ?? null);
+      })
+      .catch((error) => {
+        console.error("Error cargando configuracion de tienda:", error);
+        setStoreConfig(null);
+      })
+      .finally(() => setStoreConfigLoading(false));
+  }, [store?._id, tab]);
+
+  const saveStoreServiceTypes = async (nextServiceTypes: StoreServiceTypes) => {
+    if (!store?._id) return;
+
+    setSavingStoreConfig(true);
+    try {
+      const res = await fetch("/api/dashboard/store-config", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storeId: store._id,
+          serviceTypes: nextServiceTypes,
+        }),
+      });
+      const data = await res.json();
+
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "No se pudo guardar la configuracion");
+      }
+
+      setStoreConfig(data.store);
+      setSubmitMessage("Configuracion de restaurante actualizada.");
+      setTimeout(() => setSubmitMessage(null), 5000);
+    } catch (error: any) {
+      console.error("Error guardando configuracion de tienda:", error);
+      alert(error.message || "Error al guardar configuracion");
+    } finally {
+      setSavingStoreConfig(false);
+    }
+  };
 
 
   const handleAddProduct = async (e: React.FormEvent) => {
@@ -388,7 +477,6 @@ export default function DashboardPage() {
         if (newProduct.optionGroups?.length > 0) changes.optionGroups = newProduct.optionGroups;
 
         const body = { productId: editingProductId, changes };
-        console.log('[dashboard] create update request', body);
         const res = await fetch("/api/dashboard/product-update-requests", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -422,7 +510,6 @@ export default function DashboardPage() {
           body: JSON.stringify(body),
         });
         // Debug: log outgoing payload
-        console.log('[dashboard] submit product', { method: 'POST', body });
         const data = await res.json();
         if (data.success) {
           setProducts((prev) => [...prev, data.product]);
@@ -486,7 +573,8 @@ export default function DashboardPage() {
 
   const handleUpdateOrderStatus = async (orderId: string, orderNumber: string, status: string) => {
     // Actualización optimista
-    updateOrderLocally(orderId, { status });
+    updateTodayOrderLocally(orderId, { status });
+    updateHistoryOrderLocally(orderId, { status });
     
     setUpdatingOrder(orderNumber);
     try {
@@ -498,7 +586,10 @@ export default function DashboardPage() {
       const data = await res.json();
       if (data.success) {
         // Forzar un refresco inmediato de los datos del servidor
-        setTimeout(() => refreshOrders(), 500);
+        setTimeout(() => {
+          refreshTodayOrders();
+          refreshHistoryOrders();
+        }, 500);
       } else {
         alert(data.error || "Error al actualizar pedido");
       }
@@ -520,6 +611,52 @@ export default function DashboardPage() {
     });
   const formatCurrency = (n: number) =>
     new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(n);
+
+  const isSameDay = (dateValue: string, referenceDate: Date) => {
+    const parsedDate = new Date(dateValue);
+
+    return (
+      parsedDate.getFullYear() === referenceDate.getFullYear() &&
+      parsedDate.getMonth() === referenceDate.getMonth() &&
+      parsedDate.getDate() === referenceDate.getDate()
+    );
+  };
+
+  const today = new Date();
+  const todayActiveOrders = todayOrders.filter((order) => !finalStatuses.includes(order.status));
+  const todayCompletedOrders = todayOrders.filter((order) => finalStatuses.includes(order.status));
+  const currentOrders = ordersView === "today" ? todayOrders : historyOrders;
+  const currentOrdersLoading = ordersView === "today" ? todayOrdersLoading : historyOrdersLoading;
+  const currentLastUpdate = ordersView === "today" ? todayLastUpdate : historyLastUpdate;
+  const refreshCurrentOrders = ordersView === "today" ? refreshTodayOrders : refreshHistoryOrders;
+  const orders = currentOrders;
+  const activeOrders = todayActiveOrders;
+  const completedTodayOrders = ordersView === "today" ? todayCompletedOrders : [];
+  const previousDaysOrders = ordersView === "history" ? historyOrders : [];
+
+  const renderOrderStatusOptions = (order: Order) => (
+    <>
+      <optgroup label="Flujo de Trabajo">
+        <option value="pending">Pendiente (Recibido)</option>
+        <option value="processing">Preparando comida</option>
+        {order.deliveryMethod === "home_delivery" ? (
+          <>
+            <option value="shipped">Repartidor en camino</option>
+            <option value="delivered">Entregado (Finalizar)</option>
+          </>
+        ) : (
+          <>
+            <option value="ready_for_pickup">Listo para Recoger</option>
+            <option value="picked_up">Recogido (Finalizar)</option>
+          </>
+        )}
+      </optgroup>
+
+      <optgroup label="Otras Acciones">
+        <option value="cancelled">Cancelar Pedido</option>
+      </optgroup>
+    </>
+  );
 
   const copyToClipboard = async (text: string, label: string) => {
     try {
@@ -589,12 +726,6 @@ export default function DashboardPage() {
     );
   }
 
-  console.log('[Dashboard] Access Check:', {
-  store: store ? store.name : 'null',
-  ownedStoresLength: ownedStores?.length || 0,
-  ownedStores: ownedStores,
-  userId: user?.id
-});
 
 if (!store || ownedStores?.length !== 1) {
     return (
@@ -685,51 +816,18 @@ if (!store || ownedStores?.length !== 1) {
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-6xl">
-      {/* DEBUG PANEL - REMOVE AFTER FIXING */}
-      <div className="bg-slate-100 p-4 mb-4 rounded border border-slate-300 text-xs font-mono">
-        <div className="flex justify-between items-start">
-            <div>
-                <p><strong>Debug Info:</strong></p>
-                <p>User ID: {user?.id || 'Not logged in'}</p>
-                <p>Selected Store: {selectedStoreId}</p>
-                <p>Owned Stores: {ownedStores?.length}</p>
-            </div>
-            {ownedStores && ownedStores.length > 1 && (
-                <div>
-                    <Label>Cambiar tienda:</Label>
-                    <Select 
-                        value={selectedStoreId || ""} 
-                        onValueChange={(val) => setSelectedStoreId(val)}
-                    >
-                        <SelectTrigger className="w-[200px]">
-                            <SelectValue placeholder="Seleccionar tienda" />
-                        </SelectTrigger>
-                        <SelectContent>
-                            {(ownedStores || []).map(s => (
-                                <SelectItem key={s._id} value={s._id}>{s.name}</SelectItem>
-                            ))}
-                        </SelectContent>
-                    </Select>
-                </div>
-            )}
-        </div>
-      </div>
-
       <div className="mb-8">
         <div className="flex items-center gap-2 text-sm text-gray-500 mb-1">
-          <Link href="/" className="hover:text-[#ff8800]">
+          <Link href="/" className="hover:text-[#eb1902]">
             Inicio
           </Link>
           <ChevronRight className="w-4 h-4" />
-          <span className="text-gray-900 font-medium">Dashboard</span>
+          <span className="text-gray-900 font-medium">Manager</span>
         </div>
         <h1 className="text-2xl md:text-3xl font-bold text-gray-900 flex items-center gap-2">
-          <LayoutDashboard className="w-8 h-8 text-[#ff8800]" />
-          Panel de {store.name}
+          <LayoutDashboard className="w-8 h-8 text-[#eb1902]" />
+          {store.name}
         </h1>
-        <p className="text-gray-600 mt-1">
-          Gestiona tus productos y pedidos desde aquí.
-        </p>
         {submitMessage && (
           <div className="mt-4 p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-800 text-sm">
             ✓ {submitMessage}
@@ -754,6 +852,14 @@ if (!store || ownedStores?.length !== 1) {
           <Package className="w-4 h-4 mr-2" />
           Productos
         </Button>
+        <Button
+          variant={tab === "configuracion" ? "default" : "outline"}
+          onClick={() => setTab("configuracion")}
+          className={tab === "configuracion" ? "bg-[#ff8800] hover:bg-[#ff8800]/90 text-gray-900" : ""}
+        >
+          <Settings className="w-4 h-4 mr-2" />
+          Configuracion
+        </Button>
       </div>
 
       {tab === "pedidos" && (
@@ -762,14 +868,14 @@ if (!store || ownedStores?.length !== 1) {
             <div>
               <CardTitle className="flex items-center gap-2">
                 Pedidos de tu restaurante
-                {lastUpdate && (
+                {currentLastUpdate && (
                   <span className="text-xs font-normal text-muted-foreground flex items-center gap-1">
                     <Clock className="w-3 h-3" />
-                    Actualizado: {lastUpdate.toLocaleTimeString()}
+                    Actualizado: {currentLastUpdate.toLocaleTimeString()}
                   </span>
                 )}
               </CardTitle>
-              <CardDescription>Revisa y actualiza el estado de los pedidos en tiempo real</CardDescription>
+              <CardDescription>Hoy muestra solo las ordenes del dia. El historial se consulta aparte para mantener el dashboard agil.</CardDescription>
             </div>
             <div className="flex gap-2">
               <Button
@@ -786,24 +892,32 @@ if (!store || ownedStores?.length !== 1) {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={refreshOrders}
-                disabled={ordersLoading}
+                onClick={refreshCurrentOrders}
+                disabled={currentOrdersLoading}
               >
-                <RefreshCw className={`w-4 h-4 ${ordersLoading ? "animate-spin" : ""}`} />
+                <RefreshCw className={`w-4 h-4 ${currentOrdersLoading ? "animate-spin" : ""}`} />
               </Button>
             </div>
           </CardHeader>
           <CardContent>
-            {ordersLoading ? (
+            <Tabs value={ordersView} onValueChange={(value) => setOrdersView(value as "today" | "history")} className="mb-6 w-full">
+              <TabsList className="grid w-full grid-cols-2 md:w-[320px]">
+                <TabsTrigger value="today">Hoy</TabsTrigger>
+                <TabsTrigger value="history">Historial</TabsTrigger>
+              </TabsList>
+            </Tabs>
+            {currentOrdersLoading ? (
               <div className="py-12 flex justify-center">
                 <Loader2 className="w-8 h-8 animate-spin text-[#ff8800]" />
               </div>
-            ) : orders.length === 0 ? (
+            ) : currentOrders.length === 0 ? (
               <div className="py-12 text-center text-gray-500">
-                No hay pedidos aún para tu restaurante.
+                {ordersView === "today" ? "No hay pedidos para hoy." : "No hay pedidos en el historial todavia."}
               </div>
             ) : (
               <div className="space-y-8">
+                {ordersView === "today" && (
+                <>
                 {/* Pedidos Activos */}
                 <div>
                    <h3 className="font-semibold text-lg text-gray-800 mb-4 flex items-center gap-2">
@@ -813,7 +927,7 @@ if (!store || ownedStores?.length !== 1) {
                      </span>
                      Pedidos Activos
                    </h3>
-                   {orders.filter(o => !['completed', 'cancelled', 'delivered', 'picked_up', 'failed'].includes(o.status)).length === 0 ? (
+                   {activeOrders.length === 0 ? (
                       <div className="p-12 text-center bg-gray-50 rounded-xl border border-dashed border-gray-200">
                         <ShoppingBag className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                         <p className="text-gray-500 font-medium">No tienes pedidos activos en este momento.</p>
@@ -821,7 +935,7 @@ if (!store || ownedStores?.length !== 1) {
                       </div>
                    ) : (
                       <div className="grid gap-4">
-                        {orders.filter(o => !['completed', 'cancelled', 'delivered', 'picked_up', 'failed'].includes(o.status)).map(order => (
+                        {activeOrders.map(order => (
                           <div
                             key={order._id}
                             className="border-l-4 border-l-[#ff8800] shadow-sm bg-white rounded-r-xl border-y border-r p-5 hover:shadow-md transition-all relative overflow-hidden"
@@ -895,17 +1009,6 @@ if (!store || ownedStores?.length !== 1) {
                                 
                                 <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 mb-3">
                                     <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Detalle del pedido</p>
-                                    {/* DEBUG: Log raw order items data */}
-                                    {(() => {
-                                      console.log('[Dashboard Render] Order items:', order.items);
-                                      return null;
-                                    })()}
-                                    {/* DEBUG: Mostrar mensaje visible si no hay items */}
-                                    {(!order.items || order.items.length === 0) && (
-                                        <div className="bg-red-100 border border-red-300 text-red-700 p-2 rounded text-xs mb-2">
-                                            ⚠️ DEBUG: No hay items en este pedido. order.items = {JSON.stringify(order.items)}
-                                        </div>
-                                    )}
                                     <ul className="space-y-2">
                                         {(order.items || []).map((i, idx) => (
                                             <li key={idx} className="text-sm">
@@ -913,12 +1016,6 @@ if (!store || ownedStores?.length !== 1) {
                                                     <span className="text-gray-800">{i.quantity}x {i.productName}</span>
                                                     <span className="text-gray-500">{formatCurrency(i.price)}</span>
                                                 </div>
-                                                {/* Mostrar personalizaciones - DEBUG VERSION */}
-                                                {(() => {
-                                                  console.log(`[Dashboard] Item ${idx} customizations:`, i.customizations);
-                                                  console.log(`[Dashboard] Item ${idx} all keys:`, Object.keys(i));
-                                                  return null;
-                                                })()}
                                                 {i.customizations && i.customizations.length > 0 && (
                                                     <div className="mt-1 ml-4 space-y-0.5">
                                                         {i.customizations.map((custom, cidx) => (
@@ -1010,9 +1107,105 @@ if (!store || ownedStores?.length !== 1) {
                       </div>
                    )}
                 </div>
+                </>
+                )}
+
+                {completedTodayOrders.length > 0 && (
+                  <div className="border-t pt-8">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div>
+                        <h3 className="flex items-center gap-2 font-semibold text-gray-800">
+                          <CheckCircle className="w-5 h-5 text-green-600" />
+                          Historial del dia
+                        </h3>
+                        <p className="text-sm text-gray-500">
+                          Aqui se muestran las ordenes finalizadas hoy para mantener limpia la operacion activa.
+                        </p>
+                      </div>
+                      <Badge className="border border-green-200 bg-green-50 text-green-700 hover:bg-green-50">
+                        {completedTodayOrders.length} finalizadas hoy
+                      </Badge>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {completedTodayOrders.map((order) => (
+                        <div key={order._id} className="rounded-xl border border-green-100 bg-green-50/60 p-4">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <p className="font-semibold text-gray-800">Orden #{order.orderNumber}</p>
+                                <Badge variant="outline" className="bg-white/80">
+                                  {statusConfig[order.status]?.label ?? order.status}
+                                </Badge>
+                              </div>
+                              <p className="mt-1 text-sm text-gray-600">
+                                {order.customerInfo.name} • {order.items?.length || 0} productos
+                              </p>
+                            </div>
+                            <p className="text-right text-xs text-gray-500">{formatDate(order.createdAt)}</p>
+                          </div>
+                          <div className="mt-3 flex items-center justify-between gap-3 text-sm">
+                            <span className="text-gray-500">
+                              {order.deliveryMethod === "home_delivery" ? "Entrega a domicilio" : "Recoger en tienda"}
+                            </span>
+                            <span className="font-semibold text-[#ff8800]">{formatCurrency(order.totalAmount)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {previousDaysOrders.length > 0 && (
+                  <div className="border-t pt-8">
+                    <div className="mb-4">
+                      <h3 className="mb-1 flex items-center gap-2 font-semibold text-gray-700">
+                        <Clock className="w-5 h-5" />
+                        Historial de pedidos
+                      </h3>
+                      <p className="text-sm text-gray-500">
+                        Revisa a detalle las ordenes anteriores sin cargar todo el historico en la vista principal.
+                      </p>
+                    </div>
+                    <div className="space-y-3">
+                      {previousDaysOrders.map((order) => (
+                        <div key={order._id} className="rounded-xl border border-gray-200 bg-gray-50 p-4 hover:bg-white transition-colors">
+                          <div className="flex flex-wrap items-start justify-between gap-4">
+                            <div className="min-w-[260px] flex-1">
+                              <div className="flex items-center gap-2">
+                                <span className={`w-2 h-2 rounded-full ${["completed", "delivered", "picked_up"].includes(order.status) ? "bg-green-500" : "bg-red-500"}`}></span>
+                                <p className="font-semibold text-gray-700">Orden #{order.orderNumber}</p>
+                                <Badge variant="outline" className="bg-white text-xs font-normal">
+                                  {statusConfig[order.status]?.label ?? order.status}
+                                </Badge>
+                              </div>
+                              <p className="mt-1 text-sm text-gray-500">
+                                {order.customerInfo.name} • {order.items?.length || 0} productos • {formatCurrency(order.totalAmount)}
+                              </p>
+                              <p className="mt-1 text-xs text-gray-400">
+                                Creado: {formatDate(order.createdAt)}
+                              </p>
+                            </div>
+                            <div className="w-full max-w-xs rounded-lg border border-gray-200 bg-white p-3">
+                              <p className="text-xs font-semibold text-gray-500">RESUMEN</p>
+                              <p className="mt-2 text-sm text-gray-600">
+                                {order.deliveryMethod === "home_delivery" ? "Entrega a domicilio" : "Recoger en tienda"}
+                              </p>
+                              <p className="mt-1 text-sm text-gray-600">
+                                {order.customerInfo.phone || "Sin telefono"}
+                              </p>
+                              <p className="mt-3 text-lg font-bold text-[#ff8800]">
+                                {formatCurrency(order.totalAmount)}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Pedidos Anteriores */}
-                {orders.filter(o => ['completed', 'cancelled', 'delivered', 'picked_up', 'failed'].includes(o.status)).length > 0 && (
+                {false && orders.filter(o => ['completed', 'cancelled', 'delivered', 'picked_up', 'failed'].includes(o.status)).length > 0 && (
                   <div className="border-t pt-8">
                     <h3 className="font-semibold text-gray-500 mb-4 flex items-center gap-2">
                       <Clock className="w-5 h-5" />
@@ -1041,6 +1234,96 @@ if (!store || ownedStores?.length !== 1) {
                      </div>
                   </div>
                 )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {tab === "configuracion" && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Settings className="w-5 h-5 text-[#ff8800]" />
+              Configuracion del restaurante
+            </CardTitle>
+            <CardDescription>
+              Ajusta avisos operativos que afectan lo que ve el cliente en domicilio y retiro en local.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {storeConfigLoading ? (
+              <div className="py-12 flex justify-center">
+                <Loader2 className="w-8 h-8 animate-spin text-[#ff8800]" />
+              </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="rounded-lg border p-4 bg-gray-50">
+                  <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <h3 className="font-semibold text-gray-900">Modo On Demand</h3>
+                      <p className="text-sm text-gray-600 mt-1">
+                        Activalo cuando el restaurante tenga varios pedidos. El cliente vera un aviso y un tiempo estimado mayor.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={savingStoreConfig || !storeConfig}
+                      onClick={() => {
+                        const current = storeConfig?.serviceTypes || {};
+                        saveStoreServiceTypes({
+                          ...current,
+                          onDemand: !current.onDemand,
+                          onDemandExtraMinutes: Number(current.onDemandExtraMinutes ?? 15),
+                        });
+                      }}
+                      className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors disabled:opacity-50 ${
+                        storeConfig?.serviceTypes?.onDemand ? "bg-[#ff8800]" : "bg-gray-300"
+                      }`}
+                      aria-pressed={Boolean(storeConfig?.serviceTypes?.onDemand)}
+                    >
+                      <span
+                        className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${
+                          storeConfig?.serviceTypes?.onDemand ? "translate-x-7" : "translate-x-1"
+                        }`}
+                      />
+                    </button>
+                  </div>
+
+                  <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
+                    <div>
+                      <Label htmlFor="on-demand-extra">Minutos extra cuando On Demand esta activo</Label>
+                      <Input
+                        id="on-demand-extra"
+                        type="number"
+                        min="0"
+                        value={String(storeConfig?.serviceTypes?.onDemandExtraMinutes ?? 15)}
+                        onChange={(e) => {
+                          const value = Number(e.target.value);
+                          setStoreConfig((prev: any) => ({
+                            ...prev,
+                            serviceTypes: {
+                              ...(prev?.serviceTypes || {}),
+                              onDemandExtraMinutes: value,
+                            },
+                          }));
+                        }}
+                        disabled={savingStoreConfig || !storeConfig}
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        Por default el pedido se estima en 10 minutos. Con On Demand se suman estos minutos.
+                      </p>
+                    </div>
+                    <Button
+                      type="button"
+                      onClick={() => saveStoreServiceTypes(storeConfig?.serviceTypes || {})}
+                      disabled={savingStoreConfig || !storeConfig}
+                      className="bg-[#ff8800] hover:bg-[#ff8800]/90 text-gray-900"
+                    >
+                      {savingStoreConfig ? "Guardando..." : "Guardar tiempo"}
+                    </Button>
+                  </div>
+                </div>
               </div>
             )}
           </CardContent>

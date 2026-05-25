@@ -33,8 +33,39 @@ export const storeCategoryType = defineType({
     defineField({
       name: 'icon',
       title: 'Icono/Emoji',
-      type: 'string',
-      description: 'Emoji o icono representativo (ej: 🍕, 🍜, 🍔)',
+      type: 'object',
+      fields: [
+        defineField({
+          name: 'type',
+          title: 'Tipo',
+          type: 'string',
+          options: {
+            list: [
+              { title: 'Emoji/Texto', value: 'emoji' },
+              { title: 'Imagen PNG', value: 'image' },
+            ],
+            layout: 'radio',
+          },
+          initialValue: 'emoji',
+        }),
+        defineField({
+          name: 'emoji',
+          title: 'Emoji o Icono',
+          type: 'string',
+          description: 'Ej: 🍕, 🍜, 🍔',
+          hidden: ({ parent }) => parent?.type !== 'emoji',
+        }),
+        defineField({
+          name: 'image',
+          title: 'Imagen PNG',
+          type: 'image',
+          hidden: ({ parent }) => parent?.type !== 'image',
+          options: {
+            accept: 'image/png',
+          },
+        }),
+      ],
+      description: 'Emoji/icono representativo o imagen PNG',
     }),
     defineField({
       name: 'order',
@@ -48,13 +79,24 @@ export const storeCategoryType = defineType({
     select: {
       title: 'title',
       subtitle: 'description',
-      icon: 'icon',
+      iconType: 'icon.type',
+      emoji: 'icon.emoji',
+      image: 'icon.image',
     },
     prepare(selection) {
-      const { title, subtitle, icon } = selection;
+      const { title, subtitle, iconType, emoji, image } = selection;
+      let displayTitle = title;
+      
+      if (iconType === 'emoji' && emoji) {
+        displayTitle = `${emoji} ${title}`;
+      } else if (iconType === 'image' && image) {
+        displayTitle = title;
+      }
+      
       return {
-        title: icon ? `${icon} ${title}` : title,
+        title: displayTitle,
         subtitle: subtitle,
+        media: iconType === 'image' && image ? image : undefined,
       };
     },
   },

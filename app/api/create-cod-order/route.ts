@@ -13,8 +13,6 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { items, metadata, shippingCost = 0 } = body;
 
-    console.log("🔥 COD API - ITEMS:", JSON.stringify(items, null, 2));
-    console.log("🔥 COD API - FIRST ITEM CUSTOMIZATIONS:", items?.[0]?.customizations);
 
     if (!items || items.length === 0) {
       return NextResponse.json({ success: false, error: "La lista de productos está vacía" }, { status: 400 });
@@ -35,7 +33,6 @@ export async function POST(request: NextRequest) {
         item.customizations,
         item.product?.optionGroups
       );
-      console.log(`🔥 COD API - Item ${index} transformed customizations:`, JSON.stringify(transformedCustomizations));
       return {
         _key: `item-${index}-${Date.now()}`,
         product: { _type: "reference", _ref: item.product._id },
@@ -84,7 +81,6 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await writeClient.create(orderData);
-    console.log("✅ COD API - Order created:", result._id);
 
     return NextResponse.json({ success: true, orderId: result._id, orderNumber: metadata.orderNumber });
   } catch (error: unknown) {

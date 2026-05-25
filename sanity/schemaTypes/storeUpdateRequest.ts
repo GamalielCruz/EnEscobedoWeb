@@ -57,6 +57,8 @@ export const storeUpdateRequest = defineType({
               defineField({ name: "delivery", title: "Entrega a Domicilio", type: "boolean" }),
               defineField({ name: "pickup", title: "Recoger en Tienda", type: "boolean" }),
               defineField({ name: "deliveryRadius", title: "Radio de Entrega (km)", type: "number" }),
+              defineField({ name: "onDemand", title: "On Demand", type: "boolean" }),
+              defineField({ name: "onDemandExtraMinutes", title: "Minutos extra por alta demanda", type: "number" }),
               defineField({ name: "minimumOrderDelivery", title: "Pedido Mínimo para Entrega (MXN)", type: "number" }),
             ],
           }),

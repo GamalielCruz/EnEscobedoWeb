@@ -158,6 +158,14 @@ export async function POST(request: NextRequest) {
         coordinates: { latitude, longitude },
         operatingHours: store.operatingHours || {},
         averageDeliveryTime: store.averageDeliveryTime || 1,
+        serviceTypes: {
+          delivery: store.serviceTypes?.delivery ?? true,
+          pickup: store.serviceTypes?.pickup ?? true,
+          deliveryRadius: store.serviceTypes?.deliveryRadius ?? 10,
+          minimumOrderDelivery: store.serviceTypes?.minimumOrderDelivery ?? 100,
+          onDemand: store.serviceTypes?.onDemand ?? false,
+          onDemandExtraMinutes: store.serviceTypes?.onDemandExtraMinutes ?? 15,
+        },
       } as AffiliateStore;
     });
 
@@ -367,7 +375,15 @@ export async function GET(request: NextRequest) {
       address: store.address || { street: '', city: '', state: '', postalCode: '', country: 'México' },
       coordinates: store.coordinates || { latitude: 0, longitude: 0 },
       operatingHours: store.operatingHours || {},
-      averageDeliveryTime: store.averageDeliveryTime || 1
+      averageDeliveryTime: store.averageDeliveryTime || 1,
+      serviceTypes: {
+        delivery: store.serviceTypes?.delivery ?? true,
+        pickup: store.serviceTypes?.pickup ?? true,
+        deliveryRadius: store.serviceTypes?.deliveryRadius ?? 10,
+        minimumOrderDelivery: store.serviceTypes?.minimumOrderDelivery ?? 100,
+        onDemand: store.serviceTypes?.onDemand ?? false,
+        onDemandExtraMinutes: store.serviceTypes?.onDemandExtraMinutes ?? 15,
+      }
     }));
 
     // Permitir filtrar por storeId desde la query string (p.ej. ?filterStoreId=abc123)

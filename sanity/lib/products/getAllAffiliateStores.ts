@@ -17,7 +17,17 @@ export const getAllAffiliateStores = async () => {
                 _id,
                 title,
                 slug,
-                icon
+                icon {
+                    type,
+                    emoji,
+                    image {
+                        asset->{
+                            _id,
+                            url
+                        },
+                        alt
+                    }
+                }
             },
             address,
             coordinates,

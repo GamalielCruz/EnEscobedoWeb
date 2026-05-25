@@ -47,6 +47,8 @@ export interface AffiliateStore {
     pickup: boolean;
     deliveryRadius?: number;
     minimumOrderDelivery?: number;
+    onDemand?: boolean;
+    onDemandExtraMinutes?: number;
   };
 }
 

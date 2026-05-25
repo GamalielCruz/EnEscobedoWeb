@@ -1,4 +1,4 @@
-"use server";
+import "server-only";
 
 import { imageUrl } from "@/lib/imageUrl";
 import { getStripe } from "@/lib/stripe";

@@ -8,7 +8,17 @@ export const getAllStoreCategories = async () => {
       title,
       slug,
       description,
-      icon,
+      icon {
+        type,
+        emoji,
+        image {
+          asset->{
+            _id,
+            url
+          },
+          alt
+        }
+      },
       order
     }
   `);

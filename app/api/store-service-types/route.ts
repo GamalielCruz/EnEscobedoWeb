@@ -26,19 +26,25 @@ export async function GET(request: NextRequest) {
         delivery: true,
         pickup: true,
         deliveryRadius: 15,
-        minimumOrderDelivery: 150
+        minimumOrderDelivery: 150,
+        onDemand: false,
+        onDemandExtraMinutes: 15
       },
       'mock-pe-plaza': {
         delivery: true,
         pickup: true,
         deliveryRadius: 12,
-        minimumOrderDelivery: 100
+        minimumOrderDelivery: 100,
+        onDemand: false,
+        onDemandExtraMinutes: 15
       },
       'mock-pe-barrio': {
         delivery: false,
         pickup: true,
         deliveryRadius: 0,
-        minimumOrderDelivery: 0
+        minimumOrderDelivery: 0,
+        onDemand: false,
+        onDemandExtraMinutes: 15
       }
     };
 
@@ -47,7 +53,9 @@ export async function GET(request: NextRequest) {
       delivery: true,
       pickup: true,
       deliveryRadius: 10,
-      minimumOrderDelivery: 100
+      minimumOrderDelivery: 100,
+      onDemand: false,
+      onDemandExtraMinutes: 15
     };
 
     let serviceTypes = mockServiceTypes[storeId] || defaultServiceTypes;

@@ -47,6 +47,7 @@ interface UseOrderNotificationsOptions {
   enabled: boolean;
   onNewOrder?: (order: Order) => void;
   pollingInterval?: number; // en milisegundos, default 15000 (15 segundos)
+  queryParams?: Record<string, string>;
 }
 
 interface UseOrderNotificationsReturn {
@@ -63,12 +64,8 @@ export function useOrderNotifications({
   enabled = true,
   pollingInterval = 30000,
   onNewOrder,
-}: {
-  storeId: string | null;
-  enabled?: boolean;
-  pollingInterval?: number;
-  onNewOrder?: (order: Order) => void;
-}): UseOrderNotificationsReturn {
+  queryParams,
+}: UseOrderNotificationsOptions): UseOrderNotificationsReturn {
   const [orders, setOrders] = useState<Order[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -85,6 +82,7 @@ export function useOrderNotifications({
   
   // Referencia para tracking de actualizaciones locales recientes
   const recentLocalUpdatesRef = useRef<Map<string, { timestamp: number; updates: Partial<Order> }>>(new Map());
+  const serializedQueryParams = JSON.stringify(queryParams ?? {});
 
   // Inicializar el audio
   useEffect(() => {
@@ -116,17 +114,20 @@ export function useOrderNotifications({
         : null;
 
     if (!normalizedStoreId || !enabled) {
-      console.log('[useOrderNotifications] Not fetching orders - storeId:', storeId, 'enabled:', enabled);
       return;
     }
 
-    console.log('[useOrderNotifications] Starting to fetch orders for storeId:', normalizedStoreId);
 
     try {
       setIsLoading(true);
       setError(null);
 
-      const res = await fetch(`/api/dashboard/store-orders?storeId=${normalizedStoreId}`);
+      const params = new URLSearchParams({
+        storeId: normalizedStoreId,
+        ...JSON.parse(serializedQueryParams),
+      });
+
+      const res = await fetch(`/api/dashboard/store-orders?${params.toString()}`);
       
       if (!res.ok) {
         const errorText = await res.text();
@@ -152,8 +153,6 @@ export function useOrderNotifications({
       const data = await res.json();
       const fetchedOrders: Order[] = data.orders ?? [];
       
-      console.log('[useOrderNotifications] Orders fetched:', fetchedOrders.length);
-      console.log('[useOrderNotifications] Orders data:', fetchedOrders);
 
       // Detectar nuevos pedidos comparando IDs
       if (!isFirstLoadRef.current) {
@@ -185,7 +184,6 @@ export function useOrderNotifications({
         
         // Si hay una actualización local reciente (menos de 10 segundos), preservarla
         if (localUpdate && (now - localUpdate.timestamp) < 10000) {
-          console.log(`[useOrderNotifications] Preservando actualización local para orden ${fetchedOrder._id}`);
           return { ...fetchedOrder, ...localUpdate.updates };
         }
         
@@ -213,7 +211,7 @@ export function useOrderNotifications({
     } finally {
       setIsLoading(false);
     }
-  }, [storeId, enabled, onNewOrder, playNotificationSound]);
+  }, [storeId, enabled, onNewOrder, playNotificationSound, serializedQueryParams]);
 
   const refresh = useCallback(() => {
     isFirstLoadRef.current = true; // Forzar sonido de notificación si hay nuevos
@@ -235,7 +233,9 @@ export function useOrderNotifications({
     fetchOrders();
 
     // Configurar intervalo
-    intervalRef.current = setInterval(fetchOrders, pollingInterval);
+    if (pollingInterval > 0) {
+      intervalRef.current = setInterval(fetchOrders, pollingInterval);
+    }
 
     // Limpiar al desmontar
     return () => {
@@ -253,7 +253,6 @@ export function useOrderNotifications({
       updates
     });
     
-    console.log(`[useOrderNotifications] Registrando actualización local para orden ${orderId}:`, updates);
     
     setOrders((prev) => 
       prev.map((o) => (o._id === orderId ? { ...o, ...updates } : o))

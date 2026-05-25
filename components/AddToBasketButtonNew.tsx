@@ -84,7 +84,7 @@ function AddToBasketButtonNew({ product, disabled }: AddBasketButtonProps ) {
                         </span>
                     ) : (
                         <span className="flex items-center gap-2">
-                            🛒 Agregar al Carrito
+                            Agregar al Carrito
                         </span>
                     )}
                 </button>

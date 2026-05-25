@@ -329,7 +329,7 @@ export const orderType = defineType({
     }),
     defineField({
       name: "pickupCode",
-      title: "Código de Recogida",
+      title: "Código",
       type: "string",
       hidden: ({ document }) => document?.deliveryMethod !== "click_collect",
       description: "Código único que el cliente debe presentar para recoger su pedido",

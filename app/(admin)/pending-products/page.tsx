@@ -22,6 +22,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Store, Package } from "lucide-react";
 import Image from "next/image";
 import { urlFor } from "@/sanity/lib/image";
+import DeliveryZonesAdmin from "@/components/DeliveryZonesAdmin";
+import { ADMIN_USERS } from "@/lib/admin";
 
 type PendingProduct = {
   _id: string;
@@ -51,10 +53,6 @@ type PendingStoreUpdate = {
   changes?: any;
 };
 
-const ADMIN_USERS = [
-  "user_392Q7p9ahx7GuGwIit2aWNeWaak",
-];
-
 export default function PendingProductsPage() {
   const { user, isLoaded } = useUser();
   const { redirectToSignIn } = useClerk();
@@ -63,7 +61,7 @@ export default function PendingProductsPage() {
   const [loading, setLoading] = useState(true);
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"products" | "stores">("products");
+  const [activeTab, setActiveTab] = useState<"products" | "stores" | "delivery">("products");
   const [rejectReason, setRejectReason] = useState("");
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [selectedRejectId, setSelectedRejectId] = useState<string | null>(null);
@@ -268,7 +266,7 @@ export default function PendingProductsPage() {
       </div>
 
       <Tabs defaultValue="products" value={activeTab} onValueChange={(v) => setActiveTab(v as any)} className="w-full">
-        <TabsList className="grid w-full grid-cols-2 mb-6">
+        <TabsList className="grid w-full grid-cols-3 mb-6">
             <TabsTrigger value="products">
                 <Package className="w-4 h-4 mr-2" />
                 Productos ({productItems.length})
@@ -276,6 +274,10 @@ export default function PendingProductsPage() {
             <TabsTrigger value="stores">
                 <Store className="w-4 h-4 mr-2" />
                 Tiendas ({storeItems.length})
+            </TabsTrigger>
+            <TabsTrigger value="delivery">
+                <Store className="w-4 h-4 mr-2" />
+                Envios
             </TabsTrigger>
         </TabsList>
 
@@ -499,6 +501,9 @@ export default function PendingProductsPage() {
                 )}
                 </CardContent>
             </Card>
+        </TabsContent>
+        <TabsContent value="delivery">
+          <DeliveryZonesAdmin />
         </TabsContent>
         </Tabs>
 

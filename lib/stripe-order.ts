@@ -1,4 +1,4 @@
-import { Metadata } from "@/actions/createCheckoutSession";
+import type { Metadata } from "@/actions/createCheckoutSession";
 import { getStripe } from "@/lib/stripe";
 import { extractSpeiDetails } from "@/lib/spei-reference-extractor";
 import { backendClient } from "@/sanity/lib/backendClient";

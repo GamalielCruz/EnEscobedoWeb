@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { writeClient } from "@/sanity/lib/client";
-import type { ClickCollectOrder } from "@/sanity.types";
+
+const PRODUCT_OPTION_GROUPS_QUERY = `*[_type == "product" && _id in $ids]{
+  _id,
+  optionGroups
+}`;
 
 export async function POST(request: NextRequest) {
-  console.log("🚀 Iniciando creación de orden Click & Collect...");
-
   try {
     const body = await request.json();
-    console.log("📦 Datos recibidos:", JSON.stringify(body, null, 2));
 
     const {
       orderNumber,
@@ -44,6 +45,19 @@ export async function POST(request: NextRequest) {
 
     // Generar código de recogida único
     const pickupCode = generatePickupCode();
+    const productIds = Array.from(
+      new Set(
+        items
+          .map((item: any) => item.product?._id || item.product?.id)
+          .filter(Boolean)
+      )
+    );
+    const productsWithOptions = await writeClient.fetch<
+      Array<{ _id: string; optionGroups?: ProductOptionGroup[] }>
+    >(PRODUCT_OPTION_GROUPS_QUERY, { ids: productIds });
+    const optionGroupsByProductId = new Map(
+      productsWithOptions.map((product) => [product._id, product.optionGroups || []])
+    );
 
     // Crear orden en Sanity
     const orderData = {
@@ -63,26 +77,22 @@ export async function POST(request: NextRequest) {
         storePhone,
       },
       items: items.map((item: any) => {
-        console.log("📦 Procesando item:", JSON.stringify(item, null, 2));
-        
-        // DEBUG: Verificar estructura de customizaciones y optionGroups
-        console.log("[DEBUG] item.customizations:", JSON.stringify(item.customizations, null, 2));
-        console.log("[DEBUG] item.product.optionGroups:", JSON.stringify(item.product?.optionGroups, null, 2));
-        console.log("[DEBUG] item.product._id:", item.product?._id);
-        console.log("[DEBUG] item.product.name:", item.product?.name);
-        
+        const productId = item.product?._id || item.product?.id;
+        const optionGroups =
+          item.product?.optionGroups?.length > 0
+            ? item.product.optionGroups
+            : optionGroupsByProductId.get(productId);
+
         // Transformar customizaciones al formato de Sanity
         const transformedCustomizations = transformCustomizations(
           item.customizations,
-          item.product?.optionGroups
+          optionGroups
         );
-        
-        console.log("[DEBUG] transformedCustomizations:", JSON.stringify(transformedCustomizations, null, 2));
-        
+
         return {
           _key: crypto.randomUUID(),
           productName: item.product?.name || "Producto sin nombre",
-          productId: item.product?._id || item.product?.id,
+          productId,
           quantity: item.quantity,
           price: item.customPrice || item.product?.price,
           customizations: transformedCustomizations,
@@ -98,43 +108,11 @@ export async function POST(request: NextRequest) {
       updatedAt: new Date().toISOString(),
     };
 
-    console.log("💾 Guardando orden en Sanity:", {
-      orderNumber,
-      pickupCode,
-      storeId,
-      total,
-      itemCount: items.length,
-    });
-
-    // Guardar en Sanity
-    console.log(
-      "💾 Intentando guardar en Sanity:",
-      JSON.stringify(orderData, null, 2)
-    );
-
     let order;
     try {
       order = await writeClient.create(orderData);
-      console.log("✅ Orden Click & Collect creada en Sanity:", {
-        orderId: order._id,
-        orderNumber,
-        pickupCode,
-        storeId,
-        total,
-        itemCount: items.length,
-      });
-      
-      // VERIFICACIÓN: Leer el documento recién creado para confirmar items
-      const verifyOrder = await writeClient.getDocument(order._id);
-      console.log("🔍 VERIFICACIÓN - Documento leído de Sanity:", JSON.stringify(verifyOrder, null, 2));
-      console.log("🔍 VERIFICACIÓN - Items en documento:", verifyOrder?.items);
-      
     } catch (sanityError) {
       console.error("❌ Error guardando en Sanity:", sanityError);
-      console.error(
-        "❌ Datos que causaron el error:",
-        JSON.stringify(orderData, null, 2)
-      );
       throw new Error(
         `Error guardando la orden en la base de datos: ${sanityError instanceof Error ? sanityError.message : "Error desconocido"}`
       );
@@ -142,8 +120,6 @@ export async function POST(request: NextRequest) {
 
     // NOTA: Simulación automática deshabilitada para permitir ver el estado inicial
     // En producción, este proceso sería manejado por el administrador o un sistema de inventario
-    
-    console.log("📝 Orden creada con estado inicial 'pending' - Los administradores pueden actualizar el estado manualmente");
     
     // Opcional: Descomentar para habilitar la simulación automática después de 10 segundos
     /*
@@ -217,10 +193,6 @@ export async function POST(request: NextRequest) {
     });
   } catch (error) {
     console.error("❌ Error creando orden Click & Collect:", error);
-    console.error(
-      "❌ Stack trace:",
-      error instanceof Error ? error.stack : "No stack trace"
-    );
     return NextResponse.json(
       {
         success: false,
@@ -242,24 +214,28 @@ function generatePickupCode(): string {
   return result;
 }
 
+type ProductOptionGroup = {
+  title?: string;
+  description?: string;
+  required?: boolean;
+  selectionType?: "single" | "multiple";
+  options?: Array<{
+    label?: string;
+    description?: string;
+    priceDelta?: number;
+    isDefault?: boolean;
+  }>;
+};
+
 // Transformar customizaciones del formato del store al formato de Sanity
 function transformCustomizations(
   customizations: { [key: string]: string | string[] } | undefined,
-  optionGroups: Array<{
-    title?: string;
-    description?: string;
-    required?: boolean;
-    selectionType?: "single" | "multiple";
-    options?: Array<{
-      label?: string;
-      description?: string;
-      priceDelta?: number;
-      isDefault?: boolean;
-    }>;
-  }> | undefined
+  optionGroups: ProductOptionGroup[] | undefined
 ): Array<{
+  _key: string;
   title?: string;
   options?: Array<{
+    _key: string;
     label?: string;
     priceDelta?: number;
   }>;

@@ -290,6 +290,21 @@ export const affiliateStoreType = defineType({
           description: "Monto mínimo requerido para entrega a domicilio",
           hidden: ({ parent }) => !parent?.delivery,
         }),
+        defineField({
+          name: "onDemand",
+          title: "On Demand",
+          type: "boolean",
+          initialValue: false,
+          description: "Activa este modo cuando el restaurante tenga alta demanda y los pedidos puedan tardar mas.",
+        }),
+        defineField({
+          name: "onDemandExtraMinutes",
+          title: "Minutos extra por alta demanda",
+          type: "number",
+          initialValue: 15,
+          description: "Tiempo adicional que se sumara al estimado base cuando On Demand este activo.",
+          hidden: ({ parent }) => !parent?.onDemand,
+        }),
       ],
       description: "Configura qué tipos de servicio ofrece esta tienda",
       validation: (Rule) => Rule.custom((serviceTypes) => {

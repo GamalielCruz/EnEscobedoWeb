@@ -160,7 +160,7 @@ export default function ProductSidebar({ product, isOpen, onClose }: ProductSide
               <h1 className="text-xl font-bold text-gray-900 mb-2">
                 {product.name}
               </h1>
-              <p className="text-xl font-bold text-green-600">
+              <p className="text-xl font-bold text-[#70E000]">
                 ${typeof product.price === "number" ? product.price.toFixed(2) : "0.00"}
               </p>
             </div>
@@ -212,16 +212,7 @@ export default function ProductSidebar({ product, isOpen, onClose }: ProductSide
               </div>
             )}
 
-            {/* Stock */}
-            {product.stock != null && (
-              <div>
-                <h3 className="text-sm font-semibold text-gray-900 mb-1">Disponibilidad</h3>
-                <p className={`text-sm ${isOutOfStock ? 'text-red-600' : 'text-green-600'}`}>
-                  {isOutOfStock ? 'Agotado' : `${product.stock} disponibles`}
-                </p>
-              </div>
-            )}
-
+            
             {/* Botón Agregar - Posición prominente */}
             <div className="pt-2 pb-2">
               {product.optionGroups && product.optionGroups.length > 0 ? (
@@ -245,7 +236,7 @@ export default function ProductSidebar({ product, isOpen, onClose }: ProductSide
                   <span className="text-sm font-medium text-green-800">
                     En tu carrito
                   </span>
-                  <span className="text-base font-bold text-green-600">
+                  <span className="text-base font-bold text-[#70E000]">
                     {itemCount} {itemCount === 1 ? 'unidad' : 'unidades'}
                   </span>
                 </div>

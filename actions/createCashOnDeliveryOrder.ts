@@ -1,4 +1,4 @@
-"use server";
+import "server-only";
 
 import { writeClient } from "@/sanity/lib/client";
 import { BasketItem } from "@/store/store";
@@ -41,7 +41,6 @@ export async function createCashOnDeliveryOrder(
   shippingCost: number = 0
 ) {
   try {
-    console.log("[COD ACTION] Starting order creation:", metadata.orderNumber);
 
     // Deep validation of items
     if (!items || items.length === 0) throw new Error("La lista de productos está vacía");
@@ -60,14 +59,6 @@ export async function createCashOnDeliveryOrder(
     const totalPrice = subtotal + shippingCost;
 
     // Prepare products for Sanity with explicit keys
-    console.log("🔥 COD ITEMS:", JSON.stringify(items, null, 2));
-    console.log("🔥 FIRST ITEM:", JSON.stringify(items[0], null, 2));
-    console.log("🔥 CUSTOMIZATIONS RAW:", items[0]?.customizations);
-    console.log("🔥 OPTION GROUPS RAW:", items[0]?.product?.optionGroups);
-    console.log("🔥 TRANSFORMED CUSTOMIZATIONS:", JSON.stringify(
-      transformCustomizations(items[0]?.customizations, items[0]?.product?.optionGroups as any),
-      null, 2
-    ));
 
     const sanityProducts = items.map((item, index) => {
       const transformedCustomizations = transformCustomizations(
@@ -135,9 +126,7 @@ export async function createCashOnDeliveryOrder(
     }
 
     // Final Sanity Create
-    console.log("[COD ACTION] Submitting to Sanity...");
     const result = await writeClient.create(orderData);
-    console.log("[COD ACTION] Success! ID:", result._id);
 
     return {
       success: true,

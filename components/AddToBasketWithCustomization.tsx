@@ -159,14 +159,14 @@ function AddToBasketWithCustomization({
               </div>
               <div className="flex items-center justify-between text-sm">
                 <span className="text-gray-600">Personalización:</span>
-                <span className="font-medium text-green-600">
+                <span className="font-medium text-[#70E000]">
                   +${(totalPrice - (product.price || 0)).toFixed(2)}
                 </span>
               </div>
               <div className="border-t pt-2 mt-2">
                 <div className="flex items-center justify-between">
                   <span className="font-semibold text-gray-900">Total:</span>
-                  <span className="text-lg font-bold text-green-600">${totalPrice.toFixed(2)}</span>
+                  <span className="text-lg font-bold text-[#70E000]">${totalPrice.toFixed(2)}</span>
                 </div>
               </div>
             </div>
@@ -182,7 +182,7 @@ function AddToBasketWithCustomization({
             disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed
             flex items-center justify-center transition-all duration-200
             font-bold text-lg min-h-[56px] shadow-sm hover:shadow-md
-            ${hasUnselectedRequired ? 'bg-orange-500 hover:bg-orange-600' : 'hover:bg-[#5cb800]'}
+            ${hasUnselectedRequired ? 'bg-orange-500 hover:bg-orange-600' : 'hover:bg-[#70E000]'}
           `}
         >
           {isLoading ? (
@@ -192,7 +192,7 @@ function AddToBasketWithCustomization({
             </span>
           ) : (
             <span className="flex items-center gap-2">
-              🛒 {hasUnselectedRequired ? 'Selecciona opciones requeridas' : 'Agregar al Carrito'}
+              {hasUnselectedRequired ? 'Selecciona opciones *' : 'Agregar al Carrito'}
             </span>
           )}
         </button>

@@ -9,7 +9,7 @@ async function BuenFinBanner() {
   // Forzar visualización del banner para el Buen Fin si no hay una oferta activa en Sanity
   const effectiveSale = sale || {
     _id: "buen-fin-2024",
-    title: "MENUFY",
+    title: "ElMenu",
     description: "Tu menú digital comunitario",
     discountAmount: 20,
     couponCode: "BUENFIN",

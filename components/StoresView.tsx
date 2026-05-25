@@ -5,6 +5,18 @@ import { useRouter, useSearchParams } from "next/navigation";
 import StoreGrid from "./StoreGrid";
 import { StoreCategoryFilter } from "./StoreCategoryFilter";
 
+interface StoreCategoryIcon {
+  type?: string;
+  emoji?: string;
+  image?: {
+    asset?: {
+      _id?: string;
+      url?: string;
+    };
+    alt?: string;
+  };
+}
+
 interface Store {
   _id: string;
   name?: string;
@@ -22,7 +34,7 @@ interface Store {
     slug?: {
       current?: string;
     };
-    icon?: string;
+    icon?: StoreCategoryIcon;
   }>;
   operatingHours?: {
     monday?: string;
@@ -46,7 +58,7 @@ interface StoreCategory {
   slug?: {
     current?: string;
   };
-  icon?: string;
+  icon?: StoreCategoryIcon;
 }
 
 interface StoresViewProps {

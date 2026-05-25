@@ -3,13 +3,13 @@ import { auth } from "@clerk/nextjs/server";
 import { createClient } from "next-sanity";
 
 const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
-// Soporta documentos tipo `clickCollectOrder` y `order` (cuando deliveryMethod == 'click_collect')
-const ORDERS_QUERY = `*[
+const ORDERS_BASE_FILTER = `
   !(_id in path('drafts.**')) && (
     (_type == "clickCollectOrder" && storeInfo.storeId == $storeId)
     || (_type == "order" && (pickupStore._ref == $storeId || affiliateStore._ref == $storeId))
   )
-] | order(coalesce(createdAt, orderDate) desc) {
+`;
+const ORDER_PROJECTION = `{
   _id,
   _type,
   orderNumber,
@@ -81,10 +81,25 @@ const ORDERS_QUERY = `*[
   "deliveryMethod": coalesce(deliveryMethod, "click_collect"),
   updatedAt
 }`;
+const ALL_ORDERS_QUERY = `*[${ORDERS_BASE_FILTER}] | order(coalesce(createdAt, orderDate) desc) ${ORDER_PROJECTION}`;
+const TODAY_ORDERS_QUERY = `*[
+  ${ORDERS_BASE_FILTER}
+  && coalesce(createdAt, orderDate) >= $startAt
+  && coalesce(createdAt, orderDate) < $endAt
+] | order(coalesce(createdAt, orderDate) desc) ${ORDER_PROJECTION}`;
+const HISTORY_ORDERS_QUERY = `*[
+  ${ORDERS_BASE_FILTER}
+  && coalesce(createdAt, orderDate) < $beforeAt
+] | order(coalesce(createdAt, orderDate) desc) [0...100] ${ORDER_PROJECTION}`;
 const ORDER_BY_NUMBER = `*[
   (_type == "clickCollectOrder" && orderNumber == $orderNumber)
   || (_type == "order" && orderNumber == $orderNumber)
 ][0]`;
+
+function isValidIsoDate(value: string | null) {
+  if (!value) return false;
+  return !Number.isNaN(Date.parse(value));
+}
 
 function getSanityClients() {
   const projectId = process.env.NEXT_PUBLIC_SANITY_PROJECT_ID;
@@ -132,12 +147,24 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const storeIdRaw = searchParams.get("storeId");
+    const scope = searchParams.get("scope") ?? "all";
+    const startAt = searchParams.get("startAt");
+    const endAt = searchParams.get("endAt");
+    const beforeAt = searchParams.get("beforeAt");
     const storeId =
       storeIdRaw && storeIdRaw.trim() !== "" && storeIdRaw !== "null" && storeIdRaw !== "undefined"
         ? storeIdRaw
         : null;
     if (!storeId) {
       return NextResponse.json({ error: "storeId requerido" }, { status: 400 });
+    }
+
+    if (scope === "today" && (!isValidIsoDate(startAt) || !isValidIsoDate(endAt))) {
+      return NextResponse.json({ error: "startAt y endAt validos son requeridos para scope=today" }, { status: 400 });
+    }
+
+    if (scope === "history" && !isValidIsoDate(beforeAt)) {
+      return NextResponse.json({ error: "beforeAt valido es requerido para scope=history" }, { status: 400 });
     }
 
     const sanity = getSanityClients();
@@ -159,25 +186,26 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "No tienes permiso para esta tienda" }, { status: 403 });
     }
 
-    const orders = await readSanity.fetch(ORDERS_QUERY, { storeId });
-    
-    console.log('[store-orders API] StoreId:', storeId);
-    console.log('[store-orders API] Orders found:', orders.length);
-    
-    // Log detallado del primer pedido para depurar
-    if (orders.length > 0) {
-      console.log('[store-orders API] RAW first order:', JSON.stringify(orders[0], null, 2));
-      console.log('[store-orders API] First order items field:', orders[0].items);
-      console.log('[store-orders API] First order _type:', orders[0]._type);
-      
-      // Verificar específicamente el campo items para clickCollectOrder
-      if (orders[0]._type === 'clickCollectOrder') {
-        console.log('[store-orders API] ClickCollectOrder items structure:', JSON.stringify(orders[0].items, null, 2));
-        console.log('[store-orders API] ClickCollectOrder items length:', orders[0].items?.length);
-        console.log('[store-orders API] ClickCollectOrder first item:', JSON.stringify(orders[0].items?.[0], null, 2));
-      }
+    const query =
+      scope === "today"
+        ? TODAY_ORDERS_QUERY
+        : scope === "history"
+          ? HISTORY_ORDERS_QUERY
+          : ALL_ORDERS_QUERY;
+
+    const queryParams: Record<string, string> = { storeId };
+
+    if (scope === "today" && startAt && endAt) {
+      queryParams.startAt = startAt;
+      queryParams.endAt = endAt;
     }
-    
+
+    if (scope === "history" && beforeAt) {
+      queryParams.beforeAt = beforeAt;
+    }
+
+    const orders = await readSanity.fetch(query, queryParams);
+
     return NextResponse.json({ success: true, orders: orders ?? [] }, {
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',

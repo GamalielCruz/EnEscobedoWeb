@@ -17,6 +17,16 @@ interface ModernDeliveryFlowProps {
 
 type FlowStep = 'address' | 'validating' | 'map-confirm' | 'finding-stores' | 'store-selection' | 'complete';
 
+type DeliveryQuote = {
+  allowed: boolean;
+  finalPrice: number | null;
+  zone: { id: string; name: string; basePrice: number } | null;
+  demandMultiplier: number;
+  scheduleMultiplier: number;
+  reason?: string;
+  debug?: string[];
+};
+
 export default function ModernDeliveryFlow({ onComplete, filterStoreId }: ModernDeliveryFlowProps) {
   // Estados del flujo
   const [currentStep, setCurrentStep] = useState<FlowStep>('address');
@@ -28,6 +38,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
   const [error, setError] = useState<string | null>(null);
   const [isGoogleMapsLoaded, setIsGoogleMapsLoaded] = useState(false);
   const [loadError, setLoadError] = useState<boolean>(false);
+  const [deliveryQuote, setDeliveryQuote] = useState<DeliveryQuote | null>(null);
 
   // Map refs
   const mapRef = useRef<HTMLDivElement>(null);
@@ -350,6 +361,34 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
     }
   }, [filterStoreId]);
 
+  const fetchDeliveryQuote = useCallback(async (address: CustomerAddressWithCoords) => {
+    if (!address.latitude || !address.longitude) {
+      return null;
+    }
+
+    try {
+      const response = await fetch('/api/delivery-pricing/quote', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          latitude: address.latitude,
+          longitude: address.longitude,
+          orderDate: new Date().toISOString(),
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'No se pudo calcular el envio');
+      }
+
+      return data.quote as DeliveryQuote;
+    } catch (error) {
+      console.error('Error calculando envio por zona:', error);
+      return null;
+    }
+  }, []);
+
   // Manejar detección de ubicación
   const handleDetectLocation = useCallback(async () => {
     if (!navigator.geolocation) {
@@ -478,6 +517,23 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
     if (!customerAddress) return;
 
     setCurrentStep('finding-stores');
+    setDeliveryQuote(null);
+    setError(null);
+
+    const quote = await fetchDeliveryQuote(customerAddress);
+
+    if (!quote) {
+      setError("No pudimos calcular el costo de envio. Intenta de nuevo.");
+      setCurrentStep('map-confirm');
+      return;
+    }
+
+    if (!quote.allowed || quote.finalPrice == null) {
+      setDeliveryQuote(quote);
+      setError(quote.reason || "Esta ubicacion esta fuera de nuestras zonas de entrega.");
+      setCurrentStep('map-confirm');
+      return;
+    }
     
     // Buscar tiendas cercanas
     const stores = await findNearbyStores(customerAddress);
@@ -488,13 +544,14 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
       return;
     }
 
+    setDeliveryQuote(quote);
     setNearbyStores(stores);
     setCurrentStep('store-selection');
-  }, [customerAddress, findNearbyStores]);
+  }, [customerAddress, fetchDeliveryQuote, findNearbyStores]);
 
   // Manejar selección de tienda
   const handleStoreSelection = useCallback((store: any) => {
-    if (!customerAddress) return;
+    if (!customerAddress || !deliveryQuote?.allowed || deliveryQuote.finalPrice == null) return;
 
     const distance = calculateDistance(
       customerAddress.latitude!,
@@ -503,9 +560,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
       store.coordinates.longitude
     );
 
-    const costPerKm = 6;
-    const minCharge = 30;
-    const shippingCost = Math.max(minCharge, Math.round(distance * costPerKm));
+    const shippingCost = deliveryQuote.finalPrice;
 
     setSelectedStore(store);
     setCurrentStep('complete');
@@ -516,7 +571,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
       shippingCost,
       distanceKm: distance,
     });
-  }, [customerAddress, onComplete]);
+  }, [customerAddress, deliveryQuote, onComplete]);
 
   // Renderizar paso de dirección
   if (currentStep === 'address') {
@@ -524,20 +579,14 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
       <div className="space-y-4">
         {/* Header */}
         <div className="text-center space-y-2">
-          <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto">
-            <MapPin className="w-8 h-8 text-blue-600" />
-          </div>
           <h3 className="text-lg font-semibold text-gray-900">¿Dónde entregaremos tu pedido?</h3>
-          <p className="text-sm text-gray-600">
-            Necesitamos tu dirección para calcular el costo de envío
-          </p>
         </div>
 
         {/* Botón de ubicación */}
         <button
           onClick={handleDetectLocation}
           disabled={isLoadingLocation || !isGoogleMapsLoaded}
-          className="w-full flex items-center justify-center gap-3 px-4 py-4 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-xl hover:from-blue-700 hover:to-blue-800 disabled:from-gray-400 disabled:to-gray-500 transition-all shadow-md hover:shadow-lg"
+          className="w-full flex items-center justify-center gap-3 px-4 py-4 bg-gradient-to-r from-[#eb1901] to-[#eb1901] text-white rounded-xl hover:from-rose-700 hover:to-rose-800 disabled:from-gray-400 disabled:to-gray-500 transition-all shadow-md hover:shadow-lg"
         >
           {isLoadingLocation ? (
             <>
@@ -634,7 +683,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
                 {/* Botón para volver a centrar si existiera, pero el usuario puede arrastrar */}
             </div>
 
-            <div className="p-3 bg-blue-50 rounded-lg text-sm text-blue-800">
+            <div className="p-3 bg-rose-50 rounded-lg text-sm text-rose-800">
                 <span className="font-semibold block mb-1">Dirección detectada:</span>
                 {customerAddress?.street}, {customerAddress?.city}
             </div>
@@ -654,7 +703,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
                 </button>
                 <button
                     onClick={handleConfirmLocation}
-                    className="flex-[2] py-3 px-4 bg-blue-600 text-white font-medium rounded-xl hover:bg-blue-700 transition-colors flex items-center justify-center gap-2"
+                    className="flex-[2] py-3 px-4 bg-[#eb1902] text-white font-medium rounded-xl hover:bg-rose-700 transition-colors flex items-center justify-center gap-2"
                 >
                     Confirmar Ubicación
                 </button>
@@ -697,10 +746,74 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
 
         {/* Título simplificado */}
         <h3 className="text-md font-semibold text-gray-900 px-1">
-            Tiendas disponibles
+            Opciones de envío
         </h3>
 
-        {/* Lista de tiendas simplificada */}
+        {deliveryQuote && (
+          <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
+            <span className="font-semibold">Zona:</span> {deliveryQuote.zone?.name || "Tarifa especial"} ·
+            <span className="font-semibold"> Envio:</span> ${deliveryQuote.finalPrice} MXN
+          </div>
+        )}
+
+        {/* Lista de tiendas simplificada con animaciones */}
+        <style>{`
+          @keyframes pulse-border {
+            0%, 100% {
+              border-color: rgb(251, 113, 133);
+              box-shadow: 0 0 0 0 rgba(251, 113, 133, 0.7);
+            }
+            50% {
+              border-color: rgb(239, 68, 68);
+              box-shadow: 0 0 0 8px rgba(239, 68, 68, 0);
+            }
+          }
+          
+          @keyframes slide-up {
+            from {
+              opacity: 0;
+              transform: translateY(20px);
+            }
+            to {
+              opacity: 1;
+              transform: translateY(0);
+            }
+          }
+          
+          @keyframes bounce-subtle {
+            0%, 100% {
+              transform: translateY(0);
+            }
+            50% {
+              transform: translateY(-4px);
+            }
+          }
+          
+          .store-option-animate {
+            animation: slide-up 0.5s ease-out forwards;
+          }
+          
+          .store-option-animate:nth-child(1) {
+            animation-delay: 0.1s;
+          }
+          
+          .store-option-animate:nth-child(2) {
+            animation-delay: 0.2s;
+          }
+          
+          .store-option-animate:nth-child(3) {
+            animation-delay: 0.3s;
+          }
+          
+          .pulse-animation {
+            animation: pulse-border 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+          }
+          
+          .bounce-animation {
+            animation: bounce-subtle 2s infinite;
+          }
+        `}</style>
+        
         <div className="space-y-3">
           {nearbyStores.map((store, index) => {
             const distance = calculateDistance(
@@ -709,34 +822,54 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
               store.coordinates.latitude,
               store.coordinates.longitude
             );
-            const shippingCost = Math.max(30, Math.round(distance * 6));
+            const shippingCost = deliveryQuote?.finalPrice ?? 0;
             // Estimación simple: 20 min base + 3 min por km
-            const estimatedTime = Math.round(20 + (distance * 3));
+            const estimatedTime = Math.round(10 + (distance * 3));
+            const isFastest = index === 0;
 
             return (
               <button
                 key={store._id}
                 onClick={() => handleStoreSelection(store)}
-                className="w-full p-4 bg-white border-2 border-gray-200 rounded-xl hover:border-blue-500 hover:shadow-md transition-all text-left group"
+                className={`
+                  w-full p-4 bg-white border-2 rounded-xl transition-all text-left group relative
+                  hover:shadow-lg
+                  ${isFastest 
+                    ? 'pulse-animation border-rose-500 shadow-md' 
+                    : 'border-rose-200 hover:border-rose-500'
+                  }
+                  store-option-animate
+                `}
               >
+                {/* Badge de más rápido */}
+                {isFastest && (
+                  <div className="absolute -top-3 right-6 bg-gradient-to-r from-[#eb1901] to-rose-600 text-white px-3 py-1 rounded-full text-xs font-bold shadow-lg bounce-animation">
+                    ⚡ MÁS RÁPIDO
+                  </div>
+                )}
+                
                 <div className="flex items-center justify-between">
                     <div>
-                        <h4 className="font-bold text-gray-900 text-lg group-hover:text-blue-600 transition-colors">
-                            {store.name}
+                        <h4 className={`font-bold text-lg transition-colors ${
+                          isFastest 
+                            ? 'text-[#eb1901] group-hover:text-rose-700' 
+                            : 'text-[#eb1901] group-hover:text-rose-600'
+                        }`}>
+                            
                         </h4>
-                        <div className="flex items-center gap-3 mt-1 text-sm text-gray-600">
-                             <div className="flex items-center gap-1">
-                                <Clock className="w-4 h-4" />
+                        <div className="flex items-center gap-3 mt-1 text-sm text-rose-600">
+                             <div className="flex items-center gap-1 group-hover:scale-110 transition-transform">
+                                <Clock className="w-8 h-8" />
                                 <span>~{estimatedTime} min</span>
                              </div>
-                             <div className="flex items-center gap-1">
-                                <MapPin className="w-4 h-4" />
+                             <div className="flex items-center gap-1 group-hover:scale-110 transition-transform">
+                                <MapPin className="w-8 h-8" />
                                 <span>{distance.toFixed(1)} km</span>
                              </div>
                         </div>
                     </div>
-                    <div className="text-right">
-                        <span className="block text-lg font-bold text-blue-600">
+                    <div className="text-right group-hover:scale-110 transition-transform">
+                        <span className="block text-lg font-bold text-[#000]">
                             ${shippingCost}
                         </span>
                         <span className="text-xs text-gray-500">
@@ -760,7 +893,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
       selectedStore.coordinates.latitude,
       selectedStore.coordinates.longitude
     );
-    const shippingCost = Math.max(30, Math.round(distance * 6));
+    const shippingCost = deliveryQuote?.finalPrice ?? 0;
 
     return (
       <div className="space-y-4">

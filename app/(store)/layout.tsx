@@ -8,14 +8,14 @@ import CookieConsent from "@/components/cookie-consent";
 import HydrationErrorSuppressor from "@/components/HydrationErrorSuppressor";
 
 export const metadata: Metadata = {
-  title: "En Escobedo | Plaza en linea",
+  title: "ElMenu | Digital comunitario",
   description: "La imaginación se imprime.",
   metadataBase: new URL(process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'),
   openGraph: {
     title: "En Escobedo | Plaza en linea",
     description: "La imaginación se imprime.",
     images: ["/og-image.png"],
-    url: "https://enescobedo.com",
+    url: "https://elmenu.site",
   },
 };
 

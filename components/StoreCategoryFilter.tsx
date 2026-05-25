@@ -1,7 +1,20 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
+import Image from "next/image";
+
+interface StoreCategoryIcon {
+  type?: string;
+  emoji?: string;
+  image?: {
+    asset?: {
+      _id?: string;
+      url?: string;
+    };
+    alt?: string;
+  };
+}
 
 interface StoreCategory {
   _id: string;
@@ -9,7 +22,7 @@ interface StoreCategory {
   slug?: {
     current?: string;
   };
-  icon?: string;
+  icon?: StoreCategoryIcon;
 }
 
 interface StoreCategoryFilterProps {
@@ -23,16 +36,16 @@ export function StoreCategoryFilter({
   selectedCategory: externalSelectedCategory,
   onCategoryChange,
 }: StoreCategoryFilterProps) {
+  const [mounted, setMounted] = useState(false);
   const [internalSelectedCategory, setInternalSelectedCategory] =
     useState<string>("");
   const [showSwipeIndicator, setShowSwipeIndicator] = useState(false);
   const [hasInteracted, setHasInteracted] = useState(false);
-  const [isClient, setIsClient] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
-  // Set isClient to true after mount
+  // Initialize after mount to avoid hydration issues
   useEffect(() => {
-    setIsClient(true);
+    setMounted(true);
   }, []);
 
   // Use external state if provided, otherwise use internal state
@@ -41,9 +54,9 @@ export function StoreCategoryFilter({
       ? externalSelectedCategory
       : internalSelectedCategory;
 
-  // Check if content is scrollable and show swipe indicator (only on client)
+  // Check if content is scrollable and show swipe indicator (only on client after mount)
   useEffect(() => {
-    if (!isClient) return;
+    if (!mounted) return;
     
     const checkScrollable = () => {
       if (scrollContainerRef.current) {
@@ -53,11 +66,15 @@ export function StoreCategoryFilter({
       }
     };
 
-    checkScrollable();
+    // Small delay to ensure DOM is fully rendered
+    const timer = setTimeout(checkScrollable, 100);
     window.addEventListener("resize", checkScrollable);
 
-    return () => window.removeEventListener("resize", checkScrollable);
-  }, [categories, hasInteracted, isClient]);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("resize", checkScrollable);
+    };
+  }, [categories, hasInteracted, mounted]);
 
   // Hide indicator after user interacts
   const handleScroll = () => {
@@ -96,7 +113,14 @@ export function StoreCategoryFilter({
               : "bg-white text-black border-black hover:border-gray-400"
           )}
         >
-          <span>🏪</span>
+          <Image
+            src="/Todas.png"
+            alt="Todas las categorías"
+            width={24}
+            height={24}
+            className="w-6 h-6"
+            priority={false}
+          />
           <span>Todas</span>
         </button>
 
@@ -115,15 +139,27 @@ export function StoreCategoryFilter({
                   : "bg-white text-black border-black hover:border-gray-400"
               )}
             >
-              {category.icon && <span>{category.icon}</span>}
+              {category.icon?.type === 'emoji' && category.icon?.emoji && (
+                <span>{category.icon.emoji}</span>
+              )}
+              {category.icon?.type === 'image' && category.icon?.image?.asset?.url && (
+                <Image
+                  src={category.icon.image.asset.url}
+                  alt={category.icon.image.alt || category.title || 'category icon'}
+                  width={24}
+                  height={24}
+                  className="w-6 h-6"
+                  priority={false}
+                />
+              )}
               <span>{displayName}</span>
             </button>
           );
         })}
       </div>
 
-      {/* Gradient fade indicator */}
-      {isClient && showSwipeIndicator && (
+      {/* Gradient fade indicator - only render after mount to avoid hydration mismatch */}
+      {mounted && showSwipeIndicator && (
         <div className="absolute right-0 top-0 bottom-0 w-12 bg-gradient-to-l from-gray-100 to-transparent pointer-events-none" />
       )}
     </div>
