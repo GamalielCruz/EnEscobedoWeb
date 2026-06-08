@@ -1,4 +1,4 @@
-import { sanityClient } from '../lib/client'
+import { writeClient } from '../lib/client'
 
 /**
  * Migration script to convert storeCategory icon field from string to object
@@ -9,7 +9,7 @@ async function migrateIcons() {
   const query = `*[_type == "storeCategory" && icon != null]`
 
   try {
-    const categories = await sanityClient.fetch(query)
+    const categories = await writeClient.fetch(query)
     
     console.log(`Found ${categories.length} categories with icon values`)
     
@@ -42,7 +42,7 @@ async function migrateIcons() {
 
       // Update the document
       if (newIcon) {
-        await sanityClient
+        await writeClient
           .patch(category._id)
           .set({ icon: newIcon })
           .commit()
@@ -50,7 +50,7 @@ async function migrateIcons() {
         console.log(`✓ Updated: ${category.title}`)
       } else {
         // If empty string, set to null
-        await sanityClient
+        await writeClient
           .patch(category._id)
           .set({ icon: null })
           .commit()
