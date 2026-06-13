@@ -1,4 +1,4 @@
-const WHATSAPP_API_URL = 'https://graph.facebook.com/v19.0'
+const WHATSAPP_API_URL = 'https://graph.facebook.com/v25.0'
 
 export async function sendWhatsAppMessage(to: string, message: string) {
   const response = await fetch(
