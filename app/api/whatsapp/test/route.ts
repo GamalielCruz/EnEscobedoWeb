@@ -15,19 +15,25 @@ export async function GET() {
           to: '524427958919',
           type: 'template',
           template: {
-            name: 'hello_world',
-            language: { code: 'en_US' },
-          },
+            name: 'confirmacion_pedido',
+            language: { code: 'es' },
+            components: [
+              {
+                type: 'body',
+                parameters: [
+                  { type: 'text', text: 'Ignacio' },
+                  { type: 'text', text: 'ORD-001' }
+                ]
+              }
+            ]
+          }
         }),
       }
     )
-
     const result = await response.json()
-
     if (!response.ok) {
-      throw new Error(result.error?.message || 'Error enviando template de WhatsApp')
+      throw new Error(result.error?.message || 'Error enviando mensaje')
     }
-
     return NextResponse.json({ success: true, result })
   } catch (error) {
     return NextResponse.json({ success: false, error: String(error) }, { status: 500 })
