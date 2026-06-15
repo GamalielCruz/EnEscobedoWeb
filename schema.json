@@ -696,6 +696,36 @@
   },
   {
     "type": "type",
+    "name": "repartidor.reference",
+    "value": {
+      "type": "object",
+      "attributes": {
+        "_ref": {
+          "type": "objectAttribute",
+          "value": {
+            "type": "string"
+          }
+        },
+        "_type": {
+          "type": "objectAttribute",
+          "value": {
+            "type": "string",
+            "value": "reference"
+          }
+        },
+        "_weak": {
+          "type": "objectAttribute",
+          "value": {
+            "type": "boolean"
+          },
+          "optional": true
+        }
+      },
+      "dereferencesTo": "repartidor"
+    }
+  },
+  {
+    "type": "type",
     "name": "affiliateStore.reference",
     "value": {
       "type": "object",
@@ -1172,6 +1202,35 @@
         },
         "optional": true
       },
+      "repartidorAsignado": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "inline",
+          "name": "repartidor.reference"
+        },
+        "optional": true
+      },
+      "repartidorAsignadoAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "deliveryOfertaEnviada": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
+        },
+        "optional": true
+      },
+      "deliveryOfertaExpiresAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
       "pickupStore": {
         "type": "objectAttribute",
         "value": {
@@ -1224,6 +1283,79 @@
         "value": {
           "type": "inline",
           "name": "affiliateStore.reference"
+        },
+        "optional": true
+      }
+    }
+  },
+  {
+    "name": "repartidor",
+    "type": "document",
+    "attributes": {
+      "_id": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "_type": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string",
+          "value": "repartidor"
+        }
+      },
+      "_createdAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "_updatedAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "_rev": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "nombre": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "telefono": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "tiendaAsignada": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "inline",
+          "name": "affiliateStore.reference"
+        },
+        "optional": true
+      },
+      "activo": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
+        },
+        "optional": true
+      },
+      "notas": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
         },
         "optional": true
       }
@@ -3234,6 +3366,13 @@
         "optional": true
       },
       "isActive": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
+        },
+        "optional": true
+      },
+      "hasOwnDelivery": {
         "type": "objectAttribute",
         "value": {
           "type": "boolean"

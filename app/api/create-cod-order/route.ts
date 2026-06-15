@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { writeClient } from "@/sanity/lib/client";
+import { sendOrderConfirmation } from "@/lib/whatsapp";
 import { randomUUID } from "crypto";
 
 export async function POST(request: NextRequest) {
@@ -81,6 +82,17 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await writeClient.create(orderData);
+    const customerPhone = clean(metadata.phone);
+    const customerName = clean(metadata.customerName) || "Cliente";
+    const orderNumber = clean(metadata.orderNumber);
+
+    if (customerPhone && orderNumber) {
+      void sendOrderConfirmation(customerPhone, customerName, orderNumber).catch(
+        (whatsappError) => {
+          console.error("[create-cod-order] WhatsApp error:", whatsappError);
+        }
+      );
+    }
 
     return NextResponse.json({ success: true, orderId: result._id, orderNumber: metadata.orderNumber });
   } catch (error: unknown) {

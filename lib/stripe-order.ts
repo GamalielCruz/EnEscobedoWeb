@@ -1,6 +1,7 @@
 import type { Metadata } from "@/actions/createCheckoutSession";
 import { getStripe } from "@/lib/stripe";
 import { extractSpeiDetails } from "@/lib/spei-reference-extractor";
+import { sendOrderConfirmation } from "@/lib/whatsapp";
 import { backendClient } from "@/sanity/lib/backendClient";
 import Stripe from "stripe";
 
@@ -312,6 +313,23 @@ export async function createOrderInSanity(
 
   const orderData = await buildOrderData(session, stripe);
   const order = await backendClient.createIfNotExists(orderData);
+  const customerPhone =
+    typeof orderData.phone === "string" ? orderData.phone : "";
+  const customerName =
+    typeof orderData.customerName === "string" && orderData.customerName
+      ? orderData.customerName
+      : "Cliente";
+  const createdOrderNumber =
+    typeof orderData.orderNumber === "string" ? orderData.orderNumber : "";
+
+  if (customerPhone && createdOrderNumber) {
+    void sendOrderConfirmation(customerPhone, customerName, createdOrderNumber).catch(
+      (whatsappError) => {
+        console.error("[stripe-order] WhatsApp error:", whatsappError);
+      }
+    );
+  }
+
   console.log("[stripe-order] Order stored in Sanity:", order._id);
   return order;
 }

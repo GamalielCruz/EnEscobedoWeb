@@ -225,6 +225,13 @@ export const affiliateStoreType = defineType({
       description: "Si la tienda está activa para recibir pedidos",
     }),
     defineField({
+      name: "hasOwnDelivery",
+      title: "Tiene repartidores propios",
+      type: "boolean",
+      initialValue: false,
+      description: "Indica si la tienda tiene repartidores propios",
+    }),
+    defineField({
       name: "capacity",
       title: "Capacidad de Almacenamiento",
       type: "number",

@@ -2,6 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { client, readClient, writeClient } from "@/sanity/lib/client";
 import { isAdminUser } from "@/lib/admin";
+import {
+  sendOrderCancelled,
+  sendOrderDelivered,
+  sendOrderOnTheWay,
+} from "@/lib/whatsapp";
 
 const ORDER_PROJECTION = `{
   _id,
@@ -47,6 +52,8 @@ const ORDER_BY_NUMBER_QUERY = `*[_type == "order" && orderNumber == $orderNumber
   _id,
   orderNumber,
   orderType,
+  customerName,
+  phone,
   status,
   readyAt,
   pickedUpAt,
@@ -67,6 +74,20 @@ function getReader() {
 
 function isFinalStatus(status: string) {
   return ["cancelled", "completed", "delivered", "picked_up", "failed"].includes(status);
+}
+
+function getStatusNotification(status: string) {
+  switch (status) {
+    case "shipped":
+      return sendOrderOnTheWay;
+    case "delivered":
+    case "picked_up":
+      return sendOrderDelivered;
+    case "cancelled":
+      return sendOrderCancelled;
+    default:
+      return null;
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -207,6 +228,21 @@ export async function PATCH(request: NextRequest) {
     }
 
     const updated = await writeClient.patch(order._id).set(updateData).commit();
+    const shouldNotify = order.status !== status;
+    const notify = shouldNotify ? getStatusNotification(status) : null;
+
+    if (notify && order.phone && order.orderNumber) {
+      const customerName =
+        typeof order.customerName === "string" && order.customerName
+          ? order.customerName
+          : "Cliente";
+
+      void notify(order.phone, customerName, order.orderNumber).catch(
+        (whatsappError) => {
+          console.error("[admin/orders PATCH] WhatsApp error:", whatsappError);
+        }
+      );
+    }
 
     return NextResponse.json({
       success: true,

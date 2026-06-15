@@ -129,6 +129,13 @@ export type ProductReference = {
   [internalGroqTypeReferenceTo]?: "product";
 };
 
+export type RepartidorReference = {
+  _ref: string;
+  _type: "reference";
+  _weak?: boolean;
+  [internalGroqTypeReferenceTo]?: "repartidor";
+};
+
 export type AffiliateStoreReference = {
   _ref: string;
   _type: "reference";
@@ -206,11 +213,28 @@ export type Order = {
   };
   codInstructions?: string;
   deliveryNotes?: string;
+  repartidorAsignado?: RepartidorReference;
+  repartidorAsignadoAt?: string;
+  deliveryOfertaEnviada?: boolean;
+  deliveryOfertaExpiresAt?: string;
   pickupStore?: AffiliateStoreReference;
   estimatedPickupDate?: string;
   pickupStatus?: "in_transit" | "ready_for_pickup" | "picked_up" | "expired";
   pickupCode?: string;
   affiliateStore?: AffiliateStoreReference;
+};
+
+export type Repartidor = {
+  _id: string;
+  _type: "repartidor";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  nombre?: string;
+  telefono?: string;
+  tiendaAsignada?: AffiliateStoreReference;
+  activo?: boolean;
+  notas?: string;
 };
 
 export type StoreUpdateRequest = {
@@ -526,6 +550,7 @@ export type AffiliateStore = {
     sunday?: string;
   };
   isActive?: boolean;
+  hasOwnDelivery?: boolean;
   capacity?: number;
   averageDeliveryTime?: number;
   deliveryFee?: number;
@@ -657,8 +682,10 @@ export type AllSanitySchemaTypes =
   | Slug
   | Sale
   | ProductReference
+  | RepartidorReference
   | AffiliateStoreReference
   | Order
+  | Repartidor
   | StoreUpdateRequest
   | CategoryReference
   | ProductUpdateRequest
@@ -834,6 +861,10 @@ export type MY_ORDERS_QUERY_RESULT = Array<{
   };
   codInstructions?: string;
   deliveryNotes?: string;
+  repartidorAsignado?: RepartidorReference;
+  repartidorAsignadoAt?: string;
+  deliveryOfertaEnviada?: boolean;
+  deliveryOfertaExpiresAt?: string;
   pickupStore?: AffiliateStoreReference;
   estimatedPickupDate?: string;
   pickupStatus?: "expired" | "in_transit" | "picked_up" | "ready_for_pickup";

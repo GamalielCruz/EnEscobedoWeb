@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { writeClient } from "@/sanity/lib/client";
+import { sendOrderConfirmation } from "@/lib/whatsapp";
 
 const PRODUCT_OPTION_GROUPS_QUERY = `*[_type == "product" && _id in $ids]{
   _id,
@@ -130,6 +131,17 @@ export async function POST(request: NextRequest) {
       console.error("❌ Error guardando en Sanity:", sanityError);
       throw new Error(
         `Error guardando la orden en la base de datos: ${sanityError instanceof Error ? sanityError.message : "Error desconocido"}`
+      );
+    }
+
+    if (phone && orderNumber) {
+      void sendOrderConfirmation(phone, customerName || "Cliente", orderNumber).catch(
+        (whatsappError) => {
+          console.error(
+            "[create-click-collect-order] WhatsApp error:",
+            whatsappError
+          );
+        }
       );
     }
 

@@ -12,6 +12,7 @@ import { affiliateStoreType } from './affiliateStoreType';
 import { storeCategoryType } from './storeCategoryType';
 import { storeUpdateRequest } from './storeUpdateRequest';
 import { deliveryPricingConfigType } from './deliveryPricingConfigType';
+import { repartidorType } from './repartidorType';
 
 export const schema: { types: SchemaTypeDefinition[] } = {
   types: [
@@ -25,6 +26,7 @@ export const schema: { types: SchemaTypeDefinition[] } = {
     orderType, 
     salesType, 
     affiliateStoreType, 
+    repartidorType,
     storeCategoryType,
     deliveryPricingConfigType
   ],

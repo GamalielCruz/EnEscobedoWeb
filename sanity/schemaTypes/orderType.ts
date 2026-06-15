@@ -303,6 +303,32 @@ export const orderType = defineType({
       description: "Special notes for delivery",
     }),
     defineField({
+      name: "repartidorAsignado",
+      title: "Repartidor Asignado",
+      type: "reference",
+      to: [{ type: "repartidor" }],
+      description: "Repartidor que tomo el pedido",
+    }),
+    defineField({
+      name: "repartidorAsignadoAt",
+      title: "Repartidor Asignado At",
+      type: "datetime",
+      description: "Fecha y hora en que el repartidor fue asignado",
+    }),
+    defineField({
+      name: "deliveryOfertaEnviada",
+      title: "Oferta de Delivery Enviada",
+      type: "boolean",
+      initialValue: false,
+      description: "Indica si ya se envio la oferta a repartidores",
+    }),
+    defineField({
+      name: "deliveryOfertaExpiresAt",
+      title: "Oferta de Delivery Expira At",
+      type: "datetime",
+      description: "Momento en que expira la oferta enviada a repartidores",
+    }),
+    defineField({
       name: "pickupStore",
       title: "Tienda de Recogida",
       type: "reference",
