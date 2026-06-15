@@ -104,15 +104,13 @@ export function Header() {
       <div className="w-full ">
         <div className="flex items-center justify-between w-full py-2 sm:py-0 gap-2">
           <Link href="/" className="flex items-center gap-2 group" aria-label="En Escobedo">
-            <span className="relative flex items-center justify-center w-10 h-10 group-hover:scale-110 transition-transform duration-200 overflow-hidden">
-              <Image src="/logo.svg" alt="En Escobedo Logo" width={40} height={40} />
+            <span className="relative flex items-center justify-center w-10 h-10">
+              <Image src="/logomenu.svg" alt="ElMenu Logo" width={40} height={40} className="w-8" />
             </span>
             <span
-              className={`relative flex items-center justify-center w-auto h-8 sm:h-10 group-hover:scale-110 transition-transform duration-200 ${
-                isHydrated ? "hidden sm:block" : "hidden"
-              } mx-auto`}
+              className={`relative hidden lg:flex items-center justify-center w-auto h-8 sm:h-10`}
             >
-              <Image src="/menufy.svg" alt="Menufy Logo" width={140} height={50} />
+              <Image src="/Logo.svg" alt="ElMenu Logo" width={140} height={50} />
             </span>
           </Link>
 

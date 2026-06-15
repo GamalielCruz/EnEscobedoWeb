@@ -9,7 +9,6 @@ import { productUpdateRequest } from './productUpdateRequest'
 import { orderType } from './orderType';
 import { salesType } from './salesType';
 import { affiliateStoreType } from './affiliateStoreType';
-import { clickCollectOrderType } from './clickCollectOrderType';
 import { storeCategoryType } from './storeCategoryType';
 import { storeUpdateRequest } from './storeUpdateRequest';
 import { deliveryPricingConfigType } from './deliveryPricingConfigType';
@@ -26,7 +25,6 @@ export const schema: { types: SchemaTypeDefinition[] } = {
     orderType, 
     salesType, 
     affiliateStoreType, 
-    clickCollectOrderType, 
     storeCategoryType,
     deliveryPricingConfigType
   ],

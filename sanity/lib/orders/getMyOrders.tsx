@@ -6,47 +6,21 @@ export async function getMyOrders(userId: string) {
     throw new Error("User ID is required");
   }
 
-  // Define the query to get both regular orders and click & collect orders
+  // Define the query to get unified orders
   const MY_ORDERS_QUERY = defineQuery(`
-    *[(_type == "order" || _type == "clickCollectOrder") && (clerkUserId == $userId || customerInfo.clerkUserId == $userId)] | order(coalesce(orderDate, createdAt) desc) {
+    *[_type == "order" && clerkUserId == $userId] | order(orderDate desc) {
       ...,
-      // For regular orders
-      _type == "order" => {
-        ...,
-        "isClickCollect": deliveryMethod == "click_collect",
-        "storeInfo": select(
-          deliveryMethod == "click_collect" => {
-            "storeName": pickupStore->name,
-            "storeAddress": pickupStore->address.street,
-            "storePhone": pickupStore->contact.phone
-          }
-        ),
-        products[]{
-          ...,
-          product->
+      "isClickCollect": orderType == "pickup",
+      "storeInfo": select(
+        orderType == "pickup" => {
+          "storeName": pickupStore->name,
+          "storeAddress": pickupStore->address.street,
+          "storePhone": pickupStore->contact.phone
         }
-      },
-      // For click & collect orders
-      _type == "clickCollectOrder" => {
+      ),
+      products[]{
         ...,
-        "orderDate": createdAt,
-        "totalPrice": totalAmount,
-        "currency": "mxn",
-        "customerName": customerInfo.name,
-        "email": customerInfo.email,
-        "phone": customerInfo.phone,
-        "clerkUserId": customerInfo.clerkUserId,
-        "products": items[]{
-          "quantity": quantity,
-          "product": {
-            "_id": productId,
-            "name": productName,
-            "price": price
-          }
-        },
-        "isClickCollect": true,
-        "pickupCode": pickupCode,
-        "storeInfo": storeInfo
+        product->
       }
     }
  `);

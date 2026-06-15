@@ -83,10 +83,9 @@ export async function createCheckoutSession(
       customerId = newCustomer.id;
     }
 
-    const success_url = buildUrl(
+    const return_url = buildUrl(
       `/success?session_id={CHECKOUT_SESSION_ID}&orderNumber=${metadataForStripe.orderNumber}`
     );
-    const cancel_url = buildUrl("/basket");
 
     const stripeMetadata: Record<string, string> = {};
     for (const [key, value] of Object.entries(metadataForStripe)) {
@@ -159,6 +158,25 @@ export async function createCheckoutSession(
       };
     });
 
+    // Validar el monto mínimo de Stripe ($10.00 MXN / 1000 centavos)
+    const totalLineItemsAmount = lineItems.reduce((sum, item) => {
+      return sum + (item.price_data.unit_amount * item.quantity);
+    }, 0);
+
+    const shippingAmount = (normalizedDeliveryMethod !== "click_collect" &&
+      metadataForStripe.shippingCost &&
+      metadataForStripe.shippingCost > 0)
+        ? Math.round(metadataForStripe.shippingCost * 100)
+        : 0;
+
+    const totalStripeAmount = totalLineItemsAmount + shippingAmount;
+
+    if (totalStripeAmount < 1000) {
+      throw new Error(
+        "El monto mínimo para procesar el pago con tarjeta es de $10.00 MXN. Agrega más productos para pagar en línea, o selecciona pagar en efectivo."
+      );
+    }
+
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       metadata: stripeMetadata,
@@ -168,8 +186,8 @@ export async function createCheckoutSession(
       phone_number_collection: {
         enabled: true,
       },
-      success_url: success_url,
-      cancel_url: cancel_url,
+      ui_mode: "embedded",
+      return_url: return_url,
       line_items: lineItems,
       // Solo agregar opciones de envío si NO es Click & Collect y hay costo de envío
       ...(normalizedDeliveryMethod !== "click_collect" &&
@@ -190,7 +208,7 @@ export async function createCheckoutSession(
         }),
     });
 
-    return session.url;
+    return session.client_secret;
   } catch (error: unknown) {
     console.error("Error al crear la sesión de checkout", error);
 

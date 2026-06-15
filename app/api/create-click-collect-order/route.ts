@@ -59,54 +59,69 @@ export async function POST(request: NextRequest) {
       productsWithOptions.map((product) => [product._id, product.optionGroups || []])
     );
 
-    // Crear orden en Sanity
-    const orderData = {
-      _type: "clickCollectOrder",
+    // Construir los productos como referencias (schema unificado `order`).
+    // Se preserva el precio del momento como snapshot en las notas del ítem.
+    const sanityProducts = items.map((item: any) => {
+      const productId = item.product?._id || item.product?.id;
+      const optionGroups =
+        item.product?.optionGroups?.length > 0
+          ? item.product.optionGroups
+          : optionGroupsByProductId.get(productId);
+
+      const transformedCustomizations = transformCustomizations(
+        item.customizations,
+        optionGroups
+      );
+
+      const unitPrice = item.customPrice ?? item.product?.price;
+      const priceNote = `Precio original al ordenar: $${unitPrice ?? "?"}`;
+      const existingNote = (item.notes || "").trim();
+
+      return {
+        _key: crypto.randomUUID(),
+        product: { _type: "reference", _ref: productId },
+        quantity: item.quantity,
+        customizations: transformedCustomizations,
+        notes: existingNote ? `${existingNote}\n${priceNote}` : priceNote,
+      };
+    });
+
+    // El campo estimatedPickupDate es datetime; solo lo seteamos si es ISO válido.
+    // De lo contrario (p.ej. "10-20 minutos") lo guardamos en deliveryNotes.
+    const estimatedIsIso =
+      typeof estimatedDelivery === "string" &&
+      !Number.isNaN(Date.parse(estimatedDelivery));
+    const deliveryNotesParts: string[] = [];
+    if (!estimatedIsIso && estimatedDelivery)
+      deliveryNotesParts.push(`Tiempo estimado de recogida: ${estimatedDelivery}`);
+    if (notes) deliveryNotesParts.push(`Notas del cliente: ${notes}`);
+
+    // Crear orden en Sanity (schema unificado `order` con orderType: "pickup")
+    const orderData: { _type: string; [key: string]: any } = {
+      _type: "order",
       orderNumber,
-      pickupCode,
-      customerInfo: {
-        name: customerName,
-        email: customerEmail,
-        clerkUserId,
-        phone,
-      },
-      storeInfo: {
-        storeId,
-        storeName,
-        storeAddress,
-        storePhone,
-      },
-      items: items.map((item: any) => {
-        const productId = item.product?._id || item.product?.id;
-        const optionGroups =
-          item.product?.optionGroups?.length > 0
-            ? item.product.optionGroups
-            : optionGroupsByProductId.get(productId);
-
-        // Transformar customizaciones al formato de Sanity
-        const transformedCustomizations = transformCustomizations(
-          item.customizations,
-          optionGroups
-        );
-
-        return {
-          _key: crypto.randomUUID(),
-          productName: item.product?.name || "Producto sin nombre",
-          productId,
-          quantity: item.quantity,
-          price: item.customPrice || item.product?.price,
-          customizations: transformedCustomizations,
-          notes: item.notes || "",
-        };
-      }),
-      totalAmount: total,
+      orderType: "pickup",
+      currency: "mxn",
+      customerName: customerName || "Cliente",
+      email: customerEmail,
+      clerkUserId,
+      phone: phone || "No especificado",
+      pickupStore: storeId ? { _type: "reference", _ref: storeId } : undefined,
+      affiliateStore: storeId ? { _type: "reference", _ref: storeId } : undefined,
+      products: sanityProducts,
+      totalPrice: total,
+      subtotal: total,
+      shippingCost: 0,
       paymentMethod,
-      status: "pending",
-      estimatedPickupDate: estimatedDelivery,
-      notes: notes || "",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      status: "pending_pickup",
+      pickupStatus: "in_transit",
+      pickupCode,
+      orderDate: new Date().toISOString(),
     };
+
+    if (estimatedIsIso) orderData.estimatedPickupDate = estimatedDelivery;
+    if (deliveryNotesParts.length)
+      orderData.deliveryNotes = deliveryNotesParts.join(" | ");
 
     let order;
     try {

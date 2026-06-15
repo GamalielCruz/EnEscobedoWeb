@@ -7,7 +7,7 @@ import Image from "next/image";
 import useBasketStore from "@/store/store";
 import { SignInButton, useAuth, useUser } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { SafeLocationBasedStoreSelector } from '@/components/SafeLocationBasedStoreSelector';
 import { calculateDistance } from '@/lib/clickCollect';
 import { Truck, Store, CreditCard, Banknote, MapPin, X, CheckCircle, Loader2 } from "lucide-react";
@@ -77,6 +77,84 @@ function BasketPage() {
   const [showPickupPhoneForm, setShowPickupPhoneForm] = useState(false);
   const [pickupPhone, setPickupPhone] = useState("");
   const [pickupError, setPickupError] = useState("");
+  const [cardError, setCardError] = useState("");
+  const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const checkoutRef = useRef<any>(null);
+  const stripeContainerRef = useRef<HTMLDivElement>(null);
+
+  // Cargar Stripe y montar Checkout embebido en la misma página
+  useEffect(() => {
+    if (!clientSecret) return;
+
+    let active = true;
+
+    const loadStripeCheckout = async () => {
+      // 1. Asegurar que el script de Stripe esté cargado
+      if (!(window as any).Stripe) {
+        await new Promise<void>((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://js.stripe.com/v3/";
+          script.async = true;
+          script.onload = () => resolve();
+          script.onerror = () => reject(new Error("Error al cargar Stripe.js"));
+          document.head.appendChild(script);
+        });
+      }
+
+      if (!active) return;
+
+      try {
+        const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || '';
+        if (!publishableKey) {
+          console.error("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY no está configurada");
+          return;
+        }
+        
+        const stripe = (window as any).Stripe(publishableKey);
+        
+        // Desmontar si ya existía uno previo
+        if (checkoutRef.current) {
+          checkoutRef.current.destroy();
+          checkoutRef.current = null;
+        }
+
+        const checkout = await stripe.initEmbeddedCheckout({
+          clientSecret,
+        });
+
+        if (!active) {
+          checkout.destroy();
+          return;
+        }
+
+        // Wait for container to be in the DOM and use it
+        let element = stripeContainerRef.current;
+        if (!element) {
+          element = document.getElementById("stripe-checkout-container") as HTMLDivElement;
+        }
+
+        if (!element) {
+          console.error("No se encontró el contenedor (#stripe-checkout-container) para montar el Checkout de Stripe");
+          return;
+        }
+
+        checkout.mount(element);
+        checkoutRef.current = checkout;
+      } catch (err) {
+        console.error("Error al inicializar Checkout embebido:", err);
+      }
+    };
+
+    loadStripeCheckout();
+
+    return () => {
+      active = false;
+      if (checkoutRef.current) {
+        checkoutRef.current.destroy();
+        checkoutRef.current = null;
+      }
+    };
+  }, [clientSecret]);
 
   useEffect(() => {
     setIsClient(true);
@@ -257,8 +335,17 @@ function BasketPage() {
   const handleCheckout = async () => {
     if (!isSignedIn) return;
     setIsLoading(true);
+    setCardError("");
 
     try {
+      const subtotal = useBasketStore.getState().getTotalPrice();
+      const totalAmount = subtotal + (serviceType === 'delivery' ? (shippingCost ?? 0) : 0);
+      if (totalAmount < 10) {
+        setCardError("El monto total mínimo para pagar con tarjeta es de $10.00 MXN. Por favor agrega más productos o selecciona un método de pago en efectivo.");
+        setIsLoading(false);
+        return;
+      }
+
       // Build base metadata
       const metadata: Metadata = {
         orderNumber: crypto.randomUUID(),
@@ -296,16 +383,18 @@ function BasketPage() {
 
       if (!response.ok) {
         console.error("Error en /api/checkout-session", data);
-        throw new Error(data?.error || "Error al crear la sesión de checkout");
+        const backendError = data?.details?.message || data?.error || "Error al crear la sesión de checkout";
+        throw new Error(backendError);
       }
 
-      if (data?.url) {
-        window.location.href = data.url;
+      if (data?.clientSecret) {
+        setClientSecret(data.clientSecret);
       } else {
-        throw new Error("No se recibió URL de checkout");
+        throw new Error("No se recibió clientSecret de checkout");
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error al crear la sesión de checkout", error);
+      setCardError(error?.message || "Error al crear la sesión de checkout. Inténtalo de nuevo.");
     } finally {
       setIsLoading(false);
     }
@@ -634,6 +723,7 @@ function BasketPage() {
                           setShippingCost(null);
                           setSelectedStore(null);
                           setCustomerAddress(null);
+                          setClientSecret(null);
                         }}
                         className={`p-3 rounded-lg border-2 transition-all ${
                           serviceType === 'delivery'
@@ -652,6 +742,7 @@ function BasketPage() {
                           setShippingCost(0);
                           setSelectedStore(null);
                           setCustomerAddress(null);
+                          setClientSecret(null);
                         }}
                         className={`p-3 rounded-lg border-2 transition-all ${
                           serviceType === 'pickup'
@@ -681,6 +772,7 @@ function BasketPage() {
                             setCustomerAddress(data.customerAddress);
                             setSelectedStore(data.selectedStore);
                             setShippingCost(data.shippingCost);
+                            setClientSecret(null);
                             
                             const timing = getServiceTiming(data.selectedStore);
                             const payload = {
@@ -825,7 +917,10 @@ function BasketPage() {
                                 </p>
                               )}
                               <p className="text-sm text-gray-600 mt-1">
-                                Pagaras al recoger en esta sucursal.
+                                {clientSecret 
+                                  ? "Pagarás en línea de forma segura con tu tarjeta."
+                                  : "Puedes pagar en línea con tarjeta o al recoger en sucursal."
+                                }
                               </p>
                               <div className="flex items-baseline justify-between pt-3 border-t-2 border-rose-200 mt-3">
                                 <span className="text-sm font-semibold text-gray-700">Total:</span>
@@ -839,114 +934,139 @@ function BasketPage() {
                         </div>
                       )}
                        
-                      <div className="space-y-2">
-                        <button
-                          onClick={handleCheckout}
-                          disabled={isLoading}
-                          className="w-full bg-[#eb1902] text-white px-4 py-3 rounded-lg hover:bg-[#c11300] disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors font-medium"
-                        >
-                          <CreditCard className="w-5 h-5" />
-                          {isLoading ? "Procesando..." : "Pagar con tarjeta"}
-                        </button>
+                      {clientSecret ? (
+                        <div className="space-y-3">
+                          <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-sm text-rose-800">
+                            <span className="font-semibold block mb-1">Pago seguro con tarjeta:</span>
+                            Completa los detalles de tu tarjeta a continuación para finalizar tu pedido.
+                          </div>
+                          
+                          {/* Contenedor de Stripe Embedded Checkout */}
+                          <div ref={stripeContainerRef} id="stripe-checkout-container" className="mt-4 border-2 border-rose-200 rounded-xl p-4 bg-white shadow-inner min-h-[350px]"></div>
 
-                        {serviceType === 'delivery' && (
-                          <div className="space-y-2">
-                            <div
-                              className={`overflow-hidden transition-all duration-300 ease-out ${
-                                showCodPhoneForm ? 'max-h-48 opacity-100 translate-y-0' : 'max-h-0 opacity-0 -translate-y-1'
-                              }`}
-                            >
-                              <div className="space-y-2 rounded-lg border-2 border-[#eb1902] bg-white p-3">
-                                <input
-                                  type="tel"
-                                  inputMode="tel"
-                                  autoComplete="tel"
-                                  placeholder="Ingresa tu número de teléfono"
-                                  value={cashOnDeliveryPhone}
-                                  onChange={(e) => {
-                                    setCashOnDeliveryPhone(e.target.value);
-                                    if (codError) setCodError("");
-                                  }}
-                                  disabled={isLoading}
-                                  className="w-full rounded-lg border-2 border-[#eb1902] px-4 py-3 text-[#eb1902] placeholder:text-[#eb1902]/60 focus:outline-none focus:ring-0 disabled:bg-gray-100"
-                                />
+                          <button
+                            onClick={() => setClientSecret(null)}
+                            className="w-full text-center text-sm font-semibold text-[#eb1902] hover:text-rose-800 underline pt-2"
+                          >
+                            Cancelar y volver a métodos de pago
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <button
+                            onClick={handleCheckout}
+                            disabled={isLoading}
+                            className="w-full bg-[#eb1902] text-white px-4 py-3 rounded-lg hover:bg-[#c11300] disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors font-medium"
+                          >
+                            <CreditCard className="w-5 h-5" />
+                            {isLoading ? "Procesando..." : "Pagar con tarjeta"}
+                          </button>
+
+                          {cardError && (
+                            <p className="text-sm text-[#eb1902] font-medium text-center bg-rose-50 border border-rose-200 rounded-lg p-2.5 mt-2">
+                              {cardError}
+                            </p>
+                          )}
+
+                          {serviceType === 'delivery' && (
+                            <div className="space-y-2">
+                              <div
+                                className={`overflow-hidden transition-all duration-300 ease-out ${
+                                  showCodPhoneForm ? 'max-h-48 opacity-100 translate-y-0' : 'max-h-0 opacity-0 -translate-y-1'
+                                }`}
+                              >
+                                <div className="space-y-2 rounded-lg border-2 border-[#eb1902] bg-white p-3">
+                                  <input
+                                    type="tel"
+                                    inputMode="tel"
+                                    autoComplete="tel"
+                                    placeholder="Ingresa tu número de teléfono"
+                                    value={cashOnDeliveryPhone}
+                                    onChange={(e) => {
+                                      setCashOnDeliveryPhone(e.target.value);
+                                      if (codError) setCodError("");
+                                    }}
+                                    disabled={isLoading}
+                                    className="w-full rounded-lg border-2 border-[#eb1902] px-4 py-3 text-[#eb1902] placeholder:text-[#eb1902]/60 focus:outline-none focus:ring-0 disabled:bg-gray-100"
+                                  />
+                                  <button
+                                    onClick={handleCashOnDeliverySubmit}
+                                    disabled={isLoading}
+                                    className="w-full bg-white text-[#eb1902] border-2 border-[#eb1902] px-4 py-3 rounded-lg hover:bg-[#efe7e6] disabled:bg-gray-100 flex items-center justify-center gap-2 transition-colors font-medium"
+                                  >
+                                    <Banknote className="w-5 h-5" />
+                                    {isLoading ? 'Procesando...' : 'Confirmar pedido'}
+                                  </button>
+                                </div>
+                              </div>
+
+                              {!showCodPhoneForm && (
                                 <button
-                                  onClick={handleCashOnDeliverySubmit}
+                                  onClick={handleCashOnDeliveryStart}
                                   disabled={isLoading}
-                                  className="w-full bg-white text-[#eb1902] border-2 border-[#eb1902] px-4 py-3 rounded-lg hover:bg-[#efe7e6] disabled:bg-gray-100 flex items-center justify-center gap-2 transition-colors font-medium"
+                                  className="w-full bg-white text-[#eb1902] border-2 border-[#eb1902] px-4 py-3 rounded-lg hover:bg-[#efe7e6] disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors font-medium"
                                 >
                                   <Banknote className="w-5 h-5" />
-                                  {isLoading ? 'Procesando...' : 'Confirmar pedido'}
+                                  {isLoading ? 'Procesando...' : 'Pagar al recibir (Efectivo)'}
                                 </button>
-                              </div>
+                              )}
+
+                              {codError && (
+                                <p className="text-sm text-[#eb1902] font-medium">{codError}</p>
+                              )}
                             </div>
-
-                            {!showCodPhoneForm && (
-                              <button
-                                onClick={handleCashOnDeliveryStart}
-                                disabled={isLoading}
-                                className="w-full bg-white text-[#eb1902] border-2 border-[#eb1902] px-4 py-3 rounded-lg hover:bg-[#efe7e6] disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors font-medium"
+                          )}
+                          
+                          {serviceType === 'pickup' && (
+                            <div className="space-y-2">
+                              <div
+                                className={`overflow-hidden transition-all duration-300 ease-out ${
+                                  showPickupPhoneForm ? 'max-h-48 opacity-100 translate-y-0' : 'max-h-0 opacity-0 -translate-y-1'
+                                }`}
                               >
-                                <Banknote className="w-5 h-5" />
-                                {isLoading ? 'Procesando...' : 'Pagar al recibir (Efectivo)'}
-                              </button>
-                            )}
+                                <div className="space-y-2 rounded-lg border-2 border-green-600 bg-white p-3">
+                                  <input
+                                    type="tel"
+                                    inputMode="tel"
+                                    autoComplete="tel"
+                                    placeholder="Ingresa tu número de teléfono"
+                                    value={pickupPhone}
+                                    onChange={(e) => {
+                                      setPickupPhone(e.target.value);
+                                      if (pickupError) setPickupError("");
+                                    }}
+                                    disabled={isLoading}
+                                    className="w-full rounded-lg border-2 border-green-600 px-4 py-3 text-green-600 placeholder:text-green-600/60 focus:outline-none focus:ring-0 disabled:bg-gray-100"
+                                  />
+                                  <button
+                                    onClick={handlePickupPayment}
+                                    disabled={isLoading}
+                                    className="w-full bg-white text-green-600 border-2 border-green-600 px-4 py-3 rounded-lg hover:bg-green-50 disabled:bg-gray-100 flex items-center justify-center gap-2 transition-colors font-medium"
+                                  >
+                                    <Banknote className="w-5 h-5" />
+                                    {isLoading ? 'Procesando...' : 'Confirmar pedido'}
+                                  </button>
+                                </div>
+                              </div>
 
-                            {codError && (
-                              <p className="text-sm text-[#eb1902] font-medium">{codError}</p>
-                            )}
-                          </div>
-                        )}
-                        
-                        {serviceType === 'pickup' && (
-                          <div className="space-y-2">
-                            <div
-                              className={`overflow-hidden transition-all duration-300 ease-out ${
-                                showPickupPhoneForm ? 'max-h-48 opacity-100 translate-y-0' : 'max-h-0 opacity-0 -translate-y-1'
-                              }`}
-                            >
-                              <div className="space-y-2 rounded-lg border-2 border-green-600 bg-white p-3">
-                                <input
-                                  type="tel"
-                                  inputMode="tel"
-                                  autoComplete="tel"
-                                  placeholder="Ingresa tu número de teléfono"
-                                  value={pickupPhone}
-                                  onChange={(e) => {
-                                    setPickupPhone(e.target.value);
-                                    if (pickupError) setPickupError("");
-                                  }}
-                                  disabled={isLoading}
-                                  className="w-full rounded-lg border-2 border-green-600 px-4 py-3 text-green-600 placeholder:text-green-600/60 focus:outline-none focus:ring-0 disabled:bg-gray-100"
-                                />
+                              {!showPickupPhoneForm && (
                                 <button
-                                  onClick={handlePickupPayment}
+                                  onClick={handlePickupStart}
                                   disabled={isLoading}
-                                  className="w-full bg-white text-green-600 border-2 border-green-600 px-4 py-3 rounded-lg hover:bg-green-50 disabled:bg-gray-100 flex items-center justify-center gap-2 transition-colors font-medium"
+                                  className="w-full bg-white text-green-600 border-2 border-green-600 px-4 py-3 rounded-lg hover:bg-green-50 disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors font-medium"
                                 >
                                   <Banknote className="w-5 h-5" />
-                                  {isLoading ? 'Procesando...' : 'Confirmar pedido'}
+                                  {isLoading ? 'Procesando...' : 'Pagar en tienda (Efectivo)'}
                                 </button>
-                              </div>
+                              )}
+
+                              {pickupError && (
+                                <p className="text-sm text-green-600 font-medium">{pickupError}</p>
+                              )}
                             </div>
-
-                            {!showPickupPhoneForm && (
-                              <button
-                                onClick={handlePickupStart}
-                                disabled={isLoading}
-                                className="w-full bg-white text-green-600 border-2 border-green-600 px-4 py-3 rounded-lg hover:bg-green-50 disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors font-medium"
-                              >
-                                <Banknote className="w-5 h-5" />
-                                {isLoading ? 'Procesando...' : 'Pagar en tienda (Efectivo)'}
-                              </button>
-                            )}
-
-                            {pickupError && (
-                              <p className="text-sm text-green-600 font-medium">{pickupError}</p>
-                            )}
-                          </div>
-                        )}
-                      </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )}
 

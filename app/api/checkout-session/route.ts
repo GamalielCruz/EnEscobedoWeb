@@ -18,12 +18,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const checkoutUrl = await createCheckoutSession(
+    const clientSecret = await createCheckoutSession(
       items as GroupedBasketItem[],
       metadata as Metadata
     );
 
-    return NextResponse.json({ url: checkoutUrl, requestId });
+    return NextResponse.json({ clientSecret, requestId });
   } catch (error) {
     console.error("Error al crear la sesión de checkout", {
       requestId,

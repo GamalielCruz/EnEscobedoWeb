@@ -1,13 +1,8 @@
-import ClickCollectOrdersAdmin from "@/components/ClickCollectOrdersAdmin";
+import { redirect } from "next/navigation";
 
-// Deshabilitar caché de la página
-export const dynamic = 'force-dynamic';
+export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default function ClickCollectOrdersPage() {
-  return (
-    <div className="container mx-auto px-4 py-8">
-      <ClickCollectOrdersAdmin />
-    </div>
-  );
+  redirect("/admin/orders");
 }

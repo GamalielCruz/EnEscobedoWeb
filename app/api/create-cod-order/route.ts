@@ -56,6 +56,7 @@ export async function POST(request: NextRequest) {
       totalPrice: Number(totalPrice.toFixed(2)),
       subtotal: Number(subtotal.toFixed(2)),
       shippingCost: Number(shippingCost.toFixed(2)),
+      orderType: metadata.storeInfo?.deliveryMethod === "pickup" ? "pickup" : "delivery",
       status: metadata.storeInfo?.deliveryMethod === "pickup" ? "pending_pickup" : "pending_delivery",
       orderDate: new Date().toISOString(),
       shippingAddress: {
@@ -73,7 +74,6 @@ export async function POST(request: NextRequest) {
     if (metadata.storeInfo?.storeId) {
       orderData.pickupStore = { _type: "reference", _ref: metadata.storeInfo.storeId };
       orderData.affiliateStore = { _type: "reference", _ref: metadata.storeInfo.storeId };
-      orderData.deliveryMethod = metadata.storeInfo.deliveryMethod === "pickup" ? "click_collect" : "home_delivery";
       if (metadata.storeInfo.deliveryMethod === "pickup") {
         orderData.pickupStatus = "in_transit";
         orderData.pickupCode = randomUUID().split("-")[0].toUpperCase();

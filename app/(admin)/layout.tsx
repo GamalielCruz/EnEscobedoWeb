@@ -1,5 +1,9 @@
 import type { Metadata } from "next";
+import Link from "next/link";
+import { auth } from "@clerk/nextjs/server";
+import { redirect } from "next/navigation";
 import { Inter } from "next/font/google";
+import { isAdminUser } from "@/lib/admin";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -8,54 +12,70 @@ export const metadata: Metadata = {
   description: "Panel de administración para gestionar órdenes y tienda",
 };
 
-export default function AdminLayout({
+export default async function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return (
-    <html lang="es">
-      <body className={inter.className}>
-        <div className="min-h-screen bg-gray-50">
-          {/* Header de administración */}
-          <header className="bg-white shadow-sm border-b">
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-              <div className="flex justify-between items-center py-4">
-                <div className="flex items-center">
-                  <h1 className="text-xl font-semibold text-gray-900">
-                    Panel de Administración
-                  </h1>
-                </div>
-                <nav className="flex space-x-4">
-                  <a
-                    href="/pending-products"
-                    className="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-                  >
-                    Aprobación de Productos
-                  </a>
-                  <a
-                    href="/click-collect-orders"
-                    className="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-                  >
-                    Órdenes Click & Collect
-                  </a>
-                  <a
-                    href="/"
-                    className="text-gray-600 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-                  >
-                    Volver a Tienda
-                  </a>
-                </nav>
-              </div>
-            </div>
-          </header>
+  const { userId } = await auth();
 
-          {/* Contenido principal */}
-          <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
-            {children}
-          </main>
+  if (!userId) {
+    redirect("/");
+  }
+
+  if (!isAdminUser(userId)) {
+    redirect("/access-denied");
+  }
+
+  return (
+    <div className={`min-h-screen bg-gray-50 ${inter.className}`}>
+      <header className="border-b bg-white shadow-sm">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-col gap-4 py-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex items-center">
+              <h1 className="text-xl font-semibold text-gray-900">
+                Panel de Administracion
+              </h1>
+            </div>
+            <nav className="flex flex-wrap gap-2">
+              <Link
+                href="/admin"
+                className="rounded-md px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-900"
+              >
+                Dashboard
+              </Link>
+              <Link
+                href="/admin/orders"
+                className="rounded-md px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-900"
+              >
+                Pedidos
+              </Link>
+              <Link
+                href="/admin/pending-products"
+                className="rounded-md px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-900"
+              >
+                Aprobaciones
+              </Link>
+              <Link
+                href="/admin/repartidores"
+                className="rounded-md px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-900"
+              >
+                Repartidores
+              </Link>
+              <Link
+                href="/"
+                className="rounded-md px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-900"
+              >
+                Volver a Tienda
+              </Link>
+            </nav>
+          </div>
         </div>
-      </body>
-    </html>
+      </header>
+
+      <main className="mx-auto max-w-7xl py-6 sm:px-6 lg:px-8">
+        {children}
+      </main>
+    </div>
   );
 }

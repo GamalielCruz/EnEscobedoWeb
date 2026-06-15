@@ -49,6 +49,20 @@ export const orderType = defineType({
       description: "Customer phone number for delivery and order updates",
     }),
     defineField({
+      name: "orderType",
+      title: "Tipo de Pedido",
+      type: "string",
+      options: {
+        list: [
+          { title: "🚚 Envío a Domicilio (Delivery)", value: "delivery" },
+          { title: "🏪 Recolección en Tienda (Pickup)", value: "pickup" },
+        ],
+      },
+      initialValue: "delivery",
+      validation: (Rule) => Rule.required(),
+      description: "Define si el pedido es a domicilio o de recolección en tienda",
+    }),
+    defineField({
       name: "paymentMethod",
       title: "Payment Method",
       type: "string",
@@ -58,6 +72,8 @@ export const orderType = defineType({
           { title: "OXXO", value: "oxxo" },
           { title: "Transferencia Bancaria SPEI", value: "bank_transfer" },
           { title: "Pago Contra Entrega", value: "cash_on_delivery" },
+          { title: "Pago en Tienda (Efectivo)", value: "cash_on_pickup" },
+          { title: "Pago en Tienda (Tarjeta)", value: "card_on_pickup" },
         ],
       },
       description: "Method used for payment",
@@ -287,30 +303,18 @@ export const orderType = defineType({
       description: "Special notes for delivery",
     }),
     defineField({
-      name: "deliveryMethod",
-      title: "Método de Entrega",
-      type: "string",
-      options: {
-        list: [
-          { title: "Envío a Domicilio", value: "home_delivery" },
-          { title: "Click & Collect", value: "click_collect" },
-        ],
-      },
-      initialValue: "home_delivery",
-    }),
-    defineField({
       name: "pickupStore",
       title: "Tienda de Recogida",
       type: "reference",
       to: [{ type: "affiliateStore" }],
-      hidden: ({ document }) => document?.deliveryMethod !== "click_collect",
+      hidden: ({ document }) => document?.orderType !== "pickup",
       description: "Tienda afiliada donde el cliente recogerá su pedido",
     }),
     defineField({
       name: "estimatedPickupDate",
       title: "Fecha Estimada de Recogida",
       type: "datetime",
-      hidden: ({ document }) => document?.deliveryMethod !== "click_collect",
+      hidden: ({ document }) => document?.orderType !== "pickup",
       description: "Fecha estimada cuando el producto estará listo para recoger",
     }),
     defineField({
@@ -325,13 +329,13 @@ export const orderType = defineType({
           { title: "No Recogido (Expirado)", value: "expired" },
         ],
       },
-      hidden: ({ document }) => document?.deliveryMethod !== "click_collect",
+      hidden: ({ document }) => document?.orderType !== "pickup",
     }),
     defineField({
       name: "pickupCode",
       title: "Código",
       type: "string",
-      hidden: ({ document }) => document?.deliveryMethod !== "click_collect",
+      hidden: ({ document }) => document?.orderType !== "pickup",
       description: "Código único que el cliente debe presentar para recoger su pedido",
     }),
     defineField({
@@ -349,11 +353,16 @@ export const orderType = defineType({
       currency: "currency",
       orderId: "orderNumber",
       email: "email",
+      orderType: "orderType",
     },
     prepare(select) {
-      const orderIdSnippet = `${select.orderId.slice(0, 5)}...${select.orderId.slice(-5)}`;
+      const orderIdSnippet = select.orderId
+        ? `${select.orderId.slice(0, 5)}...${select.orderId.slice(-5)}`
+        : "sin número";
+      const typeBadge =
+        select.orderType === "pickup" ? "🏪 Pickup" : "🚚 Delivery";
       return {
-        title: `${select.name} (${orderIdSnippet})`,
+        title: `${typeBadge} · ${select.name} (${orderIdSnippet})`,
         subtitle: `${select.amount} ${select.currency}, ${select.email}`,
         media: BasketIcon,
       };

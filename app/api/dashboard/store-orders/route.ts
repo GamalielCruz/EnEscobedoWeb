@@ -4,97 +4,63 @@ import { createClient } from "next-sanity";
 
 const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
 const ORDERS_BASE_FILTER = `
-  !(_id in path('drafts.**')) && (
-    (_type == "clickCollectOrder" && storeInfo.storeId == $storeId)
-    || (_type == "order" && (pickupStore._ref == $storeId || affiliateStore._ref == $storeId))
-  )
+  !(_id in path('drafts.**')) && _type == "order" && (pickupStore._ref == $storeId || affiliateStore._ref == $storeId)
 `;
 const ORDER_PROJECTION = `{
   _id,
   _type,
   orderNumber,
   pickupCode,
-  "customerInfo": select(
-    _type == "clickCollectOrder" => customerInfo,
-    _type == "order" => { "name": customerName, "email": email, "clerkUserId": clerkUserId, "phone": phone }
-  ),
-  "deliveryAddress": select(
-    _type == "order" => shippingAddress,
-    null
-  ),
-  "storeInfo": select(
-    _type == "clickCollectOrder" => storeInfo,
-    _type == "order" => { 
-      "storeId": coalesce(pickupStore._ref, affiliateStore._ref), 
-      "storeName": coalesce(pickupStore->name, affiliateStore->name), 
-      "storeAddress": coalesce(pickupStore->address.street, affiliateStore->address.street), 
-      "storePhone": coalesce(pickupStore->contact.phone, affiliateStore->contact.phone) 
-    }
-  ),
-  "items": select(
-    _type == "clickCollectOrder" => items[]{
-      _key,
-      "productName": coalesce(productName, product->name),
-      "productId": coalesce(productId, product->_id),
-      quantity,
-      price,
-      "customizations": customizations[]{
-        _key,
-        title,
-        "options": options[]{
-          _key,
-          label,
-          priceDelta
-        }
-      },
-      notes
+  "customerInfo": { "name": customerName, "email": email, "clerkUserId": clerkUserId, "phone": phone },
+  "deliveryAddress": shippingAddress,
+  "storeInfo": { 
+    "storeId": coalesce(pickupStore._ref, affiliateStore._ref), 
+    "storeName": coalesce(pickupStore->name, affiliateStore->name), 
+    "storeAddress": coalesce(pickupStore->address.street, affiliateStore->address.street), 
+    "storePhone": coalesce(pickupStore->contact.phone, affiliateStore->contact.phone) 
+  },
+  "items": products[]{ 
+    _key, 
+    "productName": product->name,
+    "productId": product->_id,
+    "quantity": quantity, 
+    "price": product->price,
+    "productOptionGroups": product->optionGroups[]{
+      title
     },
-    _type == "order" => products[]{ 
-      _key, 
-      "productName": product->name,
-      "productId": product->_id,
-      "quantity": quantity, 
-      "price": product->price,
-      "productOptionGroups": product->optionGroups[]{
-        title
-      },
-      "customizations": customizations[]{
+    "customizations": customizations[]{
+      _key,
+      title,
+      "options": options[]{
         _key,
-        title,
-        "options": options[]{
-          _key,
-          label,
-          priceDelta
-        }
-      },
-      notes
-    }
-  ),
-  "totalAmount": coalesce(totalAmount, totalPrice),
+        label,
+        priceDelta
+      }
+    },
+    notes
+  },
+  "totalAmount": totalPrice,
   paymentMethod,
   status,
   estimatedPickupDate,
   readyAt,
   pickedUpAt,
-  notes,
-  "createdAt": coalesce(createdAt, orderDate),
-  "deliveryMethod": coalesce(deliveryMethod, "click_collect"),
+  "notes": deliveryNotes,
+  "createdAt": orderDate,
+  "deliveryMethod": select(orderType == "pickup" => "click_collect", "home_delivery"),
   updatedAt
 }`;
-const ALL_ORDERS_QUERY = `*[${ORDERS_BASE_FILTER}] | order(coalesce(createdAt, orderDate) desc) ${ORDER_PROJECTION}`;
+const ALL_ORDERS_QUERY = `*[${ORDERS_BASE_FILTER}] | order(orderDate desc) ${ORDER_PROJECTION}`;
 const TODAY_ORDERS_QUERY = `*[
   ${ORDERS_BASE_FILTER}
-  && coalesce(createdAt, orderDate) >= $startAt
-  && coalesce(createdAt, orderDate) < $endAt
-] | order(coalesce(createdAt, orderDate) desc) ${ORDER_PROJECTION}`;
+  && orderDate >= $startAt
+  && orderDate < $endAt
+] | order(orderDate desc) ${ORDER_PROJECTION}`;
 const HISTORY_ORDERS_QUERY = `*[
   ${ORDERS_BASE_FILTER}
-  && coalesce(createdAt, orderDate) < $beforeAt
-] | order(coalesce(createdAt, orderDate) desc) [0...100] ${ORDER_PROJECTION}`;
-const ORDER_BY_NUMBER = `*[
-  (_type == "clickCollectOrder" && orderNumber == $orderNumber)
-  || (_type == "order" && orderNumber == $orderNumber)
-][0]`;
+  && orderDate < $beforeAt
+] | order(orderDate desc) [0...100] ${ORDER_PROJECTION}`;
+const ORDER_BY_NUMBER = `*[_type == "order" && orderNumber == $orderNumber][0]`;
 
 function isValidIsoDate(value: string | null) {
   if (!value) return false;
@@ -291,13 +257,8 @@ export async function PATCH(request: NextRequest) {
       userId,
     });
     
-    // Extraer storeId dependiendo del tipo de documento
-    let storeId = "";
-    if (order._type === "clickCollectOrder") {
-      storeId = order.storeInfo?.storeId;
-    } else if (order._type === "order") {
-      storeId = order.pickupStore?._ref || order.affiliateStore?._ref;
-    }
+    // Extraer storeId del documento order
+    const storeId = order.pickupStore?._ref || order.affiliateStore?._ref;
 
     const ownsStore = ownedStores?.some((s) => s._id === storeId);
     if (!ownsStore) {
@@ -311,10 +272,17 @@ export async function PATCH(request: NextRequest) {
     };
     if (status === "ready_for_pickup" && !order.readyAt) {
       updateData.readyAt = new Date().toISOString();
+      updateData.pickupStatus = "ready_for_pickup";
     } else if (status === "picked_up" && !order.pickedUpAt) {
       updateData.pickedUpAt = new Date().toISOString();
+      updateData.pickupStatus = "picked_up";
+    } else if (status === "completed" && !order.pickedUpAt) {
+      updateData.pickedUpAt = new Date().toISOString();
+      updateData.pickupStatus = "picked_up";
     } else if (status === "delivered" && !order.deliveredAt) {
       updateData.deliveredAt = new Date().toISOString();
+    } else if (status === "cancelled") {
+      updateData.pickupStatus = "expired";
     }
 
     const updated = await sanity.writeClient.patch(order._id).set(updateData).commit();

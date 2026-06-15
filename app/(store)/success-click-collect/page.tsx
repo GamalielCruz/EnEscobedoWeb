@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   CheckCircle,
@@ -8,16 +8,6 @@ import {
   Package,
   ShoppingBag,
 } from "lucide-react";
-
-interface OrderData {
-  orderNumber: string;
-  pickupCode?: string;
-  storeInfo?: {
-    storeName?: string;
-    storeAddress?: string;
-    storePhone?: string;
-  };
-}
 
 const BRAND_COLOR = "#eb1902";
 
@@ -27,48 +17,13 @@ export default function SuccessClickCollectPage() {
   const orderNumber = searchParams.get("orderNumber");
   const pickupCodeFromUrl = searchParams.get("pickupCode");
 
-  const [orderData, setOrderData] = useState<OrderData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
   useEffect(() => {
-    const fetchOrderData = async () => {
-      if (!orderNumber) {
-        router.push("/");
-        return;
-      }
-
-      try {
-        const response = await fetch(`/api/click-collect-orders?orderNumber=${orderNumber}`);
-
-        if (response.ok) {
-          const result = await response.json();
-          const order = result.success && result.data?.orders?.[0];
-
-          if (order) {
-            setOrderData({
-              orderNumber: order.orderNumber,
-              pickupCode: order.pickupCode,
-              storeInfo: order.storeInfo
-                ? {
-                    storeName: order.storeInfo.storeName,
-                    storeAddress: order.storeInfo.storeAddress,
-                    storePhone: order.storeInfo.storePhone,
-                  }
-                : undefined,
-            });
-          }
-        }
-      } catch (error) {
-        console.error("Error fetching order data:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchOrderData();
+    if (!orderNumber) {
+      router.push("/");
+    }
   }, [orderNumber, router]);
 
-  if (isLoading || !orderNumber) {
+  if (!orderNumber) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
         <div
@@ -79,9 +34,8 @@ export default function SuccessClickCollectPage() {
     );
   }
 
-  const displayOrderNumber = orderData?.orderNumber || orderNumber;
-  const pickupCode = orderData?.pickupCode || pickupCodeFromUrl || displayOrderNumber.slice(-6).toUpperCase();
-  const storeInfo = orderData?.storeInfo;
+  const displayOrderNumber = orderNumber;
+  const pickupCode = pickupCodeFromUrl || displayOrderNumber.slice(-6).toUpperCase();
 
   return (
     <div className="min-h-screen bg-gray-50 px-4 py-10 sm:px-6 lg:px-8">
@@ -147,16 +101,15 @@ export default function SuccessClickCollectPage() {
               </div>
             </div>
 
-            {storeInfo?.storeName && (
-              <div className="mt-3 flex items-start gap-3 rounded-md border border-gray-200 bg-white p-4">
-                <MapPin className="mt-0.5 h-5 w-5 text-gray-500" />
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{storeInfo.storeName}</p>
-                  {storeInfo.storeAddress && <p className="mt-1 text-sm text-gray-600">{storeInfo.storeAddress}</p>}
-                  {storeInfo.storePhone && <p className="mt-1 text-sm text-gray-600">{storeInfo.storePhone}</p>}
-                </div>
+            <div className="mt-3 flex items-start gap-3 rounded-md border border-gray-200 bg-white p-4">
+              <MapPin className="mt-0.5 h-5 w-5 text-gray-500" />
+              <div>
+                <p className="text-sm font-medium text-gray-900">Recogida en tienda</p>
+                <p className="mt-1 text-sm text-gray-600">
+                  Presenta este codigo en la sucursal seleccionada para retirar tu pedido.
+                </p>
               </div>
-            )}
+            </div>
           </div>
         </div>
 

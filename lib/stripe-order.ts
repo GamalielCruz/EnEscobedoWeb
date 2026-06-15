@@ -267,11 +267,13 @@ async function buildOrderData(
   };
 
   if (deliveryMethod) {
-    orderData.deliveryMethod = deliveryMethod;
+    const isPickup = deliveryMethod === "click_collect" || deliveryMethod === "pickup";
+    orderData.orderType = isPickup ? "pickup" : "delivery";
   }
 
   if (pickupStoreId) {
-    if (deliveryMethod === "click_collect") {
+    const isPickup = deliveryMethod === "click_collect" || deliveryMethod === "pickup";
+    if (isPickup) {
       orderData.pickupStore = {
         _type: "reference",
         _ref: pickupStoreId,
