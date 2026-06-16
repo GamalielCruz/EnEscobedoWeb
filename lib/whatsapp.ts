@@ -143,3 +143,19 @@ export async function sendOrderCancelled(
 ) {
   return sendWhatsAppTemplate(phone, "pedido_cancelado", [name, orderNumber]);
 }
+
+export async function sendDeliveryOffer(
+  phone: string,
+  orderNumber: string,
+  customerName: string,
+  address: string,
+  total: string
+) {
+  return sendWhatsAppTemplate(phone, "oferta_reparto", [
+    orderNumber,
+    customerName,
+    address,
+    total,
+    `Responde ACEPTO ${orderNumber} para tomar este pedido`,
+  ]);
+}

@@ -7,6 +7,7 @@ import {
   sendOrderDelivered,
   sendOrderOnTheWay,
 } from "@/lib/whatsapp";
+import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
 
 const ORDER_PROJECTION = `{
   _id,
@@ -228,6 +229,14 @@ export async function PATCH(request: NextRequest) {
     }
 
     const updated = await writeClient.patch(order._id).set(updateData).commit();
+
+    // Disparar oferta de reparto si es un delivery que pasa a processing
+    if (status === "processing" && order.orderType === "delivery") {
+      void dispatchDeliveryOffer(order._id).catch((e) =>
+        console.error("[admin/orders PATCH] dispatchDeliveryOffer error:", e)
+      );
+    }
+
     const shouldNotify = order.status !== status;
     const notify = shouldNotify ? getStatusNotification(status) : null;
 
