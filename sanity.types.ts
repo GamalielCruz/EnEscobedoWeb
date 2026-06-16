@@ -224,6 +224,13 @@ export type Order = {
   affiliateStore?: AffiliateStoreReference;
 };
 
+export type OrderReference = {
+  _ref: string;
+  _type: "reference";
+  _weak?: boolean;
+  [internalGroqTypeReferenceTo]?: "order";
+};
+
 export type Repartidor = {
   _id: string;
   _type: "repartidor";
@@ -234,6 +241,12 @@ export type Repartidor = {
   telefono?: string;
   tiendaAsignada?: AffiliateStoreReference;
   activo?: boolean;
+  disponible?: boolean;
+  disponibleDesde?: string;
+  ultimaActividad?: string;
+  pendienteConfirmacion?: boolean;
+  confirmacionEnviadaAt?: string;
+  ultimoPedidoOfertado?: OrderReference;
   notas?: string;
 };
 
@@ -685,6 +698,7 @@ export type AllSanitySchemaTypes =
   | RepartidorReference
   | AffiliateStoreReference
   | Order
+  | OrderReference
   | Repartidor
   | StoreUpdateRequest
   | CategoryReference

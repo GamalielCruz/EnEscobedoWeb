@@ -1,0 +1,16 @@
+name: Check Repartidores
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # Cada hora en punto
+  workflow_dispatch:       # Permite ejecutar manualmente desde GitHub
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping cron endpoint
+        run: |
+          curl --fail \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            https://en-escobedo-web.vercel.app/api/cron/check-repartidores

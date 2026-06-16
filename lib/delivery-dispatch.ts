@@ -19,11 +19,11 @@ const ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   "storeAddress": affiliateStore->address.street
 }`;
 
-const STORE_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && tiendaAsignada._ref == $storeId]{
+const STORE_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && disponible == true && tiendaAsignada._ref == $storeId]{
   _id, nombre, telefono
 }`;
 
-const COMMUNITY_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && !defined(tiendaAsignada)]{
+const COMMUNITY_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && disponible == true && !defined(tiendaAsignada)]{
   _id, nombre, telefono
 }`;
 
@@ -83,6 +83,22 @@ export async function dispatchDeliveryOffer(orderId: string): Promise<void> {
     const sent = results.filter((r) => r.status === "fulfilled").length;
     const failed = results.filter((r) => r.status === "rejected").length;
     console.log(`[delivery-dispatch] Orden ${order.orderNumber}: ${sent} enviados, ${failed} fallidos`);
+
+    // Actualizar ultimoPedidoOfertado y ultimaActividad en cada repartidor que recibió la oferta
+    const now = new Date().toISOString();
+    void Promise.allSettled(
+      drivers
+        .filter((_, i) => results[i].status === "fulfilled")
+        .map((driver) =>
+          backendClient
+            .patch(driver._id)
+            .set({
+              ultimoPedidoOfertado: { _type: "reference", _ref: orderId },
+              ultimaActividad: now,
+            })
+            .commit()
+        )
+    ).catch((e) => console.error("[delivery-dispatch] Error actualizando repartidores:", e));
 
     // Actualizar orden en Sanity
     const expiresAt = new Date(Date.now() + OFFER_TTL_MINUTES * 60 * 1000).toISOString();

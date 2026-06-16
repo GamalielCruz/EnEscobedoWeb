@@ -159,3 +159,9 @@ export async function sendDeliveryOffer(
     `Responde ACEPTO ${orderNumber} para tomar este pedido`,
   ]);
 }
+
+// Mensajes de texto libre del bot hacia repartidores (respuestas a comandos y recordatorios)
+// Se puede usar porque el repartidor habrá iniciado conversación con INICIO
+export async function sendBotMessage(phone: string, message: string) {
+  return sendWhatsAppMessage(phone, message);
+}
