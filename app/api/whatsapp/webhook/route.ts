@@ -111,10 +111,16 @@ export async function POST(req: NextRequest) {
         })
         .commit()
 
-      void sendBotMessage(
-        fromPhone,
-        `Bienvenido ${repartidor.nombre}, ahora estás disponible para recibir pedidos. Manda FIN cuando termines tu turno.`
-      ).catch(() => null)
+      try {
+        const result = await sendBotMessage(
+          fromPhone,
+          `Bienvenido ${repartidor.nombre}, ahora estás disponible para recibir pedidos. Manda FIN cuando termines tu turno.`
+        )
+        console.log('[webhook INICIO] Mensaje enviado:', JSON.stringify(result))
+      } catch (err) {
+        console.error('[webhook INICIO] Error enviando mensaje:', err)
+      }
+
       return NextResponse.json({ status: 'ok' })
     }
 
