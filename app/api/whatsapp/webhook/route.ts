@@ -29,11 +29,17 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
 // Busca repartidor probando teléfono normalizado y luego raw
 async function findRepartidor(fromPhone: string) {
   const normalizedPhone = normalizeWhatsAppPhone(fromPhone)
+  console.log(`[findRepartidor] fromPhone: ${fromPhone}, normalizedPhone: ${normalizedPhone}`)
+
   if (normalizedPhone) {
     const rep = await backendClient.fetch(REPARTIDOR_BY_PHONE_QUERY, { telefono: normalizedPhone })
+    console.log(`[findRepartidor] Búsqueda con normalizado: ${JSON.stringify(rep)}`)
     if (rep) return rep
   }
-  return backendClient.fetch(REPARTIDOR_BY_PHONE_QUERY, { telefono: fromPhone })
+
+  const rep2 = await backendClient.fetch(REPARTIDOR_BY_PHONE_QUERY, { telefono: fromPhone })
+  console.log(`[findRepartidor] Búsqueda con raw: ${JSON.stringify(rep2)}`)
+  return rep2
 }
 
 // Meta llama este GET para verificar el webhook
