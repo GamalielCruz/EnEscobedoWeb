@@ -22,9 +22,9 @@ export function getPublicUrl(): string {
   
   // Fallback based on environment
   if (process.env.NODE_ENV === "production") {
-    // In production, we should always have NEXT_PUBLIC_SITE_URL set
-    console.warn("NEXT_PUBLIC_SITE_URL not set in production, using fallback");
-    return "https://store-with-stripe-26hnr4wyd-ignacios-projects-8bce5533.vercel.app";
+    // In production, NEXT_PUBLIC_SITE_URL must be set in Vercel environment variables
+    console.warn("NEXT_PUBLIC_SITE_URL not set in production, using NEXT_PUBLIC_APP_URL fallback");
+    return process.env.NEXT_PUBLIC_APP_URL || "https://en-escobedo-web.vercel.app";
   }
   
   return "http://localhost:3000";

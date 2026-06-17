@@ -29,21 +29,13 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
 // Busca repartidor probando teléfono normalizado y luego raw
 async function findRepartidor(fromPhone: string) {
   const normalizedPhone = normalizeWhatsAppPhone(fromPhone)
-  console.log(`[findRepartidor] fromPhone: ${fromPhone}, normalizedPhone: ${normalizedPhone}`)
-
-  // Debug: listar todos los repartidores para verificar acceso y formato de teléfonos
-  const allRepartidores = await backendClient.fetch(`*[_type == "repartidor"]{_id, nombre, telefono}`)
-  console.log(`[findRepartidor] Todos los repartidores: ${JSON.stringify(allRepartidores)}`)
 
   if (normalizedPhone) {
     const rep = await backendClient.fetch(REPARTIDOR_BY_PHONE_QUERY, { telefono: normalizedPhone })
-    console.log(`[findRepartidor] Búsqueda con normalizado: ${JSON.stringify(rep)}`)
     if (rep) return rep
   }
 
-  const rep2 = await backendClient.fetch(REPARTIDOR_BY_PHONE_QUERY, { telefono: fromPhone })
-  console.log(`[findRepartidor] Búsqueda con raw: ${JSON.stringify(rep2)}`)
-  return rep2
+  return backendClient.fetch(REPARTIDOR_BY_PHONE_QUERY, { telefono: fromPhone })
 }
 
 // Meta llama este GET para verificar el webhook
@@ -112,11 +104,10 @@ export async function POST(req: NextRequest) {
         .commit()
 
       try {
-        const result = await sendBotMessage(
+        await sendBotMessage(
           fromPhone,
           `Bienvenido ${repartidor.nombre}, ahora estás disponible para recibir pedidos. Manda FIN cuando termines tu turno.`
         )
-        console.log('[webhook INICIO] Mensaje enviado:', JSON.stringify(result))
       } catch (err) {
         console.error('[webhook INICIO] Error enviando mensaje:', err)
       }
