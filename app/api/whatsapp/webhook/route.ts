@@ -31,6 +31,10 @@ async function findRepartidor(fromPhone: string) {
   const normalizedPhone = normalizeWhatsAppPhone(fromPhone)
   console.log(`[findRepartidor] fromPhone: ${fromPhone}, normalizedPhone: ${normalizedPhone}`)
 
+  // Debug: listar todos los repartidores para verificar acceso y formato de teléfonos
+  const allRepartidores = await backendClient.fetch(`*[_type == "repartidor"]{_id, nombre, telefono}`)
+  console.log(`[findRepartidor] Todos los repartidores: ${JSON.stringify(allRepartidores)}`)
+
   if (normalizedPhone) {
     const rep = await backendClient.fetch(REPARTIDOR_BY_PHONE_QUERY, { telefono: normalizedPhone })
     console.log(`[findRepartidor] Búsqueda con normalizado: ${JSON.stringify(rep)}`)
