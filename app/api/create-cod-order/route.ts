@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { writeClient } from "@/sanity/lib/client";
 import { sendOrderConfirmation } from "@/lib/whatsapp";
+import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
 import { randomUUID } from "crypto";
 
 export async function POST(request: NextRequest) {
@@ -91,6 +92,13 @@ export async function POST(request: NextRequest) {
         (whatsappError) => {
           console.error("[create-cod-order] WhatsApp error:", whatsappError);
         }
+      );
+    }
+
+    // Disparar oferta de reparto si es delivery
+    if (orderData.orderType === "delivery") {
+      void dispatchDeliveryOffer(result._id).catch((e) =>
+        console.error("[create-cod-order] dispatchDeliveryOffer error:", e)
       );
     }
 

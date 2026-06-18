@@ -2,6 +2,7 @@ import type { Metadata } from "@/actions/createCheckoutSession";
 import { getStripe } from "@/lib/stripe";
 import { extractSpeiDetails } from "@/lib/spei-reference-extractor";
 import { sendOrderConfirmation } from "@/lib/whatsapp";
+import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
 import { backendClient } from "@/sanity/lib/backendClient";
 import Stripe from "stripe";
 
@@ -327,6 +328,13 @@ export async function createOrderInSanity(
       (whatsappError) => {
         console.error("[stripe-order] WhatsApp error:", whatsappError);
       }
+    );
+  }
+
+  // Disparar oferta de reparto si es delivery
+  if (orderData.orderType === "delivery") {
+    void dispatchDeliveryOffer(order._id).catch((e) =>
+      console.error("[stripe-order] dispatchDeliveryOffer error:", e)
     );
   }
 
