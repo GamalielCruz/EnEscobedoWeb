@@ -1,6 +1,7 @@
 import { getStripe } from "@/lib/stripe";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { createOrderInSanity, markOrderPaidBySession } from "@/lib/stripe-order";
+import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
 import { headers } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
@@ -67,7 +68,13 @@ export async function POST(req: NextRequest) {
     if (session.payment_status === "paid") {
       try {
         const order = await createOrderInSanity(session, stripe);
-        console.log("Order created in sanity: ", order);
+        console.log("Order created in sanity: ", order._id);
+
+        if ((order as Record<string, unknown>).orderType === "delivery") {
+          void dispatchDeliveryOffer(order._id).catch((e) =>
+            console.error("[webhook] dispatchDeliveryOffer error:", e)
+          );
+        }
       } catch (err) {
         console.log("Error creating order in sanity: ", err);
         return NextResponse.json(
@@ -80,7 +87,7 @@ export async function POST(req: NextRequest) {
       // For OXXO and bank transfers, create order with pending status
       try {
         const order = await createOrderInSanity(session, stripe);
-        console.log("Pending order created in sanity: ", order);
+        console.log("Pending order created in sanity: ", order._id);
       } catch (err) {
         console.log("Error creating pending order in sanity: ", err);
         return NextResponse.json(
