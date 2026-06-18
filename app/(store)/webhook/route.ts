@@ -70,10 +70,19 @@ export async function POST(req: NextRequest) {
         const order = await createOrderInSanity(session, stripe);
         console.log("Order created in sanity: ", order._id);
 
-        if ((order as Record<string, unknown>).orderType === "delivery") {
-          void dispatchDeliveryOffer(order._id).catch((e) =>
+        // Determinar orderType desde metadata (más confiable que el retorno)
+        const deliveryMethod = session.metadata?.deliveryMethod;
+        const isDelivery = deliveryMethod && deliveryMethod !== "click_collect" && deliveryMethod !== "pickup";
+        console.log("[webhook] deliveryMethod:", deliveryMethod, "| isDelivery:", isDelivery);
+
+        if (isDelivery) {
+          console.log("[webhook] Iniciando dispatchDeliveryOffer para:", order._id);
+          await dispatchDeliveryOffer(order._id).catch((e) =>
             console.error("[webhook] dispatchDeliveryOffer error:", e)
           );
+          console.log("[webhook] dispatchDeliveryOffer completado");
+        } else {
+          console.log("[webhook] No es delivery, saltando dispatch");
         }
       } catch (err) {
         console.log("Error creating order in sanity: ", err);
