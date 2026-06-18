@@ -79,6 +79,10 @@ function BasketPage() {
   const [pickupError, setPickupError] = useState("");
   const [cardError, setCardError] = useState("");
   const [clientSecret, setClientSecret] = useState<string | null>(null);
+  const [showCardPhoneForm, setShowCardPhoneForm] = useState(false);
+  const [cardPhone, setCardPhone] = useState("");
+  const [cardWhatsappConsent, setCardWhatsappConsent] = useState(false);
+  const [cardPhoneError, setCardPhoneError] = useState("");
   const checkoutRef = useRef<any>(null);
   const stripeContainerRef = useRef<HTMLDivElement>(null);
 
@@ -174,6 +178,14 @@ function BasketPage() {
     
     checkStoreSaved();
     
+    // Precargar teléfono guardado de compras anteriores
+    const savedPhone = localStorage.getItem("customerPhone");
+    if (savedPhone) {
+      setCardPhone(savedPhone);
+      setCashOnDeliveryPhone(savedPhone);
+      setPickupPhone(savedPhone);
+    }
+
     // Escuchar cuando se seleccione una tienda
     const handleStoreSelected = () => {
       checkStoreSaved();
@@ -332,8 +344,25 @@ function BasketPage() {
     );
   }
 
+  const handleCardPhoneStart = () => {
+    setCardPhoneError("");
+    setShowCardPhoneForm(true);
+  };
+
   const handleCheckout = async () => {
     if (!isSignedIn) return;
+
+    // Validar teléfono y consentimiento
+    const digitsOnly = cardPhone.replace(/\D/g, "");
+    if (digitsOnly.length < 10) {
+      setCardPhoneError("Ingresa un número de teléfono válido de 10 dígitos");
+      return;
+    }
+    if (!cardWhatsappConsent) {
+      setCardPhoneError("Debes aceptar recibir notificaciones por WhatsApp para continuar");
+      return;
+    }
+
     setIsLoading(true);
     setCardError("");
 
@@ -352,6 +381,8 @@ function BasketPage() {
         customerName: user?.fullName ?? "Unknown",
         customerEmail: user?.emailAddresses[0].emailAddress ?? "Unknown",
         clerkUserId: user!.id,
+        phone: `52${cardPhone.replace(/\D/g, "").slice(-10)}`,
+        whatsappConsent: "true",
       };
 
       // Add delivery/pickup info if available
@@ -388,6 +419,8 @@ function BasketPage() {
       }
 
       if (data?.clientSecret) {
+        // Guardar teléfono para futuras compras
+        localStorage.setItem("customerPhone", cardPhone.replace(/\D/g, "").slice(-10));
         setClientSecret(data.clientSecret);
       } else {
         throw new Error("No se recibió clientSecret de checkout");
@@ -724,6 +757,7 @@ function BasketPage() {
                           setSelectedStore(null);
                           setCustomerAddress(null);
                           setClientSecret(null);
+                          setShowCardPhoneForm(false);
                         }}
                         className={`p-3 rounded-lg border-2 transition-all ${
                           serviceType === 'delivery'
@@ -743,6 +777,7 @@ function BasketPage() {
                           setSelectedStore(null);
                           setCustomerAddress(null);
                           setClientSecret(null);
+                          setShowCardPhoneForm(false);
                         }}
                         className={`p-3 rounded-lg border-2 transition-all ${
                           serviceType === 'pickup'
@@ -945,7 +980,10 @@ function BasketPage() {
                           <div ref={stripeContainerRef} id="stripe-checkout-container" className="mt-4 border-2 border-rose-200 rounded-xl p-4 bg-white shadow-inner min-h-[350px]"></div>
 
                           <button
-                            onClick={() => setClientSecret(null)}
+                            onClick={() => {
+                              setClientSecret(null);
+                              setShowCardPhoneForm(false);
+                            }}
                             className="w-full text-center text-sm font-semibold text-[#eb1902] hover:text-rose-800 underline pt-2"
                           >
                             Cancelar y volver a métodos de pago
@@ -953,14 +991,76 @@ function BasketPage() {
                         </div>
                       ) : (
                         <div className="space-y-2">
-                          <button
-                            onClick={handleCheckout}
-                            disabled={isLoading}
-                            className="w-full bg-[#eb1902] text-white px-4 py-3 rounded-lg hover:bg-[#c11300] disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors font-medium"
-                          >
-                            <CreditCard className="w-5 h-5" />
-                            {isLoading ? "Procesando..." : "Pagar con tarjeta"}
-                          </button>
+                          {showCardPhoneForm ? (
+                            <div className="space-y-3 rounded-lg border-2 border-[#eb1902] bg-white p-3">
+                              <p className="text-sm font-semibold text-gray-800">
+                                📱 Teléfono para notificaciones de WhatsApp
+                              </p>
+                              <div className="flex items-center gap-2 rounded-lg border-2 border-[#eb1902] bg-white px-3 py-2 focus-within:ring-2 focus-within:ring-[#eb1902]/30">
+                                <span className="text-sm font-medium text-gray-700 whitespace-nowrap select-none">🇲🇽 +52</span>
+                                <input
+                                  type="tel"
+                                  inputMode="numeric"
+                                  autoComplete="tel-national"
+                                  maxLength={10}
+                                  placeholder="4421234567"
+                                  value={cardPhone}
+                                  onChange={(e) => {
+                                    setCardPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
+                                    if (cardPhoneError) setCardPhoneError("");
+                                  }}
+                                  disabled={isLoading}
+                                  className="flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:opacity-50"
+                                />
+                                {cardPhone.replace(/\D/g, "").length === 10 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setCardPhone("");
+                                      setCardPhoneError("");
+                                    }}
+                                    className="text-xs text-gray-400 hover:text-gray-600 underline"
+                                  >
+                                    Cambiar
+                                  </button>
+                                )}
+                              </div>
+                              <label className="flex items-start gap-2 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={cardWhatsappConsent}
+                                  onChange={(e) => {
+                                    setCardWhatsappConsent(e.target.checked);
+                                    if (cardPhoneError) setCardPhoneError("");
+                                  }}
+                                  className="mt-0.5 accent-[#eb1902]"
+                                />
+                                <span className="text-xs text-gray-600 leading-relaxed">
+                                  Acepto recibir notificaciones de mi pedido por WhatsApp
+                                </span>
+                              </label>
+                              {cardPhoneError && (
+                                <p className="text-xs text-[#eb1902] font-medium">{cardPhoneError}</p>
+                              )}
+                              <button
+                                onClick={handleCheckout}
+                                disabled={isLoading}
+                                className="w-full bg-[#eb1902] text-white px-4 py-3 rounded-lg hover:bg-[#c11300] disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors font-medium"
+                              >
+                                <CreditCard className="w-5 h-5" />
+                                {isLoading ? "Procesando..." : "Continuar al pago"}
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={handleCardPhoneStart}
+                              disabled={isLoading}
+                              className="w-full bg-[#eb1902] text-white px-4 py-3 rounded-lg hover:bg-[#c11300] disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors font-medium"
+                            >
+                              <CreditCard className="w-5 h-5" />
+                              {isLoading ? "Procesando..." : "Pagar con tarjeta"}
+                            </button>
+                          )}
 
                           {cardError && (
                             <p className="text-sm text-[#eb1902] font-medium text-center bg-rose-50 border border-rose-200 rounded-lg p-2.5 mt-2">

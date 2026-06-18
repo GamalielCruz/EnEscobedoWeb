@@ -156,7 +156,6 @@ export async function sendDeliveryOffer(
     customerName,
     address,
     total,
-    `Responde ACEPTO ${orderNumber} para tomar este pedido`,
   ]);
 }
 

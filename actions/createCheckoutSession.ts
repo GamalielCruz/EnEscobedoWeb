@@ -10,11 +10,13 @@ export type Metadata = {
   customerName: string;
   customerEmail: string;
   clerkUserId: string;
+  phone?: string;
+  whatsappConsent?: string;
   deliveryMethod?: string;
   pickupStoreId?: string;
   pickupStoreName?: string;
   customerAddress?: string;
-  shippingCost?: number; // Agregar costo de envío
+  shippingCost?: number;
 };
 
 export type GroupedBasketItem = {
