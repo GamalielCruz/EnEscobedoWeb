@@ -70,7 +70,10 @@ export async function dispatchDeliveryOffer(orderId: string): Promise<void> {
     console.log(`[delivery-dispatch] ✅ ${drivers.length} repartidor(es) disponibles: ${drivers.map((d) => d.nombre).join(", ")}`);
 
     const address = order.shippingAddress
-      ? `${order.shippingAddress.street ?? ""}, ${order.shippingAddress.city ?? ""}`.trim().replace(/^,\s*|,\s*$/, "")
+      ? [order.shippingAddress.line1, order.shippingAddress.street, order.shippingAddress.city]
+          .filter(Boolean)
+          .join(", ")
+          .trim() || "Ver pedido"
       : "Ver pedido";
 
     const total = `$${(order.totalPrice ?? 0).toFixed(2)} MXN`;

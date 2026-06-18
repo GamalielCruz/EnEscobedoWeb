@@ -44,6 +44,10 @@ async function sendWhatsAppTemplate(
   }
 
   const { endpoint, accessToken } = getWhatsAppEndpoint();
+
+  // Meta limita parámetros de texto a 30 caracteres
+  const safeVariables = variables.map((v) => String(v).slice(0, 30));
+
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -60,7 +64,7 @@ async function sendWhatsAppTemplate(
         components: [
           {
             type: "body",
-            parameters: variables.map((text) => ({
+            parameters: safeVariables.map((text) => ({
               type: "text",
               text,
             })),
