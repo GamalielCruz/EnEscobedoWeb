@@ -35,7 +35,8 @@ export function normalizeWhatsAppPhone(phone?: string | null) {
 async function sendWhatsAppTemplate(
   to: string,
   templateName: string,
-  variables: string[]
+  variables: string[],
+  languageCode: string = "es"
 ) {
   const normalizedPhone = normalizeWhatsAppPhone(to);
 
@@ -60,7 +61,7 @@ async function sendWhatsAppTemplate(
       type: "template",
       template: {
         name: templateName,
-        language: { code: "es" },
+        language: { code: languageCode },
         components: [
           {
             type: "body",
@@ -160,7 +161,7 @@ export async function sendDeliveryOffer(
     customerName,
     address,
     total,
-  ]);
+  ], "es_MX");
 }
 
 // Mensajes de texto libre del bot hacia repartidores (respuestas a comandos y recordatorios)
