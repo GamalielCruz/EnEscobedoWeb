@@ -252,7 +252,7 @@ async function buildOrderData(
     stripeCustomerId: customer,
     clerkUserId,
     email: customerEmail,
-    phone: customer_details?.phone || undefined,
+    phone: (metadata as unknown as Metadata).phone || customer_details?.phone || undefined,
     paymentMethod,
     bankTransferReference,
     bankTransferClabe,

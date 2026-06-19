@@ -186,7 +186,7 @@ export async function createCheckoutSession(
       allow_promotion_codes: true,
       payment_method_types: ["card"], // Solo tarjeta
       phone_number_collection: {
-        enabled: true,
+        enabled: false,
       },
       ui_mode: "embedded",
       return_url: return_url,
