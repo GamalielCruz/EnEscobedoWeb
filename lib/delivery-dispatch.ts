@@ -69,6 +69,16 @@ export async function dispatchDeliveryOffer(orderId: string): Promise<void> {
 
     console.log(`[delivery-dispatch] ✅ ${drivers.length} repartidor(es) disponibles: ${drivers.map((d) => d.nombre).join(", ")}`);
 
+    // Deduplicar por teléfono antes de enviar
+    const uniqueDrivers = drivers.filter(
+      (driver, index, self) =>
+        index === self.findIndex((d) => d.telefono === driver.telefono)
+    );
+
+    if (uniqueDrivers.length < drivers.length) {
+      console.log(`[delivery-dispatch] Deduplicados: ${drivers.length} → ${uniqueDrivers.length} repartidor(es) únicos`);
+    }
+
     const address = order.shippingAddress
       ? [order.shippingAddress.line1, order.shippingAddress.street, order.shippingAddress.city]
           .filter(Boolean)
@@ -78,11 +88,11 @@ export async function dispatchDeliveryOffer(orderId: string): Promise<void> {
 
     const total = `$${(order.totalPrice ?? 0).toFixed(2)} MXN`;
 
-    console.log(`[delivery-dispatch] Enviando oferta a ${drivers.length} repartidor(es) | dirección: ${address} | total: ${total}`);
+    console.log(`[delivery-dispatch] Enviando oferta a ${uniqueDrivers.length} repartidor(es) | dirección: ${address} | total: ${total}`);
 
-    // Enviar oferta a todos los repartidores simultáneamente
+    // Enviar oferta a todos los repartidores únicos simultáneamente
     const results = await Promise.allSettled(
-      drivers.map((driver) =>
+      uniqueDrivers.map((driver) =>
         sendDeliveryOffer(
           driver.telefono,
           order.orderNumber,
@@ -106,7 +116,7 @@ export async function dispatchDeliveryOffer(orderId: string): Promise<void> {
     // Actualizar ultimoPedidoOfertado y ultimaActividad en cada repartidor que recibió la oferta
     const now = new Date().toISOString();
     void Promise.allSettled(
-      drivers
+      uniqueDrivers
         .filter((_, i) => results[i].status === "fulfilled")
         .map((driver) =>
           backendClient

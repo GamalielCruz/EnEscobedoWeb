@@ -130,7 +130,7 @@ export async function sendOrderOnTheWay(
   name: string,
   orderNumber: string
 ) {
-  return sendWhatsAppTemplate(phone, "pedido_en_camino", [name, orderNumber]);
+  return sendWhatsAppTemplate(phone, "pedido_en_camino", [name, orderNumber], "es_MX");
 }
 
 export async function sendOrderDelivered(
@@ -138,7 +138,7 @@ export async function sendOrderDelivered(
   name: string,
   orderNumber: string
 ) {
-  return sendWhatsAppTemplate(phone, "pedido_entregado", [name, orderNumber]);
+  return sendWhatsAppTemplate(phone, "pedido_entregado", [name, orderNumber], "es_MX");
 }
 
 export async function sendOrderCancelled(
@@ -146,7 +146,7 @@ export async function sendOrderCancelled(
   name: string,
   orderNumber: string
 ) {
-  return sendWhatsAppTemplate(phone, "pedido_cancelado", [name, orderNumber]);
+  return sendWhatsAppTemplate(phone, "pedido_cancelado", [name, orderNumber], "es_MX");
 }
 
 export async function sendDeliveryOffer(
