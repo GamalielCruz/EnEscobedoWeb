@@ -83,8 +83,30 @@ function BasketPage() {
   const [cardPhone, setCardPhone] = useState("");
   const [cardWhatsappConsent, setCardWhatsappConsent] = useState(false);
   const [cardPhoneError, setCardPhoneError] = useState("");
+  const [editingPhone, setEditingPhone] = useState(false);
   const checkoutRef = useRef<any>(null);
   const stripeContainerRef = useRef<HTMLDivElement>(null);
+
+  // Derive persisted phone & consent from Clerk publicMetadata (cross-device)
+  const clerkPhone = (user?.publicMetadata?.phone as string) ?? "";
+  const clerkConsent = (user?.publicMetadata?.whatsappConsent as boolean) ?? false;
+  const hasPhoneAndConsent = clerkPhone.length === 10 && clerkConsent;
+
+  // Helper: save phone + consent to Clerk publicMetadata AND localStorage
+  const savePhoneToClerk = async (phone: string, consent: boolean) => {
+    const digits = phone.replace(/\D/g, "").slice(-10);
+    // Optimistic localStorage fallback
+    localStorage.setItem("customerPhone", digits);
+    try {
+      await fetch("/api/user/save-phone", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: digits, whatsappConsent: consent }),
+      });
+    } catch (e) {
+      console.warn("[savePhoneToClerk] Could not persist to Clerk:", e);
+    }
+  };
 
   // Cargar Stripe y montar Checkout embebido en la misma página
   useEffect(() => {
@@ -178,12 +200,13 @@ function BasketPage() {
     
     checkStoreSaved();
     
-    // Precargar teléfono guardado de compras anteriores
+    // Precargar teléfono guardado: Clerk tiene prioridad, localStorage como fallback
     const savedPhone = localStorage.getItem("customerPhone");
-    if (savedPhone) {
-      setCardPhone(savedPhone);
-      setCashOnDeliveryPhone(savedPhone);
-      setPickupPhone(savedPhone);
+    const initialPhone = savedPhone || "";
+    if (initialPhone) {
+      setCardPhone(initialPhone);
+      setCashOnDeliveryPhone(initialPhone);
+      setPickupPhone(initialPhone);
     }
 
     // Escuchar cuando se seleccione una tienda
@@ -347,18 +370,23 @@ function BasketPage() {
   const handleCardPhoneStart = () => {
     setCardPhoneError("");
     setShowCardPhoneForm(true);
+    setEditingPhone(false);
   };
 
-  const handleCheckout = async () => {
+  const handleCheckout = async (overridePhone?: string) => {
     if (!isSignedIn) return;
 
-    // Validar teléfono y consentimiento
-    const digitsOnly = cardPhone.replace(/\D/g, "");
+    // Determine the phone to use: override > form input > saved Clerk phone
+    const phoneToUse = overridePhone ?? (hasPhoneAndConsent && !editingPhone ? clerkPhone : cardPhone);
+    const digitsOnly = phoneToUse.replace(/\D/g, "");
+
     if (digitsOnly.length < 10) {
       setCardPhoneError("Ingresa un número de teléfono válido de 10 dígitos");
       return;
     }
-    if (!cardWhatsappConsent) {
+
+    // If editing, require explicit consent checkbox
+    if (editingPhone && !cardWhatsappConsent) {
       setCardPhoneError("Debes aceptar recibir notificaciones por WhatsApp para continuar");
       return;
     }
@@ -381,7 +409,7 @@ function BasketPage() {
         customerName: user?.fullName ?? "Unknown",
         customerEmail: user?.emailAddresses[0].emailAddress ?? "Unknown",
         clerkUserId: user!.id,
-        phone: `52${cardPhone.replace(/\D/g, "").slice(-10)}`,
+        phone: `52${digitsOnly.slice(-10)}`,
         whatsappConsent: "true",
       };
 
@@ -403,7 +431,6 @@ function BasketPage() {
         metadata.shippingCost = 0;
       }
 
-
       const response = await fetch("/api/checkout-session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -419,8 +446,10 @@ function BasketPage() {
       }
 
       if (data?.clientSecret) {
-        // Guardar teléfono para futuras compras
-        localStorage.setItem("customerPhone", cardPhone.replace(/\D/g, "").slice(-10));
+        // Persist phone + consent to Clerk (cross-device) & localStorage (offline fallback)
+        await savePhoneToClerk(digitsOnly, true);
+        setEditingPhone(false);
+        setShowCardPhoneForm(false);
         setClientSecret(data.clientSecret);
       } else {
         throw new Error("No se recibió clientSecret de checkout");
@@ -435,7 +464,7 @@ function BasketPage() {
 
   const handleCashOnDeliveryStart = () => {
     setCodError("");
-    setCashOnDeliveryPhone((prev) => prev || user?.primaryPhoneNumber?.phoneNumber || "");
+    setCashOnDeliveryPhone((prev) => prev || clerkPhone || user?.primaryPhoneNumber?.phoneNumber || "");
     setShowCodPhoneForm(true);
   };
 
@@ -520,7 +549,7 @@ function BasketPage() {
             customerName: user.fullName || user.firstName || "Cliente",
             customerEmail: user.emailAddresses[0]?.emailAddress || "",
             clerkUserId: user.id,
-            phone: cashOnDeliveryPhone.trim(),
+            phone: (hasPhoneAndConsent && !showCodPhoneForm ? clerkPhone : cashOnDeliveryPhone).trim(),
             shippingAddress: normalizedAddress,
             storeInfo: {
               storeId: selectedStoreId,
@@ -541,6 +570,9 @@ function BasketPage() {
         throw new Error(result.error || "No se pudo procesar la orden.");
       }
 
+      // Persist phone to Clerk for cross-device use
+      const codPhone = hasPhoneAndConsent && !showCodPhoneForm ? clerkPhone : cashOnDeliveryPhone.trim();
+      await savePhoneToClerk(codPhone, true);
       clearBasket();
       window.location.href = `/success-cod?orderNumber=${orderNumber}`;
     } catch (error: any) {
@@ -553,7 +585,7 @@ function BasketPage() {
 
   const handlePickupStart = () => {
     setPickupError("");
-    setPickupPhone((prev) => prev || user?.primaryPhoneNumber?.phoneNumber || "");
+    setPickupPhone((prev) => prev || clerkPhone || user?.primaryPhoneNumber?.phoneNumber || "");
     setShowPickupPhoneForm(true);
   };
 
@@ -578,7 +610,8 @@ function BasketPage() {
       return;
     }
 
-    if (!pickupPhone.trim()) {
+    const resolvedPickupPhone = hasPhoneAndConsent && !showPickupPhoneForm ? clerkPhone : pickupPhone.trim();
+    if (!resolvedPickupPhone) {
       setPickupError("Ingresa tu número de teléfono");
       return;
     }
@@ -617,7 +650,7 @@ function BasketPage() {
           customerName: user.fullName || user.firstName || "Cliente",
           customerEmail: user.emailAddresses[0]?.emailAddress || "",
           clerkUserId: user.id,
-          phone: pickupPhone.trim(),
+          phone: resolvedPickupPhone,
           storeId: selectedStoreId,
           storeName: selectedStoreName,
           storeAddress: selectedStoreAddress,
@@ -635,6 +668,8 @@ function BasketPage() {
         throw new Error(result.error || "No se pudo procesar la orden.");
       }
 
+      // Persist phone to Clerk for cross-device use
+      await savePhoneToClerk(resolvedPickupPhone, true);
       clearBasket();
       window.location.href = `/success-click-collect?orderNumber=${orderNumber}`;
     } catch (error: any) {
@@ -990,42 +1025,88 @@ function BasketPage() {
                           </button>
                         </div>
                       ) : (
-                        <div className="space-y-2">
-                          {showCardPhoneForm ? (
-                            <div className="space-y-3 rounded-lg border-2 border-[#eb1902] bg-white p-3">
-                              <p className="text-sm font-semibold text-gray-800">
-                                📱 Teléfono para notificaciones de WhatsApp
-                              </p>
-                              <div className="flex items-center gap-2 rounded-lg border-2 border-[#eb1902] bg-white px-3 py-2 focus-within:ring-2 focus-within:ring-[#eb1902]/30">
-                                <span className="text-sm font-medium text-gray-700 whitespace-nowrap select-none">🇲🇽 +52</span>
+                        <div className="space-y-3">
+
+                          {/* ── TARJETA ── */}
+                          {hasPhoneAndConsent && !editingPhone ? (
+                            /* Usuario ya tiene teléfono guardado: mostrar pastilla y proceder directo */
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                                <div className="flex items-center gap-3">
+                                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-lg">
+                                    📱
+                                  </div>
+                                  <div>
+                                    <p className="text-xs font-medium text-emerald-700">WhatsApp confirmado</p>
+                                    <p className="text-sm font-bold text-emerald-900 tracking-wide">
+                                      +52 {clerkPhone.slice(0, 3)} {clerkPhone.slice(3, 6)} {clerkPhone.slice(6)}
+                                    </p>
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingPhone(true);
+                                    setCardPhone(clerkPhone);
+                                    setCardWhatsappConsent(false);
+                                    setCardPhoneError("");
+                                  }}
+                                  className="text-xs font-semibold text-emerald-600 hover:text-emerald-800 underline underline-offset-2 transition-colors"
+                                >
+                                  Cambiar
+                                </button>
+                              </div>
+                              {cardPhoneError && (
+                                <p className="text-xs text-[#eb1902] font-medium">{cardPhoneError}</p>
+                              )}
+                              <button
+                                onClick={() => handleCheckout(clerkPhone)}
+                                disabled={isLoading}
+                                className="w-full bg-[#eb1902] text-white px-4 py-3.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
+                              >
+                                <CreditCard className="w-5 h-5" />
+                                {isLoading ? "Procesando..." : "Pagar con tarjeta"}
+                              </button>
+                            </div>
+                          ) : showCardPhoneForm || editingPhone ? (
+                            /* Formulario de captura/edición de teléfono */
+                            <div className="space-y-3 rounded-xl border-2 border-[#eb1902] bg-white p-4 shadow-sm">
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-semibold text-gray-800">
+                                  {editingPhone ? "Actualiza tu número de WhatsApp" : "Número para notificaciones de WhatsApp"}
+                                </p>
+                              </div>
+
+                              <div className="flex items-center gap-2 rounded-lg border-2 border-gray-200 bg-gray-50 px-3 py-2.5 focus-within:border-[#eb1902] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#eb1902]/20 transition-all">
+                                <span className="text-sm font-semibold text-gray-600 whitespace-nowrap select-none">🇲🇽 +52</span>
+                                <div className="w-px h-4 bg-gray-300 mx-1" />
                                 <input
                                   type="tel"
                                   inputMode="numeric"
                                   autoComplete="tel-national"
                                   maxLength={10}
-                                  placeholder="4421234567"
+                                  placeholder="1234567890"
                                   value={cardPhone}
                                   onChange={(e) => {
                                     setCardPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
                                     if (cardPhoneError) setCardPhoneError("");
                                   }}
                                   disabled={isLoading}
-                                  className="flex-1 bg-transparent text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:opacity-50"
+                                  className="flex-1 bg-transparent text-sm font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:opacity-50"
                                 />
-                                {cardPhone.replace(/\D/g, "").length === 10 && (
+                                {cardPhone.replace(/\D/g, "").length > 0 && (
                                   <button
                                     type="button"
-                                    onClick={() => {
-                                      setCardPhone("");
-                                      setCardPhoneError("");
-                                    }}
-                                    className="text-xs text-gray-400 hover:text-gray-600 underline"
+                                    onClick={() => { setCardPhone(""); setCardPhoneError(""); }}
+                                    className="ml-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                    aria-label="Limpiar"
                                   >
-                                    Cambiar
+                                    <X className="w-4 h-4" />
                                   </button>
                                 )}
                               </div>
-                              <label className="flex items-start gap-2 cursor-pointer">
+
+                              <label className="flex items-start gap-2.5 cursor-pointer group">
                                 <input
                                   type="checkbox"
                                   checked={cardWhatsappConsent}
@@ -1033,29 +1114,46 @@ function BasketPage() {
                                     setCardWhatsappConsent(e.target.checked);
                                     if (cardPhoneError) setCardPhoneError("");
                                   }}
-                                  className="mt-0.5 accent-[#eb1902]"
+                                  className="mt-0.5 h-4 w-4 accent-[#eb1902] cursor-pointer"
                                 />
-                                <span className="text-xs text-gray-600 leading-relaxed">
-                                  Acepto recibir notificaciones de mi pedido por WhatsApp
+                                <span className="text-xs text-gray-600 leading-relaxed group-hover:text-gray-800 transition-colors">
+                                  Acepto recibir notificaciones de mi pedido por WhatsApp al número indicado
                                 </span>
                               </label>
+
                               {cardPhoneError && (
-                                <p className="text-xs text-[#eb1902] font-medium">{cardPhoneError}</p>
+                                <div className="flex items-center gap-1.5 text-xs text-[#eb1902] font-medium">
+                                  <span>⚠</span> {cardPhoneError}
+                                </div>
                               )}
-                              <button
-                                onClick={handleCheckout}
-                                disabled={isLoading}
-                                className="w-full bg-[#eb1902] text-white px-4 py-3 rounded-lg hover:bg-[#c11300] disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors font-medium"
-                              >
-                                <CreditCard className="w-5 h-5" />
-                                {isLoading ? "Procesando..." : "Continuar al pago"}
-                              </button>
+
+                              <div className="flex gap-2 pt-1">
+                                {editingPhone && (
+                                  <button
+                                    type="button"
+                                    onClick={() => { setEditingPhone(false); setCardPhoneError(""); }}
+                                    disabled={isLoading}
+                                    className="flex-1 border-2 border-gray-200 text-gray-600 px-4 py-2.5 rounded-xl hover:border-gray-300 hover:text-gray-800 transition-colors font-medium text-sm"
+                                  >
+                                    Cancelar
+                                  </button>
+                                )}
+                                <button
+                                  onClick={() => handleCheckout()}
+                                  disabled={isLoading}
+                                  className="flex-1 bg-[#eb1902] text-white px-4 py-2.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-colors font-semibold text-sm shadow-sm"
+                                >
+                                  <CreditCard className="w-4 h-4" />
+                                  {isLoading ? "Procesando..." : "Continuar al pago"}
+                                </button>
+                              </div>
                             </div>
                           ) : (
+                            /* Botón inicial para pagar con tarjeta */
                             <button
                               onClick={handleCardPhoneStart}
                               disabled={isLoading}
-                              className="w-full bg-[#eb1902] text-white px-4 py-3 rounded-lg hover:bg-[#c11300] disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors font-medium"
+                              className="w-full bg-[#eb1902] text-white px-4 py-3.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
                             >
                               <CreditCard className="w-5 h-5" />
                               {isLoading ? "Procesando..." : "Pagar con tarjeta"}
@@ -1063,105 +1161,208 @@ function BasketPage() {
                           )}
 
                           {cardError && (
-                            <p className="text-sm text-[#eb1902] font-medium text-center bg-rose-50 border border-rose-200 rounded-lg p-2.5 mt-2">
-                              {cardError}
-                            </p>
+                            <div className="flex items-start gap-2 text-sm text-[#eb1902] font-medium bg-rose-50 border border-rose-200 rounded-xl p-3">
+                              <span>{cardError}</span>
+                            </div>
                           )}
 
+                          {/* ── PAGO AL RECIBIR (delivery) ── */}
                           {serviceType === 'delivery' && (
                             <div className="space-y-2">
-                              <div
-                                className={`overflow-hidden transition-all duration-300 ease-out ${
-                                  showCodPhoneForm ? 'max-h-48 opacity-100 translate-y-0' : 'max-h-0 opacity-0 -translate-y-1'
-                                }`}
-                              >
-                                <div className="space-y-2 rounded-lg border-2 border-[#eb1902] bg-white p-3">
-                                  <input
-                                    type="tel"
-                                    inputMode="tel"
-                                    autoComplete="tel"
-                                    placeholder="Ingresa tu número de teléfono"
-                                    value={cashOnDeliveryPhone}
-                                    onChange={(e) => {
-                                      setCashOnDeliveryPhone(e.target.value);
-                                      if (codError) setCodError("");
-                                    }}
-                                    disabled={isLoading}
-                                    className="w-full rounded-lg border-2 border-[#eb1902] px-4 py-3 text-[#eb1902] placeholder:text-[#eb1902]/60 focus:outline-none focus:ring-0 disabled:bg-gray-100"
-                                  />
+                              {hasPhoneAndConsent && !showCodPhoneForm ? (
+                                /* Ya tiene teléfono guardado: pastilla + botón directo */
+                                <div className="space-y-2">
+                                  <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5">
+                                    <div className="flex items-center gap-2 text-xs text-gray-600">
+                                      <span className="font-medium">
+                                        +52 {clerkPhone.slice(0, 3)} {clerkPhone.slice(3, 6)} {clerkPhone.slice(6)}
+                                      </span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={handleCashOnDeliveryStart}
+                                      className="text-xs font-semibold text-gray-500 hover:text-gray-800 underline underline-offset-2 transition-colors"
+                                    >
+                                      Cambiar
+                                    </button>
+                                  </div>
                                   <button
                                     onClick={handleCashOnDeliverySubmit}
                                     disabled={isLoading}
-                                    className="w-full bg-white text-[#eb1902] border-2 border-[#eb1902] px-4 py-3 rounded-lg hover:bg-[#efe7e6] disabled:bg-gray-100 flex items-center justify-center gap-2 transition-colors font-medium"
+                                    className="w-full bg-white text-[#eb1902] border-2 border-[#eb1902] px-4 py-3.5 rounded-xl hover:bg-rose-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
                                   >
                                     <Banknote className="w-5 h-5" />
-                                    {isLoading ? 'Procesando...' : 'Confirmar pedido'}
+                                    {isLoading ? 'Procesando...' : 'Pagar al recibir (Efectivo)'}
                                   </button>
                                 </div>
-                              </div>
+                              ) : (
+                                /* Formulario de teléfono para COD */
+                                <div
+                                  className={`overflow-hidden transition-all duration-300 ease-out ${
+                                    showCodPhoneForm ? 'max-h-72 opacity-100' : 'max-h-0 opacity-0'
+                                  }`}
+                                >
+                                  <div className="space-y-3 rounded-xl border-2 border-[#eb1902] bg-white p-4 shadow-sm">
+                                    <p className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                                      <span>📱</span> Teléfono de contacto
+                                    </p>
+                                    <div className="flex items-center gap-2 rounded-lg border-2 border-gray-200 bg-gray-50 px-3 py-2.5 focus-within:border-[#eb1902] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#eb1902]/20 transition-all">
+                                      <span className="text-sm font-semibold text-gray-600 whitespace-nowrap select-none">🇲🇽 +52</span>
+                                      <div className="w-px h-4 bg-gray-300 mx-1" />
+                                      <input
+                                        type="tel"
+                                        inputMode="numeric"
+                                        autoComplete="tel-national"
+                                        maxLength={10}
+                                        placeholder="4421234567"
+                                        value={cashOnDeliveryPhone.replace(/\D/g, "").slice(0, 10)}
+                                        onChange={(e) => {
+                                          setCashOnDeliveryPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
+                                          if (codError) setCodError("");
+                                        }}
+                                        disabled={isLoading}
+                                        className="flex-1 bg-transparent text-sm font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:opacity-50"
+                                      />
+                                    </div>
+                                    {codError && (
+                                      <p className="text-xs text-[#eb1902] font-medium flex items-center gap-1"><span>⚠</span>{codError}</p>
+                                    )}
+                                    <div className="flex gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => setShowCodPhoneForm(false)}
+                                        disabled={isLoading}
+                                        className="flex-1 border-2 border-gray-200 text-gray-600 px-3 py-2.5 rounded-xl hover:border-gray-300 transition-colors font-medium text-sm"
+                                      >
+                                        Cancelar
+                                      </button>
+                                      <button
+                                        onClick={handleCashOnDeliverySubmit}
+                                        disabled={isLoading}
+                                        className="flex-1 bg-[#eb1902] text-white border-2 border-[#eb1902] px-3 py-2.5 rounded-xl hover:bg-[#c11300] disabled:opacity-50 flex items-center justify-center gap-2 transition-colors font-semibold text-sm"
+                                      >
+                                        <Banknote className="w-4 h-4" />
+                                        {isLoading ? 'Procesando...' : 'Confirmar'}
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
 
-                              {!showCodPhoneForm && (
+                              {!hasPhoneAndConsent && !showCodPhoneForm && (
                                 <button
                                   onClick={handleCashOnDeliveryStart}
                                   disabled={isLoading}
-                                  className="w-full bg-white text-[#eb1902] border-2 border-[#eb1902] px-4 py-3 rounded-lg hover:bg-[#efe7e6] disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors font-medium"
+                                  className="w-full bg-white text-[#eb1902] border-2 border-[#eb1902] px-4 py-3.5 rounded-xl hover:bg-rose-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
                                 >
                                   <Banknote className="w-5 h-5" />
                                   {isLoading ? 'Procesando...' : 'Pagar al recibir (Efectivo)'}
                                 </button>
                               )}
 
-                              {codError && (
-                                <p className="text-sm text-[#eb1902] font-medium">{codError}</p>
+                              {codError && !showCodPhoneForm && (
+                                <p className="text-sm text-[#eb1902] font-medium flex items-center gap-1"><span>⚠</span>{codError}</p>
                               )}
                             </div>
                           )}
-                          
+
+                          {/* ── PAGO EN TIENDA (pickup) ── */}
                           {serviceType === 'pickup' && (
                             <div className="space-y-2">
-                              <div
-                                className={`overflow-hidden transition-all duration-300 ease-out ${
-                                  showPickupPhoneForm ? 'max-h-48 opacity-100 translate-y-0' : 'max-h-0 opacity-0 -translate-y-1'
-                                }`}
-                              >
-                                <div className="space-y-2 rounded-lg border-2 border-green-600 bg-white p-3">
-                                  <input
-                                    type="tel"
-                                    inputMode="tel"
-                                    autoComplete="tel"
-                                    placeholder="Ingresa tu número de teléfono"
-                                    value={pickupPhone}
-                                    onChange={(e) => {
-                                      setPickupPhone(e.target.value);
-                                      if (pickupError) setPickupError("");
-                                    }}
-                                    disabled={isLoading}
-                                    className="w-full rounded-lg border-2 border-green-600 px-4 py-3 text-green-600 placeholder:text-green-600/60 focus:outline-none focus:ring-0 disabled:bg-gray-100"
-                                  />
+                              {hasPhoneAndConsent && !showPickupPhoneForm ? (
+                                /* Ya tiene teléfono guardado: pastilla + botón directo */
+                                <div className="space-y-2">
+                                  <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5">
+                                    <div className="flex items-center gap-2 text-xs text-gray-600">
+                                      <span>📱</span>
+                                      <span className="font-medium">
+                                        +52 {clerkPhone.slice(0, 3)} {clerkPhone.slice(3, 6)} {clerkPhone.slice(6)}
+                                      </span>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={handlePickupStart}
+                                      className="text-xs font-semibold text-gray-500 hover:text-gray-800 underline underline-offset-2 transition-colors"
+                                    >
+                                      Cambiar
+                                    </button>
+                                  </div>
                                   <button
                                     onClick={handlePickupPayment}
                                     disabled={isLoading}
-                                    className="w-full bg-white text-green-600 border-2 border-green-600 px-4 py-3 rounded-lg hover:bg-green-50 disabled:bg-gray-100 flex items-center justify-center gap-2 transition-colors font-medium"
+                                    className="w-full bg-white text-green-700 border-2 border-green-600 px-4 py-3.5 rounded-xl hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
                                   >
                                     <Banknote className="w-5 h-5" />
-                                    {isLoading ? 'Procesando...' : 'Confirmar pedido'}
+                                    {isLoading ? 'Procesando...' : 'Pagar en tienda (Efectivo)'}
                                   </button>
                                 </div>
-                              </div>
+                              ) : (
+                                /* Formulario de teléfono para pickup */
+                                <div
+                                  className={`overflow-hidden transition-all duration-300 ease-out ${
+                                    showPickupPhoneForm ? 'max-h-72 opacity-100' : 'max-h-0 opacity-0'
+                                  }`}
+                                >
+                                  <div className="space-y-3 rounded-xl border-2 border-green-600 bg-white p-4 shadow-sm">
+                                    <p className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                                      <span>📱</span> Teléfono de contacto
+                                    </p>
+                                    <div className="flex items-center gap-2 rounded-lg border-2 border-gray-200 bg-gray-50 px-3 py-2.5 focus-within:border-green-600 focus-within:bg-white focus-within:ring-2 focus-within:ring-green-600/20 transition-all">
+                                      <span className="text-sm font-semibold text-gray-600 whitespace-nowrap select-none">🇲🇽 +52</span>
+                                      <div className="w-px h-4 bg-gray-300 mx-1" />
+                                      <input
+                                        type="tel"
+                                        inputMode="numeric"
+                                        autoComplete="tel-national"
+                                        maxLength={10}
+                                        placeholder="4421234567"
+                                        value={pickupPhone.replace(/\D/g, "").slice(0, 10)}
+                                        onChange={(e) => {
+                                          setPickupPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
+                                          if (pickupError) setPickupError("");
+                                        }}
+                                        disabled={isLoading}
+                                        className="flex-1 bg-transparent text-sm font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:opacity-50"
+                                      />
+                                    </div>
+                                    {pickupError && (
+                                      <p className="text-xs text-green-700 font-medium flex items-center gap-1"><span>⚠</span>{pickupError}</p>
+                                    )}
+                                    <div className="flex gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => setShowPickupPhoneForm(false)}
+                                        disabled={isLoading}
+                                        className="flex-1 border-2 border-gray-200 text-gray-600 px-3 py-2.5 rounded-xl hover:border-gray-300 transition-colors font-medium text-sm"
+                                      >
+                                        Cancelar
+                                      </button>
+                                      <button
+                                        onClick={handlePickupPayment}
+                                        disabled={isLoading}
+                                        className="flex-1 bg-green-600 text-white px-3 py-2.5 rounded-xl hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2 transition-colors font-semibold text-sm"
+                                      >
+                                        <Banknote className="w-4 h-4" />
+                                        {isLoading ? 'Procesando...' : 'Confirmar'}
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
 
-                              {!showPickupPhoneForm && (
+                              {!hasPhoneAndConsent && !showPickupPhoneForm && (
                                 <button
                                   onClick={handlePickupStart}
                                   disabled={isLoading}
-                                  className="w-full bg-white text-green-600 border-2 border-green-600 px-4 py-3 rounded-lg hover:bg-green-50 disabled:bg-gray-400 flex items-center justify-center gap-2 transition-colors font-medium"
+                                  className="w-full bg-white text-green-700 border-2 border-green-600 px-4 py-3.5 rounded-xl hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
                                 >
                                   <Banknote className="w-5 h-5" />
                                   {isLoading ? 'Procesando...' : 'Pagar en tienda (Efectivo)'}
                                 </button>
                               )}
 
-                              {pickupError && (
-                                <p className="text-sm text-green-600 font-medium">{pickupError}</p>
+                              {pickupError && !showPickupPhoneForm && (
+                                <p className="text-sm text-green-700 font-medium flex items-center gap-1"><span>⚠</span>{pickupError}</p>
                               )}
                             </div>
                           )}
