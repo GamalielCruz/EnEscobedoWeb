@@ -218,8 +218,16 @@ export async function POST(req: NextRequest) {
       ).catch(() => null)
 
       // Notificar al cliente
+      console.log('[webhook ACEPTO] Datos cliente para notificación:', {
+        phone: order.phone,
+        customerName: order.customerName,
+        orderNumber: order.orderNumber
+      })
+
       if (order.phone && order.customerName && order.orderNumber) {
-        void sendOrderOnTheWay(order.phone, order.customerName, order.orderNumber).catch(() => null)
+        void sendOrderOnTheWay(order.phone, order.customerName, order.orderNumber).catch((err) =>
+          console.error('[webhook ACEPTO] Error sendOrderOnTheWay:', err)
+        )
       }
 
       // Notificar a los demás repartidores disponibles
