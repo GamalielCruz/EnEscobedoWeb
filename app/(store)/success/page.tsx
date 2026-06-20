@@ -9,8 +9,8 @@ import useBasketStore from "@/store/store";
 
 export default function SuccessPage() {
   const searchParams = useSearchParams();
-  const orderNumber = searchParams.get("orderNumber");
-  const sessionId = searchParams.get("session_id");
+  const orderNumber = searchParams?.get("orderNumber") ?? "";
+const sessionId = searchParams?.get("session_id") ?? "";
   const clearBasket = useBasketStore((state) => state.clearBasket);
   const [confirmationError, setConfirmationError] = useState<string | null>(
     null

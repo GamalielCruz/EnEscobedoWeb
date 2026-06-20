@@ -18,7 +18,7 @@ export default function SuccessCODPage() {
 
   useEffect(() => {
     setIsMounted(true);
-    const orderNum = searchParams.get("orderNumber");
+    const orderNum = searchParams?.get("orderNumber") ?? "";
 
     if (orderNum) {
       setOrderNumber(orderNum);

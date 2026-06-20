@@ -14,8 +14,8 @@ const BRAND_COLOR = "#eb1902";
 export default function SuccessClickCollectPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const orderNumber = searchParams.get("orderNumber");
-  const pickupCodeFromUrl = searchParams.get("pickupCode");
+  const orderNumber = searchParams?.get("orderNumber") ?? "";
+  const pickupCodeFromUrl = searchParams?.get("pickupCode") ?? "";
 
   useEffect(() => {
     if (!orderNumber) {

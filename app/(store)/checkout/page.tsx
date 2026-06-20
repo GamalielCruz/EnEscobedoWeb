@@ -37,7 +37,7 @@ export default function CheckoutPage() {
   const [clickCollectStore, setClickCollectStore] =
     useState<ClickCollectStore | null>(null);
 
-  const isClickCollectMode = searchParams.get("mode") === "click_collect";
+  const isClickCollectMode = (searchParams?.get("mode") ?? "") === "click_collect";
 
   useEffect(() => {
     setIsClient(true);

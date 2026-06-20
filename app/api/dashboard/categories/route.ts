@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+export const dynamic = "force-dynamic";
 import { client } from "@/sanity/lib/client";
 
 const CATEGORIES_QUERY = `*[_type == "category"] | order(title asc) {

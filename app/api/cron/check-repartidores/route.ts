@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { backendClient } from '@/sanity/lib/backendClient'
 import { sendBotMessage } from '@/lib/whatsapp'
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 const EIGHT_HOURS_MS = 8 * 60 * 60 * 1000
 const THIRTY_MINUTES_MS = 30 * 60 * 1000
 

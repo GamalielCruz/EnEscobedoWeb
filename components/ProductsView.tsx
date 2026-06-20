@@ -69,7 +69,7 @@ const ProductsView = ({ products, stores, selectedStore, isLoading = false }: Pr
             setPreviousStore(selectedStore);
         }
         
-        const params = new URLSearchParams(searchParams);
+        const params = new URLSearchParams(searchParams?.toString() ?? "");
         
         if (storeId) {
             params.set('store', storeId);

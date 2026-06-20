@@ -76,7 +76,7 @@ export default function StoresView({
   const searchParams = useSearchParams();
 
   const handleCategoryChange = (categoryId: string | null) => {
-    const params = new URLSearchParams(searchParams);
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
     
     // Remove page when changing category
     params.delete("page");
