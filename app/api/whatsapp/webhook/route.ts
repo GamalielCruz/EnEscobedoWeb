@@ -3,6 +3,7 @@ import { backendClient } from '@/sanity/lib/backendClient'
 import {
   sendBotMessage,
   sendOrderOnTheWay,
+  sendOrderDelivered,
   normalizeWhatsAppPhone,
 } from '@/lib/whatsapp'
 
@@ -10,7 +11,8 @@ const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'garoga_verify_token'
 
 const REPARTIDOR_BY_PHONE_QUERY = `*[_type == "repartidor" && telefono == $telefono][0]{
   _id, nombre, telefono, activo, disponible, pendienteConfirmacion,
-  "ultimoPedidoOfertadoRef": ultimoPedidoOfertado._ref
+  "ultimoPedidoOfertadoRef": ultimoPedidoOfertado._ref,
+  "repartidorAsignadoRef": *[_type == "order" && repartidorAsignado._ref == ^._id && status == "shipped"][0]._id
 }`
 
 const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
@@ -218,11 +220,6 @@ export async function POST(req: NextRequest) {
       ).catch(() => null)
 
       // Notificar al cliente
-      console.log('[webhook ACEPTO] Datos cliente para notificación:', {
-        phone: order.phone,
-        customerName: order.customerName,
-        orderNumber: order.orderNumber
-      })
 
       if (order.phone && order.customerName && order.orderNumber) {
         void sendOrderOnTheWay(order.phone, order.customerName, order.orderNumber).catch((err) =>
@@ -247,11 +244,51 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: 'ok' })
     }
 
-    // --- Cualquier otro mensaje de un repartidor registrado ---
-    void sendBotMessage(
-      fromPhone,
-      `Comandos disponibles: INICIO para conectarte, FIN para desconectarte, ACEPTO para aceptar tu pedido asignado.`
-    ).catch(() => null)
+    // --- ENTREGADO — confirmar entrega del pedido en curso ---
+      if (textBody === 'ENTREGADO') {
+        // Buscar pedido asignado al repartidor con status "shipped"
+        const shippedOrder = await backendClient.fetch(
+          `*[_type == "order" && repartidorAsignado._ref == $repartidorId && status == "shipped"][0]{_id, phone, customerName, orderNumber}`,
+          { repartidorId: repartidor._id }
+        )
+
+        if (!shippedOrder) {
+          void sendBotMessage(
+            fromPhone,
+            'No tienes ningún pedido en camino actualmente.'
+          ).catch(() => null)
+          return NextResponse.json({ status: 'ok' })
+        }
+
+        // Actualizar estado a delivered
+        await backendClient
+          .patch(shippedOrder._id)
+          .set({ status: 'delivered', updatedAt: now })
+          .commit()
+
+        // Notificar al cliente
+        void sendOrderDelivered(
+          shippedOrder.phone,
+          shippedOrder.customerName,
+          shippedOrder.orderNumber
+        ).catch((err) =>
+          console.error('[webhook ENTREGADO] Error sendOrderDelivered:', err)
+        )
+
+        // Respuesta al repartidor
+        void sendBotMessage(
+          fromPhone,
+          '✅ Pedido entregado correctamente. ¡Gracias!'
+        ).catch(() => null)
+
+        return NextResponse.json({ status: 'ok' })
+      }
+
+      // --- Cualquier otro mensaje de un repartidor registrado ---
+      void sendBotMessage(
+        fromPhone,
+        `Comandos disponibles: INICIO, FIN, ACEPTO, ENTREGADO.`
+      ).catch(() => null)
 
   } catch (error) {
     console.error('[whatsapp webhook] Error:', error)
