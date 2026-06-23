@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { revalidatePath } from 'next/cache'
 import { backendClient } from '@/sanity/lib/backendClient'
 import {
   sendBotMessage,
@@ -17,6 +18,7 @@ const REPARTIDOR_BY_PHONE_QUERY = `*[_type == "repartidor" && telefono == $telef
 
 const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   _id,
+  _rev,
   orderNumber,
   customerName,
   phone,
@@ -194,16 +196,24 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Asignar repartidor a la orden
-      await backendClient
-        .patch(order._id)
-        .set({
-          repartidorAsignado: { _type: 'reference', _ref: repartidor._id },
-          repartidorAsignadoAt: now,
-          status: 'shipped',
-          updatedAt: now,
-        })
-        .commit()
+      // Asignar repartidor a la orden usando condicional de revisión para evitar race conditions
+      try {
+        await backendClient
+          .patch(order._id)
+          .ifRevisionId(order._rev)
+          .set({
+            repartidorAsignado: { _type: 'reference', _ref: repartidor._id },
+            repartidorAsignadoAt: now,
+            status: 'shipped',
+            updatedAt: now,
+          })
+          .commit()
+      } catch (patchError) {
+        console.log(`[whatsapp webhook] Race condition evitada en ACEPTO para ${order.orderNumber}`)
+        return NextResponse.json({ status: 'ok' })
+      }
+
+      revalidatePath('/orders')
 
       // Limpiar ultimoPedidoOfertado del repartidor
       void backendClient
@@ -248,7 +258,7 @@ export async function POST(req: NextRequest) {
       if (textBody === 'ENTREGADO') {
         // Buscar pedido asignado al repartidor con status "shipped"
         const shippedOrder = await backendClient.fetch(
-          `*[_type == "order" && repartidorAsignado._ref == $repartidorId && status == "shipped"][0]{_id, phone, customerName, orderNumber}`,
+          `*[_type == "order" && repartidorAsignado._ref == $repartidorId && status == "shipped"][0]{_id, _rev, phone, customerName, orderNumber}`,
           { repartidorId: repartidor._id }
         )
 
@@ -260,11 +270,19 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ status: 'ok' })
         }
 
-        // Actualizar estado a delivered
-        await backendClient
-          .patch(shippedOrder._id)
-          .set({ status: 'delivered', updatedAt: now })
-          .commit()
+        // Actualizar estado a delivered de forma segura
+        try {
+          await backendClient
+            .patch(shippedOrder._id)
+            .ifRevisionId(shippedOrder._rev)
+            .set({ status: 'delivered', updatedAt: now })
+            .commit()
+        } catch (patchError) {
+          console.log(`[whatsapp webhook] Race condition evitada en ENTREGADO para ${shippedOrder.orderNumber}`)
+          return NextResponse.json({ status: 'ok' })
+        }
+
+        revalidatePath('/orders')
 
         // Notificar al cliente
         void sendOrderDelivered(
