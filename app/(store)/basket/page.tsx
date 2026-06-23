@@ -772,8 +772,8 @@ function BasketPage() {
           </div>
 
           {/* Sidebar de resumen */}
-          <div className="lg:w-96 lg:sticky lg:top-24 h-fit">
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+          <div className="w-full lg:w-[420px] xl:w-[480px] lg:sticky lg:top-24 h-fit">
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 md:p-6">
               <h3 className="text-xl font-bold text-gray-900 mb-4">Resumen de Compra</h3>              
 
               {isSignedIn ? (
@@ -1012,7 +1012,7 @@ function BasketPage() {
                           </div>
                           
                           {/* Contenedor de Stripe Embedded Checkout */}
-                          <div ref={stripeContainerRef} id="stripe-checkout-container" className="mt-4 border-2 border-rose-200 rounded-xl p-4 bg-white shadow-inner min-h-[350px]"></div>
+                          <div ref={stripeContainerRef} id="stripe-checkout-container" className="mt-4 bg-white rounded-xl w-full min-h-[400px] -mx-1 sm:mx-0"></div>
 
                           <button
                             onClick={() => {

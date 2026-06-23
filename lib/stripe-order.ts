@@ -312,7 +312,22 @@ export async function createOrderInSanity(
   }
 
   const orderData = await buildOrderData(session, stripe);
-  const order = await backendClient.createIfNotExists(orderData);
+  
+  let order;
+  let isNewOrder = false;
+  
+  try {
+    order = await backendClient.create(orderData);
+    isNewOrder = true;
+  } catch (error: any) {
+    if (error.statusCode === 409 || error.message?.includes("already exists")) {
+      order = await backendClient.getDocument(orderData._id);
+      if (!order) throw error; // Failsafe
+    } else {
+      throw error;
+    }
+  }
+
   const customerPhone =
     typeof orderData.phone === "string" ? orderData.phone : "";
   const customerName =
@@ -322,7 +337,7 @@ export async function createOrderInSanity(
   const createdOrderNumber =
     typeof orderData.orderNumber === "string" ? orderData.orderNumber : "";
 
-  if (customerPhone && createdOrderNumber) {
+  if (isNewOrder && customerPhone && createdOrderNumber) {
     void sendOrderConfirmation(customerPhone, customerName, createdOrderNumber).catch(
       (whatsappError) => {
         console.error("[stripe-order] WhatsApp error:", whatsappError);

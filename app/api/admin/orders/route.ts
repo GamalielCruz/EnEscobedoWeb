@@ -2,11 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { client, readClient, writeClient } from "@/sanity/lib/client";
 import { isAdminUser } from "@/lib/admin";
-import {
-  sendOrderCancelled,
-  sendOrderDelivered,
-  sendOrderOnTheWay,
-} from "@/lib/whatsapp";
+import { sendOrderCancelled } from "@/lib/whatsapp";
 import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
 
 const ORDER_PROJECTION = `{
@@ -79,11 +75,6 @@ function isFinalStatus(status: string) {
 
 function getStatusNotification(status: string) {
   switch (status) {
-    case "shipped":
-      return sendOrderOnTheWay;
-    case "delivered":
-    case "picked_up":
-      return sendOrderDelivered;
     case "cancelled":
       return sendOrderCancelled;
     default:
