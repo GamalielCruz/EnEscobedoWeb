@@ -268,17 +268,22 @@ export async function POST(req: NextRequest) {
         ? `https://maps.google.com/maps?q=${encodeURIComponent(order.shippingAddress.line1)}`
         : `https://maps.google.com/maps?q=${encodeURIComponent(clientAddressStr)}`;
 
-      void sendConfirmacionRepartidor(
-        fromPhone,
-        order.orderNumber,
-        order.storeName ?? 'La Tienda',
-        clientAddressStr,
-        paymentMethodDisplay,
-        restaurantMapsUrl,
-        clientMapsUrl
-      ).catch((err) =>
-        console.error('[webhook ACEPTO] Error sendConfirmacionRepartidor:', err)
-      )
+      const confirmationResults = await Promise.allSettled([
+        sendConfirmacionRepartidor(
+          fromPhone,
+          order.orderNumber,
+          order.storeName ?? 'La Tienda',
+          clientAddressStr,
+          paymentMethodDisplay,
+          restaurantMapsUrl,
+          clientMapsUrl
+        ),
+      ])
+
+      const [confirmationResult] = confirmationResults
+      if (confirmationResult?.status === 'rejected') {
+        console.error('[webhook ACEPTO] Error sendConfirmacionRepartidor:', confirmationResult.reason)
+      }
 
       // Notificar al cliente
       // Quitado sendOrderOnTheWay de aquí porque ahora se hace cuando mandan 'PEDIDO EN DIRECCIÓN AL DOMICILIO'
@@ -320,23 +325,34 @@ export async function POST(req: NextRequest) {
         )
 
         if (!shippedOrder) {
+          console.log(`[whatsapp webhook] Sin pedido shipped para ${repartidor.nombre} al marcar EN_CAMINO`)
           void sendBotMessage(fromPhone, 'No tienes ningún pedido en camino actualmente.').catch(() => null)
           return NextResponse.json({ status: 'ok' })
         }
 
-        void sendRepartidorEnCamino(fromPhone, shippedOrder.orderNumber).catch((err) =>
-          console.error('[webhook EN_CAMINO] Error sendRepartidorEnCamino:', err)
-        );
+        const enCaminoNotifications: Promise<unknown>[] = [
+          sendRepartidorEnCamino(fromPhone, shippedOrder.orderNumber),
+        ]
 
         if (shippedOrder.phone && shippedOrder.customerName) {
-          void sendOrderOnTheWay(
-            shippedOrder.phone,
-            shippedOrder.customerName,
-            shippedOrder.orderNumber
-          ).catch((err) =>
-            console.error('[webhook EN_CAMINO] Error sendOrderOnTheWay:', err)
-          );
+          enCaminoNotifications.push(
+            sendOrderOnTheWay(
+              shippedOrder.phone,
+              shippedOrder.customerName,
+              shippedOrder.orderNumber
+            )
+          )
         }
+
+        const enCaminoResults = await Promise.allSettled(enCaminoNotifications)
+        enCaminoResults.forEach((result, index) => {
+          if (result.status === 'rejected') {
+            const label = index === 0 ? 'sendRepartidorEnCamino' : 'sendOrderOnTheWay'
+            console.error(`[webhook EN_CAMINO] Error ${label}:`, result.reason)
+          }
+        })
+
+        console.log(`[whatsapp webhook] Notificaciones EN_CAMINO procesadas para pedido ${shippedOrder.orderNumber}`)
 
         return NextResponse.json({ status: 'ok' })
     }
@@ -349,23 +365,34 @@ export async function POST(req: NextRequest) {
         )
 
         if (!shippedOrder) {
+          console.log(`[whatsapp webhook] Sin pedido shipped para ${repartidor.nombre} al marcar EN_PUERTA`)
           void sendBotMessage(fromPhone, 'No tienes ningún pedido en camino actualmente.').catch(() => null)
           return NextResponse.json({ status: 'ok' })
         }
 
-        void sendRepartidorEnPuerta(fromPhone, shippedOrder.orderNumber).catch((err) =>
-          console.error('[webhook EN_PUERTA] Error sendRepartidorEnPuerta:', err)
-        );
+        const enPuertaNotifications: Promise<unknown>[] = [
+          sendRepartidorEnPuerta(fromPhone, shippedOrder.orderNumber),
+        ]
 
         if (shippedOrder.phone && shippedOrder.customerName) {
-          void sendClienteRepartidorEnPuerta(
-            shippedOrder.phone,
-            shippedOrder.customerName,
-            shippedOrder.orderNumber
-          ).catch((err) =>
-            console.error('[webhook EN_PUERTA] Error sendClienteRepartidorEnPuerta:', err)
-          );
+          enPuertaNotifications.push(
+            sendClienteRepartidorEnPuerta(
+              shippedOrder.phone,
+              shippedOrder.customerName,
+              shippedOrder.orderNumber
+            )
+          )
         }
+
+        const enPuertaResults = await Promise.allSettled(enPuertaNotifications)
+        enPuertaResults.forEach((result, index) => {
+          if (result.status === 'rejected') {
+            const label = index === 0 ? 'sendRepartidorEnPuerta' : 'sendClienteRepartidorEnPuerta'
+            console.error(`[webhook EN_PUERTA] Error ${label}:`, result.reason)
+          }
+        })
+
+        console.log(`[whatsapp webhook] Notificaciones EN_PUERTA procesadas para pedido ${shippedOrder.orderNumber}`)
 
         return NextResponse.json({ status: 'ok' })
     }
@@ -379,6 +406,7 @@ export async function POST(req: NextRequest) {
         )
 
         if (!shippedOrder) {
+          console.log(`[whatsapp webhook] Sin pedido shipped para ${repartidor.nombre} al marcar ENTREGADO`)
           void sendBotMessage(
             fromPhone,
             'No tienes ningún pedido en camino actualmente.'
@@ -401,19 +429,26 @@ export async function POST(req: NextRequest) {
         revalidatePath('/orders')
 
         // Notificar al cliente
-        void sendOrderDelivered(
-          shippedOrder.phone,
-          shippedOrder.customerName,
-          shippedOrder.orderNumber
-        ).catch((err) =>
-          console.error('[webhook ENTREGADO] Error sendOrderDelivered:', err)
-        )
+        const deliveredResults = await Promise.allSettled([
+          sendOrderDelivered(
+            shippedOrder.phone,
+            shippedOrder.customerName,
+            shippedOrder.orderNumber
+          ),
+        ])
+
+        const [deliveredResult] = deliveredResults
+        if (deliveredResult?.status === 'rejected') {
+          console.error('[webhook ENTREGADO] Error sendOrderDelivered:', deliveredResult.reason)
+        }
 
         // Respuesta al repartidor
         void sendBotMessage(
           fromPhone,
           '✅ Pedido entregado correctamente. ¡Gracias!'
         ).catch(() => null)
+
+        console.log(`[whatsapp webhook] Pedido ${shippedOrder.orderNumber} marcado ENTREGADO por ${repartidor.nombre}`)
 
         return NextResponse.json({ status: 'ok' })
       }
