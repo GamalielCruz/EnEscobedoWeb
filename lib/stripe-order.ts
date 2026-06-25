@@ -338,11 +338,12 @@ export async function createOrderInSanity(
     typeof orderData.orderNumber === "string" ? orderData.orderNumber : "";
 
   if (isNewOrder && customerPhone && createdOrderNumber) {
-    void sendOrderConfirmation(customerPhone, customerName, createdOrderNumber).catch(
-      (whatsappError) => {
-        console.error("[stripe-order] WhatsApp error:", whatsappError);
-      }
-    );
+    try {
+      await sendOrderConfirmation(customerPhone, customerName, createdOrderNumber);
+      console.log("[stripe-order] WhatsApp confirmacion enviada a:", customerPhone);
+    } catch (err) {
+      console.error("[stripe-order] Error sendOrderConfirmation:", err);
+    }
   }
 
   console.log("[stripe-order] Order stored in Sanity:", order._id);
