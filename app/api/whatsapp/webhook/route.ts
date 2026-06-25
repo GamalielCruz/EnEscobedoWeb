@@ -48,6 +48,14 @@ async function findRepartidor(fromPhone: string) {
   return backendClient.fetch(REPARTIDOR_BY_PHONE_QUERY, { telefono: fromPhone })
 }
 
+function normalizeText(text: string): string {
+  return text
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+}
+
 // Meta llama este GET para verificar el webhook
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -89,14 +97,14 @@ export async function POST(req: NextRequest) {
     let textBody = ''
 
     if (message.type === 'text') {
-      textBody = ((message.text as Record<string, unknown>)?.body as string ?? '').trim().toUpperCase()
+      textBody = normalizeText((message.text as Record<string, unknown>)?.body as string ?? '')
     } else if (message.type === 'interactive') {
       const interactive = message.interactive as Record<string, unknown>
       const buttonReply = interactive?.button_reply as Record<string, unknown>
-      textBody = (buttonReply?.id as string ?? buttonReply?.title as string ?? '').trim().toUpperCase()
+      textBody = normalizeText(buttonReply?.id as string ?? buttonReply?.title as string ?? '')
     } else if (message.type === 'button') {
       const btn = message.button as Record<string, unknown>
-      textBody = (btn?.payload as string ?? btn?.text as string ?? '').trim().toUpperCase()
+      textBody = normalizeText(btn?.payload as string ?? btn?.text as string ?? '')
     } else {
       return NextResponse.json({ status: 'ok' })
     }
@@ -304,8 +312,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: 'ok' })
     }
 
-    // --- PEDIDO EN DIRECCIÓN AL DOMICILIO ---
-    if (textBody === 'PEDIDO EN DIRECCIÓN AL DOMICILIO') {
+    // --- PEDIDO EN DIRECCION AL DOMICILIO ---
+    if (textBody === 'PEDIDO EN DIRECCION AL DOMICILIO') {
         const shippedOrder = await backendClient.fetch(
           `*[_type == "order" && repartidorAsignado._ref == $repartidorId && status == "shipped"][0]{_id, _rev, phone, customerName, orderNumber}`,
           { repartidorId: repartidor._id }
