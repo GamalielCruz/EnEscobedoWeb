@@ -286,6 +286,7 @@ export async function POST(req: NextRequest) {
       }
 
       // Notificar al cliente
+      console.log('[webhook ACEPTO] Enviando pedido_en_camino al cliente:', order.phone)
       // Quitado sendOrderOnTheWay de aquí porque ahora se hace cuando mandan 'PEDIDO EN DIRECCIÓN AL DOMICILIO'
 
       // Notificar a los demás repartidores disponibles

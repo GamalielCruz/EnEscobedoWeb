@@ -65,7 +65,7 @@ async function sendWhatsAppTemplate(
             type: "body",
             parameters: variables.map((text) => ({
               type: "text",
-              text: String(text),
+              text: String(text).substring(0, 60),
             })),
           },
           ...buttonComponents,
@@ -132,7 +132,8 @@ export async function sendOrderConfirmation(
   name: string,
   orderNumber: string
 ) {
-  return sendWhatsAppTemplate(phone, "confirmacion_pedido", [name, orderNumber]);
+  const truncatedName = name.substring(0, 30);
+  return sendWhatsAppTemplate(phone, "confirmacion_pedido", [truncatedName, orderNumber], "es_MX");
 }
 
 export async function sendOrderOnTheWay(
