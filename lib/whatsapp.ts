@@ -36,7 +36,8 @@ async function sendWhatsAppTemplate(
   to: string,
   templateName: string,
   variables: string[],
-  languageCode: string = "es"
+  languageCode: string = "es",
+  buttonComponents: Array<Record<string, unknown>> = []
 ) {
   const normalizedPhone = normalizeWhatsAppPhone(to);
 
@@ -45,9 +46,6 @@ async function sendWhatsAppTemplate(
   }
 
   const { endpoint, accessToken } = getWhatsAppEndpoint();
-
-  // Meta limita parámetros de texto a 30 caracteres
-  const safeVariables = variables.map((v) => String(v).slice(0, 30));
 
   const response = await fetch(endpoint, {
     method: "POST",
@@ -65,11 +63,12 @@ async function sendWhatsAppTemplate(
         components: [
           {
             type: "body",
-            parameters: safeVariables.map((text) => ({
+            parameters: variables.map((text) => ({
               type: "text",
-              text,
+              text: String(text),
             })),
           },
+          ...buttonComponents,
         ],
       },
     }),
@@ -83,6 +82,17 @@ async function sendWhatsAppTemplate(
   }
 
   return data;
+}
+
+function toWhatsAppUrlButtonParam(value: string) {
+  const trimmed = String(value || "").trim();
+  const mapsPrefix = "https://maps.google.com/maps?q=";
+
+  if (trimmed.startsWith(mapsPrefix)) {
+    return trimmed.slice(mapsPrefix.length);
+  }
+
+  return trimmed;
 }
 
 export async function sendWhatsAppMessage(to: string, message: string) {
@@ -153,15 +163,73 @@ export async function sendDeliveryOffer(
   phone: string,
   orderNumber: string,
   customerName: string,
+  restaurantName: string,
   address: string,
-  total: string
+  total: string,
+  paymentMethod: string,
+  mapsUrl: string
 ) {
-  return sendWhatsAppTemplate(phone, "oferta_reparto", [
-    orderNumber,
-    customerName,
-    address,
-    total,
-  ], "es_MX");
+  return sendWhatsAppTemplate(
+    phone,
+    "oferta_reparto",
+    [orderNumber, customerName, restaurantName, address, total, paymentMethod],
+    "es_MX",
+    [
+      {
+        type: "button",
+        sub_type: "url",
+        index: "2",
+        parameters: [{ type: "text", text: toWhatsAppUrlButtonParam(mapsUrl) }],
+      },
+    ]
+  );
+}
+
+export async function sendConfirmacionRepartidor(
+  phone: string,
+  orderNumber: string,
+  restaurantName: string,
+  deliveryAddress: string,
+  paymentMethod: string,
+  restaurantMapsUrl: string,
+  clientMapsUrl: string
+) {
+  return sendWhatsAppTemplate(
+    phone,
+    "confirmacion_repartidor",
+    [orderNumber, restaurantName, deliveryAddress, paymentMethod],
+    "es_MX",
+    [
+      {
+        type: "button",
+        sub_type: "url",
+        index: "0",
+        parameters: [{ type: "text", text: toWhatsAppUrlButtonParam(restaurantMapsUrl) }],
+      },
+      {
+        type: "button",
+        sub_type: "url",
+        index: "1",
+        parameters: [{ type: "text", text: toWhatsAppUrlButtonParam(clientMapsUrl) }],
+      },
+    ]
+  );
+}
+
+export async function sendRepartidorEnCamino(phone: string, orderNumber: string) {
+  return sendWhatsAppTemplate(phone, "repartidor_en_camino", [orderNumber], "es_MX");
+}
+
+export async function sendRepartidorEnPuerta(phone: string, orderNumber: string) {
+  return sendWhatsAppTemplate(phone, "repartidor_en_puerta", [orderNumber], "es_MX");
+}
+
+export async function sendClienteRepartidorEnPuerta(
+  phone: string,
+  customerName: string,
+  orderNumber: string
+) {
+  return sendWhatsAppTemplate(phone, "cliente_repartidor_en_puerta", [customerName, orderNumber], "es_MX");
 }
 
 // Mensajes de texto libre del bot hacia repartidores (respuestas a comandos y recordatorios)

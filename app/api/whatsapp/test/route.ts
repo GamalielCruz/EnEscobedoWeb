@@ -20,8 +20,11 @@ export async function GET() {
       testPhone,
       'TEST-001',
       'Cliente de Prueba',
+      'Restaurante de Prueba',
       'Calle Falsa 123, Pedro Escobedo',
-      '$150.00 MXN'
+      '$150.00 MXN',
+      'YA PAGADO',
+      'https://maps.google.com/maps?q=Calle%20Falsa%20123%2C%20Pedro%20Escobedo'
     )
     results.deliveryOffer = { success: true, response: r }
   } catch (e) {

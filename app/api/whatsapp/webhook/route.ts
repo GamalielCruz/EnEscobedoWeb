@@ -6,6 +6,10 @@ import {
   sendOrderOnTheWay,
   sendOrderDelivered,
   normalizeWhatsAppPhone,
+  sendConfirmacionRepartidor,
+  sendRepartidorEnCamino,
+  sendRepartidorEnPuerta,
+  sendClienteRepartidorEnPuerta,
 } from '@/lib/whatsapp'
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'garoga_verify_token'
@@ -23,11 +27,13 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   customerName,
   phone,
   status,
+  paymentMethod,
   deliveryOfertaEnviada,
   deliveryOfertaExpiresAt,
   "repartidorAsignadoRef": repartidorAsignado._ref,
   "storeAddress": affiliateStore->address.street,
-  "storeName": affiliateStore->name
+  "storeName": affiliateStore->name,
+  "shippingAddress": shippingAddress
 }`
 
 // Busca repartidor probando teléfono normalizado y luego raw
@@ -75,13 +81,21 @@ export async function POST(req: NextRequest) {
     const messages = value?.messages as Record<string, unknown>[] | undefined
     const message = messages?.[0]
 
-    if (!message || message.type !== 'text') {
+    if (!message || (message.type !== 'text' && message.type !== 'interactive')) {
       return NextResponse.json({ status: 'ok' })
     }
 
     const fromPhone = message.from as string
-    const textRaw = (message.text as Record<string, unknown>)?.body as string ?? ''
-    const textBody = textRaw.trim().toUpperCase()
+    let textBody = ''
+
+    if (message.type === 'interactive') {
+      const interactive = message.interactive as Record<string, unknown>
+      const buttonReply = (interactive?.button_reply as Record<string, unknown>)
+      textBody = (buttonReply?.id as string ?? buttonReply?.title as string ?? '').toUpperCase().trim()
+    } else {
+      const textRaw = (message.text as Record<string, unknown>)?.body as string ?? ''
+      textBody = textRaw.trim().toUpperCase()
+    }
 
     // Verificar si el número es un repartidor registrado
     const repartidor = await findRepartidor(fromPhone)
@@ -156,7 +170,7 @@ export async function POST(req: NextRequest) {
     }
 
     // --- ACEPTO (sin número — usa ultimoPedidoOfertado del repartidor) ---
-    if (textBody === 'ACEPTO') {
+    if (textBody === 'ACEPTO' || textBody === 'ACEPTAR') {
       console.log(`[whatsapp webhook] ACEPTO de ${repartidor.nombre}`)
 
       // Actualizar ultimaActividad
@@ -224,18 +238,38 @@ export async function POST(req: NextRequest) {
 
       // Notificar al repartidor asignado
       const storeAddress = order.storeAddress ?? order.storeName ?? 'la tienda'
-      void sendBotMessage(
+
+      const paymentMethodDisplay =
+        order.paymentMethod === "cash_on_delivery" || order.paymentMethod === "cash_on_pickup"
+          ? "COBRAR EN EFECTIVO"
+          : "YA PAGADO";
+
+      const restaurantMapsUrl = order.storeAddress
+        ? `https://maps.google.com/maps?q=${encodeURIComponent(order.storeAddress)}`
+        : `https://maps.google.com/maps?q=${encodeURIComponent(storeAddress)}`;
+
+      const clientAddressStr = order.shippingAddress
+        ? [order.shippingAddress.line1, order.shippingAddress.street, order.shippingAddress.city].filter(Boolean).join(", ")
+        : "Ver pedido";
+
+      const clientMapsUrl = order.shippingAddress?.line1
+        ? `https://maps.google.com/maps?q=${encodeURIComponent(order.shippingAddress.line1)}`
+        : `https://maps.google.com/maps?q=${encodeURIComponent(clientAddressStr)}`;
+
+      void sendConfirmacionRepartidor(
         fromPhone,
-        `✅ Pedido #${order.orderNumber} asignado a ti. Dirígete a ${storeAddress} para recogerlo.`
-      ).catch(() => null)
+        order.orderNumber,
+        order.storeName ?? 'La Tienda',
+        clientAddressStr,
+        paymentMethodDisplay,
+        restaurantMapsUrl,
+        clientMapsUrl
+      ).catch((err) =>
+        console.error('[webhook ACEPTO] Error sendConfirmacionRepartidor:', err)
+      )
 
       // Notificar al cliente
-
-      if (order.phone && order.customerName && order.orderNumber) {
-        void sendOrderOnTheWay(order.phone, order.customerName, order.orderNumber).catch((err) =>
-          console.error('[webhook ACEPTO] Error sendOrderOnTheWay:', err)
-        )
-      }
+      // Quitado sendOrderOnTheWay de aquí porque ahora se hace cuando mandan 'PEDIDO EN DIRECCIÓN AL DOMICILIO'
 
       // Notificar a los demás repartidores disponibles
       const otherDrivers: Array<{ _id: string; nombre: string; telefono: string }> =
@@ -252,6 +286,76 @@ export async function POST(req: NextRequest) {
 
       console.log(`[whatsapp webhook] Pedido ${order.orderNumber} asignado a ${repartidor.nombre}`)
       return NextResponse.json({ status: 'ok' })
+    }
+
+    // --- RECHAZAR ---
+    if (textBody === 'RECHAZAR') {
+      await backendClient
+        .patch(repartidor._id)
+        .unset(['ultimoPedidoOfertado'])
+        .set({ ultimaActividad: now })
+        .commit()
+
+      void sendBotMessage(fromPhone, `Gracias, el pedido fue ofrecido a otro repartidor.`).catch(() => null)
+      return NextResponse.json({ status: 'ok' })
+    }
+
+    // --- PEDIDO EN DIRECCIÓN AL DOMICILIO ---
+    if (textBody === 'PEDIDO EN DIRECCIÓN AL DOMICILIO') {
+        const shippedOrder = await backendClient.fetch(
+          `*[_type == "order" && repartidorAsignado._ref == $repartidorId && status == "shipped"][0]{_id, _rev, phone, customerName, orderNumber}`,
+          { repartidorId: repartidor._id }
+        )
+
+        if (!shippedOrder) {
+          void sendBotMessage(fromPhone, 'No tienes ningún pedido en camino actualmente.').catch(() => null)
+          return NextResponse.json({ status: 'ok' })
+        }
+
+        void sendRepartidorEnCamino(fromPhone, shippedOrder.orderNumber).catch((err) =>
+          console.error('[webhook EN_CAMINO] Error sendRepartidorEnCamino:', err)
+        );
+
+        if (shippedOrder.phone && shippedOrder.customerName) {
+          void sendOrderOnTheWay(
+            shippedOrder.phone,
+            shippedOrder.customerName,
+            shippedOrder.orderNumber
+          ).catch((err) =>
+            console.error('[webhook EN_CAMINO] Error sendOrderOnTheWay:', err)
+          );
+        }
+
+        return NextResponse.json({ status: 'ok' })
+    }
+
+    // --- EN PUERTA ---
+    if (textBody === 'EN PUERTA') {
+        const shippedOrder = await backendClient.fetch(
+          `*[_type == "order" && repartidorAsignado._ref == $repartidorId && status == "shipped"][0]{_id, _rev, phone, customerName, orderNumber}`,
+          { repartidorId: repartidor._id }
+        )
+
+        if (!shippedOrder) {
+          void sendBotMessage(fromPhone, 'No tienes ningún pedido en camino actualmente.').catch(() => null)
+          return NextResponse.json({ status: 'ok' })
+        }
+
+        void sendRepartidorEnPuerta(fromPhone, shippedOrder.orderNumber).catch((err) =>
+          console.error('[webhook EN_PUERTA] Error sendRepartidorEnPuerta:', err)
+        );
+
+        if (shippedOrder.phone && shippedOrder.customerName) {
+          void sendClienteRepartidorEnPuerta(
+            shippedOrder.phone,
+            shippedOrder.customerName,
+            shippedOrder.orderNumber
+          ).catch((err) =>
+            console.error('[webhook EN_PUERTA] Error sendClienteRepartidorEnPuerta:', err)
+          );
+        }
+
+        return NextResponse.json({ status: 'ok' })
     }
 
     // --- ENTREGADO — confirmar entrega del pedido en curso ---
@@ -305,7 +409,7 @@ export async function POST(req: NextRequest) {
       // --- Cualquier otro mensaje de un repartidor registrado ---
       void sendBotMessage(
         fromPhone,
-        `Comandos disponibles: INICIO, FIN, ACEPTO, ENTREGADO.`
+        `Comandos disponibles: INICIO, FIN, ACEPTO, RECHAZAR, PEDIDO EN DIRECCIÓN AL DOMICILIO, EN PUERTA, ENTREGADO.`
       ).catch(() => null)
 
   } catch (error) {

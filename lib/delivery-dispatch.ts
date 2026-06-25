@@ -10,6 +10,7 @@ const ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   customerName,
   phone,
   totalPrice,
+  paymentMethod,
   deliveryOfertaEnviada,
   repartidorAsignado,
   "shippingAddress": shippingAddress,
@@ -88,7 +89,16 @@ export async function dispatchDeliveryOffer(orderId: string): Promise<void> {
 
     const total = `$${(order.totalPrice ?? 0).toFixed(2)} MXN`;
 
-    console.log(`[delivery-dispatch] Enviando oferta a ${uniqueDrivers.length} repartidor(es) | dirección: ${address} | total: ${total}`);
+    const paymentMethodDisplay =
+      order.paymentMethod === "cash_on_delivery" || order.paymentMethod === "cash_on_pickup"
+        ? "COBRAR EN EFECTIVO"
+        : "YA PAGADO";
+
+    const mapsUrl = order.shippingAddress?.line1
+      ? `https://maps.google.com/maps?q=${encodeURIComponent(order.shippingAddress.line1)}`
+      : `https://maps.google.com/maps?q=${encodeURIComponent(address)}`;
+
+    console.log(`[delivery-dispatch] Enviando oferta a ${uniqueDrivers.length} repartidor(es) | dirección: ${address} | total: ${total} | pago: ${paymentMethodDisplay}`);
 
     // Enviar oferta a todos los repartidores únicos simultáneamente
     const results = await Promise.allSettled(
@@ -97,8 +107,11 @@ export async function dispatchDeliveryOffer(orderId: string): Promise<void> {
           driver.telefono,
           order.orderNumber,
           order.customerName ?? "Cliente",
+          order.storeName ?? "La Tienda",
           address,
-          total
+          total,
+          paymentMethodDisplay,
+          mapsUrl
         ).then((res) => {
           console.log(`[delivery-dispatch] ✅ Oferta enviada a ${driver.nombre} (${driver.telefono}):`, JSON.stringify(res));
           return res;
