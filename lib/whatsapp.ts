@@ -133,7 +133,33 @@ export async function sendOrderConfirmation(
   orderNumber: string
 ) {
   const truncatedName = name.substring(0, 30);
-  return sendWhatsAppTemplate(phone, "confirmacion_pedido", [truncatedName, orderNumber], "es_MX");
+
+  try {
+    return await sendWhatsAppTemplate(
+      phone,
+      "confirmacion_pedido",
+      [truncatedName, orderNumber],
+      "es_MX"
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const shouldFallbackToEs =
+      message.includes("does not exist in es_MX") ||
+      message.includes("does not exist in the translation");
+
+    if (!shouldFallbackToEs) {
+      throw error;
+    }
+
+    console.warn("[whatsapp] confirmacion_pedido no existe en es_MX, reintentando con es");
+
+    return sendWhatsAppTemplate(
+      phone,
+      "confirmacion_pedido",
+      [truncatedName, orderNumber],
+      "es"
+    );
+  }
 }
 
 export async function sendOrderOnTheWay(

@@ -214,12 +214,14 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ status: 'ok' })
       }
 
-      if (order.deliveryOfertaExpiresAt) {
-        const expires = new Date(order.deliveryOfertaExpiresAt).getTime()
-        if (Date.now() > expires) {
-          void sendBotMessage(fromPhone, `Lo sentimos, la oferta del pedido #${order.orderNumber} ya expiró.`).catch(() => null)
-          return NextResponse.json({ status: 'ok' })
-        }
+      const isOfferExpired = order.deliveryOfertaExpiresAt
+        ? Date.now() > new Date(order.deliveryOfertaExpiresAt).getTime()
+        : false
+
+      if (isOfferExpired) {
+        console.log(
+          `[whatsapp webhook] Oferta expirada para ${order.orderNumber}, pero sigue libre; permitiendo ACEPTO tardio`
+        )
       }
 
       // Asignar repartidor a la orden usando condicional de revisión para evitar race conditions
@@ -231,8 +233,10 @@ export async function POST(req: NextRequest) {
             repartidorAsignado: { _type: 'reference', _ref: repartidor._id },
             repartidorAsignadoAt: now,
             status: 'shipped',
+            deliveryOfertaEnviada: false,
             updatedAt: now,
           })
+          .unset(['deliveryOfertaExpiresAt'])
           .commit()
       } catch (patchError) {
         console.log(`[whatsapp webhook] Race condition evitada en ACEPTO para ${order.orderNumber}`)
