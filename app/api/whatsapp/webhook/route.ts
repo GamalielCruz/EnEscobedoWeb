@@ -81,20 +81,24 @@ export async function POST(req: NextRequest) {
     const messages = value?.messages as Record<string, unknown>[] | undefined
     const message = messages?.[0]
 
-    if (!message || (message.type !== 'text' && message.type !== 'interactive')) {
+    if (!message) {
       return NextResponse.json({ status: 'ok' })
     }
 
     const fromPhone = message.from as string
     let textBody = ''
 
-    if (message.type === 'interactive') {
+    if (message.type === 'text') {
+      textBody = ((message.text as Record<string, unknown>)?.body as string ?? '').trim().toUpperCase()
+    } else if (message.type === 'interactive') {
       const interactive = message.interactive as Record<string, unknown>
-      const buttonReply = (interactive?.button_reply as Record<string, unknown>)
-      textBody = (buttonReply?.id as string ?? buttonReply?.title as string ?? '').toUpperCase().trim()
+      const buttonReply = interactive?.button_reply as Record<string, unknown>
+      textBody = (buttonReply?.id as string ?? buttonReply?.title as string ?? '').trim().toUpperCase()
+    } else if (message.type === 'button') {
+      const btn = message.button as Record<string, unknown>
+      textBody = (btn?.payload as string ?? btn?.text as string ?? '').trim().toUpperCase()
     } else {
-      const textRaw = (message.text as Record<string, unknown>)?.body as string ?? ''
-      textBody = textRaw.trim().toUpperCase()
+      return NextResponse.json({ status: 'ok' })
     }
 
     // Verificar si el número es un repartidor registrado
