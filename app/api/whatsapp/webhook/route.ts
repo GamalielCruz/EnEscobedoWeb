@@ -339,13 +339,20 @@ export async function POST(req: NextRequest) {
           sendRepartidorEnCamino(fromPhone, shippedOrder.orderNumber),
         ]
 
-        if (shippedOrder.phone && shippedOrder.customerName) {
+        const customerPhone = normalizeWhatsAppPhone(shippedOrder.phone)
+
+        if (customerPhone && shippedOrder.customerName) {
           enCaminoNotifications.push(
             sendOrderOnTheWay(
-              shippedOrder.phone,
+              customerPhone,
               shippedOrder.customerName,
               shippedOrder.orderNumber
             )
+          )
+        } else {
+          console.warn(
+            `[webhook EN_CAMINO] Telefono cliente invalido u omitido para pedido ${shippedOrder.orderNumber}:`,
+            shippedOrder.phone
           )
         }
 
@@ -379,13 +386,20 @@ export async function POST(req: NextRequest) {
           sendRepartidorEnPuerta(fromPhone, shippedOrder.orderNumber),
         ]
 
-        if (shippedOrder.phone && shippedOrder.customerName) {
+        const customerPhone = normalizeWhatsAppPhone(shippedOrder.phone)
+
+        if (customerPhone && shippedOrder.customerName) {
           enPuertaNotifications.push(
             sendClienteRepartidorEnPuerta(
-              shippedOrder.phone,
+              customerPhone,
               shippedOrder.customerName,
               shippedOrder.orderNumber
             )
+          )
+        } else {
+          console.warn(
+            `[webhook EN_PUERTA] Telefono cliente invalido u omitido para pedido ${shippedOrder.orderNumber}:`,
+            shippedOrder.phone
           )
         }
 
@@ -434,17 +448,25 @@ export async function POST(req: NextRequest) {
         revalidatePath('/orders')
 
         // Notificar al cliente
-        const deliveredResults = await Promise.allSettled([
-          sendOrderDelivered(
-            shippedOrder.phone,
-            shippedOrder.customerName,
-            shippedOrder.orderNumber
-          ),
-        ])
+        const customerPhone = normalizeWhatsAppPhone(shippedOrder.phone)
+        if (customerPhone && shippedOrder.customerName) {
+          const deliveredResults = await Promise.allSettled([
+            sendOrderDelivered(
+              customerPhone,
+              shippedOrder.customerName,
+              shippedOrder.orderNumber
+            ),
+          ])
 
-        const [deliveredResult] = deliveredResults
-        if (deliveredResult?.status === 'rejected') {
-          console.error('[webhook ENTREGADO] Error sendOrderDelivered:', deliveredResult.reason)
+          const [deliveredResult] = deliveredResults
+          if (deliveredResult?.status === 'rejected') {
+            console.error('[webhook ENTREGADO] Error sendOrderDelivered:', deliveredResult.reason)
+          }
+        } else {
+          console.warn(
+            `[webhook ENTREGADO] Telefono cliente invalido u omitido para pedido ${shippedOrder.orderNumber}:`,
+            shippedOrder.phone
+          )
         }
 
         // Respuesta al repartidor

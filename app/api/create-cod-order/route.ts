@@ -45,12 +45,14 @@ export async function POST(request: NextRequest) {
 
     const clean = (text: unknown): string => String(text || "").trim();
 
+    const customerPhone = clean(metadata.phone);
+
     const orderData: { _type: string; [key: string]: unknown } = {
       _type: "order",
       orderNumber: metadata.orderNumber,
       customerName: clean(metadata.customerName),
       email: clean(metadata.customerEmail),
-      phone: clean(metadata.phone) || "No especificado",
+      phone: customerPhone || undefined,
       clerkUserId: metadata.clerkUserId,
       paymentMethod: "cash_on_delivery",
       currency: "mxn",
@@ -83,7 +85,6 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await writeClient.create(orderData);
-    const customerPhone = clean(metadata.phone);
     const customerName = clean(metadata.customerName) || "Cliente";
     const orderNumber = clean(metadata.orderNumber);
 

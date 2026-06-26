@@ -98,6 +98,8 @@ export async function POST(request: NextRequest) {
     if (notes) deliveryNotesParts.push(`Notas del cliente: ${notes}`);
 
     // Crear orden en Sanity (schema unificado `order` con orderType: "pickup")
+    const normalizedCustomerPhone = typeof phone === "string" ? phone.trim() : "";
+
     const orderData: { _type: string; [key: string]: any } = {
       _type: "order",
       orderNumber,
@@ -106,7 +108,7 @@ export async function POST(request: NextRequest) {
       customerName: customerName || "Cliente",
       email: customerEmail,
       clerkUserId,
-      phone: phone || "No especificado",
+      phone: normalizedCustomerPhone || undefined,
       pickupStore: storeId ? { _type: "reference", _ref: storeId } : undefined,
       affiliateStore: storeId ? { _type: "reference", _ref: storeId } : undefined,
       products: sanityProducts,
@@ -134,8 +136,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (phone && orderNumber) {
-      void sendOrderConfirmation(phone, customerName || "Cliente", orderNumber).catch(
+    if (normalizedCustomerPhone && orderNumber) {
+      void sendOrderConfirmation(normalizedCustomerPhone, customerName || "Cliente", orderNumber).catch(
         (whatsappError) => {
           console.error(
             "[create-click-collect-order] WhatsApp error:",
