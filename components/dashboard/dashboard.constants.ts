@@ -23,20 +23,20 @@ export const sidebarItems: Array<{
 ];
 
 export const statusConfig: Record<string, { label: string; color: string }> = {
-  pending: { label: "Pendiente", color: "bg-yellow-100 text-yellow-800" },
-  paid: { label: "Pagado", color: "bg-blue-100 text-blue-800" },
-  pending_delivery: { label: "Pendiente entrega", color: "bg-yellow-100 text-yellow-800" },
-  pending_pickup: { label: "Pendiente de recoger", color: "bg-yellow-100 text-yellow-800" },
-  processing: { label: "Preparando", color: "bg-blue-100 text-blue-800" },
-  shipped: { label: "En camino", color: "bg-indigo-100 text-indigo-800" },
-  ready_for_pickup: { label: "Listo para recoger", color: "bg-green-100 text-green-800" },
-  completed: { label: "Completado", color: "bg-gray-100 text-gray-800" },
-  delivered: { label: "Entregado", color: "bg-gray-100 text-gray-800" },
-  picked_up: { label: "Recogido", color: "bg-gray-100 text-gray-800" },
-  cancelled: { label: "Cancelado", color: "bg-red-100 text-red-800" },
-  failed: { label: "Fallido", color: "bg-red-100 text-red-800" },
-  approved: { label: "Aprobada", color: "bg-green-100 text-green-700" },
-  rejected: { label: "Rechazada", color: "bg-red-100 text-red-700" },
+  pending: { label: "Pendiente", color: "border border-amber-200 bg-amber-50 text-amber-800" },
+  paid: { label: "Pagado", color: "border border-[#20096F]/10 bg-[#eff2ff] text-[#20096F]" },
+  pending_delivery: { label: "Pendiente entrega", color: "border border-amber-200 bg-amber-50 text-amber-800" },
+  pending_pickup: { label: "Pendiente de recoger", color: "border border-amber-200 bg-amber-50 text-amber-800" },
+  processing: { label: "Preparando", color: "border border-[#850C22]/10 bg-[#fff3f4] text-[#850C22]" },
+  shipped: { label: "En camino", color: "border border-sky-200 bg-sky-50 text-sky-800" },
+  ready_for_pickup: { label: "Listo para recoger", color: "border border-[#9943ED]/10 bg-[#f6f0ff] text-[#6d33bf]" },
+  completed: { label: "Completado", color: "border border-gray-200 bg-gray-50 text-gray-700" },
+  delivered: { label: "Entregado", color: "border border-gray-200 bg-gray-50 text-gray-700" },
+  picked_up: { label: "Recogido", color: "border border-gray-200 bg-gray-50 text-gray-700" },
+  cancelled: { label: "Cancelado", color: "border border-[#EB1902]/10 bg-[#fff1ef] text-[#EB1902]" },
+  failed: { label: "Fallido", color: "border border-[#EB1902]/10 bg-[#fff1ef] text-[#EB1902]" },
+  approved: { label: "Aprobada", color: "border border-[#20096F]/10 bg-[#eff2ff] text-[#20096F]" },
+  rejected: { label: "Rechazada", color: "border border-[#EB1902]/10 bg-[#fff1ef] text-[#EB1902]" },
 };
 
 export const finalStatuses = ["completed", "cancelled", "delivered", "picked_up", "failed"];

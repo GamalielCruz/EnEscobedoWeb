@@ -35,8 +35,8 @@ export function DashboardShell({
   const [mobileOpen, setMobileOpen] = React.useState(false);
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <div className="mx-auto flex min-h-screen max-w-[1600px]">
+    <div className="min-h-screen bg-[#f5f5f6] text-gray-900">
+      <div className="mx-auto flex min-h-screen max-w-[1580px]">
         <DashboardSidebar
           currentSection={currentSection}
           onSectionChange={(section) => {
@@ -68,7 +68,7 @@ export function DashboardShell({
             }
           />
 
-          <main className="flex-1 p-4 md:p-6">{children}</main>
+          <main className="flex-1 px-4 pb-5 pt-4 md:px-6 md:pb-6 md:pt-5">{children}</main>
         </div>
       </div>
     </div>

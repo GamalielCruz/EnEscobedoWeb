@@ -3,8 +3,17 @@
 import { ArrowRight, Package, Settings2, ShoppingBag } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 
+import {
+  DashboardDescription,
+  DashboardEmptyState,
+  DashboardEyebrow,
+  DashboardPanel,
+  DashboardPanelBody,
+  DashboardPanelHeader,
+  DashboardStatusPill,
+  DashboardTitle,
+} from "./dashboard.design";
 import { DashboardMetrics } from "./DashboardMetrics";
 import { DashboardQuickToggles } from "./DashboardQuickToggles";
 import { OrderCard } from "./OrderCard";
@@ -40,11 +49,44 @@ export function DashboardHomeSection({
   onGoToProducts,
   onGoToStore,
 }: DashboardHomeSectionProps) {
+  const alertItems = [
+    !isOpen ? "La tienda esta cerrada y los pedidos nuevos deben permanecer detenidos." : null,
+    highDemandMode ? "Alta Demanda esta activa y el cliente ya ve un aviso de demoras." : null,
+    metrics.pendingOrders > 0
+      ? `${metrics.pendingOrders} pedidos requieren atencion inmediata.`
+      : "No hay pedidos urgentes en cola.",
+  ].filter(Boolean);
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      <DashboardPanel tone={!isOpen ? "danger" : "subtle"} className="overflow-hidden">
+        <DashboardPanelBody className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between">
+          <div className="min-w-0">
+            <DashboardEyebrow>Resumen operativo</DashboardEyebrow>
+            <DashboardTitle className="mt-1 text-[18px]">
+              {isOpen ? "La tienda esta operando" : "La tienda esta pausada"}
+            </DashboardTitle>
+            <DashboardDescription className="mt-1 max-w-3xl">
+              Revisa estado actual, ventas del dia y acciones pendientes antes de entrar al detalle.
+            </DashboardDescription>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <DashboardStatusPill tone={isOpen ? "success" : "danger"}>
+              {isOpen ? "Abierta" : "Cerrada"}
+            </DashboardStatusPill>
+            <DashboardStatusPill tone={highDemandMode ? "warning" : "neutral"}>
+              {highDemandMode ? "Alta demanda" : "Flujo normal"}
+            </DashboardStatusPill>
+            <DashboardStatusPill tone={metrics.pendingOrders > 0 ? "brand" : "neutral"}>
+              {metrics.pendingOrders > 0 ? `${metrics.pendingOrders} por atender` : "Sin pendientes"}
+            </DashboardStatusPill>
+          </div>
+        </DashboardPanelBody>
+      </DashboardPanel>
+
       <DashboardMetrics metrics={metrics} />
 
-      <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
+      <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <DashboardQuickToggles
           isOpen={isOpen}
           highDemandMode={highDemandMode}
@@ -53,62 +95,98 @@ export function DashboardHomeSection({
           onToggleHighDemand={onToggleHighDemand}
         />
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Accesos directos</CardTitle>
-            <CardDescription>Atajos para las tareas mas usadas del dia.</CardDescription>
-          </CardHeader>
-          <CardContent className="grid gap-3">
-            <Button
-              type="button"
-              className="justify-between bg-[#ff8800] text-gray-900 hover:bg-[#ff8800]/90"
-              onClick={onGoToOrders}
-            >
-              <span className="flex items-center gap-2">
-                <ShoppingBag className="h-4 w-4" />
-                Ver pedidos
-              </span>
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-            <Button type="button" variant="outline" className="justify-between" onClick={onGoToProducts}>
-              <span className="flex items-center gap-2">
-                <Package className="h-4 w-4" />
-                Gestionar productos
-              </span>
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-            <Button type="button" variant="outline" className="justify-between" onClick={onGoToStore}>
-              <span className="flex items-center gap-2">
-                <Settings2 className="h-4 w-4" />
-                Configurar tienda
-              </span>
-              <ArrowRight className="h-4 w-4" />
-            </Button>
-          </CardContent>
-        </Card>
+        <DashboardPanel>
+          <DashboardPanelHeader>
+            <DashboardEyebrow>Atajos</DashboardEyebrow>
+            <DashboardTitle className="text-[17px]">Que necesita tu atencion</DashboardTitle>
+            <DashboardDescription>
+              Lleva la operacion a lo importante sin recorrer todo el panel.
+            </DashboardDescription>
+          </DashboardPanelHeader>
+          <DashboardPanelBody className="space-y-3">
+            <div className="space-y-2">
+              {alertItems.map((alert) => (
+                <div
+                  key={alert}
+                  className="rounded-lg border border-black/6 bg-[#fafafb] px-3 py-2 text-[13px] text-gray-700"
+                >
+                  {alert}
+                </div>
+              ))}
+            </div>
+            <div className="grid gap-2.5">
+              <Button
+                type="button"
+                className="h-10 justify-between rounded-lg bg-[#EB1902] px-4 text-white hover:bg-[#850C22]"
+                onClick={onGoToOrders}
+              >
+                <span className="flex items-center gap-2">
+                  <ShoppingBag className="h-4 w-4" />
+                  Revisar pedidos
+                </span>
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 justify-between rounded-lg border-black/8 bg-white px-4 hover:bg-gray-50"
+                onClick={onGoToProducts}
+              >
+                <span className="flex items-center gap-2">
+                  <Package className="h-4 w-4" />
+                  Actualizar menu
+                </span>
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-10 justify-between rounded-lg border-black/8 bg-white px-4 hover:bg-gray-50"
+                onClick={onGoToStore}
+              >
+                <span className="flex items-center gap-2">
+                  <Settings2 className="h-4 w-4" />
+                  Ajustes de tienda
+                </span>
+                <ArrowRight className="h-4 w-4" />
+              </Button>
+            </div>
+          </DashboardPanelBody>
+        </DashboardPanel>
       </div>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-4">
+      <DashboardPanel>
+        <DashboardPanelHeader align="spread">
           <div>
-            <CardTitle className="text-lg">Pedidos activos</CardTitle>
-            <CardDescription>Vista rapida de los pedidos pendientes mas recientes.</CardDescription>
+            <DashboardEyebrow>Actividad reciente</DashboardEyebrow>
+            <DashboardTitle className="mt-1 text-[17px]">Pedidos activos</DashboardTitle>
+            <DashboardDescription className="mt-1">
+              Vista rapida de lo que sigue en cocina, entrega o pickup.
+            </DashboardDescription>
           </div>
-          <Button type="button" variant="ghost" className="text-[#eb1902]" onClick={onGoToOrders}>
-            Ver todos
-            <ArrowRight className="h-4 w-4" />
-          </Button>
-        </CardHeader>
-        <CardContent className="grid gap-4">
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              className="h-9 rounded-lg px-3 text-[#850C22] hover:bg-[#fff3f4] hover:text-[#850C22]"
+              onClick={onGoToOrders}
+            >
+              Ver todos
+              <ArrowRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </DashboardPanelHeader>
+        <DashboardPanelBody className="grid gap-3">
           {activeOrders.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-10 text-center text-gray-500">
-              No hay pedidos activos en este momento.
-            </div>
+            <DashboardEmptyState
+              title="No hay pedidos activos"
+              description="Cuando lleguen nuevos pedidos apareceran aqui para darles seguimiento rapido."
+            />
           ) : (
             activeOrders.slice(0, 5).map((order) => <OrderCard key={order._id} order={order} compact />)
           )}
-        </CardContent>
-      </Card>
+        </DashboardPanelBody>
+      </DashboardPanel>
     </div>
   );
 }

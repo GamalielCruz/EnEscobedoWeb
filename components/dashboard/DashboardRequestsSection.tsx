@@ -1,5 +1,6 @@
 "use client";
 
+import { DashboardPanel, DashboardPanelBody, DashboardStatusPill } from "./dashboard.design";
 import { RequestStatusList } from "./RequestStatusList";
 import type { ProductRequest, StoreRequest } from "./dashboard.types";
 import { extractPlainTextFromBlocks, formatCurrency } from "./dashboard.utils";
@@ -13,6 +14,10 @@ export function DashboardRequestsSection({
   productRequests,
   storeRequests,
 }: DashboardRequestsSectionProps) {
+  const totalPending =
+    productRequests.filter((request) => request.status === "pending").length +
+    storeRequests.filter((request) => request.status === "pending").length;
+
   const mappedProductRequests = productRequests.map((request) => ({
     id: request._id,
     title: request.product?.name || "Producto",
@@ -55,7 +60,26 @@ export function DashboardRequestsSection({
   }));
 
   return (
-    <div className="grid gap-6 xl:grid-cols-2">
+    <div className="space-y-4">
+      <DashboardPanel tone="subtle">
+        <DashboardPanelBody className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-gray-950">Flujo de solicitudes</p>
+            <p className="mt-1 text-sm text-gray-600">
+              Consulta cambios enviados, revisa aprobaciones y detecta rechazos sin cambiar de vista.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <DashboardStatusPill tone={totalPending > 0 ? "warning" : "neutral"}>
+              {totalPending} pendientes
+            </DashboardStatusPill>
+            <DashboardStatusPill tone="accent">{productRequests.length} de productos</DashboardStatusPill>
+            <DashboardStatusPill tone="neutral">{storeRequests.length} de tienda</DashboardStatusPill>
+          </div>
+        </DashboardPanelBody>
+      </DashboardPanel>
+
+      <div className="grid gap-4 xl:grid-cols-2">
       <RequestStatusList
         title="Solicitudes de productos"
         description="Productos nuevos o cambios enviados para aprobacion."
@@ -68,6 +92,7 @@ export function DashboardRequestsSection({
         emptyMessage="No hay solicitudes de tienda."
         items={mappedStoreRequests}
       />
+      </div>
     </div>
   );
 }

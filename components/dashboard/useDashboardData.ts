@@ -15,6 +15,7 @@ import type {
   StoreConfig,
   StoreRequest,
 } from "./dashboard.types";
+import { getLocalDayBounds } from "./dashboard.utils";
 
 type StoreImageAsset = { _type: string; asset: { _type: string; _ref: string } };
 
@@ -50,16 +51,34 @@ export function useDashboardData() {
     [ownedStores, selectedStoreId]
   );
 
+  const [dayBounds] = React.useState(() => getLocalDayBounds());
+  const { startAt: todayStartAt, endAt: todayEndAt } = dayBounds;
+  const todayQueryParams = React.useMemo(
+    () => ({
+      scope: "today",
+      startAt: todayStartAt,
+      endAt: todayEndAt,
+    }),
+    [todayStartAt, todayEndAt]
+  );
+  const historyQueryParams = React.useMemo(
+    () => ({
+      scope: "history",
+      beforeAt: todayStartAt,
+    }),
+    [todayStartAt]
+  );
+
   const todayOrdersHook = useOrderNotifications({
     storeId: selectedStoreId,
     enabled: Boolean(selectedStoreId),
-    queryParams: { scope: "today" },
+    queryParams: todayQueryParams,
   });
 
   const historyOrdersHook = useOrderNotifications({
     storeId: selectedStoreId,
     enabled: Boolean(selectedStoreId),
-    queryParams: { scope: "history" },
+    queryParams: historyQueryParams,
   });
 
   const activeOrders = React.useMemo(

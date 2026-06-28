@@ -13,6 +13,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+import {
+  DashboardDescription,
+  DashboardEmptyState,
+  DashboardEyebrow,
+  DashboardPanel,
+  DashboardPanelBody,
+  DashboardPanelHeader,
+  DashboardStatusPill,
+  DashboardTitle,
+} from "./dashboard.design";
 import { ProductCard } from "./ProductCard";
 import { ProductEditorDialog } from "./ProductEditorDialog";
 import type { CategoryOption, Product, ProductFormState } from "./dashboard.types";
@@ -96,38 +106,57 @@ export function DashboardProductsSection({
 
   return (
     <>
-      <Card>
-        <CardHeader className="gap-4">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <CardTitle>Productos</CardTitle>
-              <CardDescription>
-                Organiza tu menu, detecta solicitudes pendientes y agrega nuevos productos.
-              </CardDescription>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <Button type="button" variant="outline" onClick={onRefresh} disabled={refreshing}>
-                <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-                Actualizar
-              </Button>
-              <Button
-                type="button"
-                className="bg-[#ff8800] text-gray-900 hover:bg-[#ff8800]/90"
-                onClick={handleOpenCreate}
-              >
-                <Plus className="h-4 w-4" />
-                Agregar producto
-              </Button>
-            </div>
+      <DashboardPanel>
+        <DashboardPanelHeader align="spread" className="gap-4">
+          <div>
+            <DashboardEyebrow>Catalogo</DashboardEyebrow>
+            <DashboardTitle className="mt-1">Productos</DashboardTitle>
+            <DashboardDescription className="mt-1">
+              Administra disponibilidad, cambios pendientes y nuevos productos desde una sola vista.
+            </DashboardDescription>
           </div>
 
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="flex flex-wrap items-center gap-2">
+            <DashboardStatusPill tone="neutral">{products.length} totales</DashboardStatusPill>
+            <DashboardStatusPill tone="accent">
+              {Object.values(pendingChanges).filter(Boolean).length} con cambios pendientes
+            </DashboardStatusPill>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-9 rounded-lg border-black/8 px-3 shadow-none hover:bg-gray-50"
+              onClick={onRefresh}
+              disabled={refreshing}
+            >
+              <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+              Actualizar
+            </Button>
+            <Button
+              type="button"
+              className="h-9 rounded-lg bg-[#EB1902] px-3 text-white hover:bg-[#850C22]"
+              onClick={handleOpenCreate}
+            >
+              <Plus className="h-4 w-4" />
+              Agregar producto
+            </Button>
+          </div>
+        </DashboardPanelHeader>
+
+        <DashboardPanelBody className="space-y-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                Filtro de categoria
+              </p>
+              <DashboardDescription className="mt-1 text-[13px]">
+                Reduce ruido y enfocate en una parte del menu.
+              </DashboardDescription>
+            </div>
             <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger className="w-full bg-white sm:w-[220px]">
+              <SelectTrigger className="h-9 w-full rounded-lg border-black/8 bg-white shadow-none sm:w-[240px]">
                 <SelectValue placeholder="Filtrar por categoria" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="rounded-xl border-black/8 shadow-[0_10px_28px_rgba(15,23,42,0.08)]">
                 <SelectItem value="all">Todas las categorias</SelectItem>
                 {availableCategories.map((category) => (
                   <SelectItem key={category._id} value={category._id}>
@@ -137,19 +166,19 @@ export function DashboardProductsSection({
               </SelectContent>
             </Select>
           </div>
-        </CardHeader>
 
-        <CardContent>
           {loading ? (
-            <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-12 text-center text-gray-500">
-              Cargando productos...
-            </div>
+            <DashboardEmptyState
+              title="Cargando productos"
+              description="Estamos preparando el catalogo para esta tienda."
+            />
           ) : filteredProducts.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-12 text-center text-gray-500">
-              No hay productos para la categoria seleccionada.
-            </div>
+            <DashboardEmptyState
+              title="Sin productos para este filtro"
+              description="Prueba otra categoria o agrega nuevos productos al menu."
+            />
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            <div className="grid gap-3 xl:grid-cols-2">
               {filteredProducts.map((product) => (
                 <ProductCard
                   key={product._id}
@@ -160,8 +189,8 @@ export function DashboardProductsSection({
               ))}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </DashboardPanelBody>
+      </DashboardPanel>
 
       <ProductEditorDialog
         open={modalOpen}

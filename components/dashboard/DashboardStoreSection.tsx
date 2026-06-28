@@ -3,11 +3,19 @@
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+import {
+  DashboardDescription,
+  DashboardEyebrow,
+  DashboardPanel,
+  DashboardPanelBody,
+  DashboardPanelHeader,
+  DashboardStatusPill,
+  DashboardTitle,
+} from "./dashboard.design";
 import { weekdays } from "./dashboard.constants";
 import { RequestStatusList } from "./RequestStatusList";
 import type { StoreConfig, StoreRequest, StoreSettingsDraft } from "./dashboard.types";
@@ -57,23 +65,50 @@ export function DashboardStoreSection({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
+      <DashboardPanel tone="subtle">
+        <DashboardPanelBody className="flex flex-col gap-3 py-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <DashboardEyebrow>Configuracion</DashboardEyebrow>
+            <DashboardTitle className="mt-1 text-[17px]">Mi tienda</DashboardTitle>
+            <DashboardDescription className="mt-1">
+              Agrupa datos operativos, disponibilidad y delivery antes de enviar cambios al administrador.
+            </DashboardDescription>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <DashboardStatusPill tone={draft.isOpen ? "success" : "danger"}>
+              {draft.isOpen ? "Abierta" : "Cerrada"}
+            </DashboardStatusPill>
+            <DashboardStatusPill tone={draft.highDemandMode ? "warning" : "neutral"}>
+              {draft.highDemandMode ? "Alta demanda" : "Operacion normal"}
+            </DashboardStatusPill>
+            <DashboardStatusPill tone="neutral">
+              {storeRequests.filter((request) => request.status === "pending").length} pendientes
+            </DashboardStatusPill>
+          </div>
+        </DashboardPanelBody>
+      </DashboardPanel>
+
       {message ? (
-        <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+        <div className="rounded-xl border border-[#20096F]/10 bg-[#eff2ff] px-4 py-3 text-sm text-[#20096F]">
           {message}
         </div>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle>Informacion general</CardTitle>
-            <CardDescription>Datos visibles y operativos de la tienda.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
+      <div className="grid gap-4 xl:grid-cols-2">
+        <DashboardPanel>
+          <DashboardPanelHeader>
+            <DashboardEyebrow>Perfil</DashboardEyebrow>
+            <DashboardTitle className="text-[17px]">Informacion general</DashboardTitle>
+            <DashboardDescription>Datos visibles y operativos del negocio.</DashboardDescription>
+          </DashboardPanelHeader>
+          <DashboardPanelBody className="space-y-4">
             <div>
-              <Label>Nombre de la tienda</Label>
+              <Label className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                Nombre de la tienda
+              </Label>
               <Input
+                className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                 value={draft.name}
                 onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
               />
@@ -81,8 +116,11 @@ export function DashboardStoreSection({
 
             <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <Label>Telefono</Label>
+                <Label className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                  Telefono
+                </Label>
                 <Input
+                  className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                   value={draft.contact.phone}
                   onChange={(event) =>
                     setDraft((current) => ({
@@ -93,8 +131,11 @@ export function DashboardStoreSection({
                 />
               </div>
               <div>
-                <Label>Email</Label>
+                <Label className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                  Email
+                </Label>
                 <Input
+                  className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                   value={draft.contact.email}
                   onChange={(event) =>
                     setDraft((current) => ({
@@ -107,8 +148,11 @@ export function DashboardStoreSection({
             </div>
 
             <div>
-              <Label>Encargado</Label>
+              <Label className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                Encargado
+              </Label>
               <Input
+                className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                 value={draft.contact.manager}
                 onChange={(event) =>
                   setDraft((current) => ({
@@ -121,8 +165,11 @@ export function DashboardStoreSection({
 
             <div className="grid gap-4 md:grid-cols-2">
               <div>
-                <Label>Calle</Label>
+                <Label className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                  Calle
+                </Label>
                 <Input
+                  className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                   value={draft.address.street}
                   onChange={(event) =>
                     setDraft((current) => ({
@@ -133,8 +180,11 @@ export function DashboardStoreSection({
                 />
               </div>
               <div>
-                <Label>Ciudad</Label>
+                <Label className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                  Ciudad
+                </Label>
                 <Input
+                  className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                   value={draft.address.city}
                   onChange={(event) =>
                     setDraft((current) => ({
@@ -145,8 +195,11 @@ export function DashboardStoreSection({
                 />
               </div>
               <div>
-                <Label>Estado</Label>
+                <Label className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                  Estado
+                </Label>
                 <Input
+                  className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                   value={draft.address.state}
                   onChange={(event) =>
                     setDraft((current) => ({
@@ -157,8 +210,11 @@ export function DashboardStoreSection({
                 />
               </div>
               <div>
-                <Label>Codigo postal</Label>
+                <Label className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                  Codigo postal
+                </Label>
                 <Input
+                  className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                   value={draft.address.postalCode}
                   onChange={(event) =>
                     setDraft((current) => ({
@@ -169,17 +225,19 @@ export function DashboardStoreSection({
                 />
               </div>
             </div>
-          </CardContent>
-        </Card>
+          </DashboardPanelBody>
+        </DashboardPanel>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Servicio y delivery</CardTitle>
-            <CardDescription>Tipos de servicio, estado y ajustes de entrega.</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <DashboardPanel>
+          <DashboardPanelHeader>
+            <DashboardEyebrow>Operacion</DashboardEyebrow>
+            <DashboardTitle className="text-[17px]">Servicio y delivery</DashboardTitle>
+            <DashboardDescription>Disponibilidad, tipos de servicio y parametros de entrega.</DashboardDescription>
+          </DashboardPanelHeader>
+          <DashboardPanelBody className="space-y-4">
             <div className="grid gap-3 md:grid-cols-2">
-              <div className="flex items-center gap-2">
+              <div className="rounded-xl border border-black/6 bg-[#fafafb] px-3 py-3">
+                <div className="flex items-center gap-2">
                 <Checkbox
                   id="draft-is-open"
                   checked={draft.isOpen}
@@ -187,9 +245,14 @@ export function DashboardStoreSection({
                     setDraft((current) => ({ ...current, isOpen: Boolean(checked) }))
                   }
                 />
-                <Label htmlFor="draft-is-open">Tienda abierta</Label>
+                  <Label htmlFor="draft-is-open">Tienda abierta</Label>
+                </div>
+                <p className="mt-2 text-[13px] text-gray-600">
+                  Si esta desactivada, el cliente no deberia poder generar pedidos nuevos.
+                </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="rounded-xl border border-black/6 bg-[#fafafb] px-3 py-3">
+                <div className="flex items-center gap-2">
                 <Checkbox
                   id="draft-high-demand"
                   checked={draft.highDemandMode}
@@ -204,9 +267,14 @@ export function DashboardStoreSection({
                     }))
                   }
                 />
-                <Label htmlFor="draft-high-demand">Alta demanda</Label>
+                  <Label htmlFor="draft-high-demand">Alta demanda</Label>
+                </div>
+                <p className="mt-2 text-[13px] text-gray-600">
+                  Informa retrasos y suma minutos al estimado cuando la cocina va saturada.
+                </p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="rounded-xl border border-black/6 bg-[#fafafb] px-3 py-3">
+                <div className="flex items-center gap-2">
                 <Checkbox
                   id="draft-delivery"
                   checked={draft.serviceTypes.delivery}
@@ -217,9 +285,12 @@ export function DashboardStoreSection({
                     }))
                   }
                 />
-                <Label htmlFor="draft-delivery">Entrega a domicilio</Label>
+                  <Label htmlFor="draft-delivery">Entrega a domicilio</Label>
+                </div>
+                <p className="mt-2 text-[13px] text-gray-600">Mantiene habilitado el flujo de delivery.</p>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="rounded-xl border border-black/6 bg-[#fafafb] px-3 py-3">
+                <div className="flex items-center gap-2">
                 <Checkbox
                   id="draft-pickup"
                   checked={draft.serviceTypes.pickup}
@@ -230,14 +301,19 @@ export function DashboardStoreSection({
                     }))
                   }
                 />
-                <Label htmlFor="draft-pickup">Recoger en tienda</Label>
+                  <Label htmlFor="draft-pickup">Recoger en tienda</Label>
+                </div>
+                <p className="mt-2 text-[13px] text-gray-600">Permite pedidos para recoger en sucursal.</p>
               </div>
             </div>
 
             <div className="grid gap-4 md:grid-cols-3">
               <div>
-                <Label>Radio de entrega</Label>
+                <Label className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                  Radio de entrega
+                </Label>
                 <Input
+                  className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                   type="number"
                   value={draft.serviceTypes.deliveryRadius}
                   onChange={(event) =>
@@ -252,8 +328,11 @@ export function DashboardStoreSection({
                 />
               </div>
               <div>
-                <Label>Pedido minimo</Label>
+                <Label className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                  Pedido minimo
+                </Label>
                 <Input
+                  className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                   type="number"
                   value={draft.serviceTypes.minimumOrderDelivery}
                   onChange={(event) =>
@@ -268,8 +347,11 @@ export function DashboardStoreSection({
                 />
               </div>
               <div>
-                <Label>Minutos extra por alta demanda</Label>
+                <Label className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                  Minutos extra por alta demanda
+                </Label>
                 <Input
+                  className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                   type="number"
                   value={draft.serviceTypes.onDemandExtraMinutes}
                   onChange={(event) =>
@@ -288,27 +370,31 @@ export function DashboardStoreSection({
             <div className="flex justify-end">
               <Button
                 type="button"
-                className="bg-[#ff8800] text-gray-900 hover:bg-[#ff8800]/90"
+                className="h-10 rounded-lg bg-[#EB1902] px-4 text-white hover:bg-[#850C22]"
                 disabled={submitting}
                 onClick={handleSubmit}
               >
                 {submitting ? "Enviando..." : "Solicitar cambios"}
               </Button>
             </div>
-          </CardContent>
-        </Card>
+          </DashboardPanelBody>
+        </DashboardPanel>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Horarios</CardTitle>
-          <CardDescription>Define los horarios operativos por dia.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <DashboardPanel>
+        <DashboardPanelHeader>
+          <DashboardEyebrow>Horarios</DashboardEyebrow>
+          <DashboardTitle className="text-[17px]">Disponibilidad semanal</DashboardTitle>
+          <DashboardDescription>Define los horarios operativos por dia y mantenlos claros para el admin.</DashboardDescription>
+        </DashboardPanelHeader>
+        <DashboardPanelBody className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {weekdays.map((day) => (
             <div key={day.key}>
-              <Label>{day.label}</Label>
+              <Label className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                {day.label}
+              </Label>
               <Input
+                className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                 value={draft.operatingHours[day.key as keyof StoreSettingsDraft["operatingHours"]]}
                 onChange={(event) =>
                   setDraft((current) => ({
@@ -322,8 +408,8 @@ export function DashboardStoreSection({
               />
             </div>
           ))}
-        </CardContent>
-      </Card>
+        </DashboardPanelBody>
+      </DashboardPanel>
 
       <RequestStatusList
         title="Historial de solicitudes"

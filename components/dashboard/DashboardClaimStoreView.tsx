@@ -3,7 +3,17 @@
 import { Building2, Loader2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
+import {
+  DashboardDescription,
+  DashboardEmptyState,
+  DashboardEyebrow,
+  DashboardPanel,
+  DashboardPanelBody,
+  DashboardPanelHeader,
+  DashboardStatusPill,
+  DashboardTitle,
+} from "./dashboard.design";
 
 type StoreOption = {
   _id: string;
@@ -26,36 +36,48 @@ export function DashboardClaimStoreView({
   onReload,
 }: DashboardClaimStoreViewProps) {
   return (
-    <div className="mx-auto max-w-4xl space-y-6 p-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Activa tu panel</CardTitle>
-          <CardDescription>
-            Aun no hay una tienda asociada a tu cuenta. Selecciona una tienda disponible para comenzar.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+    <div className="mx-auto max-w-5xl space-y-4 p-6">
+      <DashboardPanel>
+        <DashboardPanelHeader align="spread">
+          <div>
+            <DashboardEyebrow>Acceso inicial</DashboardEyebrow>
+            <DashboardTitle className="mt-1">Activa tu panel</DashboardTitle>
+            <DashboardDescription className="mt-1">
+              Aun no hay una tienda asociada a tu cuenta. Selecciona una tienda disponible para comenzar.
+            </DashboardDescription>
+          </div>
+          <DashboardStatusPill tone="neutral">{stores.length} tiendas disponibles</DashboardStatusPill>
+        </DashboardPanelHeader>
+        <DashboardPanelBody className="space-y-4">
           <div className="flex justify-end">
-            <Button type="button" variant="outline" onClick={onReload} disabled={loading}>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-9 rounded-lg border-black/8 px-3 shadow-none"
+              onClick={onReload}
+              disabled={loading}
+            >
               Recargar tiendas
             </Button>
           </div>
 
           {loading ? (
-            <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-10 text-center text-gray-500">
-              Cargando tiendas disponibles...
-            </div>
+            <DashboardEmptyState
+              title="Cargando tiendas disponibles"
+              description="Espera un momento mientras consultamos las sucursales que puedes reclamar."
+            />
           ) : stores.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-10 text-center text-gray-500">
-              No hay tiendas disponibles para reclamar.
-            </div>
+            <DashboardEmptyState
+              title="No hay tiendas para reclamar"
+              description="Cuando exista una tienda disponible la veras aqui."
+            />
           ) : (
             <div className="grid gap-4 md:grid-cols-2">
               {stores.map((store) => (
-                <Card key={store._id} className="border-gray-200">
-                  <CardContent className="flex items-center justify-between gap-4 p-4">
+                <DashboardPanel key={store._id} className="px-4 py-4">
+                  <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-3">
-                      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-orange-50 text-[#ff8800]">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-[#fff1ef] text-[#850C22]">
                         <Building2 className="h-5 w-5" />
                       </div>
                       <div>
@@ -66,7 +88,7 @@ export function DashboardClaimStoreView({
 
                     <Button
                       type="button"
-                      className="bg-[#ff8800] text-gray-900 hover:bg-[#ff8800]/90"
+                      className="h-9 rounded-lg bg-[#EB1902] px-3 text-white hover:bg-[#850C22]"
                       disabled={claimingStoreId === store._id}
                       onClick={() => onClaimStore(store._id)}
                     >
@@ -79,13 +101,13 @@ export function DashboardClaimStoreView({
                         "Reclamar"
                       )}
                     </Button>
-                  </CardContent>
-                </Card>
+                  </div>
+                </DashboardPanel>
               ))}
             </div>
           )}
-        </CardContent>
-      </Card>
+        </DashboardPanelBody>
+      </DashboardPanel>
     </div>
   );
 }

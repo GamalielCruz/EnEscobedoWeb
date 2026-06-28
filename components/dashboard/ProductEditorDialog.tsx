@@ -3,7 +3,6 @@
 import { ImageIcon, Loader2, Plus, Settings, Tag, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -26,6 +25,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 
+import { DashboardStatusPill } from "./dashboard.design";
 import type { CategoryOption, ProductFormState } from "./dashboard.types";
 
 type ProductEditorDialogProps = {
@@ -55,22 +55,31 @@ export function ProductEditorDialog({
 }: ProductEditorDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto">
+      <DialogContent className="max-h-[90vh] max-w-5xl overflow-y-auto rounded-2xl border-black/8 p-0 shadow-[0_18px_60px_rgba(15,23,42,0.16)]">
         <DialogHeader>
-          <DialogTitle>{editingProductId ? "Editar producto" : "Agregar producto"}</DialogTitle>
-          <DialogDescription>
-            {editingProductId
-              ? "Edita la informacion del producto y envia los cambios para aprobacion."
-              : "Completa la informacion para enviar un nuevo producto a revision."}
-          </DialogDescription>
+          <div className="border-b border-black/6 px-6 py-5">
+            <div className="flex flex-wrap items-center gap-2">
+              <DashboardStatusPill tone="accent">
+                {editingProductId ? "Edicion" : "Nuevo producto"}
+              </DashboardStatusPill>
+            </div>
+            <DialogTitle className="mt-3 text-xl">
+              {editingProductId ? "Editar producto" : "Agregar producto"}
+            </DialogTitle>
+            <DialogDescription className="mt-1">
+              {editingProductId
+                ? "Edita la informacion del producto y envia los cambios para aprobacion."
+                : "Completa la informacion para enviar un nuevo producto a revision."}
+            </DialogDescription>
+          </div>
         </DialogHeader>
 
-        <form onSubmit={onSubmit}>
+        <form onSubmit={onSubmit} className="px-6 pb-6">
           <Tabs defaultValue="basic" className="w-full">
-            <TabsList className="grid w-full grid-cols-3">
-              <TabsTrigger value="basic">Basico</TabsTrigger>
-              <TabsTrigger value="media">Imagen y categorias</TabsTrigger>
-              <TabsTrigger value="options">Opciones</TabsTrigger>
+            <TabsList className="mt-5 grid h-10 w-full grid-cols-3 rounded-lg border border-black/6 bg-[#f6f6f7] p-1">
+              <TabsTrigger className="rounded-md text-[13px] data-[state=active]:bg-white data-[state=active]:shadow-[0_1px_2px_rgba(15,23,42,0.06)]" value="basic">Basico</TabsTrigger>
+              <TabsTrigger className="rounded-md text-[13px] data-[state=active]:bg-white data-[state=active]:shadow-[0_1px_2px_rgba(15,23,42,0.06)]" value="media">Imagen y categorias</TabsTrigger>
+              <TabsTrigger className="rounded-md text-[13px] data-[state=active]:bg-white data-[state=active]:shadow-[0_1px_2px_rgba(15,23,42,0.06)]" value="options">Opciones</TabsTrigger>
             </TabsList>
 
             <TabsContent value="basic" className="space-y-4 pt-4">
@@ -78,6 +87,7 @@ export function ProductEditorDialog({
                 <Label htmlFor="product-name">Nombre del producto *</Label>
                 <Input
                   id="product-name"
+                  className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                   value={formState.name}
                   onChange={(event) =>
                     setFormState((current) => ({ ...current, name: event.target.value }))
@@ -92,6 +102,7 @@ export function ProductEditorDialog({
                   <Label htmlFor="product-price">Precio *</Label>
                   <Input
                     id="product-price"
+                    className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                     type="number"
                     min="0"
                     step="0.01"
@@ -106,6 +117,7 @@ export function ProductEditorDialog({
                   <Label htmlFor="product-stock">Inventario</Label>
                   <Input
                     id="product-stock"
+                    className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                     type="number"
                     min="0"
                     value={formState.stock}
@@ -121,7 +133,7 @@ export function ProductEditorDialog({
                 <Textarea
                   id="product-description"
                   rows={5}
-                  className="resize-none"
+                  className="mt-1 resize-none rounded-lg border-black/8 shadow-none"
                   value={formState.description}
                   onChange={(event) =>
                     setFormState((current) => ({
@@ -142,9 +154,9 @@ export function ProductEditorDialog({
                 </Label>
                 <div className="mt-2 space-y-3">
                   {formState.image ? (
-                    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <div className="rounded-xl border border-black/6 bg-[#fafafb] p-4">
                       <div className="flex items-center justify-between">
-                        <p className="text-sm font-medium text-green-700">Imagen cargada</p>
+                        <p className="text-sm font-medium text-[#20096F]">Imagen cargada</p>
                         <Button
                           type="button"
                           variant="ghost"
@@ -161,9 +173,9 @@ export function ProductEditorDialog({
                       </p>
                     </div>
                   ) : (
-                    <div className="rounded-xl border-2 border-dashed border-gray-200 p-6 text-center">
+                    <div className="rounded-xl border border-dashed border-gray-300 bg-[#fafafb] p-6 text-center">
                       <ImageIcon className="mx-auto mb-2 h-10 w-10 text-gray-400" />
-                      <Label htmlFor="product-image-upload" className="cursor-pointer text-[#ff8800] hover:underline">
+                      <Label htmlFor="product-image-upload" className="cursor-pointer text-[#EB1902] hover:underline">
                         {uploadingImage ? "Subiendo..." : "Seleccionar imagen"}
                       </Label>
                       <input
@@ -174,7 +186,7 @@ export function ProductEditorDialog({
                         onChange={onImageUpload}
                         disabled={uploadingImage}
                       />
-                      {uploadingImage ? <Loader2 className="mx-auto mt-3 h-5 w-5 animate-spin text-[#ff8800]" /> : null}
+                      {uploadingImage ? <Loader2 className="mx-auto mt-3 h-5 w-5 animate-spin text-[#EB1902]" /> : null}
                     </div>
                   )}
                 </div>
@@ -189,7 +201,7 @@ export function ProductEditorDialog({
                 </Label>
 
                 {availableCategories.length > 0 ? (
-                  <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-gray-200 p-3">
+                  <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-black/6 p-3">
                     {availableCategories.map((category) => (
                       <div key={category._id} className="flex items-center gap-2">
                         <Checkbox
@@ -255,7 +267,7 @@ export function ProductEditorDialog({
               ) : (
                 <div className="space-y-4">
                   {formState.optionGroups.map((group, groupIndex) => (
-                    <Card key={group._key} className="p-4">
+                    <div key={group._key} className="rounded-xl border border-black/6 bg-[#fafafb] p-4">
                       <div className="space-y-3">
                         <div className="flex items-center justify-between">
                           <p className="font-semibold text-gray-900">Grupo {groupIndex + 1}</p>
@@ -278,6 +290,7 @@ export function ProductEditorDialog({
                           <div>
                             <Label>Titulo</Label>
                             <Input
+                              className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                               value={group.title}
                               onChange={(event) =>
                                 setFormState((current) => ({
@@ -292,6 +305,7 @@ export function ProductEditorDialog({
                           <div>
                             <Label>Descripcion</Label>
                             <Input
+                              className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                               value={group.description || ""}
                               onChange={(event) =>
                                 setFormState((current) => ({
@@ -336,10 +350,10 @@ export function ProductEditorDialog({
                                 }))
                               }
                             >
-                              <SelectTrigger>
+                              <SelectTrigger className="mt-1 h-10 rounded-lg border-black/8 shadow-none">
                                 <SelectValue />
                               </SelectTrigger>
-                              <SelectContent>
+                              <SelectContent className="rounded-xl border-black/8 shadow-[0_10px_28px_rgba(15,23,42,0.08)]">
                                 <SelectItem value="single">Una opcion</SelectItem>
                                 <SelectItem value="multiple">Multiples</SelectItem>
                               </SelectContent>
@@ -389,7 +403,7 @@ export function ProductEditorDialog({
                           ) : (
                             <div className="space-y-2">
                               {group.options.map((option, optionIndex) => (
-                                <div key={option._key} className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+                                <div key={option._key} className="rounded-xl border border-black/6 bg-white p-3">
                                   <div className="mb-2 flex items-center justify-between">
                                     <p className="text-sm font-medium text-gray-800">
                                       Opcion {optionIndex + 1}
@@ -420,6 +434,7 @@ export function ProductEditorDialog({
                                     <div>
                                       <Label>Etiqueta</Label>
                                       <Input
+                                        className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                                         value={option.label}
                                         onChange={(event) =>
                                           setFormState((current) => ({
@@ -443,6 +458,7 @@ export function ProductEditorDialog({
                                     <div>
                                       <Label>Costo adicional</Label>
                                       <Input
+                                        className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
                                         type="number"
                                         step="0.01"
                                         value={option.priceDelta}
@@ -500,7 +516,7 @@ export function ProductEditorDialog({
                           )}
                         </div>
                       </div>
-                    </Card>
+                    </div>
                   ))}
                 </div>
               )}
@@ -511,7 +527,7 @@ export function ProductEditorDialog({
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancelar
             </Button>
-            <Button type="submit" className="bg-[#ff8800] text-gray-900 hover:bg-[#ff8800]/90" disabled={submitting}>
+            <Button type="submit" className="bg-[#EB1902] text-white hover:bg-[#850C22]" disabled={submitting}>
               {submitting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : editingProductId ? (

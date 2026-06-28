@@ -14,6 +14,16 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+import {
+  DashboardDescription,
+  DashboardEmptyState,
+  DashboardEyebrow,
+  DashboardPanel,
+  DashboardPanelBody,
+  DashboardPanelHeader,
+  DashboardStatusPill,
+  DashboardTitle,
+} from "./dashboard.design";
 import { statusConfig } from "./dashboard.constants";
 import { OrderCard } from "./OrderCard";
 import type { DashboardOrder, OrderFilterState, OrderViewKey } from "./dashboard.types";
@@ -67,39 +77,67 @@ export function DashboardOrdersSection({
         : onRefreshHistoryOrders;
 
   return (
-    <Card>
-      <CardHeader className="gap-4">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-          <div>
-            <CardTitle>Pedidos</CardTitle>
-            <CardDescription>
-              Monitorea pedidos activos, del dia e historicos con filtros rapidos.
-            </CardDescription>
-          </div>
-
-          <div className="flex items-center gap-2 text-sm text-gray-500">
-            {currentLastUpdate ? (
-              <span>Actualizado: {currentLastUpdate.toLocaleTimeString()}</span>
-            ) : null}
-            <Button type="button" variant="outline" size="sm" onClick={refreshCurrent}>
-              <RefreshCw className={`h-4 w-4 ${currentOrdersLoading ? "animate-spin" : ""}`} />
-            </Button>
-          </div>
+    <DashboardPanel>
+      <DashboardPanelHeader align="spread" className="gap-4">
+        <div>
+          <DashboardEyebrow>Pedidos</DashboardEyebrow>
+          <DashboardTitle className="mt-1">Cola operativa</DashboardTitle>
+          <DashboardDescription className="mt-1">
+            Prioriza, filtra y cambia estados sin perder tiempo.
+          </DashboardDescription>
         </div>
 
+        <div className="flex flex-wrap items-center gap-2">
+          <DashboardStatusPill tone={filteredOrders.length > 0 ? "brand" : "neutral"}>
+            {filteredOrders.length} visibles
+          </DashboardStatusPill>
+          {currentLastUpdate ? (
+            <DashboardStatusPill tone="neutral">
+              Actualizado {currentLastUpdate.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+            </DashboardStatusPill>
+          ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 rounded-lg border-black/8 px-2.5 shadow-none hover:bg-gray-50"
+            onClick={refreshCurrent}
+          >
+            <RefreshCw className={`h-4 w-4 ${currentOrdersLoading ? "animate-spin" : ""}`} />
+            <span className="sr-only">Actualizar pedidos</span>
+          </Button>
+        </div>
+      </DashboardPanelHeader>
+
+      <DashboardPanelBody className="space-y-4">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
           <Tabs value={view} onValueChange={(value) => setView(value as OrderViewKey)}>
-            <TabsList className="grid w-full grid-cols-3 md:w-[420px]">
-              <TabsTrigger value="activos">Activos</TabsTrigger>
-              <TabsTrigger value="hoy">Hoy</TabsTrigger>
-              <TabsTrigger value="historial">Historial</TabsTrigger>
+            <TabsList className="grid h-10 w-full grid-cols-3 rounded-lg border border-black/6 bg-[#f6f6f7] p-1 md:w-[360px]">
+              <TabsTrigger
+                value="activos"
+                className="rounded-md text-[13px] font-medium data-[state=active]:bg-white data-[state=active]:text-gray-950 data-[state=active]:shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
+              >
+                Activos
+              </TabsTrigger>
+              <TabsTrigger
+                value="hoy"
+                className="rounded-md text-[13px] font-medium data-[state=active]:bg-white data-[state=active]:text-gray-950 data-[state=active]:shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
+              >
+                Hoy
+              </TabsTrigger>
+              <TabsTrigger
+                value="historial"
+                className="rounded-md text-[13px] font-medium data-[state=active]:bg-white data-[state=active]:text-gray-950 data-[state=active]:shadow-[0_1px_2px_rgba(15,23,42,0.06)]"
+              >
+                Historial
+              </TabsTrigger>
             </TabsList>
           </Tabs>
 
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <div className="flex items-center gap-2 text-sm text-gray-500">
-              <Filter className="h-4 w-4" />
-              <span>Filtros</span>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+            <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+              <Filter className="h-3.5 w-3.5" />
+              Filtros
             </div>
             <Select
               value={filters.type}
@@ -107,10 +145,10 @@ export function DashboardOrdersSection({
                 setFilters((current) => ({ ...current, type: value }))
               }
             >
-              <SelectTrigger className="w-full sm:w-[180px] bg-white">
+              <SelectTrigger className="h-9 w-full rounded-lg border-black/8 bg-white text-sm shadow-none sm:w-[170px]">
                 <SelectValue placeholder="Tipo" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="rounded-xl border-black/8 shadow-[0_10px_28px_rgba(15,23,42,0.08)]">
                 <SelectItem value="all">Todos los tipos</SelectItem>
                 <SelectItem value="home_delivery">Delivery</SelectItem>
                 <SelectItem value="click_collect">Pickup</SelectItem>
@@ -123,10 +161,10 @@ export function DashboardOrdersSection({
                 setFilters((current) => ({ ...current, status: value }))
               }
             >
-              <SelectTrigger className="w-full sm:w-[220px] bg-white">
+              <SelectTrigger className="h-9 w-full rounded-lg border-black/8 bg-white text-sm shadow-none sm:w-[210px]">
                 <SelectValue placeholder="Estado" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="rounded-xl border-black/8 shadow-[0_10px_28px_rgba(15,23,42,0.08)]">
                 <SelectItem value="all">Todos los estados</SelectItem>
                 {Object.entries(statusConfig).map(([value, config]) => (
                   <SelectItem key={value} value={value}>
@@ -137,13 +175,12 @@ export function DashboardOrdersSection({
             </Select>
           </div>
         </div>
-      </CardHeader>
-
-      <CardContent className="space-y-4">
+        <div className="space-y-3">
         {filteredOrders.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50 p-12 text-center text-gray-500">
-            No hay pedidos que coincidan con los filtros actuales.
-          </div>
+          <DashboardEmptyState
+            title="No hay pedidos para mostrar"
+            description="Prueba otro filtro o espera nuevas ordenes."
+          />
         ) : (
           filteredOrders.map((order) => (
             <OrderCard
@@ -154,7 +191,8 @@ export function DashboardOrdersSection({
             />
           ))
         )}
-      </CardContent>
-    </Card>
+        </div>
+      </DashboardPanelBody>
+    </DashboardPanel>
   );
 }

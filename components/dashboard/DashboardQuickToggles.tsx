@@ -2,7 +2,15 @@
 
 import { Loader2, Store, Zap } from "lucide-react";
 
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  DashboardDescription,
+  DashboardEyebrow,
+  DashboardPanel,
+  DashboardPanelBody,
+  DashboardPanelHeader,
+  DashboardStatusPill,
+  DashboardTitle,
+} from "./dashboard.design";
 
 type DashboardQuickTogglesProps = {
   isOpen: boolean;
@@ -30,14 +38,14 @@ function ToggleCard({
   iconClassName: string;
 }) {
   return (
-    <div className="flex items-center justify-between gap-4 rounded-2xl border border-gray-200 bg-white p-4">
-      <div className="flex items-start gap-3">
-        <div className={`flex h-11 w-11 items-center justify-center rounded-full ${iconClassName}`}>
+    <div className="flex items-center justify-between gap-4 rounded-xl border border-black/6 bg-[#fafafb] px-4 py-3">
+      <div className="flex min-w-0 items-start gap-3">
+        <div className={`mt-0.5 flex h-9 w-9 items-center justify-center rounded-lg ${iconClassName}`}>
           {icon}
         </div>
-        <div>
-          <p className="font-semibold text-gray-900">{title}</p>
-          <p className="text-sm text-gray-600">{description}</p>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-gray-900">{title}</p>
+          <p className="mt-0.5 text-[13px] leading-5 text-gray-600">{description}</p>
         </div>
       </div>
 
@@ -45,13 +53,15 @@ function ToggleCard({
         type="button"
         disabled={disabled}
         onClick={onToggle}
-        className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${
-          active ? "bg-[#ff8800]" : "bg-gray-300"
+        className={`relative inline-flex h-7 w-12 items-center rounded-full border transition-colors ${
+          active
+            ? "border-[#EB1902]/15 bg-[#EB1902]"
+            : "border-gray-200 bg-gray-200"
         } disabled:opacity-50`}
       >
         <span
-          className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${
-            active ? "translate-x-7" : "translate-x-1"
+          className={`inline-block h-5 w-5 transform rounded-full bg-white shadow-sm transition-transform ${
+            active ? "translate-x-6" : "translate-x-1"
           }`}
         />
       </button>
@@ -67,15 +77,18 @@ export function DashboardQuickToggles({
   onToggleHighDemand,
 }: DashboardQuickTogglesProps) {
   return (
-    <Card className="border-orange-100">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-lg">
-          Switches Express
-          {saving ? <Loader2 className="h-4 w-4 animate-spin text-[#ff8800]" /> : null}
-        </CardTitle>
-        <CardDescription>Cambia el estado operativo visible para el cliente en segundos.</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <DashboardPanel>
+      <DashboardPanelHeader>
+        <DashboardEyebrow>Operacion</DashboardEyebrow>
+        <div className="flex items-center gap-2">
+          <DashboardTitle className="text-[17px]">Controles rapidos</DashboardTitle>
+          {saving ? <Loader2 className="h-4 w-4 animate-spin text-[#EB1902]" /> : null}
+        </div>
+        <DashboardDescription>
+          Ajusta el estado de la tienda sin entrar a configuracion avanzada.
+        </DashboardDescription>
+      </DashboardPanelHeader>
+      <DashboardPanelBody className="space-y-3">
         <ToggleCard
           title={isOpen ? "Tienda Abierta" : "Tienda Cerrada"}
           description="Cuando esta cerrada no acepta nuevos pedidos."
@@ -83,7 +96,7 @@ export function DashboardQuickToggles({
           disabled={saving}
           onToggle={() => onToggleOpen(!isOpen)}
           icon={<Store className="h-5 w-5" />}
-          iconClassName={isOpen ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"}
+          iconClassName={isOpen ? "bg-[#20096F]/10 text-[#20096F]" : "bg-[#EB1902]/10 text-[#EB1902]"}
         />
         <ToggleCard
           title={highDemandMode ? "Alta Demanda Activa" : "Alta Demanda Inactiva"}
@@ -92,9 +105,17 @@ export function DashboardQuickToggles({
           disabled={saving}
           onToggle={() => onToggleHighDemand(!highDemandMode)}
           icon={<Zap className="h-5 w-5" />}
-          iconClassName="bg-orange-100 text-[#eb1902]"
+          iconClassName="bg-[#fff3f4] text-[#850C22]"
         />
-      </CardContent>
-    </Card>
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <DashboardStatusPill tone={isOpen ? "success" : "danger"}>
+            {isOpen ? "Recibiendo pedidos" : "Pausada"}
+          </DashboardStatusPill>
+          <DashboardStatusPill tone={highDemandMode ? "warning" : "neutral"}>
+            {highDemandMode ? "Demoras visibles al cliente" : "Operacion normal"}
+          </DashboardStatusPill>
+        </div>
+      </DashboardPanelBody>
+    </DashboardPanel>
   );
 }
