@@ -12,7 +12,8 @@
     "sanity": "npx sanity@latest dev",
     "sanity:build": "npx sanity@latest build",
     "sanity:deploy": "npx sanity@latest deploy",
-    "migrate:products": "npx sanity exec scripts/migrate-products.js --with-user-token"
+    "migrate:products": "npx sanity exec scripts/migrate-products.js --with-user-token",
+    "orders:mark-delivered": "node scripts/mark-all-orders-delivered.mjs"
   },
   "dependencies": {
     "@clerk/localizations": "^3.23.0",
