@@ -10,13 +10,27 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const storeId = searchParams.get("storeId");
+    const statusParam = searchParams.get("status");
 
-    // Fetch pending requests
+    const allowedStatuses = ["pending", "approved", "rejected"] as const;
+    const requestedStatuses = statusParam
+      ? statusParam
+          .split(",")
+          .map((status) => status.trim())
+          .filter((status): status is (typeof allowedStatuses)[number] =>
+            allowedStatuses.includes(status as (typeof allowedStatuses)[number])
+          )
+      : ["pending"];
+    const statusFilter =
+      requestedStatuses.length === 1
+        ? `status == '${requestedStatuses[0]}'`
+        : `status in [${requestedStatuses.map((status) => `'${status}'`).join(", ")}]`;
+
     let query;
     let params: any = {};
 
     if (storeId) {
-      query = `*[_type == "storeUpdateRequest" && store._ref == $storeId && status == 'pending']{ 
+      query = `*[_type == "storeUpdateRequest" && store._ref == $storeId && ${statusFilter}]{ 
         _id, 
         store->{_id, name}, 
         changes, 
@@ -24,11 +38,10 @@ export async function GET(request: NextRequest) {
         submittedAt, 
         status,
         rejectionReason
-      }`;
+      } | order(submittedAt desc)`;
       params = { storeId };
     } else {
-      // Admin: Fetch all pending requests
-      query = `*[_type == "storeUpdateRequest" && status == 'pending']{ 
+      query = `*[_type == "storeUpdateRequest" && ${statusFilter}]{ 
         _id, 
         store->{_id, name}, 
         changes, 
@@ -36,7 +49,7 @@ export async function GET(request: NextRequest) {
         submittedAt, 
         status,
         rejectionReason
-      }`;
+      } | order(submittedAt desc)`;
     }
     
     const items = await writeClient.fetch(query, params);

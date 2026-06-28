@@ -1261,7 +1261,7 @@ if (!store || ownedStores?.length !== 1) {
                 <div className="rounded-lg border p-4 bg-gray-50">
                   <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                     <div>
-                      <h3 className="font-semibold text-gray-900">Modo On Demand</h3>
+                      <h3 className="font-semibold text-gray-900">Modo Alta Demanda</h3>
                       <p className="text-sm text-gray-600 mt-1">
                         Activalo cuando el restaurante tenga varios pedidos. El cliente vera un aviso y un tiempo estimado mayor.
                       </p>
@@ -1292,7 +1292,7 @@ if (!store || ownedStores?.length !== 1) {
 
                   <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto] md:items-end">
                     <div>
-                      <Label htmlFor="on-demand-extra">Minutos extra cuando On Demand esta activo</Label>
+                      <Label htmlFor="on-demand-extra">Minutos extra cuando Alta Demanda esta activa</Label>
                       <Input
                         id="on-demand-extra"
                         type="number"
@@ -1311,7 +1311,7 @@ if (!store || ownedStores?.length !== 1) {
                         disabled={savingStoreConfig || !storeConfig}
                       />
                       <p className="text-xs text-gray-500 mt-1">
-                        Por default el pedido se estima en 10 minutos. Con On Demand se suman estos minutos.
+                        Por default el pedido se estima en 10 minutos. Con Alta Demanda se suman estos minutos.
                       </p>
                     </div>
                     <Button

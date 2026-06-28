@@ -1583,6 +1583,20 @@
               },
               "optional": true
             },
+            "isOpen": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "boolean"
+              },
+              "optional": true
+            },
+            "highDemandMode": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "boolean"
+              },
+              "optional": true
+            },
             "contact": {
               "type": "objectAttribute",
               "value": {
@@ -3439,6 +3453,20 @@
         "optional": true
       },
       "isActive": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
+        },
+        "optional": true
+      },
+      "isOpen": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
+        },
+        "optional": true
+      },
+      "highDemandMode": {
         "type": "objectAttribute",
         "value": {
           "type": "boolean"

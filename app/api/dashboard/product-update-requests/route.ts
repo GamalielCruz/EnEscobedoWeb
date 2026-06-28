@@ -10,14 +10,36 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const storeId = searchParams.get("storeId");
     const includeRejected = searchParams.get("includeRejected") === "true";
+    const statusParam = searchParams.get("status");
 
-    // Fetch pending requests (optionally include rejected for re-approval)
-    const statusFilter = includeRejected 
-      ? `(status == 'pending' || status == 'rejected')`
-      : `status == 'pending'`;
-    const query = `*[_type == "productUpdateRequest" && ${statusFilter}]{ _id, product->{_id, name, affiliateStore->{_id, name}}, changes, submittedBy, submittedAt, status, rejectionReason }`;
+    const allowedStatuses = ["pending", "approved", "rejected"] as const;
+    const requestedStatuses = statusParam
+      ? statusParam
+          .split(",")
+          .map((status) => status.trim())
+          .filter((status): status is (typeof allowedStatuses)[number] =>
+            allowedStatuses.includes(status as (typeof allowedStatuses)[number])
+          )
+      : includeRejected
+        ? ["pending", "rejected"]
+        : ["pending"];
+
+    const statusFilter =
+      requestedStatuses.length === 1
+        ? `status == '${requestedStatuses[0]}'`
+        : `status in [${requestedStatuses.map((status) => `'${status}'`).join(", ")}]`;
+    const storeFilter = storeId ? ` && product->affiliateStore._ref == $storeId` : "";
+    const query = `*[_type == "productUpdateRequest" && ${statusFilter}${storeFilter}]{
+      _id,
+      product->{_id, name, affiliateStore->{_id, name}},
+      changes,
+      submittedBy,
+      submittedAt,
+      status,
+      rejectionReason
+    } | order(submittedAt desc)`;
     console.log("[product-update-requests GET] Fetching with query:", query);
-    const items = await writeClient.fetch(query, {});
+    const items = await writeClient.fetch(query, storeId ? { storeId } : {});
     console.log("[product-update-requests GET] Found items:", items.length);
     return NextResponse.json({ success: true, items: items ?? [] }, {
       headers: {

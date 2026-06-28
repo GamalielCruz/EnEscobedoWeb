@@ -273,6 +273,8 @@ export type StoreUpdateRequest = {
       crop?: SanityImageCrop;
       _type: "image";
     };
+    isOpen?: boolean;
+    highDemandMode?: boolean;
     contact?: {
       phone?: string;
       email?: string;
@@ -563,6 +565,8 @@ export type AffiliateStore = {
     sunday?: string;
   };
   isActive?: boolean;
+  isOpen?: boolean;
+  highDemandMode?: boolean;
   hasOwnDelivery?: boolean;
   capacity?: number;
   averageDeliveryTime?: number;

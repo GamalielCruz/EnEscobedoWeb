@@ -44,11 +44,26 @@ const getServiceTiming = (storeData: any) => {
   };
 };
 
+const getStoreOperationalState = (storeData: any) => {
+  const serviceTypes = storeData?.store?.serviceTypes || storeData?.serviceTypes || {};
+  const highDemandMode = Boolean(
+    storeData?.store?.highDemandMode ??
+      storeData?.highDemandMode ??
+      serviceTypes.onDemand
+  );
+  const isOpen = Boolean(storeData?.store?.isOpen ?? storeData?.isOpen ?? true);
+
+  return {
+    isOpen,
+    highDemandMode,
+  };
+};
+
 const fetchStoreServiceTypes = async (storeId: string) => {
   try {
     const response = await fetch(`/api/store-service-types?storeId=${storeId}`, { cache: "no-store" });
     const data = await response.json();
-    return data?.serviceTypes || null;
+    return data || null;
   } catch (error) {
     console.error("Error loading store service types:", error);
     return null;
@@ -261,10 +276,13 @@ function BasketPage() {
 
         if (!store || isCancelled) throw new Error("No se pudo cargar la sucursal");
 
-        const serviceTypes = await fetchStoreServiceTypes(cartStoreId);
+        const storeConfig = await fetchStoreServiceTypes(cartStoreId);
         const normalizedStore = {
           ...store,
-          serviceTypes: serviceTypes || store.serviceTypes,
+          serviceTypes: storeConfig?.serviceTypes || store.serviceTypes,
+          isOpen: storeConfig?.isOpen ?? store.isOpen ?? true,
+          highDemandMode:
+            storeConfig?.highDemandMode ?? store.highDemandMode ?? store.serviceTypes?.onDemand ?? false,
         };
 
         const storeAddress = [normalizedStore.address?.street, normalizedStore.address?.city, normalizedStore.address?.state]
@@ -286,6 +304,8 @@ function BasketPage() {
           storePhone: cleanDisplayText(normalizedStore.contact?.phone),
           estimatedDelivery: pickupTiming.label,
           serviceTypes: normalizedStore.serviceTypes,
+          isOpen: normalizedStore.isOpen,
+          highDemandMode: normalizedStore.highDemandMode,
         };
 
         setSelectedStore(pickupSelection);
@@ -299,6 +319,8 @@ function BasketPage() {
           storePhone: pickupSelection.storePhone,
           estimatedDelivery: pickupSelection.estimatedDelivery,
           serviceTypes: pickupSelection.serviceTypes,
+          isOpen: pickupSelection.isOpen,
+          highDemandMode: pickupSelection.highDemandMode,
           shippingCost: 0,
         }));
       } catch (error) {
@@ -306,10 +328,13 @@ function BasketPage() {
 
         const fallbackStore = groupedItems[0]?.product?.affiliateStore as any;
         if (!fallbackStore || isCancelled) return;
-        const serviceTypes = await fetchStoreServiceTypes(cartStoreId);
+        const storeConfig = await fetchStoreServiceTypes(cartStoreId);
         const normalizedFallbackStore = {
           ...fallbackStore,
-          serviceTypes: serviceTypes || fallbackStore.serviceTypes,
+          serviceTypes: storeConfig?.serviceTypes || fallbackStore.serviceTypes,
+          isOpen: storeConfig?.isOpen ?? fallbackStore.isOpen ?? true,
+          highDemandMode:
+            storeConfig?.highDemandMode ?? fallbackStore.highDemandMode ?? fallbackStore.serviceTypes?.onDemand ?? false,
         };
         const fallbackTiming = getServiceTiming(normalizedFallbackStore);
 
@@ -327,6 +352,8 @@ function BasketPage() {
           storePhone: cleanDisplayText(savedStoreInfo?.storePhone),
           estimatedDelivery: fallbackTiming.label,
           serviceTypes: normalizedFallbackStore.serviceTypes,
+          isOpen: normalizedFallbackStore.isOpen,
+          highDemandMode: normalizedFallbackStore.highDemandMode,
         });
         setShippingCost(0);
       } finally {
@@ -375,6 +402,10 @@ function BasketPage() {
 
   const handleCheckout = async (overridePhone?: string) => {
     if (!isSignedIn) return;
+    if (selectedStore && !getStoreOperationalState(selectedStore).isOpen) {
+      setCardPhoneError("La tienda seleccionada esta cerrada temporalmente.");
+      return;
+    }
 
     // Determine the phone to use: override > form input > saved Clerk phone
     const phoneToUse = overridePhone ?? (hasPhoneAndConsent && !editingPhone ? clerkPhone : cardPhone);
@@ -486,6 +517,11 @@ function BasketPage() {
 
     if (!selectedStore) {
       setCodError("Selecciona una tienda antes de confirmar");
+      return;
+    }
+
+    if (!getStoreOperationalState(selectedStore).isOpen) {
+      setCodError("La tienda seleccionada esta cerrada temporalmente.");
       return;
     }
 
@@ -610,6 +646,11 @@ function BasketPage() {
       return;
     }
 
+    if (!getStoreOperationalState(selectedStore).isOpen) {
+      setPickupError("La sucursal seleccionada no esta disponible en este momento.");
+      return;
+    }
+
     const resolvedPickupPhone = hasPhoneAndConsent && !showPickupPhoneForm ? clerkPhone : pickupPhone.trim();
     if (!resolvedPickupPhone) {
       setPickupError("Ingresa tu número de teléfono");
@@ -679,6 +720,10 @@ function BasketPage() {
       setIsLoading(false);
     }
   };
+
+  const selectedStoreTiming = selectedStore ? getServiceTiming(selectedStore) : null;
+  const selectedStoreState = selectedStore ? getStoreOperationalState(selectedStore) : null;
+  const isSelectedStoreClosed = Boolean(selectedStore && selectedStoreState && !selectedStoreState.isOpen);
 
   return (
     <div className="min-h-screen bg-gray-50 pt-20 pb-8">
@@ -856,6 +901,9 @@ function BasketPage() {
                               shippingCost: data.shippingCost,
                               distanceKm: data.distanceKm,
                               serviceTypes: data.selectedStore.serviceTypes,
+                              isOpen: data.selectedStore.isOpen ?? true,
+                              highDemandMode:
+                                data.selectedStore.highDemandMode ?? data.selectedStore.serviceTypes?.onDemand ?? false,
                             };
                             
                             localStorage.setItem('clickCollectStore', JSON.stringify(payload));
@@ -935,11 +983,16 @@ function BasketPage() {
                                 {customerAddress.street}, {customerAddress.city}
                               </p>
                               <p className="text-sm text-gray-600 mt-1">
-                                Tiempo estimado: {getServiceTiming(selectedStore).label}
+                                Tiempo estimado: {selectedStoreTiming?.label}
                               </p>
-                              {getServiceTiming(selectedStore).onDemand && (
+                              {selectedStoreState?.highDemandMode && (
                                 <p className="text-sm text-amber-700 font-medium mt-1">
-                                  On Demand activo: el restaurante tiene alta demanda y tu pedido puede tardar un poco mas.
+                                  Alta Demanda activa: el restaurante tiene alta demanda y tu pedido puede tardar un poco mas.
+                                </p>
+                              )}
+                              {isSelectedStoreClosed && (
+                                <p className="text-sm text-red-700 font-semibold mt-2">
+                                  Tienda cerrada: esta sucursal no esta aceptando pedidos nuevos en este momento.
                                 </p>
                               )}
                               <br/>
@@ -979,11 +1032,16 @@ function BasketPage() {
                                 Telefono: {cleanDisplayText(selectedStore.summary?.phone || selectedStore.storePhone, 'No disponible')}
                               </p>
                               <p className="text-sm text-gray-600 mt-1">
-                                Estara listo aproximadamente en {getServiceTiming(selectedStore).label}.
+                                Estara listo aproximadamente en {selectedStoreTiming?.label}.
                               </p>
-                              {getServiceTiming(selectedStore).onDemand && (
+                              {selectedStoreState?.highDemandMode && (
                                 <p className="text-sm text-amber-700 font-medium mt-1">
-                                  On Demand activo: el restaurante tiene alta demanda y puede tardar un poco mas.
+                                  Alta Demanda activa: el restaurante tiene alta demanda y puede tardar un poco mas.
+                                </p>
+                              )}
+                              {isSelectedStoreClosed && (
+                                <p className="text-sm text-red-700 font-semibold mt-2">
+                                  Tienda cerrada: esta sucursal no esta disponible para retiro en este momento.
                                 </p>
                               )}
                               <p className="text-sm text-gray-600 mt-1">
@@ -1004,7 +1062,12 @@ function BasketPage() {
                         </div>
                       )}
                        
-                      {clientSecret ? (
+                      {isSelectedStoreClosed ? (
+                        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+                          <span className="font-semibold block mb-1">Tienda no disponible</span>
+                          La tienda seleccionada esta cerrada temporalmente. Cambia de servicio o espera a que vuelva a abrir para continuar.
+                        </div>
+                      ) : clientSecret ? (
                         <div className="space-y-3">
                           <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-sm text-rose-800">
                             <span className="font-semibold block mb-1">Pago seguro con tarjeta:</span>

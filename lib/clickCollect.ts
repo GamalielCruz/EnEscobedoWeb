@@ -38,6 +38,8 @@ export interface AffiliateStore {
     [key: string]: string;
   };
   isActive: boolean;
+  isOpen?: boolean;
+  highDemandMode?: boolean;
   capacity: number;
   averageDeliveryTime: number;
   deliveryTimeMin?: number;

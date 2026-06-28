@@ -22,6 +22,8 @@ export const storeUpdateRequest = defineType({
         defineField({ name: "name", title: "Nombre", type: "string" }),
         defineField({ name: "image", title: "Imagen Principal", type: "image", options: { hotspot: true } }),
         defineField({ name: "coverImage", title: "Imagen de Portada", type: "image", options: { hotspot: true } }),
+        defineField({ name: "isOpen", title: "Tienda Abierta", type: "boolean" }),
+        defineField({ name: "highDemandMode", title: "Modo Alta Demanda", type: "boolean" }),
         
         defineField({
           name: "contact",
@@ -57,7 +59,7 @@ export const storeUpdateRequest = defineType({
               defineField({ name: "delivery", title: "Entrega a Domicilio", type: "boolean" }),
               defineField({ name: "pickup", title: "Recoger en Tienda", type: "boolean" }),
               defineField({ name: "deliveryRadius", title: "Radio de Entrega (km)", type: "number" }),
-              defineField({ name: "onDemand", title: "On Demand", type: "boolean" }),
+              defineField({ name: "onDemand", title: "Alta Demanda", type: "boolean" }),
               defineField({ name: "onDemandExtraMinutes", title: "Minutos extra por alta demanda", type: "number" }),
               defineField({ name: "minimumOrderDelivery", title: "Pedido Mínimo para Entrega (MXN)", type: "number" }),
             ],

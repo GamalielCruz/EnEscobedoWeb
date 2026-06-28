@@ -225,6 +225,20 @@ export const affiliateStoreType = defineType({
       description: "Si la tienda está activa para recibir pedidos",
     }),
     defineField({
+      name: "isOpen",
+      title: "Tienda Abierta",
+      type: "boolean",
+      initialValue: true,
+      description: "Si esta desactivado, la tienda no acepta nuevos pedidos.",
+    }),
+    defineField({
+      name: "highDemandMode",
+      title: "Modo Alta Demanda",
+      type: "boolean",
+      initialValue: false,
+      description: "Activalo cuando haya muchos pedidos y puedan presentarse demoras.",
+    }),
+    defineField({
       name: "hasOwnDelivery",
       title: "Tiene repartidores propios",
       type: "boolean",
@@ -299,7 +313,7 @@ export const affiliateStoreType = defineType({
         }),
         defineField({
           name: "onDemand",
-          title: "On Demand",
+          title: "Alta Demanda",
           type: "boolean",
           initialValue: false,
           description: "Activa este modo cuando el restaurante tenga alta demanda y los pedidos puedan tardar mas.",
@@ -309,7 +323,7 @@ export const affiliateStoreType = defineType({
           title: "Minutos extra por alta demanda",
           type: "number",
           initialValue: 15,
-          description: "Tiempo adicional que se sumara al estimado base cuando On Demand este activo.",
+          description: "Tiempo adicional que se sumara al estimado base cuando Alta Demanda este activo.",
           hidden: ({ parent }) => !parent?.onDemand,
         }),
       ],

@@ -5,6 +5,8 @@ import { client } from '@/sanity/lib/client';
 const STORE_SERVICE_TYPES_QUERY = `*[_type == "affiliateStore" && _id == $storeId][0] {
   _id,
   name,
+  isOpen,
+  highDemandMode,
   serviceTypes
 }`;
 
@@ -47,6 +49,11 @@ export async function GET(request: NextRequest) {
         onDemandExtraMinutes: 15
       }
     };
+    const mockStoreStates: Record<string, { isOpen: boolean; highDemandMode: boolean }> = {
+      'mock-pe-centro': { isOpen: true, highDemandMode: false },
+      'mock-pe-plaza': { isOpen: true, highDemandMode: false },
+      'mock-pe-barrio': { isOpen: true, highDemandMode: false }
+    };
 
     // Configuración por defecto
     const defaultServiceTypes = {
@@ -57,9 +64,17 @@ export async function GET(request: NextRequest) {
       onDemand: false,
       onDemandExtraMinutes: 15
     };
+    const defaultStoreState = {
+      isOpen: true,
+      highDemandMode: false
+    };
 
     let serviceTypes = mockServiceTypes[storeId] || defaultServiceTypes;
     let storeName = 'Tienda Mock';
+    let isOpen = mockStoreStates[storeId]?.isOpen ?? defaultStoreState.isOpen;
+    let highDemandMode =
+      mockStoreStates[storeId]?.highDemandMode ??
+      defaultStoreState.highDemandMode;
 
     // Intentar obtener de Sanity si no es una tienda mock
     if (!mockServiceTypes[storeId]) {
@@ -68,6 +83,9 @@ export async function GET(request: NextRequest) {
         if (store) {
           serviceTypes = store.serviceTypes || defaultServiceTypes;
           storeName = store.name;
+          isOpen = store.isOpen ?? defaultStoreState.isOpen;
+          highDemandMode =
+            store.highDemandMode ?? store.serviceTypes?.onDemand ?? defaultStoreState.highDemandMode;
         }
       } catch (sanityError) {
         console.log('Error obteniendo de Sanity, usando configuración por defecto:', sanityError);
@@ -86,7 +104,12 @@ export async function GET(request: NextRequest) {
       success: true,
       storeId,
       storeName,
-      serviceTypes
+      isOpen,
+      highDemandMode,
+      serviceTypes: {
+        ...serviceTypes,
+        onDemand: highDemandMode
+      }
     });
 
   } catch (error) {
