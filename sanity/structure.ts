@@ -20,6 +20,8 @@ export const structure: StructureResolver = (S) =>
         ),
       S.divider(),
       ...S.documentTypeListItems().filter(
-        (item) => item.getId() && !["category", "productUpdateRequest"].includes(item.getId()!)
+        (item) =>
+          item.getId() &&
+          !["category", "promoBanner", "productUpdateRequest"].includes(item.getId()!)
       ),
     ]);
