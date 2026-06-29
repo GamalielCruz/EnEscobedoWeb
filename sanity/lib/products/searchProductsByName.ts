@@ -7,6 +7,10 @@ const PRODUCT_SEARCH_QUERY = defineQuery(`
         _type == "product"
         && name match $searchParam
      ] | order(name asc)
+    {
+      ...,
+      affiliateStore->{ _id, name }
+    }
     `);
 
     try {

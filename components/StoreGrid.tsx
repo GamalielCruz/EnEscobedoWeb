@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { urlFor } from "@/sanity/lib/image";
-import { getStoreStatusText } from "@/lib/storeHours";
+import { getStoreOperationalState } from "@/lib/storeOperationalState";
 import { useEffect, useState } from "react";
 
 interface Store {
@@ -56,8 +56,9 @@ export default function StoreGrid({ stores }: StoreGridProps) {
     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mt-4 w-full">
       {stores.map((store) => {
         // Calculate status consistently - use a default on server, actual status on client
-        const storeStatus = mounted ? getStoreStatusText(store.operatingHours) : "Verificando...";
-        const isOpen = mounted ? storeStatus.includes("Abierto") : false;
+        const storeState = getStoreOperationalState(store);
+        const isOpen = mounted ? storeState.effectiveIsOpen : false;
+        const storeStatus = mounted ? (isOpen ? "Abierto" : "Cerrado") : "Verificando...";
 
         const deliveryTimeText =
           store.deliveryTimeMin != null && store.deliveryTimeMax != null

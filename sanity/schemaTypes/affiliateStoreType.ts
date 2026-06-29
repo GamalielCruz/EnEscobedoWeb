@@ -232,6 +232,21 @@ export const affiliateStoreType = defineType({
       description: "Si esta desactivado, la tienda no acepta nuevos pedidos.",
     }),
     defineField({
+      name: "manualOperationalStatus",
+      title: "Estado Operativo Manual",
+      type: "string",
+      options: {
+        list: [
+          { title: "Autom?tico", value: "auto" },
+          { title: "Abierta", value: "open" },
+          { title: "Cerrada", value: "closed" },
+        ],
+        layout: "radio",
+      },
+      initialValue: "auto",
+      description: "Override manual que tiene prioridad sobre el horario cuando no est? en autom?tico.",
+    }),
+    defineField({
       name: "highDemandMode",
       title: "Modo Alta Demanda",
       type: "boolean",

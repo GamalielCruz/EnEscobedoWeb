@@ -3,6 +3,7 @@
 import type { OrderItem } from "@/hooks/useOrderNotifications";
 
 import { finalStatuses } from "./dashboard.constants";
+import { getStoreOperationalState } from "@/lib/storeOperationalState";
 import type {
   DashboardOrder,
   OrderQuickAction,
@@ -137,7 +138,8 @@ export function getOrderQuickActions(order: DashboardOrder): OrderQuickAction[] 
 export function buildStoreSettingsDraft(storeConfig: StoreConfig | null): StoreSettingsDraft {
   return {
     name: storeConfig?.name || "",
-    isOpen: storeConfig?.isOpen ?? true,
+    isOpen: getStoreOperationalState(storeConfig).effectiveIsOpen,
+    manualOperationalStatus: storeConfig?.manualOperationalStatus ?? "auto",
     highDemandMode:
       storeConfig?.highDemandMode ?? storeConfig?.serviceTypes?.onDemand ?? false,
     contact: {
@@ -177,6 +179,7 @@ export function buildStoreChangesPayload(original: StoreConfig | null, draft: St
   const changes: Record<string, unknown> = {};
 
   if (baseline.name !== draft.name.trim()) changes.name = draft.name.trim();
+  if (baseline.manualOperationalStatus !== draft.manualOperationalStatus) changes.manualOperationalStatus = draft.manualOperationalStatus;
   if (baseline.isOpen !== draft.isOpen) changes.isOpen = draft.isOpen;
   if (baseline.highDemandMode !== draft.highDemandMode) changes.highDemandMode = draft.highDemandMode;
 
@@ -206,11 +209,10 @@ export function buildStoreChangesPayload(original: StoreConfig | null, draft: St
 }
 
 export function getStoreStatusSummary(storeConfig: StoreConfig | null) {
-  const isOpen = storeConfig?.isOpen ?? true;
-  const highDemandMode =
-    storeConfig?.highDemandMode ?? storeConfig?.serviceTypes?.onDemand ?? false;
+  const { effectiveIsOpen, highDemandMode, canAcceptOrders } = getStoreOperationalState(storeConfig);
 
-  if (!isOpen) return "Tienda cerrada";
+  if (!effectiveIsOpen) return "Tienda cerrada";
+  if (!canAcceptOrders) return "No acepta pedidos";
   if (highDemandMode) return "Alta demanda";
   return "Operando";
 }

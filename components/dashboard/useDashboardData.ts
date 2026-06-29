@@ -244,6 +244,7 @@ export function useDashboardData() {
     async (payload: {
       serviceTypes?: StoreConfig["serviceTypes"];
       isOpen?: boolean;
+      manualOperationalStatus?: StoreConfig["manualOperationalStatus"];
       highDemandMode?: boolean;
     }) => {
       if (!selectedStoreId) return false;

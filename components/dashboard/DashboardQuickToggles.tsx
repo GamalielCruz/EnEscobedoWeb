@@ -14,6 +14,7 @@ import {
 
 type DashboardQuickTogglesProps = {
   isOpen: boolean;
+  manualOperationalStatus: "open" | "closed" | "auto";
   highDemandMode: boolean;
   saving: boolean;
   onToggleOpen: (nextValue: boolean) => void;
@@ -71,6 +72,7 @@ function ToggleCard({
 
 export function DashboardQuickToggles({
   isOpen,
+  manualOperationalStatus,
   highDemandMode,
   saving,
   onToggleOpen,
@@ -112,7 +114,7 @@ export function DashboardQuickToggles({
             {isOpen ? "Recibiendo pedidos" : "Pausada"}
           </DashboardStatusPill>
           <DashboardStatusPill tone={highDemandMode ? "warning" : "neutral"}>
-            {highDemandMode ? "Demoras visibles al cliente" : "Operacion normal"}
+            {isOpen && highDemandMode ? "Demoras visibles al cliente" : "Operacion normal"}
           </DashboardStatusPill>
         </div>
       </DashboardPanelBody>

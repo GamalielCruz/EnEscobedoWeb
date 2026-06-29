@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { getStoreStatusText } from "@/lib/storeHours";
+import { getStoreOperationalState } from "@/lib/storeOperationalState";
 
 interface StoreStatusProps {
   operatingHours?: {
@@ -32,8 +32,9 @@ export function StoreStatus({ operatingHours }: StoreStatusProps) {
     );
   }
 
-  const storeStatus = getStoreStatusText(operatingHours);
-  const isOpen = storeStatus.includes("Abierto");
+  const { effectiveIsOpen } = getStoreOperationalState({ operatingHours });
+  const storeStatus = effectiveIsOpen ? "Abierto" : "Cerrado";
+  const isOpen = effectiveIsOpen;
 
   return (
     <div className="flex items-center gap-1">

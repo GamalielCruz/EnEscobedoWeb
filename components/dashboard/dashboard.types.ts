@@ -100,6 +100,7 @@ export type StoreConfig = {
   _id: string;
   name?: string;
   isOpen?: boolean;
+  manualOperationalStatus?: "open" | "closed" | "auto";
   highDemandMode?: boolean;
   serviceTypes?: StoreServiceTypes;
   contact?: StoreContact;
@@ -112,6 +113,7 @@ export type StoreConfig = {
 export type StoreSettingsDraft = {
   name: string;
   isOpen: boolean;
+  manualOperationalStatus: "open" | "closed" | "auto";
   highDemandMode: boolean;
   contact: Required<StoreContact>;
   address: Required<StoreAddress>;

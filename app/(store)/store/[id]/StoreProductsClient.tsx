@@ -1,15 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Image from "next/image";
+import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { urlFor } from "@/sanity/lib/image";
 import { CategoryFilter } from "@/components/ui/category-filter";
 import ProductSidebar from "@/components/ProductSidebar";
 import ProductCounter from "@/components/ProductCounter";
 import MiniBasket from "@/components/MiniBasket";
-import useBasketStore from "@/store/store";
-import { ShoppingCart } from "lucide-react";
-import Link from "next/link";
 
 interface Category {
   _id: string;
@@ -59,16 +57,21 @@ interface Product {
 interface StoreProductsClientProps {
   products: Product[];
   categories: Category[];
+  highlightedProductSlug?: string;
 }
 
 export function StoreProductsClient({
   products,
   categories,
+  highlightedProductSlug,
 }: StoreProductsClientProps) {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const { canAddProduct } = useBasketStore();
+  const [dismissedHighlightedSlug, setDismissedHighlightedSlug] = useState<string | null>(null);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const pathname = usePathname();
 
   // Verificar si un producto requiere personalización obligatoria
   const hasRequiredOptions = (product: Product) => {
@@ -119,8 +122,41 @@ export function StoreProductsClient({
 
   const handleCloseSidebar = () => {
     setIsSidebarOpen(false);
+    if (highlightedProductSlug) {
+      setDismissedHighlightedSlug(highlightedProductSlug);
+      const params = new URLSearchParams(searchParams?.toString() ?? "");
+      params.delete("product");
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname ?? "/", { scroll: false });
+    }
     setTimeout(() => setSelectedProduct(null), 300);
   };
+
+  const highlightedProduct = highlightedProductSlug
+    && highlightedProductSlug !== dismissedHighlightedSlug
+    ? products.find((product) => product.slug?.current === highlightedProductSlug)
+    : null;
+
+  useEffect(() => {
+    if (highlightedProduct && !selectedProduct) {
+      setSelectedProduct(highlightedProduct);
+      setIsSidebarOpen(true);
+    }
+  }, [highlightedProduct, selectedProduct]);
+
+  useEffect(() => {
+    if (!highlightedProductSlug) {
+      setDismissedHighlightedSlug(null);
+    }
+  }, [highlightedProductSlug]);
+
+  useEffect(() => {
+    if (!highlightedProductSlug) return;
+    const el = document.querySelector(
+      `[data-product-slug="${highlightedProductSlug}"]`
+    ) as HTMLElement | null;
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [highlightedProductSlug]);
 
   return (
     <div className="py-6 pb-24">
@@ -160,6 +196,7 @@ export function StoreProductsClient({
                   key={product._id}
                   className="group cursor-pointer"
                   onClick={(e) => handleProductClick(product, e)}
+                  data-product-slug={product.slug?.current || ""}
                 >
                   <div className="relative aspect-square rounded-2xl shadow-lg overflow-hidden bg-white mb-2">
                     {product.image && (
@@ -220,3 +257,4 @@ export function StoreProductsClient({
     </div>
   );
 }
+

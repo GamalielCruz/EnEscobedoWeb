@@ -11,6 +11,7 @@ import { DashboardRequestsSection } from "@/components/dashboard/DashboardReques
 import { DashboardShell } from "@/components/dashboard/DashboardShell";
 import { DashboardStoreSection } from "@/components/dashboard/DashboardStoreSection";
 import type { SectionKey } from "@/components/dashboard/dashboard.types";
+import { getStoreOperationalState } from "@/lib/storeOperationalState";
 import { useDashboardData } from "@/components/dashboard/useDashboardData";
 
 export default function DashboardPage() {
@@ -109,9 +110,9 @@ export default function DashboardPage() {
     );
   }
 
-  const isOpen = storeConfig?.isOpen ?? true;
-  const highDemandMode =
-    storeConfig?.highDemandMode ?? storeConfig?.serviceTypes?.onDemand ?? false;
+  const storeOperationalState = getStoreOperationalState(storeConfig);
+  const isOpen = storeOperationalState.effectiveIsOpen;
+  const highDemandMode = storeOperationalState.highDemandMode;
 
   return (
     <DashboardShell
@@ -131,7 +132,13 @@ export default function DashboardPage() {
           isOpen={isOpen}
           highDemandMode={highDemandMode}
           savingConfig={savingStoreConfig}
-          onToggleOpen={(nextValue) => saveStoreConfig({ isOpen: nextValue })}
+          onToggleOpen={(nextValue) =>
+            saveStoreConfig({
+              isOpen: nextValue,
+              manualOperationalStatus: nextValue ? "open" : "closed",
+            })
+          }
+          manualOperationalStatus={storeOperationalState.manualOperationalStatus ?? "auto"}
           onToggleHighDemand={(nextValue) =>
             saveStoreConfig({ highDemandMode: nextValue })
           }

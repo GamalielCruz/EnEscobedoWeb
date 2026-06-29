@@ -60,10 +60,10 @@ export function DashboardShell({
                 type="button"
                 variant="outline"
                 size="icon"
-                className="md:hidden"
+                className="h-8 w-8 rounded-full border-black/8 bg-white/90 text-gray-700 shadow-none md:hidden"
                 onClick={() => setMobileOpen(true)}
               >
-                <Menu className="h-5 w-5" />
+                <Menu className="h-4 w-4" />
               </Button>
             }
           />

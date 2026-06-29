@@ -8,7 +8,7 @@ import Image from "next/image";
 import type { Metadata } from "next";
 import { urlFor, getShareableImageUrl } from "@/sanity/lib/image";
 import ShareButton from "../ShareButton";
-import { buildProductUrl } from "@/lib/utils";
+import { buildStoreProductUrl } from "@/lib/utils";
 import LazyRelatedProducts from "@/components/LazyRelatedProducts";
 
 export async function generateMetadata({
@@ -41,6 +41,11 @@ export async function generateMetadata({
   const imageUrl = product.image
     ? getShareableImageUrl(product.image)
     : undefined;
+  const shareUrl = buildStoreProductUrl(
+    product.affiliateStore?._id || "",
+    product.slug?.current || slug,
+    true
+  );
 
   return {
     title: product.name
@@ -57,18 +62,21 @@ export async function generateMetadata({
         : [
             "https://store-with-stripe.vercel.app/_next/image?url=https%3A%2F%2Fcdn.sanity.io%2Fimages%2Fkgklfrat%2Fproduction%2Fc765b695508ea8327a6ec91548d22cddb4064a9d-2048x2048.png&w=1920&q=75",
           ],
-      url: `https://pixelaplastico.com/product/${product.slug?.current || slug}`,
+      url: shareUrl,
     },
   };
 }
 
 export default async function ProductPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>; // ✅ Promise for Next.js 15
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   // Await params
   const { slug } = await params;
+  await (searchParams ?? Promise.resolve({}));
 
   const product = await getProductBySlug(slug);
   if (!product) return notFound();
@@ -85,6 +93,11 @@ export default async function ProductPage({
 
   // Get product categories for lazy loading related products
   const productCategories = product.categories?.map((cat) => cat._ref) || [];
+  const shareUrl = buildStoreProductUrl(
+    product.affiliateStore?._id || "",
+    product.slug?.current || slug,
+    true
+  );
 
   const typedProduct = product as any as Product & {
     affiliateStore?: {
@@ -294,7 +307,7 @@ export default async function ProductPage({
 
           <div>
             <ShareButton
-              url={buildProductUrl(product.slug?.current || slug)}
+              url={shareUrl}
               title={product.name || ""}
               text="La imaginación se imprime."
             />

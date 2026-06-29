@@ -28,6 +28,7 @@ type DashboardHomeSectionProps = {
   };
   activeOrders: DashboardOrder[];
   isOpen: boolean;
+  manualOperationalStatus: "open" | "closed" | "auto";
   highDemandMode: boolean;
   savingConfig: boolean;
   onToggleOpen: (nextValue: boolean) => void;
@@ -41,6 +42,7 @@ export function DashboardHomeSection({
   metrics,
   activeOrders,
   isOpen,
+  manualOperationalStatus,
   highDemandMode,
   savingConfig,
   onToggleOpen,
@@ -89,6 +91,7 @@ export function DashboardHomeSection({
       <div className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <DashboardQuickToggles
           isOpen={isOpen}
+          manualOperationalStatus={manualOperationalStatus}
           highDemandMode={highDemandMode}
           saving={savingConfig}
           onToggleOpen={onToggleOpen}

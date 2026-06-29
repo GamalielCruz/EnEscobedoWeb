@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, Store } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 
 import {
   Select,
@@ -10,13 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-import {
-  DashboardDescription,
-  DashboardEyebrow,
-  DashboardPanel,
-  DashboardStatusPill,
-  DashboardTitle,
-} from "./dashboard.design";
+import { DashboardPanel } from "./dashboard.design";
 import type { OwnedStore } from "./dashboard.types";
 
 type DashboardHeaderProps = {
@@ -32,37 +26,18 @@ type DashboardHeaderProps = {
 export function DashboardHeader({
   storeName,
   isOpen,
-  highDemandMode,
   stores,
   selectedStoreId,
   onSelectStore,
   mobileMenuTrigger,
 }: DashboardHeaderProps) {
   return (
-    <header className="sticky top-0 z-30 px-4 pt-4 md:px-6 md:pt-5">
+    <header className="sticky top-0 z-30 px-4 pt-3 md:px-6 md:pt-4">
       <DashboardPanel className="overflow-hidden">
-        <div className="flex flex-col gap-4 px-4 py-3 md:flex-row md:items-center md:justify-between md:px-5">
-          <div className="flex min-w-0 items-center gap-3">
-            {mobileMenuTrigger}
-            <div className="min-w-0">
-              <DashboardEyebrow className="mb-1">Dashboard del negocio</DashboardEyebrow>
-              <div className="flex min-w-0 items-center gap-2">
-                <DashboardTitle className="truncate text-[20px]">{storeName}</DashboardTitle>
-                <DashboardStatusPill tone={isOpen ? "success" : "danger"}>
-                  {isOpen ? "Abierta" : "Cerrada"}
-                </DashboardStatusPill>
-                {highDemandMode ? (
-                  <DashboardStatusPill tone="warning">Alta demanda</DashboardStatusPill>
-                ) : null}
-              </div>
-              <DashboardDescription className="mt-1 flex items-center gap-2 text-[13px]">
-                <Store className="h-3.5 w-3.5 text-gray-400" />
-                Controla pedidos, productos y operacion desde una sola barra de trabajo.
-              </DashboardDescription>
-            </div>
-          </div>
+        <div className="flex items-center gap-3 px-3 py-2.5 md:px-4">
+          {mobileMenuTrigger ? <div className="shrink-0 md:hidden">{mobileMenuTrigger}</div> : null}
 
-          <div className="flex min-w-[240px] items-center gap-2 md:max-w-[300px]">
+          <div className="ml-auto flex min-w-0 flex-1 items-center gap-2 md:max-w-[300px]">
             {stores.length > 1 ? (
               <Select value={selectedStoreId ?? undefined} onValueChange={onSelectStore}>
                 <SelectTrigger className="h-9 rounded-lg border-black/8 bg-[#fafafb] text-sm shadow-none">

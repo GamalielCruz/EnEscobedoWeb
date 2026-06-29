@@ -1,6 +1,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
+import { revalidatePath } from "next/cache";
 import { client, writeClient } from "@/sanity/lib/client";
 
 export async function GET(request: NextRequest) {
@@ -36,10 +37,10 @@ export async function PATCH(request: NextRequest) {
     if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
 
     const body = await request.json();
-    const { storeId, serviceTypes, isOpen, highDemandMode } = body;
+    const { storeId, serviceTypes, isOpen, highDemandMode, manualOperationalStatus } = body;
 
     if (!storeId) return NextResponse.json({ error: "Falta storeId" }, { status: 400 });
-    if (!serviceTypes && typeof isOpen !== "boolean" && typeof highDemandMode !== "boolean") {
+    if (!serviceTypes && typeof isOpen !== "boolean" && typeof highDemandMode !== "boolean" && typeof manualOperationalStatus !== "string") {
       return NextResponse.json(
         { error: "Faltan datos para actualizar la configuracion" },
         { status: 400 }
@@ -47,7 +48,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     const store = await client.fetch(
-      `*[_type == "affiliateStore" && _id == $storeId][0]{ _id, ownerClerkUserId, serviceTypes, isOpen, highDemandMode }`,
+      `*[_type == "affiliateStore" && _id == $storeId][0]{ _id, ownerClerkUserId, serviceTypes, isOpen, highDemandMode, manualOperationalStatus }`,
       { storeId }
     );
 
@@ -62,6 +63,13 @@ export async function PATCH(request: NextRequest) {
         : typeof serviceTypes?.onDemand === "boolean"
           ? serviceTypes.onDemand
           : Boolean(store.highDemandMode ?? store.serviceTypes?.onDemand);
+
+    const resolvedManualOperationalStatus =
+      typeof manualOperationalStatus === "string"
+        ? manualOperationalStatus
+        : typeof isOpen === "boolean"
+          ? (isOpen ? "open" : "closed")
+          : store.manualOperationalStatus ?? "auto";
 
     const nextServiceTypes = serviceTypes
       ? {
@@ -78,7 +86,7 @@ export async function PATCH(request: NextRequest) {
         };
 
     const patchData = {
-      ...(typeof isOpen === "boolean" ? { isOpen } : {}),
+      manualOperationalStatus: resolvedManualOperationalStatus,
       highDemandMode: resolvedHighDemandMode,
       serviceTypes: nextServiceTypes,
     };
@@ -87,6 +95,10 @@ export async function PATCH(request: NextRequest) {
       .patch(storeId)
       .set(patchData)
       .commit();
+
+    revalidatePath("/");
+    revalidatePath("/dashboard");
+    revalidatePath(`/store/${storeId}`);
 
     return NextResponse.json({ success: true, store: updated });
   } catch (e) {

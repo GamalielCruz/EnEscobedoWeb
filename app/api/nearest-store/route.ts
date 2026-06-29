@@ -208,6 +208,7 @@ export async function POST(request: NextRequest) {
           },
           isActive: true,
           isOpen: true,
+          manualOperationalStatus: "auto",
           highDemandMode: false,
           capacity: 80,
           averageDeliveryTime: 1,

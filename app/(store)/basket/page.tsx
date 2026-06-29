@@ -44,19 +44,10 @@ const getServiceTiming = (storeData: any) => {
   };
 };
 
-const getStoreOperationalState = (storeData: any) => {
-  const serviceTypes = storeData?.store?.serviceTypes || storeData?.serviceTypes || {};
-  const highDemandMode = Boolean(
-    storeData?.store?.highDemandMode ??
-      storeData?.highDemandMode ??
-      serviceTypes.onDemand
-  );
-  const isOpen = Boolean(storeData?.store?.isOpen ?? storeData?.isOpen ?? true);
+import { getStoreOperationalState } from "@/lib/storeOperationalState";
 
-  return {
-    isOpen,
-    highDemandMode,
-  };
+const getStoreOperationalStateLegacy = (storeData: any): ReturnType<typeof getStoreOperationalState> => {
+  return getStoreOperationalState(storeData);
 };
 
 const fetchStoreServiceTypes = async (storeId: string) => {
@@ -402,7 +393,7 @@ function BasketPage() {
 
   const handleCheckout = async (overridePhone?: string) => {
     if (!isSignedIn) return;
-    if (selectedStore && !getStoreOperationalState(selectedStore).isOpen) {
+    if (selectedStore && !getStoreOperationalStateLegacy(selectedStore).effectiveIsOpen) {
       setCardPhoneError("La tienda seleccionada esta cerrada temporalmente.");
       return;
     }
@@ -520,7 +511,7 @@ function BasketPage() {
       return;
     }
 
-    if (!getStoreOperationalState(selectedStore).isOpen) {
+    if (!getStoreOperationalStateLegacy(selectedStore).effectiveIsOpen) {
       setCodError("La tienda seleccionada esta cerrada temporalmente.");
       return;
     }
@@ -646,7 +637,7 @@ function BasketPage() {
       return;
     }
 
-    if (!getStoreOperationalState(selectedStore).isOpen) {
+    if (!getStoreOperationalStateLegacy(selectedStore).effectiveIsOpen) {
       setPickupError("La sucursal seleccionada no esta disponible en este momento.");
       return;
     }
@@ -722,8 +713,8 @@ function BasketPage() {
   };
 
   const selectedStoreTiming = selectedStore ? getServiceTiming(selectedStore) : null;
-  const selectedStoreState = selectedStore ? getStoreOperationalState(selectedStore) : null;
-  const isSelectedStoreClosed = Boolean(selectedStore && selectedStoreState && !selectedStoreState.isOpen);
+  const selectedStoreState = selectedStore ? getStoreOperationalStateLegacy(selectedStore) : null;
+  const isSelectedStoreClosed = Boolean(selectedStore && selectedStoreState && !selectedStoreState.effectiveIsOpen);
 
   return (
     <div className="min-h-screen bg-gray-50 pt-20 pb-8">

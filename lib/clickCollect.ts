@@ -39,6 +39,7 @@ export interface AffiliateStore {
   };
   isActive: boolean;
   isOpen?: boolean;
+  manualOperationalStatus?: "open" | "closed" | "auto";
   highDemandMode?: boolean;
   capacity: number;
   averageDeliveryTime: number;

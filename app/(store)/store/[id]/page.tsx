@@ -3,19 +3,54 @@ import Image from "next/image";
 import type { Metadata } from "next";
 import { getStoreById } from "@/sanity/lib/products/getStoreById";
 import { getProductsByStore } from "@/sanity/lib/products/getProductsByStore";
+import { getProductBySlug } from "@/sanity/lib/products/getProductBySlug";
 import { urlFor } from "@/sanity/lib/image";
 import { StoreProductsClient } from "./StoreProductsClient";
 import { StoreStatus } from "@/components/StoreStatus";
+import { getShareableImageUrl } from "@/sanity/lib/image";
 
 export async function generateMetadata({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ product?: string }>;
 }): Promise<Metadata> {
   const { id } = await params;
+  const resolvedSearchParams = (await (searchParams ?? Promise.resolve({}))) as {
+    product?: string;
+  };
   const store = await getStoreById(id);
 
   if (!store) return notFound();
+
+  const productSlug = resolvedSearchParams.product?.trim();
+  const product = productSlug ? await getProductBySlug(productSlug) : null;
+
+  if (product && product.affiliateStore?._id === id) {
+    const descriptionText =
+      typeof product.description === "string"
+        ? product.description
+        : Array.isArray(product.description)
+          ? product.description
+              .filter((block: any) => block?._type === "block")
+              .flatMap((block: any) => block?.children ?? [])
+              .map((child: any) => child?.text || "")
+              .join(" ")
+          : "";
+    const imageUrl = product.image ? getShareableImageUrl(product.image) : undefined;
+
+    return {
+      title: product.name ? `${product.name} | ${store.name}` : `${store.name} | EnEscobedo`,
+      description: descriptionText || `Compra ${product.name || "este producto"} en ${store.name}.`,
+      openGraph: {
+        title: product.name ? `${product.name} | ${store.name}` : `${store.name} | EnEscobedo`,
+        description: descriptionText || `Compra ${product.name || "este producto"} en ${store.name}.`,
+        url: `https://enescobedo.com/store/${id}?product=${encodeURIComponent(productSlug || "")}`,
+        images: imageUrl ? [imageUrl] : [],
+      },
+    };
+  }
 
   return {
     title: `${store.name} | EnEscobedo`,
@@ -30,16 +65,22 @@ export async function generateMetadata({
 
 export default async function StorePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ product?: string }>;
 }) {
   const { id } = await params;
+  const resolvedSearchParams = (await (searchParams ?? Promise.resolve({}))) as {
+    product?: string;
+  };
   const store = await getStoreById(id);
 
   if (!store) return notFound();
 
   // Obtener productos de esta tienda
   const products = await getProductsByStore(id);
+  const highlightedProductSlug = resolvedSearchParams.product?.trim() || "";
 
 
 
@@ -137,7 +178,11 @@ export default async function StorePage({
         </div>
 
         {/* Productos con filtro de categorías */}
-        <StoreProductsClient products={products as any} categories={categories} />
+        <StoreProductsClient
+          products={products as any}
+          categories={categories}
+          highlightedProductSlug={highlightedProductSlug}
+        />
       </div>
     </div>
   );

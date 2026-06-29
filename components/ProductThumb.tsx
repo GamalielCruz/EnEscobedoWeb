@@ -1,18 +1,20 @@
 "use client";
 
 import { imageUrl } from "@/lib/imageUrl";
+import { buildStoreProductUrl } from "@/lib/utils";
 import { Product } from "@/sanity.types";
 import Image from "next/image";
 import Link from "next/link";
 import { useState, useEffect } from "react";
-import { Heart, Star } from "lucide-react";
+import { Heart } from "lucide-react";
 
 function ProductThumb({ product }: { product: Product }) {
     const [imageError, setImageError] = useState(false);
     const [isFavorite, setIsFavorite] = useState(false);
     const isOutOfStock = product.stock != null && product.stock <= 0;
     const slug = product.slug?.current || product._id || "";
-    const productHref = slug ? `/product/${slug}` : "#";
+    const storeId = (product as Product & { affiliateStore?: { _id?: string } }).affiliateStore?._id || "";
+    const productHref = slug ? buildStoreProductUrl(storeId, slug) : "#";
 
     // Debug en desarrollo
     useEffect(() => {
