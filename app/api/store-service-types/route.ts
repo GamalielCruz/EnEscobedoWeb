@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { client } from '@/sanity/lib/client';
 
-// Query para obtener los tipos de servicio de una tienda específica
 const STORE_SERVICE_TYPES_QUERY = `*[_type == "affiliateStore" && _id == $storeId][0] {
   _id,
   name,
   isOpen,
+  manualOperationalStatus,
   highDemandMode,
   serviceTypes
 }`;
@@ -17,12 +17,11 @@ export async function GET(request: NextRequest) {
 
     if (!storeId) {
       return NextResponse.json(
-        { error: 'Se requiere storeId como parámetro' },
+        { error: 'Se requiere storeId como parametro' },
         { status: 400 }
       );
     }
 
-    // Configuraciones mock para las tiendas de prueba
     const mockServiceTypes: Record<string, any> = {
       'mock-pe-centro': {
         delivery: true,
@@ -49,13 +48,12 @@ export async function GET(request: NextRequest) {
         onDemandExtraMinutes: 15
       }
     };
-    const mockStoreStates: Record<string, { isOpen: boolean; highDemandMode: boolean }> = {
-      'mock-pe-centro': { isOpen: true, highDemandMode: false },
-      'mock-pe-plaza': { isOpen: true, highDemandMode: false },
-      'mock-pe-barrio': { isOpen: true, highDemandMode: false }
+    const mockStoreStates: Record<string, { isOpen: boolean; manualOperationalStatus: 'open' | 'closed' | 'auto'; highDemandMode: boolean }> = {
+      'mock-pe-centro': { isOpen: true, manualOperationalStatus: 'auto', highDemandMode: false },
+      'mock-pe-plaza': { isOpen: true, manualOperationalStatus: 'auto', highDemandMode: false },
+      'mock-pe-barrio': { isOpen: true, manualOperationalStatus: 'auto', highDemandMode: false }
     };
 
-    // Configuración por defecto
     const defaultServiceTypes = {
       delivery: true,
       pickup: true,
@@ -66,17 +64,18 @@ export async function GET(request: NextRequest) {
     };
     const defaultStoreState = {
       isOpen: true,
+      manualOperationalStatus: 'auto' as const,
       highDemandMode: false
     };
 
     let serviceTypes = mockServiceTypes[storeId] || defaultServiceTypes;
     let storeName = 'Tienda Mock';
     let isOpen = mockStoreStates[storeId]?.isOpen ?? defaultStoreState.isOpen;
+    let manualOperationalStatus = mockStoreStates[storeId]?.manualOperationalStatus ?? defaultStoreState.manualOperationalStatus;
     let highDemandMode =
       mockStoreStates[storeId]?.highDemandMode ??
       defaultStoreState.highDemandMode;
 
-    // Intentar obtener de Sanity si no es una tienda mock
     if (!mockServiceTypes[storeId]) {
       try {
         const store = await client.fetch(STORE_SERVICE_TYPES_QUERY, { storeId });
@@ -84,14 +83,14 @@ export async function GET(request: NextRequest) {
           serviceTypes = store.serviceTypes || defaultServiceTypes;
           storeName = store.name;
           isOpen = store.isOpen ?? defaultStoreState.isOpen;
+          manualOperationalStatus = store.manualOperationalStatus ?? defaultStoreState.manualOperationalStatus;
           highDemandMode =
             store.highDemandMode ?? store.serviceTypes?.onDemand ?? defaultStoreState.highDemandMode;
         }
       } catch (sanityError) {
-        console.log('Error obteniendo de Sanity, usando configuración por defecto:', sanityError);
+        console.log('Error obteniendo de Sanity, usando configuracion por defecto:', sanityError);
       }
     } else {
-      // Nombres para tiendas mock
       const mockNames: Record<string, string> = {
         'mock-pe-centro': 'Tienda Centro Pedro Escobedo',
         'mock-pe-plaza': 'Tienda Plaza San Miguel',
@@ -105,6 +104,7 @@ export async function GET(request: NextRequest) {
       storeId,
       storeName,
       isOpen,
+      manualOperationalStatus,
       highDemandMode,
       serviceTypes: {
         ...serviceTypes,
@@ -114,9 +114,9 @@ export async function GET(request: NextRequest) {
 
   } catch (error) {
     console.error('Error en /api/store-service-types:', error);
-    
+
     return NextResponse.json(
-      { 
+      {
         error: 'Error interno del servidor',
         details: error instanceof Error ? error.message : 'Error desconocido'
       },

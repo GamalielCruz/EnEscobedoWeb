@@ -19,6 +19,7 @@ const STORES_QUERY = `*[_type == "affiliateStore" && isActive == true] {
   operatingHours,
   isActive,
   isOpen,
+  manualOperationalStatus,
   highDemandMode,
   capacity,
   averageDeliveryTime,
@@ -160,6 +161,7 @@ export async function POST(request: NextRequest) {
         coordinates: { latitude, longitude },
         operatingHours: store.operatingHours || {},
         isOpen: store.isOpen ?? true,
+        manualOperationalStatus: store.manualOperationalStatus ?? "auto",
         highDemandMode: store.highDemandMode ?? store.serviceTypes?.onDemand ?? false,
         averageDeliveryTime: store.averageDeliveryTime || 1,
         serviceTypes: {
@@ -387,6 +389,7 @@ export async function GET(request: NextRequest) {
       coordinates: store.coordinates || { latitude: 0, longitude: 0 },
       operatingHours: store.operatingHours || {},
       isOpen: store.isOpen ?? true,
+      manualOperationalStatus: store.manualOperationalStatus ?? "auto",
       highDemandMode: store.highDemandMode ?? store.serviceTypes?.onDemand ?? false,
       averageDeliveryTime: store.averageDeliveryTime || 1,
       serviceTypes: {
@@ -568,3 +571,9 @@ export async function GET(request: NextRequest) {
     );
   }
 }
+
+
+
+
+
+

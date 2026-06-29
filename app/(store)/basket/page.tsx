@@ -47,7 +47,7 @@ const getServiceTiming = (storeData: any) => {
 import { getStoreOperationalState } from "@/lib/storeOperationalState";
 
 const getStoreOperationalStateLegacy = (storeData: any): ReturnType<typeof getStoreOperationalState> => {
-  return getStoreOperationalState(storeData);
+  return getStoreOperationalState(storeData?.store ?? storeData);
 };
 
 const fetchStoreServiceTypes = async (storeId: string) => {
@@ -272,6 +272,8 @@ function BasketPage() {
           ...store,
           serviceTypes: storeConfig?.serviceTypes || store.serviceTypes,
           isOpen: storeConfig?.isOpen ?? store.isOpen ?? true,
+          manualOperationalStatus:
+            storeConfig?.manualOperationalStatus ?? store.manualOperationalStatus ?? "auto",
           highDemandMode:
             storeConfig?.highDemandMode ?? store.highDemandMode ?? store.serviceTypes?.onDemand ?? false,
         };
@@ -296,6 +298,7 @@ function BasketPage() {
           estimatedDelivery: pickupTiming.label,
           serviceTypes: normalizedStore.serviceTypes,
           isOpen: normalizedStore.isOpen,
+          manualOperationalStatus: normalizedStore.manualOperationalStatus,
           highDemandMode: normalizedStore.highDemandMode,
         };
 
@@ -311,6 +314,7 @@ function BasketPage() {
           estimatedDelivery: pickupSelection.estimatedDelivery,
           serviceTypes: pickupSelection.serviceTypes,
           isOpen: pickupSelection.isOpen,
+          manualOperationalStatus: pickupSelection.manualOperationalStatus,
           highDemandMode: pickupSelection.highDemandMode,
           shippingCost: 0,
         }));
@@ -324,6 +328,8 @@ function BasketPage() {
           ...fallbackStore,
           serviceTypes: storeConfig?.serviceTypes || fallbackStore.serviceTypes,
           isOpen: storeConfig?.isOpen ?? fallbackStore.isOpen ?? true,
+          manualOperationalStatus:
+            storeConfig?.manualOperationalStatus ?? fallbackStore.manualOperationalStatus ?? "auto",
           highDemandMode:
             storeConfig?.highDemandMode ?? fallbackStore.highDemandMode ?? fallbackStore.serviceTypes?.onDemand ?? false,
         };
@@ -344,6 +350,7 @@ function BasketPage() {
           estimatedDelivery: fallbackTiming.label,
           serviceTypes: normalizedFallbackStore.serviceTypes,
           isOpen: normalizedFallbackStore.isOpen,
+          manualOperationalStatus: normalizedFallbackStore.manualOperationalStatus,
           highDemandMode: normalizedFallbackStore.highDemandMode,
         });
         setShippingCost(0);
@@ -893,6 +900,7 @@ function BasketPage() {
                               distanceKm: data.distanceKm,
                               serviceTypes: data.selectedStore.serviceTypes,
                               isOpen: data.selectedStore.isOpen ?? true,
+                              manualOperationalStatus: data.selectedStore.manualOperationalStatus ?? "auto",
                               highDemandMode:
                                 data.selectedStore.highDemandMode ?? data.selectedStore.serviceTypes?.onDemand ?? false,
                             };
@@ -1458,3 +1466,12 @@ function BasketPage() {
 }
 
 export default BasketPage;
+
+
+
+
+
+
+
+
+
