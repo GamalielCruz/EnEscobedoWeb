@@ -183,7 +183,8 @@ export async function createCheckoutSession(
       customer: customerId,
       metadata: stripeMetadata,
       mode: "payment",
-      allow_promotion_codes: true,
+      // ponytail: no aceptar cupones libres hasta mapearlos a cupones reales de Stripe
+      allow_promotion_codes: false,
       payment_method_types: ["card"], // Solo tarjeta
       phone_number_collection: {
         enabled: false,
@@ -248,3 +249,4 @@ export async function createCheckoutSession(
     throw error;
   }
 }
+
