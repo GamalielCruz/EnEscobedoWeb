@@ -132,10 +132,10 @@ export default function DashboardPage() {
           isOpen={isOpen}
           highDemandMode={highDemandMode}
           savingConfig={savingStoreConfig}
-          onToggleOpen={(nextValue) =>
+          onOperationalStatusChange={(nextValue) =>
             saveStoreConfig({
-              isOpen: nextValue,
-              manualOperationalStatus: nextValue ? "open" : "closed",
+              isOpen: nextValue !== "closed",
+              manualOperationalStatus: nextValue,
             })
           }
           manualOperationalStatus={storeOperationalState.manualOperationalStatus ?? "auto"}
@@ -195,3 +195,4 @@ export default function DashboardPage() {
     </DashboardShell>
   );
 }
+

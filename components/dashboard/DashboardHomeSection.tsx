@@ -31,7 +31,7 @@ type DashboardHomeSectionProps = {
   manualOperationalStatus: "open" | "closed" | "auto";
   highDemandMode: boolean;
   savingConfig: boolean;
-  onToggleOpen: (nextValue: boolean) => void;
+  onOperationalStatusChange: (nextValue: "open" | "closed" | "auto") => void;
   onToggleHighDemand: (nextValue: boolean) => void;
   onGoToOrders: () => void;
   onGoToProducts: () => void;
@@ -45,14 +45,18 @@ export function DashboardHomeSection({
   manualOperationalStatus,
   highDemandMode,
   savingConfig,
-  onToggleOpen,
+  onOperationalStatusChange,
   onToggleHighDemand,
   onGoToOrders,
   onGoToProducts,
   onGoToStore,
 }: DashboardHomeSectionProps) {
   const alertItems = [
-    !isOpen ? "La tienda esta cerrada y los pedidos nuevos deben permanecer detenidos." : null,
+    manualOperationalStatus === "closed"
+      ? "La tienda esta cerrada manualmente y no acepta pedidos nuevos."
+      : manualOperationalStatus === "auto" && !isOpen
+        ? "La tienda esta siguiendo horario y en este momento permanece cerrada."
+        : null,
     highDemandMode ? "Alta Demanda esta activa y el cliente ya ve un aviso de demoras." : null,
     metrics.pendingOrders > 0
       ? `${metrics.pendingOrders} pedidos requieren atencion inmediata.`
@@ -76,6 +80,13 @@ export function DashboardHomeSection({
             <DashboardStatusPill tone={isOpen ? "success" : "danger"}>
               {isOpen ? "Abierta" : "Cerrada"}
             </DashboardStatusPill>
+            <DashboardStatusPill tone="neutral">
+              {manualOperationalStatus === "open"
+                ? "Modo manual: abierta"
+                : manualOperationalStatus === "closed"
+                  ? "Modo manual: cerrada"
+                  : "Modo horario"}
+            </DashboardStatusPill>
             <DashboardStatusPill tone={highDemandMode ? "warning" : "neutral"}>
               {highDemandMode ? "Alta demanda" : "Flujo normal"}
             </DashboardStatusPill>
@@ -94,7 +105,7 @@ export function DashboardHomeSection({
           manualOperationalStatus={manualOperationalStatus}
           highDemandMode={highDemandMode}
           saving={savingConfig}
-          onToggleOpen={onToggleOpen}
+          onOperationalStatusChange={onOperationalStatusChange}
           onToggleHighDemand={onToggleHighDemand}
         />
 
