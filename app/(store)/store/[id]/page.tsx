@@ -167,7 +167,7 @@ export default async function StorePage({
                 isOpen={store.isOpen}
                 manualOperationalStatus={store.manualOperationalStatus}
                 highDemandMode={store.highDemandMode}
-                serviceTypes={store.serviceTypes}
+                serviceTypes={store.serviceTypes || undefined}
               />
               
               {/* Costo de entrega */}

@@ -8,6 +8,7 @@ import { optionGroup } from './optionGroup'
 import { productUpdateRequest } from './productUpdateRequest'
 import { orderType } from './orderType';
 import { salesType } from './salesType';
+import { promoBannerType } from './promoBannerType';
 import { affiliateStoreType } from './affiliateStoreType';
 import { storeCategoryType } from './storeCategoryType';
 import { storeUpdateRequest } from './storeUpdateRequest';
@@ -25,6 +26,7 @@ export const schema: { types: SchemaTypeDefinition[] } = {
     storeUpdateRequest,
     orderType, 
     salesType, 
+    promoBannerType,
     affiliateStoreType, 
     repartidorType,
     storeCategoryType,

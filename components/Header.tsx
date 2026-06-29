@@ -110,7 +110,7 @@ export function Header() {
             <span
               className={`relative hidden lg:flex items-center justify-center w-auto h-8 sm:h-10`}
             >
-              <Image src="/logo.svg" alt="ElMenu Logo" width={140} height={50} />
+              <Image src="/logo.svg" alt="ElMenu Logo" width={150} height={60} />
             </span>
           </Link>
 

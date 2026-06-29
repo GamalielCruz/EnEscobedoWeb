@@ -2,18 +2,24 @@
 
 import { imageUrl } from "@/lib/imageUrl";
 import { buildStoreProductUrl } from "@/lib/utils";
-import { Product } from "@/sanity.types";
+import { PRODUCT_SEARCH_QUERY_RESULT, Product } from "@/sanity.types";
 import Image from "next/image";
 import Link from "next/link";
 import { useState, useEffect } from "react";
 import { Heart } from "lucide-react";
 
-function ProductThumb({ product }: { product: Product }) {
+type ProductThumbProduct = Product | PRODUCT_SEARCH_QUERY_RESULT[number];
+
+function ProductThumb({ product }: { product: ProductThumbProduct }) {
     const [imageError, setImageError] = useState(false);
     const [isFavorite, setIsFavorite] = useState(false);
     const isOutOfStock = product.stock != null && product.stock <= 0;
     const slug = product.slug?.current || product._id || "";
-    const storeId = (product as Product & { affiliateStore?: { _id?: string } }).affiliateStore?._id || "";
+    const affiliateStore = product.affiliateStore as
+        | { _id?: string | null; _ref?: string | null }
+        | null
+        | undefined;
+    const storeId = affiliateStore?._id || affiliateStore?._ref || "";
     const productHref = slug ? buildStoreProductUrl(storeId, slug) : "#";
 
     // Debug en desarrollo

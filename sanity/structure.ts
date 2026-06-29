@@ -6,6 +6,7 @@ export const structure: StructureResolver = (S) =>
     .title("Galiel - Pedro Escobedo")
     .items([
       S.documentTypeListItem("category").title("Categories"),
+      S.documentTypeListItem("promoBanner").title("Banners Promocionales"),
       S.divider(),
       S.listItem()
         .title("Solicitudes Pendientes")

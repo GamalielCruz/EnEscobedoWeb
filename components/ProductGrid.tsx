@@ -1,10 +1,12 @@
 "use client";
 
-import { Product } from "@/sanity.types";
+import { PRODUCT_SEARCH_QUERY_RESULT, Product } from "@/sanity.types";
 import { AnimatePresence, motion } from "framer-motion";
 import ProductThumb from "./ProductThumb";
 
-function ProductGrid({ products }: { products: Product[] }) {
+type ProductGridProduct = Product | PRODUCT_SEARCH_QUERY_RESULT[number];
+
+function ProductGrid({ products }: { products: ProductGridProduct[] }) {
     // Sort products by creation date (newest first)
     const sortedProducts = products?.sort((a, b) => {
         const dateA = a._createdAt ? new Date(a._createdAt).getTime() : 0;
