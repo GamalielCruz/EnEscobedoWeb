@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
-import { client, writeClient } from "@/sanity/lib/client";
+import { writeClient } from "@/sanity/lib/client";
 
 export async function GET(request: NextRequest) {
   try {
@@ -15,7 +15,7 @@ export async function GET(request: NextRequest) {
     if (!storeId) return NextResponse.json({ error: "Falta storeId" }, { status: 400 });
 
     const query = `*[_type == "affiliateStore" && _id == $storeId][0]`;
-    const store = await client.fetch(query, { storeId });
+    const store = await writeClient.fetch(query, { storeId }, { cache: "no-store" });
 
     if (!store) return NextResponse.json({ error: "Tienda no encontrada" }, { status: 404 });
     
@@ -47,9 +47,10 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const store = await client.fetch(
+    const store = await writeClient.fetch(
       `*[_type == "affiliateStore" && _id == $storeId][0]{ _id, ownerClerkUserId, serviceTypes, isOpen, highDemandMode, manualOperationalStatus }`,
-      { storeId }
+      { storeId },
+      { cache: "no-store" }
     );
 
     if (!store) return NextResponse.json({ error: "Tienda no encontrada" }, { status: 404 });
@@ -86,6 +87,7 @@ export async function PATCH(request: NextRequest) {
         };
 
     const patchData = {
+      isOpen: typeof isOpen === "boolean" ? isOpen : store.isOpen ?? resolvedManualOperationalStatus === "open",
       manualOperationalStatus: resolvedManualOperationalStatus,
       highDemandMode: resolvedHighDemandMode,
       serviceTypes: nextServiceTypes,
@@ -106,3 +108,4 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
   }
 }
+

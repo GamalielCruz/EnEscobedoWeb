@@ -13,9 +13,22 @@ interface StoreStatusProps {
     saturday?: string;
     sunday?: string;
   };
+  isOpen?: boolean | null;
+  manualOperationalStatus?: "open" | "closed" | "auto" | null;
+  highDemandMode?: boolean | null;
+  serviceTypes?: {
+    onDemand?: boolean;
+    onDemandExtraMinutes?: number;
+  };
 }
 
-export function StoreStatus({ operatingHours }: StoreStatusProps) {
+export function StoreStatus({
+  operatingHours,
+  isOpen,
+  manualOperationalStatus,
+  highDemandMode,
+  serviceTypes,
+}: StoreStatusProps) {
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
@@ -23,7 +36,6 @@ export function StoreStatus({ operatingHours }: StoreStatusProps) {
   }, []);
 
   if (!mounted) {
-    // Mostrar un placeholder durante SSR
     return (
       <div className="flex items-center gap-1">
         <div className="h-2 w-2 rounded-full bg-gray-300" />
@@ -32,20 +44,25 @@ export function StoreStatus({ operatingHours }: StoreStatusProps) {
     );
   }
 
-  const { effectiveIsOpen } = getStoreOperationalState({ operatingHours });
+  const { effectiveIsOpen } = getStoreOperationalState({
+    operatingHours,
+    isOpen,
+    manualOperationalStatus,
+    highDemandMode,
+    serviceTypes,
+  });
   const storeStatus = effectiveIsOpen ? "Abierto" : "Cerrado";
-  const isOpen = effectiveIsOpen;
 
   return (
     <div className="flex items-center gap-1">
       <div
         className={`h-2 w-2 rounded-full ${
-          isOpen ? "bg-green-500" : "bg-red-500"
+          effectiveIsOpen ? "bg-green-500" : "bg-red-500"
         }`}
       />
       <span
         className={
-          isOpen
+          effectiveIsOpen
             ? "text-green-600 font-medium"
             : "text-red-600 font-medium"
         }

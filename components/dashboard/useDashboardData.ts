@@ -257,13 +257,13 @@ export function useDashboardData() {
         });
         const data = await response.json();
         if (!data.success) return false;
-        await refreshStoreConfig();
+        if (data.store) setStoreConfig(data.store);
         return true;
       } finally {
         setSavingStoreConfig(false);
       }
     },
-    [selectedStoreId, refreshStoreConfig]
+    [selectedStoreId]
   );
 
   const updateOrderStatus = React.useCallback(
@@ -451,3 +451,4 @@ export function useDashboardData() {
     refreshHistoryOrders: historyOrdersHook.refresh,
   };
 }
+

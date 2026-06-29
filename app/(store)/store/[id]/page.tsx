@@ -162,7 +162,13 @@ export default async function StorePage({
           <div className="px-4 py-4">
             <div className="flex items-center gap-4 text-sm">
               {/* Estado de la tienda (Abierto/Cerrado) */}
-              <StoreStatus operatingHours={store.operatingHours || undefined} />
+              <StoreStatus
+                operatingHours={store.operatingHours || undefined}
+                isOpen={store.isOpen}
+                manualOperationalStatus={store.manualOperationalStatus}
+                highDemandMode={store.highDemandMode}
+                serviceTypes={store.serviceTypes}
+              />
               
               {/* Costo de entrega */}
               <div className="flex items-center gap-1 text-gray-600">
@@ -187,3 +193,4 @@ export default async function StorePage({
     </div>
   );
 }
+

@@ -74,13 +74,13 @@ export default async function Home(props: NextPageProps) {
   const paginatedStores = filteredStores.slice(startIdx, endIdx);
 
   // Convert stores to match StoresView interface
-  const convertedStores = paginatedStores.map(store => ({
+  const convertedStores = paginatedStores.map((store: any) => ({
     ...store,
     name: store.name || undefined, // Convert null to undefined
     storeId: store.storeId || undefined,
     address: store.address || undefined, // Convert null to undefined
     operatingHours: store.operatingHours || undefined, // Convert null to undefined
-    storeCategories: store.storeCategories ? store.storeCategories.map(cat => ({
+    storeCategories: store.storeCategories ? store.storeCategories.map((cat: any) => ({
       _id: cat._id,
       title: cat.title || undefined,
       slug: cat.slug ? {
@@ -103,7 +103,7 @@ export default async function Home(props: NextPageProps) {
       <div className="flex flex-col min-h-screen bg-white p-4 w-full">
         <div className="w-full max-w-7xl mx-auto">
           <StoresView
-            stores={paginatedStores as any}
+            stores={convertedStores as any}
             storeCategories={storeCategories as any}
             selectedCategory={selectedCategory}
           />
@@ -143,3 +143,5 @@ export default async function Home(props: NextPageProps) {
     </div>
   );
 }
+
+
