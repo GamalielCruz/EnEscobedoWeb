@@ -76,7 +76,7 @@ function SlideContent({
   const hasSale = Boolean(banner.sale?.discountAmount || banner.sale?.couponCode);
   const buttonText = banner.ctaText?.trim();
   const buttonLink = banner.ctaLink?.trim();
-  const title = banner.title?.trim() || "Promoci髇 disponible";
+  const title = banner.title?.trim() || "Promoci贸n disponible";
   const description = banner.description?.trim();
   const productName = banner.product?.name?.trim();
 
@@ -114,12 +114,12 @@ function SlideContent({
         <div className="flex items-start justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full bg-white/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white backdrop-blur-sm ring-1 ring-white/10">
-              Promoci髇
+              Promoci贸n
             </span>
             {hasSale ? (
               <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-[11px] font-bold text-[#850C22] shadow-sm sm:text-xs">
                 <TicketPercent className="h-4 w-4" />
-                {banner.sale?.discountAmount ? `${banner.sale.discountAmount}% de descuento` : "Cup髇 disponible"}
+                {banner.sale?.discountAmount ? `${banner.sale.discountAmount}% de descuento` : "Cup贸n disponible"}
               </span>
             ) : null}
           </div>
@@ -161,7 +161,7 @@ function SlideContent({
 
             {banner.sale?.couponCode ? (
               <span className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white backdrop-blur-sm">
-                C骴igo: {banner.sale.couponCode}
+                C贸digo: {banner.sale.couponCode}
               </span>
             ) : null}
           </div>
