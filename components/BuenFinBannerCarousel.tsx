@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Image from "next/image";
 import Link from "next/link";
@@ -82,6 +82,7 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
   const title = banner.title?.trim() || "Promocion disponible";
   const description = banner.description?.trim();
   const mainColor = banner.mainColor?.trim() || DEFAULT_MAIN_COLOR;
+  const buttonTextColor = mainColor.toLowerCase() === '#ffffff' ? '#111827' : mainColor;
   const bannerTypeLabel = getBannerTypeLabel(banner.bannerType);
 
   const body = (
@@ -147,7 +148,7 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
               {buttonText && buttonLink ? (
-                <span className="inline-flex rounded-full bg-white px-5 py-2.5 text-sm font-bold shadow-sm transition-transform duration-200 hover:scale-[1.02]">
+                <span className="inline-flex rounded-full bg-white px-5 py-2.5 text-sm font-bold shadow-sm transition-transform duration-200 hover:scale-[1.02]" style={{ color: buttonTextColor }}>
                   {buttonText}
                 </span>
               ) : null}

@@ -10,8 +10,25 @@ const bannerTypeLabels: Record<string, string> = {
   event: "Evento",
 };
 
-function getBannerTypeLabel(value?: string) {
+const mainColorLabels: Record<string, string> = {
+  "#FFFFFF": "Blanco",
+  "#000000": "Negro",
+  "#09193B": "Azul marino",
+  "#850C22": "Rojo vino",
+  "#111827": "Grafito",
+  "#166534": "Verde",
+  "#0F766E": "Teal",
+  "#6D28D9": "Violeta",
+  "#C2410C": "Naranja",
+};
+
+function getBannerTypeLabel(value?: string | null) {
   return bannerTypeLabels[value || ""] || "Promocion";
+}
+
+function getMainColorLabel(value?: string | null) {
+  if (!value) return "Color personalizado";
+  return mainColorLabels[value.toUpperCase()] || value;
 }
 
 export const promoBannerType = defineType({
@@ -41,15 +58,15 @@ export const promoBannerType = defineType({
       options: {
         layout: "dropdown",
         list: [
-          { title: "Promocion", value: "promotion" },
-          { title: "Anuncio", value: "announcement" },
-          { title: "Informacion", value: "info" },
-          { title: "Destacado", value: "featured" },
-          { title: "Aviso", value: "warning" },
-          { title: "Evento", value: "event" },
+          { title: "Promocion (Blanco sugerido)", value: "promotion" },
+          { title: "Anuncio (Negro sugerido)", value: "announcement" },
+          { title: "Informacion (Azul marino sugerido)", value: "info" },
+          { title: "Destacado (Rojo vino sugerido)", value: "featured" },
+          { title: "Aviso (Naranja sugerido)", value: "warning" },
+          { title: "Evento (Verde sugerido)", value: "event" },
         ],
       },
-      description: "Etiqueta principal que aparecera en el banner.",
+      description: "El color principal se elige abajo; las sugerencias de la lista son solo de referencia.",
     }),
     defineField({
       name: "mainColor",
@@ -59,6 +76,8 @@ export const promoBannerType = defineType({
       options: {
         layout: "dropdown",
         list: [
+          { title: "Blanco", value: "#FFFFFF" },
+          { title: "Negro", value: "#000000" },
           { title: "Azul marino", value: "#09193B" },
           { title: "Rojo vino", value: "#850C22" },
           { title: "Grafito", value: "#111827" },
@@ -68,7 +87,7 @@ export const promoBannerType = defineType({
           { title: "Naranja", value: "#C2410C" },
         ],
       },
-      description: "Color principal para titulo, descripcion, boton, codigo y tienda. Elige un tono que contraste con la imagen.",
+      description: "Color principal para titulo, descripcion, boton, codigo y tienda. Usa blanco o negro si el fondo lo pide.",
     }),
     defineField({
       name: "desktopImage",
@@ -183,16 +202,18 @@ export const promoBannerType = defineType({
       sortOrder: "sortOrder",
       isActive: "isActive",
       bannerType: "bannerType",
+      mainColor: "mainColor",
     },
     prepare(selection) {
-      const { title, subtitle, media, sortOrder, isActive, bannerType } = selection;
+      const { title, subtitle, media, sortOrder, isActive, bannerType, mainColor } = selection;
 
       const status = isActive ? "Activo" : "Inactivo";
       const typeLabel = getBannerTypeLabel(bannerType as string | undefined);
+      const colorLabel = getMainColorLabel(mainColor as string | undefined);
 
       return {
         title: title || "Banner sin titulo",
-        subtitle: `#${sortOrder || 0} - ${typeLabel} - ${status}${subtitle ? ` - ${subtitle}` : ""}`,
+        subtitle: `#${sortOrder || 0} - ${typeLabel} - Color: ${colorLabel} - ${status}${subtitle ? ` - ${subtitle}` : ""}`,
         media: media as any,
       };
     },
