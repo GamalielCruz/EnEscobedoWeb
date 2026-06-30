@@ -256,7 +256,7 @@ export async function sendClienteRepartidorEnPuerta(
   customerName: string,
   orderNumber: string
 ) {
-  return sendWhatsAppTemplate(phone, "repartidor_en_puerta", [customerName, orderNumber], "es_MX");
+  return sendWhatsAppTemplate(phone, "cliente_repartidor_en_puerta", [customerName, orderNumber], "es_MX");
 }
 
 // Mensajes de texto libre del bot hacia repartidores (respuestas a comandos y recordatorios)
@@ -264,3 +264,4 @@ export async function sendClienteRepartidorEnPuerta(
 export async function sendBotMessage(phone: string, message: string) {
   return sendWhatsAppMessage(phone, message);
 }
+

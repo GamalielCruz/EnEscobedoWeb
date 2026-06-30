@@ -15,18 +15,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <ClerkProvider 
-      localization={esMX}
-      signInFallbackRedirectUrl="/"
-      signUpFallbackRedirectUrl="/"
-    >
-      <ClerkRedirectInterceptor>
-        <html lang="es">
-          <body>
-            {children}
-          </body>
-        </html>
-      </ClerkRedirectInterceptor>
-    </ClerkProvider>
+    <html lang="es">
+      <body>
+        <ClerkProvider
+          localization={esMX}
+          signInFallbackRedirectUrl="/"
+          signUpFallbackRedirectUrl="/"
+        >
+          <ClerkRedirectInterceptor>{children}</ClerkRedirectInterceptor>
+        </ClerkProvider>
+      </body>
+    </html>
   );
 }
