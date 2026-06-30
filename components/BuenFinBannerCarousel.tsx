@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import Image from "next/image";
 import Link from "next/link";
@@ -37,14 +37,14 @@ function StoreBadge({ banner }: { banner: PromoBannerItem }) {
   if (!storeName) return null;
 
   return (
-    <div className="flex items-center gap-3 rounded-full bg-white/8 px-3 py-2 ring-1 ring-white/10 backdrop-blur-md">
-      <div className="h-10 w-10 overflow-hidden rounded-full bg-white/12 ring-1 ring-white/15">
+    <div className="inline-flex items-center gap-3 rounded-full bg-white/10 px-3 py-2 text-white ring-1 ring-white/10 backdrop-blur-md">
+      <div className="h-9 w-9 overflow-hidden rounded-full bg-white/12 ring-1 ring-white/15">
         {storeImageUrl ? (
           <Image
             src={storeImageUrl}
             alt={storeName}
-            width={40}
-            height={40}
+            width={36}
+            height={36}
             className="h-full w-full object-cover"
           />
         ) : (
@@ -53,7 +53,45 @@ function StoreBadge({ banner }: { banner: PromoBannerItem }) {
           </div>
         )}
       </div>
-      <span className="text-sm font-semibold text-white sm:text-base">{storeName}</span>
+      <span className="truncate text-sm font-semibold sm:text-base">{storeName}</span>
+    </div>
+  );
+}
+
+function ProductCard({ banner, priority }: { banner: PromoBannerItem; priority: boolean }) {
+  const productName = banner.product?.name?.trim();
+  const productImageUrl = useMemo(
+    () =>
+      buildImageUrl(
+        banner.product?.image ?? banner.desktopImage ?? banner.mobileImage ?? null,
+        420,
+        420
+      ),
+    [banner.desktopImage, banner.mobileImage, banner.product?.image]
+  );
+
+  return (
+    <div className="mx-auto w-[126px] sm:w-[150px] md:w-[170px] lg:w-[210px]">
+      <div className="relative overflow-hidden rounded-[1.35rem] border border-white/15 bg-white/10 p-2.5 shadow-[0_24px_60px_rgba(0,0,0,0.25)] backdrop-blur-md sm:p-3 lg:p-3.5">
+        <div className="relative aspect-square overflow-hidden rounded-[1rem] bg-black/10">
+          {productImageUrl ? (
+            <Image
+              src={productImageUrl}
+              alt={productName || "Producto destacado"}
+              fill
+              priority={priority}
+              className="object-cover object-center"
+              sizes="(max-width: 1024px) 150px, 210px"
+            />
+          ) : null}
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(0,0,0,0.28))]" />
+          {productName ? (
+            <div className="absolute inset-x-2 bottom-2 rounded-full bg-black/35 px-2 py-1 text-center text-[11px] font-semibold text-white backdrop-blur-sm sm:text-xs">
+              {productName}
+            </div>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }
@@ -76,12 +114,11 @@ function SlideContent({
   const hasSale = Boolean(banner.sale?.discountAmount || banner.sale?.couponCode);
   const buttonText = banner.ctaText?.trim();
   const buttonLink = banner.ctaLink?.trim();
-  const title = banner.title?.trim() || "Promoci\u00f3n disponible";
+  const title = banner.title?.trim() || "Promocion disponible";
   const description = banner.description?.trim();
-  const productName = banner.product?.name?.trim();
 
   const body = (
-    <article className="relative isolate aspect-[16/4.8] min-h-[250px] overflow-hidden rounded-2xl bg-[#140b12] shadow-[0_18px_50px_rgba(0,0,0,0.18)] sm:aspect-[16/4.4] sm:min-h-[280px] lg:aspect-[16/4.1]">
+    <article className="relative isolate w-full max-w-full min-w-0 overflow-hidden rounded-2xl bg-[#09193B] shadow-[0_18px_50px_rgba(0,0,0,0.18)]">
       {desktopImageUrl ? (
         <>
           <div className="absolute inset-0 hidden md:block">
@@ -107,19 +144,19 @@ function SlideContent({
         </>
       ) : null}
 
-      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(12,8,12,0.72)_0%,rgba(12,8,12,0.44)_55%,rgba(12,8,12,0.18)_100%)]" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.08),transparent_42%)]" />
+      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(9,15,32,0.82)_0%,rgba(9,15,32,0.54)_58%,rgba(9,15,32,0.22)_100%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.08),transparent_40%)]" />
 
-      <div className="relative z-10 grid h-full grid-rows-[auto_1fr_auto] px-4 py-4 sm:px-6 sm:py-5 lg:px-8 lg:py-6">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-2">
+      <div className="relative z-10 flex min-h-[210px] flex-col gap-4 p-4 sm:min-h-[240px] sm:p-5 lg:min-h-[280px] lg:p-6">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex max-w-full flex-wrap items-center gap-2">
             <span className="rounded-full bg-white/14 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white backdrop-blur-md ring-1 ring-white/10 sm:text-xs">
-              Promoción
+              Promocion
             </span>
             {hasSale ? (
-              <span className="inline-flex items-center gap-2 rounded-full bg-white/92 px-3 py-1 text-[11px] font-bold text-[#850C22] shadow-sm sm:text-xs">
+              <span className="inline-flex items-center gap-2 rounded-full bg-white/90 px-3 py-1 text-[11px] font-bold text-[#850C22] shadow-sm sm:text-xs">
                 <TicketPercent className="h-4 w-4" />
-                {banner.sale?.discountAmount ? `${banner.sale.discountAmount}% de descuento` : "Cupón disponible"}
+                {banner.sale?.discountAmount ? `${banner.sale.discountAmount}% de descuento` : "Cupon disponible"}
               </span>
             ) : null}
           </div>
@@ -129,44 +166,27 @@ function SlideContent({
           </div>
         </div>
 
-        <div className="relative flex items-center justify-center py-1 sm:py-2">
-          <div className="grid w-full max-w-5xl items-center gap-3 lg:grid-cols-[1.05fr_0.95fr] lg:gap-5">
-            <div className="space-y-2 sm:space-y-3 lg:max-w-3xl">
-              <h2 className="text-balance text-2xl font-black leading-[0.98] text-white sm:text-4xl lg:text-5xl">
-                {title}
-              </h2>
-              {description ? (
-                <p className="max-w-2xl text-pretty text-sm leading-5 text-white/88 sm:text-base lg:text-lg">
-                  {description}
-                </p>
-              ) : null}
-            </div>
-
-            <div className="flex justify-center lg:justify-end">
-              <div className="relative w-full max-w-[180px] sm:max-w-[220px] lg:max-w-[250px]">
-                <div className="absolute inset-x-6 -bottom-2 h-6 rounded-full bg-black/25 blur-2xl" />
-                <div className="relative overflow-hidden rounded-[1.4rem] border border-white/16 bg-white/10 p-2.5 shadow-2xl backdrop-blur-md sm:p-3 lg:p-4">
-                  <div className="relative aspect-square overflow-hidden rounded-[1.05rem] bg-black/12">
-                    <Image
-                      src={desktopImageUrl || mobileImageUrl || "/favicon.ico"}
-                      alt={productName || title}
-                      fill
-                      priority={priority}
-                      className="object-cover object-center"
-                      sizes="(max-width: 1024px) 220px, 280px"
-                    />
-                    <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(0,0,0,0.22))]" />
-                  </div>
-                  {productName ? (
-                    <div className="mt-3 text-center">
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/72">Producto destacado</p>
-                      <p className="mt-1 text-sm font-bold text-white sm:text-base">{productName}</p>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-            </div>
+        <div className="grid min-w-0 flex-1 items-center gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(126px,210px)_minmax(0,0.65fr)] lg:gap-5">
+          <div className="min-w-0 max-w-[92%] space-y-2 sm:max-w-[72%] sm:space-y-3 lg:max-w-full">
+            <h2 className="break-words text-2xl font-black leading-tight text-white sm:text-3xl md:text-4xl">
+              {title}
+            </h2>
+            {description ? (
+              <p className="max-w-full break-words text-sm leading-relaxed text-white/85 sm:text-base md:text-lg">
+                {description}
+              </p>
+            ) : null}
           </div>
+
+          {banner.product ? (
+            <div className="min-w-0 lg:justify-self-center">
+              <ProductCard banner={banner} priority={priority} />
+            </div>
+          ) : (
+            <div className="hidden lg:block" />
+          )}
+
+          <div className="hidden lg:block" />
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -179,7 +199,7 @@ function SlideContent({
 
             {banner.sale?.couponCode ? (
               <span className="rounded-full border border-white/14 bg-white/10 px-4 py-2 text-sm font-semibold text-white/92 backdrop-blur-md">
-                Código: {banner.sale.couponCode}
+                Codigo: {banner.sale.couponCode}
               </span>
             ) : null}
           </div>
@@ -196,14 +216,14 @@ function SlideContent({
 
   if (isExternalLink(buttonLink)) {
     return (
-      <a href={buttonLink} target="_blank" rel="noreferrer" className="block">
+      <a href={buttonLink} target="_blank" rel="noreferrer" className="block w-full max-w-full">
         {body}
       </a>
     );
   }
 
   return (
-    <Link href={buttonLink} className="block">
+    <Link href={buttonLink} className="block w-full max-w-full">
       {body}
     </Link>
   );
@@ -232,47 +252,48 @@ export default function BuenFinBannerCarousel({ banners }: BuenFinBannerCarousel
   const currentBanner = banners[currentIndex];
 
   return (
-    <section className="mx-4 mt-2 sm:mx-6 lg:mx-8">
-      <div className="relative mx-auto max-w-7xl">
-        <SlideContent banner={currentBanner} priority />
+    <section className="w-full max-w-full overflow-x-clip px-4 pt-2 sm:px-6 lg:px-8">
+      <div className="mx-auto w-full max-w-7xl min-w-0 overflow-hidden">
+        <div className="relative w-full max-w-full min-w-0 overflow-hidden rounded-2xl">
+          <SlideContent banner={currentBanner} priority />
 
-        {banners.length > 1 ? (
-          <>
-            <button
-              type="button"
-              onClick={() => setCurrentIndex((prev) => (prev - 1 + banners.length) % banners.length)}
-              className="absolute left-2 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/22 p-2 text-white/95 backdrop-blur-md transition hover:bg-black/38 sm:left-4"
-              aria-label="Banner anterior"
-            >
-              <ChevronLeft className="h-5 w-5" />
-            </button>
+          {banners.length > 1 ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setCurrentIndex((prev) => (prev - 1 + banners.length) % banners.length)}
+                className="absolute left-2 top-1/2 z-20 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full bg-black/20 text-white/95 ring-1 ring-white/10 backdrop-blur-md transition hover:bg-black/35 sm:left-4 sm:h-10 sm:w-10"
+                aria-label="Banner anterior"
+              >
+                <ChevronLeft className="h-5 w-5" />
+              </button>
 
-            <button
-              type="button"
-              onClick={() => setCurrentIndex((prev) => (prev + 1) % banners.length)}
-              className="absolute right-2 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/22 p-2 text-white/95 backdrop-blur-md transition hover:bg-black/38 sm:right-4"
-              aria-label="Siguiente banner"
-            >
-              <ChevronRight className="h-5 w-5" />
-            </button>
+              <button
+                type="button"
+                onClick={() => setCurrentIndex((prev) => (prev + 1) % banners.length)}
+                className="absolute right-2 top-1/2 z-20 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full bg-black/20 text-white/95 ring-1 ring-white/10 backdrop-blur-md transition hover:bg-black/35 sm:right-4 sm:h-10 sm:w-10"
+                aria-label="Siguiente banner"
+              >
+                <ChevronRight className="h-5 w-5" />
+              </button>
 
-            <div className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/8 px-3 py-2 backdrop-blur-sm ring-1 ring-white/6 sm:bottom-4">
-              {banners.map((banner, index) => (
-                <button
-                  key={banner._id}
-                  type="button"
-                  onClick={() => setCurrentIndex(index)}
-                  className={`h-2.5 rounded-full transition-all ${
-                    index === currentIndex ? "w-8 bg-white" : "w-2.5 bg-white/42"
-                  }`}
-                  aria-label={`Ver banner ${index + 1}`}
-                />
-              ))}
-            </div>
-          </>
-        ) : null}
+              <div className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/8 px-3 py-2 backdrop-blur-sm ring-1 ring-white/6 sm:bottom-4">
+                {banners.map((banner, index) => (
+                  <button
+                    key={banner._id}
+                    type="button"
+                    onClick={() => setCurrentIndex(index)}
+                    className={`h-2.5 rounded-full transition-all ${
+                      index === currentIndex ? "w-8 bg-white" : "w-2.5 bg-white/42"
+                    }`}
+                    aria-label={`Ver banner ${index + 1}`}
+                  />
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
       </div>
     </section>
   );
 }
-

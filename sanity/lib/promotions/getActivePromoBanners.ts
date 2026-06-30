@@ -11,6 +11,7 @@ export type PromoBannerStore = {
 export type PromoBannerProduct = {
   _id: string;
   name?: string;
+  image?: SanityImageSource | null;
 };
 
 export type PromoBannerSale = {
@@ -59,7 +60,8 @@ const ACTIVE_PROMO_BANNERS_QUERY = defineQuery(`
     },
     product-> {
       _id,
-      name
+      name,
+      image
     },
     "sale": select(
       defined(sale)
