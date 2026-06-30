@@ -39,6 +39,20 @@ export const promoBannerType = defineType({
       description: "Opcional. Si no se carga, se usa la imagen principal.",
     }),
     defineField({
+      name: "affiliateStore",
+      title: "Tienda asociada",
+      type: "reference",
+      to: [{ type: "affiliateStore" }],
+      description: "Opcional. Si se asigna, el banner mostrara la tienda relacionada.",
+    }),
+    defineField({
+      name: "product",
+      title: "Producto destacado",
+      type: "reference",
+      to: [{ type: "product" }],
+      description: "Opcional. Producto o articulo mencionado en el banner.",
+    }),
+    defineField({
       name: "sortOrder",
       title: "Orden",
       type: "number",
@@ -120,13 +134,7 @@ export const promoBannerType = defineType({
       isActive: "isActive",
     },
     prepare(selection) {
-      const {
-        title,
-        subtitle,
-        media,
-        sortOrder,
-        isActive,
-      } = selection;
+      const { title, subtitle, media, sortOrder, isActive } = selection;
 
       const status = isActive ? "Activo" : "Inactivo";
 

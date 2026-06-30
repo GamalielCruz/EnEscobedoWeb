@@ -45,6 +45,10 @@ function SlideContent({
     () => buildImageUrl(banner.mobileImage ?? banner.desktopImage, 900, 1200),
     [banner.desktopImage, banner.mobileImage]
   );
+  const storeImageUrl = useMemo(
+    () => buildImageUrl(banner.affiliateStore?.image ?? null, 160, 160),
+    [banner.affiliateStore?.image]
+  );
   const hasSale = Boolean(banner.sale?.discountAmount || banner.sale?.couponCode);
   const buttonText = banner.ctaText?.trim();
   const buttonLink = banner.ctaLink?.trim();
@@ -91,10 +95,43 @@ function SlideContent({
           ) : null}
         </div>
 
-        <div className="max-w-3xl">
+        <div className="max-w-3xl space-y-4">
+          {banner.affiliateStore ? (
+            <div className="flex items-center gap-3 rounded-2xl bg-white/10 px-3 py-3 backdrop-blur-sm w-fit max-w-full">
+              <div className="h-12 w-12 overflow-hidden rounded-full bg-white/15 ring-1 ring-white/20 flex items-center justify-center">
+                {storeImageUrl ? (
+                  <Image
+                    src={storeImageUrl}
+                    alt={banner.affiliateStore.name || "Tienda"}
+                    width={48}
+                    height={48}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <span className="text-sm font-black text-white">
+                    {banner.affiliateStore.name?.charAt(0)?.toUpperCase() || "T"}
+                  </span>
+                )}
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/70">
+                  Tienda destacada
+                </p>
+                <p className="truncate text-sm font-bold text-white md:text-base">
+                  {banner.affiliateStore.name}
+                </p>
+              </div>
+            </div>
+          ) : null}
+
           <h2 className="text-2xl font-black leading-tight text-white md:text-4xl">
             {banner.title}
           </h2>
+          {banner.product?.name ? (
+            <p className="inline-flex rounded-full border border-white/25 bg-white/10 px-4 py-2 text-sm font-semibold text-white backdrop-blur-sm">
+              Producto: {banner.product.name}
+            </p>
+          ) : null}
           {banner.description ? (
             <p className="mt-3 max-w-2xl text-sm font-medium text-white/90 md:text-base">
               {banner.description}
