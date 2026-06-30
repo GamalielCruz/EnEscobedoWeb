@@ -19,15 +19,43 @@ function getBannerDurationSeconds(banner: PromoBannerItem) {
 }
 
 function buildImageUrl(image: PromoBannerItem["desktopImage"], width: number, height: number) {
-  if (!image) {
-    return null;
-  }
-
+  if (!image) return null;
   return urlFor(image).width(width).height(height).fit("crop").url();
 }
 
 function isExternalLink(link: string) {
   return /^https?:\/\//i.test(link);
+}
+
+function BannerMeta({ banner }: { banner: PromoBannerItem }) {
+  const storeImageUrl = useMemo(
+    () => buildImageUrl(banner.affiliateStore?.image ?? null, 96, 96),
+    [banner.affiliateStore?.image]
+  );
+  const storeName = banner.affiliateStore?.name?.trim();
+
+  if (!storeName) return null;
+
+  return (
+    <div className="inline-flex items-center gap-3 rounded-full bg-white/10 px-3 py-2 backdrop-blur-sm ring-1 ring-white/10">
+      <div className="h-9 w-9 overflow-hidden rounded-full bg-white/15 ring-1 ring-white/15">
+        {storeImageUrl ? (
+          <Image
+            src={storeImageUrl}
+            alt={storeName}
+            width={36}
+            height={36}
+            className="h-full w-full object-cover"
+          />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-xs font-black text-white">
+            {storeName.charAt(0).toUpperCase()}
+          </div>
+        )}
+      </div>
+      <span className="text-sm font-semibold text-white">{storeName}</span>
+    </div>
+  );
 }
 
 function SlideContent({
@@ -45,128 +73,108 @@ function SlideContent({
     () => buildImageUrl(banner.mobileImage ?? banner.desktopImage, 900, 1200),
     [banner.desktopImage, banner.mobileImage]
   );
-  const storeImageUrl = useMemo(
-    () => buildImageUrl(banner.affiliateStore?.image ?? null, 160, 160),
-    [banner.affiliateStore?.image]
-  );
   const hasSale = Boolean(banner.sale?.discountAmount || banner.sale?.couponCode);
   const buttonText = banner.ctaText?.trim();
   const buttonLink = banner.ctaLink?.trim();
+  const title = banner.title?.trim() || "Promoción disponible";
+  const description = banner.description?.trim();
+  const productName = banner.product?.name?.trim();
 
   const body = (
-    <article className="relative min-h-[220px] overflow-hidden rounded-xl bg-gradient-to-r from-[#850C22] via-[#EB1902] to-[#9943ED] shadow-lg">
+    <article className="relative isolate aspect-[16/6] min-h-[320px] overflow-hidden rounded-2xl bg-[#140b12] shadow-[0_18px_50px_rgba(0,0,0,0.18)] sm:aspect-[16/5] sm:min-h-[360px]">
       {desktopImageUrl ? (
         <>
           <div className="absolute inset-0 hidden md:block">
             <Image
               src={desktopImageUrl}
-              alt={banner.title || "Banner promocional"}
+              alt={title}
               fill
               priority={priority}
-              className="object-cover"
+              className="object-cover object-center"
               sizes="(max-width: 768px) 100vw, 1200px"
             />
           </div>
           <div className="absolute inset-0 md:hidden">
             <Image
               src={mobileImageUrl || desktopImageUrl}
-              alt={banner.title || "Banner promocional"}
+              alt={title}
               fill
               priority={priority}
-              className="object-cover"
+              className="object-cover object-center"
               sizes="100vw"
             />
           </div>
         </>
       ) : null}
 
-      <div className="absolute inset-0 bg-gradient-to-r from-black/70 via-black/45 to-black/30" />
+      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(10,8,12,0.78)_0%,rgba(10,8,12,0.5)_55%,rgba(10,8,12,0.28)_100%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.08),transparent_45%)]" />
 
-      <div className="relative z-10 flex min-h-[220px] flex-col justify-between gap-4 px-6 py-6 md:min-h-[280px] md:px-8">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-full bg-white/15 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-white backdrop-blur-sm">
-            Promocion
-          </span>
-          {hasSale ? (
-            <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-xs font-bold text-[#850C22]">
-              <TicketPercent className="h-4 w-4" />
-              {banner.sale?.discountAmount ? `${banner.sale.discountAmount}% de descuento` : "Cupon disponible"}
+      <div className="relative z-10 flex h-full flex-col justify-between px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-7">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full bg-white/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white backdrop-blur-sm ring-1 ring-white/10">
+              Promoción
             </span>
-          ) : null}
+            {hasSale ? (
+              <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-[11px] font-bold text-[#850C22] shadow-sm sm:text-xs">
+                <TicketPercent className="h-4 w-4" />
+                {banner.sale?.discountAmount ? `${banner.sale.discountAmount}% de descuento` : "Cupón disponible"}
+              </span>
+            ) : null}
+          </div>
+
+          <div className="hidden sm:block">
+            <BannerMeta banner={banner} />
+          </div>
         </div>
 
-        <div className="max-w-3xl space-y-4">
+        <div className="max-w-3xl space-y-3 sm:space-y-4">
+          <div className="space-y-2 sm:space-y-3">
+            <h2 className="text-balance text-2xl font-black leading-[1.02] text-white sm:text-4xl lg:text-5xl">
+              {title}
+            </h2>
+            {description ? (
+              <p className="max-w-2xl text-pretty text-sm leading-6 text-white/88 sm:text-base lg:text-lg">
+                {description}
+              </p>
+            ) : null}
+            {productName ? (
+              <p className="max-w-2xl text-sm leading-6 text-white/82 sm:text-base">
+                {productName}
+              </p>
+            ) : null}
+          </div>
+
           {banner.affiliateStore ? (
-            <div className="flex items-center gap-3 rounded-2xl bg-white/10 px-3 py-3 backdrop-blur-sm w-fit max-w-full">
-              <div className="h-12 w-12 overflow-hidden rounded-full bg-white/15 ring-1 ring-white/20 flex items-center justify-center">
-                {storeImageUrl ? (
-                  <Image
-                    src={storeImageUrl}
-                    alt={banner.affiliateStore.name || "Tienda"}
-                    width={48}
-                    height={48}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <span className="text-sm font-black text-white">
-                    {banner.affiliateStore.name?.charAt(0)?.toUpperCase() || "T"}
-                  </span>
-                )}
-              </div>
-              <div className="min-w-0">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/70">
-                  Tienda destacada
-                </p>
-                <p className="truncate text-sm font-bold text-white md:text-base">
-                  {banner.affiliateStore.name}
-                </p>
-              </div>
+            <div className="sm:hidden">
+              <BannerMeta banner={banner} />
             </div>
           ) : null}
 
-          <h2 className="text-2xl font-black leading-tight text-white md:text-4xl">
-            {banner.title}
-          </h2>
-          {banner.product?.name ? (
-            <p className="inline-flex rounded-full border border-white/25 bg-white/10 px-4 py-2 text-sm font-semibold text-white backdrop-blur-sm">
-              Producto: {banner.product.name}
-            </p>
-          ) : null}
-          {banner.description ? (
-            <p className="mt-3 max-w-2xl text-sm font-medium text-white/90 md:text-base">
-              {banner.description}
-            </p>
-          ) : null}
-          {banner.sale?.couponCode ? (
-            <p className="mt-4 inline-flex rounded-full border border-white/25 bg-white/10 px-4 py-2 text-sm font-semibold text-white backdrop-blur-sm">
-              Usa el cupon: {banner.sale.couponCode}
-            </p>
-          ) : null}
-        </div>
+          <div className="flex flex-wrap items-center gap-3 pt-1">
+            {buttonText && buttonLink ? (
+              <span className="inline-flex rounded-full bg-white px-5 py-2.5 text-sm font-bold text-[#850C22] shadow-sm transition-transform duration-200 hover:scale-[1.02]">
+                {buttonText}
+              </span>
+            ) : null}
 
-        {buttonText && buttonLink ? (
-          <div>
-            <span className="inline-flex rounded-full bg-white px-5 py-2 text-sm font-bold text-[#850C22] shadow-sm transition-transform duration-200 hover:scale-[1.02]">
-              {buttonText}
-            </span>
+            {banner.sale?.couponCode ? (
+              <span className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white backdrop-blur-sm">
+                Código: {banner.sale.couponCode}
+              </span>
+            ) : null}
           </div>
-        ) : null}
+        </div>
       </div>
     </article>
   );
 
-  if (!buttonText || !buttonLink) {
-    return body;
-  }
+  if (!buttonText || !buttonLink) return body;
 
   if (isExternalLink(buttonLink)) {
     return (
-      <a
-        href={buttonLink}
-        target="_blank"
-        rel="noreferrer"
-        className="block"
-      >
+      <a href={buttonLink} target="_blank" rel="noreferrer" className="block">
         {body}
       </a>
     );
@@ -179,15 +187,11 @@ function SlideContent({
   );
 }
 
-export default function BuenFinBannerCarousel({
-  banners,
-}: BuenFinBannerCarouselProps) {
+export default function BuenFinBannerCarousel({ banners }: BuenFinBannerCarouselProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
 
   useEffect(() => {
-    if (banners.length <= 1) {
-      return;
-    }
+    if (banners.length <= 1) return;
 
     const activeBanner = banners[currentIndex];
     const timeout = window.setTimeout(() => {
@@ -198,30 +202,24 @@ export default function BuenFinBannerCarousel({
   }, [banners, currentIndex]);
 
   useEffect(() => {
-    if (currentIndex >= banners.length) {
-      setCurrentIndex(0);
-    }
+    if (currentIndex >= banners.length) setCurrentIndex(0);
   }, [banners.length, currentIndex]);
 
-  if (banners.length === 0) {
-    return null;
-  }
+  if (banners.length === 0) return null;
 
   const currentBanner = banners[currentIndex];
 
   return (
-    <section className="mx-4 mt-2">
-      <div className="relative">
+    <section className="mx-4 mt-2 sm:mx-6 lg:mx-8">
+      <div className="relative mx-auto max-w-7xl">
         <SlideContent banner={currentBanner} priority />
 
         {banners.length > 1 ? (
           <>
             <button
               type="button"
-              onClick={() =>
-                setCurrentIndex((prev) => (prev - 1 + banners.length) % banners.length)
-              }
-              className="absolute left-3 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/35 p-2 text-white backdrop-blur-sm transition hover:bg-black/55"
+              onClick={() => setCurrentIndex((prev) => (prev - 1 + banners.length) % banners.length)}
+              className="absolute left-3 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/35 p-2 text-white backdrop-blur-sm transition hover:bg-black/55 sm:left-4"
               aria-label="Banner anterior"
             >
               <ChevronLeft className="h-5 w-5" />
@@ -230,7 +228,7 @@ export default function BuenFinBannerCarousel({
             <button
               type="button"
               onClick={() => setCurrentIndex((prev) => (prev + 1) % banners.length)}
-              className="absolute right-3 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/35 p-2 text-white backdrop-blur-sm transition hover:bg-black/55"
+              className="absolute right-3 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/35 p-2 text-white backdrop-blur-sm transition hover:bg-black/55 sm:right-4"
               aria-label="Siguiente banner"
             >
               <ChevronRight className="h-5 w-5" />
