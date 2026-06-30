@@ -65,7 +65,7 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
   const description = banner.description?.trim();
 
   const body = (
-    <article className="relative isolate h-[280px] w-full max-w-full min-w-0 overflow-hidden rounded-2xl bg-[#09193B] shadow-[0_18px_50px_rgba(0,0,0,0.18)] sm:h-[320px] lg:h-[380px]">
+    <article className="relative isolate h-[220px] w-full max-w-full min-w-0 overflow-hidden bg-[#09193B] shadow-[0_18px_50px_rgba(0,0,0,0.18)] sm:h-[250px] lg:h-[290px]">
       {desktopImageUrl ? (
         <>
           <div className="absolute inset-0 hidden md:block">
@@ -195,10 +195,11 @@ export default function BuenFinBannerCarousel({ banners }: BuenFinBannerCarousel
   return (
     <section className="w-full max-w-full overflow-x-clip px-0 pt-2 sm:px-2 lg:px-4">
       <div className="w-full min-w-0 overflow-hidden">
-        <div className="relative w-full max-w-full min-w-0 overflow-hidden rounded-2xl">
+        <div className="relative w-full max-w-full min-w-0 overflow-hidden">
           <SlideContent banner={currentBanner} priority />
         </div>
       </div>
     </section>
   );
 }
+
