@@ -6,30 +6,30 @@ export type PromoBannerType = "promotion" | "announcement" | "info" | "featured"
 
 export type PromoBannerStore = {
   _id: string;
-  name?: string;
+  name?: string | null;
   image?: SanityImageSource | null;
 };
 
 export type PromoBannerSale = {
   _id: string;
-  title?: string;
-  description?: string;
-  discountAmount?: number;
-  couponCode?: string;
+  title?: string | null;
+  description?: string | null;
+  discountAmount?: number | null;
+  couponCode?: string | null;
 };
 
 export type PromoBannerItem = {
   _id: string;
-  title?: string;
-  description?: string;
-  bannerType?: PromoBannerType;
-  mainColor?: string;
+  title?: string | null;
+  description?: string | null;
+  bannerType?: PromoBannerType | null;
+  mainColor?: string | null;
   desktopImage?: SanityImageSource | null;
   mobileImage?: SanityImageSource | null;
-  sortOrder?: number;
-  displayDurationSeconds?: number;
-  ctaText?: string;
-  ctaLink?: string;
+  sortOrder?: number | null;
+  displayDurationSeconds?: number | null;
+  ctaText?: string | null;
+  ctaLink?: string | null;
   affiliateStore?: PromoBannerStore | null;
   sale?: PromoBannerSale | null;
 };
