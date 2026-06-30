@@ -71,8 +71,8 @@ function ProductCard({ banner, priority }: { banner: PromoBannerItem; priority: 
   );
 
   return (
-    <div className="mx-auto w-[126px] sm:w-[150px] md:w-[170px] lg:w-[210px]">
-      <div className="relative overflow-hidden rounded-[1.35rem] border border-white/15 bg-white/10 p-2.5 shadow-[0_24px_60px_rgba(0,0,0,0.25)] backdrop-blur-md sm:p-3 lg:p-3.5">
+    <div className="w-[104px] justify-self-end sm:w-[120px] md:w-[132px] lg:w-[160px]">
+      <div className="relative overflow-hidden rounded-[1.3rem] border border-white/15 bg-white/10 p-2.5 shadow-[0_24px_60px_rgba(0,0,0,0.25)] backdrop-blur-md sm:p-3 lg:p-3.5">
         <div className="relative aspect-square overflow-hidden rounded-[1rem] bg-black/10">
           {productImageUrl ? (
             <Image
@@ -81,17 +81,17 @@ function ProductCard({ banner, priority }: { banner: PromoBannerItem; priority: 
               fill
               priority={priority}
               className="object-cover object-center"
-              sizes="(max-width: 1024px) 150px, 210px"
+              sizes="(max-width: 1024px) 132px, 160px"
             />
           ) : null}
-          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(0,0,0,0.28))]" />
-          {productName ? (
-            <div className="absolute inset-x-2 bottom-2 rounded-full bg-black/35 px-2 py-1 text-center text-[11px] font-semibold text-white backdrop-blur-sm sm:text-xs">
-              {productName}
-            </div>
-          ) : null}
+          <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(0,0,0,0.25))]" />
         </div>
       </div>
+      {productName ? (
+        <p className="mt-2 max-w-full truncate text-right text-[11px] font-semibold leading-tight text-white/82 sm:text-xs">
+          {productName}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -166,8 +166,8 @@ function SlideContent({
           </div>
         </div>
 
-        <div className="grid min-w-0 flex-1 items-center gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(126px,210px)_minmax(0,0.65fr)] lg:gap-5">
-          <div className="min-w-0 max-w-[92%] space-y-2 sm:max-w-[72%] sm:space-y-3 lg:max-w-full">
+        <div className="grid min-w-0 flex-1 items-center gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(104px,160px)] lg:gap-5">
+          <div className="min-w-0 max-w-[95%] space-y-2 sm:max-w-[80%] sm:space-y-3 lg:max-w-[70%]">
             <h2 className="break-words text-2xl font-black leading-tight text-white sm:text-3xl md:text-4xl">
               {title}
             </h2>
@@ -179,17 +179,15 @@ function SlideContent({
           </div>
 
           {banner.product ? (
-            <div className="min-w-0 lg:justify-self-center">
+            <div className="min-w-0 lg:justify-self-end">
               <ProductCard banner={banner} priority={priority} />
             </div>
           ) : (
             <div className="hidden lg:block" />
           )}
-
-          <div className="hidden lg:block" />
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-end justify-between gap-3">
           <div className="flex flex-wrap items-center gap-3">
             {buttonText && buttonLink ? (
               <span className="inline-flex rounded-full bg-white px-5 py-2.5 text-sm font-bold text-[#850C22] shadow-sm transition-transform duration-200 hover:scale-[1.02]">
@@ -198,7 +196,7 @@ function SlideContent({
             ) : null}
 
             {banner.sale?.couponCode ? (
-              <span className="rounded-full border border-white/14 bg-white/10 px-4 py-2 text-sm font-semibold text-white/92 backdrop-blur-md">
+              <span className="max-w-[72vw] truncate rounded-full border border-white/14 bg-white/10 px-4 py-2 text-sm font-semibold text-white/92 backdrop-blur-md">
                 Codigo: {banner.sale.couponCode}
               </span>
             ) : null}

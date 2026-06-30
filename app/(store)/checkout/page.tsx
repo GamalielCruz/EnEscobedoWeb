@@ -16,6 +16,7 @@ import {
 import { ArrowLeft, CreditCard, MapPin, Loader2 } from "lucide-react";
 import Loader from "@/components/Loader";
 
+export const dynamic = "force-dynamic";
 interface ClickCollectStore {
   storeId: string;
   storeName: string;
@@ -48,13 +49,13 @@ export default function CheckoutPage() {
       if (storeData) {
         setClickCollectStore(JSON.parse(storeData));
       } else {
-        // Si no hay datos de tienda, redirigir a selección
+        // Si no hay datos de tienda, redirigir a selecciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n
         router.push("/select-store");
       }
     }
   }, [isClickCollectMode, router]);
 
-  // Redirigir si no está autenticado o no hay productos
+  // Redirigir si no estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ autenticado o no hay productos
   useEffect(() => {
     if (isClient && (!isSignedIn || groupedItems.length === 0)) {
       router.push("/basket");
@@ -105,7 +106,7 @@ export default function CheckoutPage() {
 
       if (!response.ok) {
         console.error("Error en /api/checkout-session", data);
-        throw new Error(data?.error || "Error al crear la sesión de checkout");
+        throw new Error(data?.error || "Error al crear la sesiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n de checkout");
       }
 
       if (data?.url) {
@@ -114,10 +115,10 @@ export default function CheckoutPage() {
         }
         window.location.href = data.url;
       } else {
-        throw new Error("No se recibió URL de checkout");
+        throw new Error("No se recibiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ URL de checkout");
       }
     } catch (error) {
-      console.error("Error al crear la sesión de checkout", error);
+      console.error("Error al crear la sesiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n de checkout", error);
       alert("Error al procesar el pago. Por favor intenta de nuevo.");
     } finally {
       setLoading(false);
@@ -146,16 +147,16 @@ export default function CheckoutPage() {
           </h1>
           <p className="text-gray-600">
             {isClickCollectMode
-              ? "Paga tu pedido y recógelo en la tienda seleccionada"
+              ? "Paga tu pedido y recÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³gelo en la tienda seleccionada"
               : "Completa tu compra de forma segura"}
           </p>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Información del pedido */}
+        {/* InformaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n del pedido */}
         <div className="space-y-6">
-          {/* Método de entrega */}
+          {/* MÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©todo de entrega */}
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -173,8 +174,8 @@ export default function CheckoutPage() {
               </CardTitle>
               <CardDescription>
                 {isClickCollectMode
-                  ? "Recogerás tu pedido en la tienda seleccionada"
-                  : "Pago seguro con múltiples opciones"}
+                  ? "RecogerÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s tu pedido en la tienda seleccionada"
+                  : "Pago seguro con mÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºltiples opciones"}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -190,7 +191,7 @@ export default function CheckoutPage() {
                     {clickCollectStore.storeAddress}
                   </p>
                   <p className="text-blue-600 text-sm">
-                    📞 {clickCollectStore.storePhone}
+                    ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€¦Ã‚Â¾ {clickCollectStore.storePhone}
                   </p>
                   <p className="text-blue-600 text-sm mt-2">
                     <strong>Listo para recoger:</strong>{" "}
@@ -200,7 +201,7 @@ export default function CheckoutPage() {
               ) : (
                 <div className="bg-gray-50 p-4 rounded-lg">
                   <p className="text-gray-700 text-sm">
-                    Acepta tarjetas de crédito/débito, OXXO y transferencias
+                    Acepta tarjetas de crÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©dito/dÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â©bito, OXXO y transferencias
                     bancarias SPEI.
                   </p>
                 </div>
@@ -249,7 +250,7 @@ export default function CheckoutPage() {
                   <span>${subtotal.toFixed(2)}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span>Envío:</span>
+                  <span>EnvÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â­o:</span>
                   <span className={isClickCollectMode ? "text-green-600" : ""}>
                     {isClickCollectMode ? "GRATIS" : "Se calcula en checkout"}
                   </span>
@@ -277,7 +278,7 @@ export default function CheckoutPage() {
               </Button>
 
               <div className="text-xs text-gray-500 text-center">
-                Serás redirigido a Stripe para completar el pago de forma segura
+                SerÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s redirigido a Stripe para completar el pago de forma segura
               </div>
             </CardContent>
           </Card>
@@ -285,12 +286,12 @@ export default function CheckoutPage() {
           {isClickCollectMode && (
             <Card>
               <CardContent className="p-4">
-                <h4 className="font-medium text-sm mb-2">🎯 Próximos pasos:</h4>
+                <h4 className="font-medium text-sm mb-2">ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â½Ãƒâ€šÃ‚Â¯ PrÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³ximos pasos:</h4>
                 <ul className="text-xs text-gray-600 space-y-1">
                   <li>1. Completa el pago con Stripe</li>
-                  <li>2. Recibirás confirmación por email</li>
-                  <li>3. Te notificaremos cuando esté listo</li>
-                  <li>4. Recoge con tu código único</li>
+                  <li>2. RecibirÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡s confirmaciÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³n por email</li>
+                  <li>3. Te notificaremos cuando estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â© listo</li>
+                  <li>4. Recoge con tu cÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â³digo ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Âºnico</li>
                 </ul>
               </CardContent>
             </Card>
