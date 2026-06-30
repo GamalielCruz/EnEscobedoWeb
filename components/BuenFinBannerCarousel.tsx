@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Image from "next/image";
 import Link from "next/link";
@@ -27,24 +27,24 @@ function isExternalLink(link: string) {
   return /^https?:\/\//i.test(link);
 }
 
-function BannerMeta({ banner }: { banner: PromoBannerItem }) {
+function StoreBadge({ banner }: { banner: PromoBannerItem }) {
+  const storeName = banner.affiliateStore?.name?.trim();
   const storeImageUrl = useMemo(
     () => buildImageUrl(banner.affiliateStore?.image ?? null, 96, 96),
     [banner.affiliateStore?.image]
   );
-  const storeName = banner.affiliateStore?.name?.trim();
 
   if (!storeName) return null;
 
   return (
-    <div className="inline-flex items-center gap-3 rounded-full bg-white/10 px-3 py-2 backdrop-blur-sm ring-1 ring-white/10">
-      <div className="h-9 w-9 overflow-hidden rounded-full bg-white/15 ring-1 ring-white/15">
+    <div className="flex items-center gap-3 rounded-full bg-white/8 px-3 py-2 ring-1 ring-white/10 backdrop-blur-md">
+      <div className="h-10 w-10 overflow-hidden rounded-full bg-white/12 ring-1 ring-white/15">
         {storeImageUrl ? (
           <Image
             src={storeImageUrl}
             alt={storeName}
-            width={36}
-            height={36}
+            width={40}
+            height={40}
             className="h-full w-full object-cover"
           />
         ) : (
@@ -53,7 +53,7 @@ function BannerMeta({ banner }: { banner: PromoBannerItem }) {
           </div>
         )}
       </div>
-      <span className="text-sm font-semibold text-white">{storeName}</span>
+      <span className="text-sm font-semibold text-white sm:text-base">{storeName}</span>
     </div>
   );
 }
@@ -66,7 +66,7 @@ function SlideContent({
   priority: boolean;
 }) {
   const desktopImageUrl = useMemo(
-    () => buildImageUrl(banner.desktopImage, 1600, 640),
+    () => buildImageUrl(banner.desktopImage, 1600, 700),
     [banner.desktopImage]
   );
   const mobileImageUrl = useMemo(
@@ -76,12 +76,12 @@ function SlideContent({
   const hasSale = Boolean(banner.sale?.discountAmount || banner.sale?.couponCode);
   const buttonText = banner.ctaText?.trim();
   const buttonLink = banner.ctaLink?.trim();
-  const title = banner.title?.trim() || "Promoción disponible";
+  const title = banner.title?.trim() || "Promoci\u00f3n disponible";
   const description = banner.description?.trim();
   const productName = banner.product?.name?.trim();
 
   const body = (
-    <article className="relative isolate aspect-[16/6] min-h-[320px] overflow-hidden rounded-2xl bg-[#140b12] shadow-[0_18px_50px_rgba(0,0,0,0.18)] sm:aspect-[16/5] sm:min-h-[360px]">
+    <article className="relative isolate aspect-[16/4.8] min-h-[250px] overflow-hidden rounded-2xl bg-[#140b12] shadow-[0_18px_50px_rgba(0,0,0,0.18)] sm:aspect-[16/4.4] sm:min-h-[280px] lg:aspect-[16/4.1]">
       {desktopImageUrl ? (
         <>
           <div className="absolute inset-0 hidden md:block">
@@ -107,52 +107,70 @@ function SlideContent({
         </>
       ) : null}
 
-      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(10,8,12,0.78)_0%,rgba(10,8,12,0.5)_55%,rgba(10,8,12,0.28)_100%)]" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.08),transparent_45%)]" />
+      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(12,8,12,0.72)_0%,rgba(12,8,12,0.44)_55%,rgba(12,8,12,0.18)_100%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.08),transparent_42%)]" />
 
-      <div className="relative z-10 flex h-full flex-col justify-between px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-7">
+      <div className="relative z-10 grid h-full grid-rows-[auto_1fr_auto] px-4 py-4 sm:px-6 sm:py-5 lg:px-8 lg:py-6">
         <div className="flex items-start justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="rounded-full bg-white/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white backdrop-blur-sm ring-1 ring-white/10">
+            <span className="rounded-full bg-white/14 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white backdrop-blur-md ring-1 ring-white/10 sm:text-xs">
               Promoción
             </span>
             {hasSale ? (
-              <span className="inline-flex items-center gap-2 rounded-full bg-white px-3 py-1 text-[11px] font-bold text-[#850C22] shadow-sm sm:text-xs">
+              <span className="inline-flex items-center gap-2 rounded-full bg-white/92 px-3 py-1 text-[11px] font-bold text-[#850C22] shadow-sm sm:text-xs">
                 <TicketPercent className="h-4 w-4" />
                 {banner.sale?.discountAmount ? `${banner.sale.discountAmount}% de descuento` : "Cupón disponible"}
               </span>
             ) : null}
           </div>
 
-          <div className="hidden sm:block">
-            <BannerMeta banner={banner} />
+          <div className="hidden md:block">
+            <StoreBadge banner={banner} />
           </div>
         </div>
 
-        <div className="max-w-3xl space-y-3 sm:space-y-4">
-          <div className="space-y-2 sm:space-y-3">
-            <h2 className="text-balance text-2xl font-black leading-[1.02] text-white sm:text-4xl lg:text-5xl">
-              {title}
-            </h2>
-            {description ? (
-              <p className="max-w-2xl text-pretty text-sm leading-6 text-white/88 sm:text-base lg:text-lg">
-                {description}
-              </p>
-            ) : null}
-            {productName ? (
-              <p className="max-w-2xl text-sm leading-6 text-white/82 sm:text-base">
-                {productName}
-              </p>
-            ) : null}
-          </div>
-
-          {banner.affiliateStore ? (
-            <div className="sm:hidden">
-              <BannerMeta banner={banner} />
+        <div className="relative flex items-center justify-center py-1 sm:py-2">
+          <div className="grid w-full max-w-5xl items-center gap-3 lg:grid-cols-[1.05fr_0.95fr] lg:gap-5">
+            <div className="space-y-2 sm:space-y-3 lg:max-w-3xl">
+              <h2 className="text-balance text-2xl font-black leading-[0.98] text-white sm:text-4xl lg:text-5xl">
+                {title}
+              </h2>
+              {description ? (
+                <p className="max-w-2xl text-pretty text-sm leading-5 text-white/88 sm:text-base lg:text-lg">
+                  {description}
+                </p>
+              ) : null}
             </div>
-          ) : null}
 
-          <div className="flex flex-wrap items-center gap-3 pt-1">
+            <div className="flex justify-center lg:justify-end">
+              <div className="relative w-full max-w-[180px] sm:max-w-[220px] lg:max-w-[250px]">
+                <div className="absolute inset-x-6 -bottom-2 h-6 rounded-full bg-black/25 blur-2xl" />
+                <div className="relative overflow-hidden rounded-[1.4rem] border border-white/16 bg-white/10 p-2.5 shadow-2xl backdrop-blur-md sm:p-3 lg:p-4">
+                  <div className="relative aspect-square overflow-hidden rounded-[1.05rem] bg-black/12">
+                    <Image
+                      src={desktopImageUrl || mobileImageUrl || "/favicon.ico"}
+                      alt={productName || title}
+                      fill
+                      priority={priority}
+                      className="object-cover object-center"
+                      sizes="(max-width: 1024px) 220px, 280px"
+                    />
+                    <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(0,0,0,0.22))]" />
+                  </div>
+                  {productName ? (
+                    <div className="mt-3 text-center">
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-white/72">Producto destacado</p>
+                      <p className="mt-1 text-sm font-bold text-white sm:text-base">{productName}</p>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             {buttonText && buttonLink ? (
               <span className="inline-flex rounded-full bg-white px-5 py-2.5 text-sm font-bold text-[#850C22] shadow-sm transition-transform duration-200 hover:scale-[1.02]">
                 {buttonText}
@@ -160,10 +178,14 @@ function SlideContent({
             ) : null}
 
             {banner.sale?.couponCode ? (
-              <span className="rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white backdrop-blur-sm">
+              <span className="rounded-full border border-white/14 bg-white/10 px-4 py-2 text-sm font-semibold text-white/92 backdrop-blur-md">
                 Código: {banner.sale.couponCode}
               </span>
             ) : null}
+          </div>
+
+          <div className="md:hidden">
+            <StoreBadge banner={banner} />
           </div>
         </div>
       </div>
@@ -219,7 +241,7 @@ export default function BuenFinBannerCarousel({ banners }: BuenFinBannerCarousel
             <button
               type="button"
               onClick={() => setCurrentIndex((prev) => (prev - 1 + banners.length) % banners.length)}
-              className="absolute left-3 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/35 p-2 text-white backdrop-blur-sm transition hover:bg-black/55 sm:left-4"
+              className="absolute left-2 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/22 p-2 text-white/95 backdrop-blur-md transition hover:bg-black/38 sm:left-4"
               aria-label="Banner anterior"
             >
               <ChevronLeft className="h-5 w-5" />
@@ -228,20 +250,20 @@ export default function BuenFinBannerCarousel({ banners }: BuenFinBannerCarousel
             <button
               type="button"
               onClick={() => setCurrentIndex((prev) => (prev + 1) % banners.length)}
-              className="absolute right-3 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/35 p-2 text-white backdrop-blur-sm transition hover:bg-black/55 sm:right-4"
+              className="absolute right-2 top-1/2 z-20 -translate-y-1/2 rounded-full bg-black/22 p-2 text-white/95 backdrop-blur-md transition hover:bg-black/38 sm:right-4"
               aria-label="Siguiente banner"
             >
               <ChevronRight className="h-5 w-5" />
             </button>
 
-            <div className="absolute bottom-4 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/25 px-3 py-2 backdrop-blur-sm">
+            <div className="absolute bottom-3 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-black/8 px-3 py-2 backdrop-blur-sm ring-1 ring-white/6 sm:bottom-4">
               {banners.map((banner, index) => (
                 <button
                   key={banner._id}
                   type="button"
                   onClick={() => setCurrentIndex(index)}
                   className={`h-2.5 rounded-full transition-all ${
-                    index === currentIndex ? "w-8 bg-white" : "w-2.5 bg-white/55"
+                    index === currentIndex ? "w-8 bg-white" : "w-2.5 bg-white/42"
                   }`}
                   aria-label={`Ver banner ${index + 1}`}
                 />
@@ -253,3 +275,4 @@ export default function BuenFinBannerCarousel({ banners }: BuenFinBannerCarousel
     </section>
   );
 }
+
