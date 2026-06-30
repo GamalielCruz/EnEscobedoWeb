@@ -1,7 +1,8 @@
-import { defineQuery } from "next-sanity";
+﻿import { defineQuery } from "next-sanity";
+import type { Product } from "@/sanity.types";
 import { sanityFetch } from "../live";
 
-export const getAllProducts = async () => {
+export const getAllProducts = async (): Promise<Product[]> => {
     const ALL_PRODUCTS_QUERY = defineQuery(`
        *[
            _type == "product"
@@ -19,7 +20,7 @@ export const getAllProducts = async () => {
         }
     `);
     try {
-        const products = await sanityFetch({
+        const products = await sanityFetch<Product[]>({
             query: ALL_PRODUCTS_QUERY,
         });
 
