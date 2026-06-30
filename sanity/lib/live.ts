@@ -1,19 +1,28 @@
 import "server-only";
 
-import { defineLive } from "next-sanity";
 import { client } from "@/sanity/lib/client";
 
-const token = process.env.SANITY_API_READ_TOKEN;
-if (!token) {
-  throw new Error("Missing SANITY_API_READ_TOKEN");
+const defaultRevalidate = process.env.NODE_ENV === "production" ? 60 : 0;
+
+export type SanityFetchArgs<TParams extends Record<string, unknown> = Record<string, unknown>> = {
+  query: string;
+  params?: TParams;
+  revalidate?: number;
+};
+
+export async function sanityFetch<TData, TParams extends Record<string, unknown> = Record<string, unknown>>({
+  query,
+  params,
+  revalidate = defaultRevalidate,
+}: SanityFetchArgs<TParams>): Promise<{ data: TData }> {
+  const data = await client.fetch<TData>(query, params ?? ({} as TParams), {
+    next: { revalidate },
+  });
+
+  return { data };
 }
 
-export const { sanityFetch, SanityLive } = defineLive({
-  client,
-  serverToken: token,
-  // No exponer token en el navegador en producción
-  browserToken: process.env.NODE_ENV === 'production' ? undefined : token,
-  fetchOptions: { 
-    revalidate: process.env.NODE_ENV === 'production' ? 60 : 0,
-  },
-});
+export function SanityLive() {
+  // ponytail: live preview is off until we actually need draft editing here.
+  return null;
+}

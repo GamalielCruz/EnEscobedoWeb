@@ -1,14 +1,8 @@
-import { defineQuery } from "next-sanity";
+﻿import { defineQuery } from "next-sanity";
 import { SanityImageSource } from "@sanity/image-url/lib/types/types";
 import { sanityFetch } from "../live";
 
 export type PromoBannerStore = {
-  _id: string;
-  name?: string;
-  image?: SanityImageSource | null;
-};
-
-export type PromoBannerProduct = {
   _id: string;
   name?: string;
   image?: SanityImageSource | null;
@@ -33,7 +27,6 @@ export type PromoBannerItem = {
   ctaText?: string;
   ctaLink?: string;
   affiliateStore?: PromoBannerStore | null;
-  product?: PromoBannerProduct | null;
   sale?: PromoBannerSale | null;
 };
 
@@ -58,11 +51,7 @@ const ACTIVE_PROMO_BANNERS_QUERY = defineQuery(`
       name,
       image
     },
-    product-> {
-      _id,
-      name,
-      image
-    },
+
     "sale": select(
       defined(sale)
       && sale->isActive == true
@@ -91,3 +80,5 @@ export async function getActivePromoBanners(): Promise<PromoBannerItem[]> {
     return [];
   }
 }
+
+
