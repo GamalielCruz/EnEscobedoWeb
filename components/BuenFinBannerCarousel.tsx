@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import Image from "next/image";
 import Link from "next/link";
@@ -8,6 +8,7 @@ import { urlFor } from "@/sanity/lib/image";
 import { PromoBannerItem } from "@/sanity/lib/promotions/getActivePromoBanners";
 
 const DEFAULT_DURATION_SECONDS = 6;
+const DEFAULT_MAIN_COLOR = "#09193B";
 
 type BuenFinBannerCarouselProps = {
   banners: PromoBannerItem[];
@@ -16,6 +17,23 @@ type BuenFinBannerCarouselProps = {
 function getBannerDurationSeconds(banner: PromoBannerItem) {
   const seconds = banner.displayDurationSeconds ?? DEFAULT_DURATION_SECONDS;
   return seconds >= 2 ? seconds : DEFAULT_DURATION_SECONDS;
+}
+
+function getBannerTypeLabel(type?: PromoBannerItem["bannerType"]) {
+  switch (type) {
+    case "announcement":
+      return "Anuncio";
+    case "info":
+      return "Informacion";
+    case "featured":
+      return "Destacado";
+    case "warning":
+      return "Aviso";
+    case "event":
+      return "Evento";
+    default:
+      return "Promocion";
+  }
 }
 
 function buildImageUrl(image: PromoBannerItem["desktopImage"], width: number, height: number) {
@@ -37,12 +55,12 @@ function StoreBadge({ banner }: { banner: PromoBannerItem }) {
   if (!storeName) return null;
 
   return (
-    <div className="inline-flex items-center gap-3 rounded-full bg-white/10 px-3 py-2 text-white ring-1 ring-white/10 backdrop-blur-md">
+    <div className="inline-flex items-center gap-3 rounded-full bg-white/10 px-3 py-2 ring-1 ring-white/10 backdrop-blur-md">
       <div className="h-9 w-9 overflow-hidden rounded-full bg-white/12 ring-1 ring-white/15">
         {storeImageUrl ? (
           <Image src={storeImageUrl} alt={storeName} width={36} height={36} className="h-full w-full object-cover" />
         ) : (
-          <div className="flex h-full w-full items-center justify-center text-xs font-black text-white">
+          <div className="flex h-full w-full items-center justify-center text-xs font-black">
             {storeName.charAt(0).toUpperCase()}
           </div>
         )}
@@ -63,6 +81,8 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
   const buttonLink = banner.ctaLink?.trim();
   const title = banner.title?.trim() || "Promocion disponible";
   const description = banner.description?.trim();
+  const mainColor = banner.mainColor?.trim() || DEFAULT_MAIN_COLOR;
+  const bannerTypeLabel = getBannerTypeLabel(banner.bannerType);
 
   const body = (
     <article className="relative isolate h-[220px] w-full max-w-full min-w-0 overflow-hidden bg-[#09193B] shadow-[0_18px_50px_rgba(0,0,0,0.18)] sm:h-[250px] lg:h-[290px]">
@@ -91,14 +111,11 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
         </>
       ) : null}
 
-      <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(9,15,32,0.82)_0%,rgba(9,15,32,0.54)_58%,rgba(9,15,32,0.22)_100%)]" />
-      <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,255,255,0.08),transparent_40%)]" />
-
-      <div className="relative z-10 flex h-full min-h-0 flex-col gap-4 p-4 sm:p-5 lg:p-6">
+      <div className="relative z-10 flex h-full min-h-0 flex-col gap-4 p-4 sm:p-5 lg:p-6" style={{ color: mainColor }}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex max-w-full flex-wrap items-center gap-2">
             <span className="rounded-full bg-white/14 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white backdrop-blur-md ring-1 ring-white/10 sm:text-xs">
-              Promocion
+              {bannerTypeLabel}
             </span>
             {hasSale ? (
               <span className="inline-flex items-center gap-2 rounded-full bg-white/90 px-3 py-1 text-[11px] font-bold text-[#850C22] shadow-sm sm:text-xs">
@@ -115,11 +132,11 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
 
         <div className="flex flex-1 min-h-0 min-w-0 items-center">
           <div className="min-w-0 max-w-[96%] space-y-2 overflow-hidden sm:max-w-[82%] sm:space-y-3 lg:max-w-[72%]">
-            <h2 className="line-clamp-2 break-words text-2xl font-black leading-tight text-white sm:text-3xl md:text-4xl">
+            <h2 className="line-clamp-2 break-words text-2xl font-black leading-tight sm:text-3xl md:text-4xl">
               {title}
             </h2>
             {description ? (
-              <p className="line-clamp-3 max-w-full break-words text-sm leading-relaxed text-white/85 sm:text-base md:text-lg">
+              <p className="line-clamp-3 max-w-full break-words text-sm leading-relaxed opacity-90 sm:text-base md:text-lg">
                 {description}
               </p>
             ) : null}
@@ -130,13 +147,13 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-3">
               {buttonText && buttonLink ? (
-                <span className="inline-flex rounded-full bg-white px-5 py-2.5 text-sm font-bold text-[#850C22] shadow-sm transition-transform duration-200 hover:scale-[1.02]">
+                <span className="inline-flex rounded-full bg-white px-5 py-2.5 text-sm font-bold shadow-sm transition-transform duration-200 hover:scale-[1.02]">
                   {buttonText}
                 </span>
               ) : null}
 
               {banner.sale?.couponCode ? (
-                <span className="max-w-[76vw] truncate rounded-full border border-white/14 bg-white/10 px-4 py-2 text-sm font-semibold text-white/92 backdrop-blur-md">
+                <span className="max-w-[76vw] truncate rounded-full border border-current bg-white/10 px-4 py-2 text-sm font-semibold backdrop-blur-md">
                   Codigo: {banner.sale.couponCode}
                 </span>
               ) : null}
@@ -146,8 +163,6 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
               <StoreBadge banner={banner} />
             </div>
           </div>
-
-
         </div>
       </div>
     </article>
@@ -202,4 +217,3 @@ export default function BuenFinBannerCarousel({ banners }: BuenFinBannerCarousel
     </section>
   );
 }
-

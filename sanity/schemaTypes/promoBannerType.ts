@@ -1,5 +1,18 @@
-import { ImagesIcon } from "@sanity/icons";
+﻿import { ImagesIcon } from "@sanity/icons";
 import { defineField, defineType } from "sanity";
+
+const bannerTypeLabels: Record<string, string> = {
+  promotion: "Promocion",
+  announcement: "Anuncio",
+  info: "Informacion",
+  featured: "Destacado",
+  warning: "Aviso",
+  event: "Evento",
+};
+
+function getBannerTypeLabel(value?: string) {
+  return bannerTypeLabels[value || ""] || "Promocion";
+}
 
 export const promoBannerType = defineType({
   name: "promoBanner",
@@ -19,6 +32,43 @@ export const promoBannerType = defineType({
       type: "text",
       rows: 3,
       validation: (Rule) => Rule.max(180),
+    }),
+    defineField({
+      name: "bannerType",
+      title: "Tipo de banner",
+      type: "string",
+      initialValue: "promotion",
+      options: {
+        layout: "dropdown",
+        list: [
+          { title: "Promocion", value: "promotion" },
+          { title: "Anuncio", value: "announcement" },
+          { title: "Informacion", value: "info" },
+          { title: "Destacado", value: "featured" },
+          { title: "Aviso", value: "warning" },
+          { title: "Evento", value: "event" },
+        ],
+      },
+      description: "Etiqueta principal que aparecera en el banner.",
+    }),
+    defineField({
+      name: "mainColor",
+      title: "Color principal",
+      type: "string",
+      initialValue: "#09193B",
+      options: {
+        layout: "dropdown",
+        list: [
+          { title: "Azul marino", value: "#09193B" },
+          { title: "Rojo vino", value: "#850C22" },
+          { title: "Grafito", value: "#111827" },
+          { title: "Verde", value: "#166534" },
+          { title: "Teal", value: "#0F766E" },
+          { title: "Violeta", value: "#6D28D9" },
+          { title: "Naranja", value: "#C2410C" },
+        ],
+      },
+      description: "Color principal para titulo, descripcion, boton, codigo y tienda. Elige un tono que contraste con la imagen.",
     }),
     defineField({
       name: "desktopImage",
@@ -132,15 +182,17 @@ export const promoBannerType = defineType({
       media: "desktopImage",
       sortOrder: "sortOrder",
       isActive: "isActive",
+      bannerType: "bannerType",
     },
     prepare(selection) {
-      const { title, subtitle, media, sortOrder, isActive } = selection;
+      const { title, subtitle, media, sortOrder, isActive, bannerType } = selection;
 
       const status = isActive ? "Activo" : "Inactivo";
+      const typeLabel = getBannerTypeLabel(bannerType as string | undefined);
 
       return {
         title: title || "Banner sin titulo",
-        subtitle: `#${sortOrder || 0} - ${status}${subtitle ? ` - ${subtitle}` : ""}`,
+        subtitle: `#${sortOrder || 0} - ${typeLabel} - ${status}${subtitle ? ` - ${subtitle}` : ""}`,
         media: media as any,
       };
     },

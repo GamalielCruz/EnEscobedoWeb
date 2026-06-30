@@ -717,6 +717,76 @@
         },
         "optional": true
       },
+      "bannerType": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "promotion"
+            },
+            {
+              "type": "string",
+              "value": "announcement"
+            },
+            {
+              "type": "string",
+              "value": "info"
+            },
+            {
+              "type": "string",
+              "value": "featured"
+            },
+            {
+              "type": "string",
+              "value": "warning"
+            },
+            {
+              "type": "string",
+              "value": "event"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "mainColor": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "#09193B"
+            },
+            {
+              "type": "string",
+              "value": "#850C22"
+            },
+            {
+              "type": "string",
+              "value": "#111827"
+            },
+            {
+              "type": "string",
+              "value": "#166534"
+            },
+            {
+              "type": "string",
+              "value": "#0F766E"
+            },
+            {
+              "type": "string",
+              "value": "#6D28D9"
+            },
+            {
+              "type": "string",
+              "value": "#C2410C"
+            }
+          ]
+        },
+        "optional": true
+      },
       "desktopImage": {
         "type": "objectAttribute",
         "value": {

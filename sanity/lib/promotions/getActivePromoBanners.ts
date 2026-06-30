@@ -1,6 +1,8 @@
-﻿import { defineQuery } from "next-sanity";
+import { defineQuery } from "next-sanity";
 import { SanityImageSource } from "@sanity/image-url/lib/types/types";
 import { sanityFetch } from "../live";
+
+export type PromoBannerType = "promotion" | "announcement" | "info" | "featured" | "warning" | "event";
 
 export type PromoBannerStore = {
   _id: string;
@@ -20,6 +22,8 @@ export type PromoBannerItem = {
   _id: string;
   title?: string;
   description?: string;
+  bannerType?: PromoBannerType;
+  mainColor?: string;
   desktopImage?: SanityImageSource | null;
   mobileImage?: SanityImageSource | null;
   sortOrder?: number;
@@ -40,6 +44,8 @@ const ACTIVE_PROMO_BANNERS_QUERY = defineQuery(`
     _id,
     title,
     description,
+    bannerType,
+    mainColor,
     desktopImage,
     mobileImage,
     sortOrder,
@@ -74,11 +80,9 @@ export async function getActivePromoBanners(): Promise<PromoBannerItem[]> {
       query: ACTIVE_PROMO_BANNERS_QUERY,
     });
 
-    return Array.isArray(result.data) ? (result.data as PromoBannerItem[]) : [];
+    return Array.isArray(result.data) ? result.data : [];
   } catch (error) {
     console.error("Error fetching active promo banners:", error);
     return [];
   }
 }
-
-
