@@ -107,6 +107,20 @@ export type Slug = {
   source?: string;
 };
 
+export type AffiliateStoreReference = {
+  _ref: string;
+  _type: "reference";
+  _weak?: boolean;
+  [internalGroqTypeReferenceTo]?: "affiliateStore";
+};
+
+export type ProductReference = {
+  _ref: string;
+  _type: "reference";
+  _weak?: boolean;
+  [internalGroqTypeReferenceTo]?: "product";
+};
+
 export type SaleReference = {
   _ref: string;
   _type: "reference";
@@ -136,6 +150,8 @@ export type PromoBanner = {
     crop?: SanityImageCrop;
     _type: "image";
   };
+  affiliateStore?: AffiliateStoreReference;
+  product?: ProductReference;
   sortOrder?: number;
   displayDurationSeconds?: number;
   validFrom?: string;
@@ -161,25 +177,11 @@ export type Sale = {
   isActive?: boolean;
 };
 
-export type ProductReference = {
-  _ref: string;
-  _type: "reference";
-  _weak?: boolean;
-  [internalGroqTypeReferenceTo]?: "product";
-};
-
 export type RepartidorReference = {
   _ref: string;
   _type: "reference";
   _weak?: boolean;
   [internalGroqTypeReferenceTo]?: "repartidor";
-};
-
-export type AffiliateStoreReference = {
-  _ref: string;
-  _type: "reference";
-  _weak?: boolean;
-  [internalGroqTypeReferenceTo]?: "affiliateStore";
 };
 
 export type Order = {
@@ -737,12 +739,12 @@ export type AllSanitySchemaTypes =
   | SanityImageCrop
   | SanityImageHotspot
   | Slug
+  | AffiliateStoreReference
+  | ProductReference
   | SaleReference
   | PromoBanner
   | Sale
-  | ProductReference
   | RepartidorReference
-  | AffiliateStoreReference
   | Order
   | OrderReference
   | Repartidor
@@ -1564,7 +1566,7 @@ export type PRODUCT_SEARCH_QUERY_RESULT = Array<{
 
 // Source: sanity/lib/promotions/getActivePromoBanners.ts
 // Variable: ACTIVE_PROMO_BANNERS_QUERY
-// Query: *[    _type == "promoBanner"    && isActive == true    && (!defined(validFrom) || validFrom <= now())    && (!defined(validUntil) || validUntil >= now())  ] | order(sortOrder asc, _createdAt desc) {    _id,    title,    description,    desktopImage,    mobileImage,    sortOrder,    displayDurationSeconds,    ctaText,    ctaLink,    "sale": select(      defined(sale)      && sale->isActive == true      && (!defined(sale->validFrom) || sale->validFrom <= now())      && (!defined(sale->validUntil) || sale->validUntil >= now()) => sale->{        _id,        title,        description,        discountAmount,        couponCode      },      null    )  }
+// Query: *[    _type == "promoBanner"    && isActive == true    && (!defined(validFrom) || validFrom <= now())    && (!defined(validUntil) || validUntil >= now())  ] | order(sortOrder asc, _createdAt desc) {    _id,    title,    description,    desktopImage,    mobileImage,    sortOrder,    displayDurationSeconds,    ctaText,    ctaLink,    affiliateStore-> {      _id,      name,      image    },    product-> {      _id,      name    },    "sale": select(      defined(sale)      && sale->isActive == true      && (!defined(sale->validFrom) || sale->validFrom <= now())      && (!defined(sale->validUntil) || sale->validUntil >= now()) => sale->{        _id,        title,        description,        discountAmount,        couponCode      },      null    )  }
 export type ACTIVE_PROMO_BANNERS_QUERY_RESULT = Array<{
   _id: string;
   title: string | null;
@@ -1587,6 +1589,21 @@ export type ACTIVE_PROMO_BANNERS_QUERY_RESULT = Array<{
   displayDurationSeconds: number | null;
   ctaText: string | null;
   ctaLink: string | null;
+  affiliateStore: {
+    _id: string;
+    name: string | null;
+    image: {
+      asset?: SanityImageAssetReference;
+      media?: unknown;
+      hotspot?: SanityImageHotspot;
+      crop?: SanityImageCrop;
+      _type: "image";
+    } | null;
+  } | null;
+  product: {
+    _id: string;
+    name: string | null;
+  } | null;
   sale: {
     _id: string;
     title: string | null;
@@ -1628,7 +1645,7 @@ declare module "@sanity/client" {
     '\n    *[_type == "product" && affiliateStore._ref == $storeId] | order(name asc) {\n      _id,\n      _createdAt,\n      name,\n      slug,\n      image,\n      price,\n      stock,\n      description,\n      categories[]->{\n        _id,\n        title,\n        slug\n      },\n      optionGroups,\n      affiliateStore->{\n        _id,\n        name,\n        categories,\n        averageDeliveryTime,\n        deliveryFee,\n        deliveryTimeMin,\n        deliveryTimeMax\n      }\n    }\n  ': PRODUCTS_BY_STORE_QUERY_RESULT;
     '\n    *[_type == "affiliateStore" && _id == $storeId][0] {\n      _id,\n      name,\n      storeId,\n      image,\n      coverImage,\n      categories,\n      address,\n      coordinates,\n      contact,\n      operatingHours,\n      isActive,\n      isOpen,\n      manualOperationalStatus,\n      highDemandMode,\n      capacity,\n      averageDeliveryTime,\n      deliveryFee,\n      deliveryTimeMin,\n      deliveryTimeMax,\n      serviceTypes\n    }\n  ': STORE_BY_ID_QUERY_RESULT;
     '\n     *[\n        _type == "product"\n        && name match $searchParam\n     ] | order(name asc)\n    {\n      ...,\n      affiliateStore->{ _id, name }\n    }\n    ': PRODUCT_SEARCH_QUERY_RESULT;
-    '\n  *[\n    _type == "promoBanner"\n    && isActive == true\n    && (!defined(validFrom) || validFrom <= now())\n    && (!defined(validUntil) || validUntil >= now())\n  ] | order(sortOrder asc, _createdAt desc) {\n    _id,\n    title,\n    description,\n    desktopImage,\n    mobileImage,\n    sortOrder,\n    displayDurationSeconds,\n    ctaText,\n    ctaLink,\n    "sale": select(\n      defined(sale)\n      && sale->isActive == true\n      && (!defined(sale->validFrom) || sale->validFrom <= now())\n      && (!defined(sale->validUntil) || sale->validUntil >= now()) => sale->{\n        _id,\n        title,\n        description,\n        discountAmount,\n        couponCode\n      },\n      null\n    )\n  }\n': ACTIVE_PROMO_BANNERS_QUERY_RESULT;
+    '\n  *[\n    _type == "promoBanner"\n    && isActive == true\n    && (!defined(validFrom) || validFrom <= now())\n    && (!defined(validUntil) || validUntil >= now())\n  ] | order(sortOrder asc, _createdAt desc) {\n    _id,\n    title,\n    description,\n    desktopImage,\n    mobileImage,\n    sortOrder,\n    displayDurationSeconds,\n    ctaText,\n    ctaLink,\n    affiliateStore-> {\n      _id,\n      name,\n      image\n    },\n    product-> {\n      _id,\n      name\n    },\n    "sale": select(\n      defined(sale)\n      && sale->isActive == true\n      && (!defined(sale->validFrom) || sale->validFrom <= now())\n      && (!defined(sale->validUntil) || sale->validUntil >= now()) => sale->{\n        _id,\n        title,\n        description,\n        discountAmount,\n        couponCode\n      },\n      null\n    )\n  }\n': ACTIVE_PROMO_BANNERS_QUERY_RESULT;
     '\n        *[\n            _type == "sale"\n            && isActive == true \n            && couponCode == $couponCode\n        ] | order(validFrom desc)[0]\n        ': ACTIVE_SALE_BY_COUPON_QUERY_RESULT;
   }
 }
