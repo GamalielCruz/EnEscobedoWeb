@@ -122,16 +122,16 @@ async function sendWhatsAppTemplate(
 
 function toWhatsAppUrlButtonParam(value: string) {
   const trimmed = String(value || "").trim();
-  let param = trimmed;
 
-  try {
-    const url = new URL(trimmed);
-    param = url.searchParams.get("q") || url.search.replace(/^\?/, "");
-  } catch {
-    param = encodeURIComponent(trimmed);
+  if (trimmed.startsWith("http")) {
+    try {
+      const url = new URL(trimmed);
+      const q = url.searchParams.get("q");
+      if (q) return encodeURIComponent(q).substring(0, 1800);
+    } catch {}
   }
 
-  return param.substring(0, 1800);
+  return encodeURIComponent(trimmed).substring(0, 1800);
 }
 
 export async function sendWhatsAppMessage(to: string, message: string) {
@@ -144,10 +144,10 @@ export async function sendWhatsAppMessage(to: string, message: string) {
   const { endpoint, accessToken } = getWhatsAppEndpoint();
   const response = await fetchWhatsAppApi(endpoint, accessToken, {
     messaging_product: "whatsapp",
-      to: normalizedPhone,
-      type: "text",
-      text: { body: message },
-    }, 2);
+    to: normalizedPhone,
+    type: "text",
+    text: { body: message },
+  });
 
   const data = await response.json();
 
@@ -165,12 +165,13 @@ export async function sendOrderConfirmation(
   orderNumber: string
 ) {
   const truncatedName = name.substring(0, 30);
+  const truncatedOrder = orderNumber.substring(0, 30);
 
   try {
     return await sendWhatsAppTemplate(
       phone,
       "confirmacion_pedido",
-      [truncatedName, orderNumber],
+      [truncatedName, truncatedOrder],
       "es_MX"
     );
   } catch (error) {
@@ -188,7 +189,7 @@ export async function sendOrderConfirmation(
     return sendWhatsAppTemplate(
       phone,
       "confirmacion_pedido",
-      [truncatedName, orderNumber],
+      [truncatedName, truncatedOrder],
       "es"
     );
   }
