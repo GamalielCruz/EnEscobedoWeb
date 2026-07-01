@@ -115,6 +115,28 @@ function toWhatsAppUrlButtonParam(value: string) {
   return encodeURIComponent(trimmed).substring(0, 1800);
 }
 
+async function sendSpanishTemplate(
+  phone: string,
+  templateName: string,
+  variables: string[],
+  buttonComponents: Array<Record<string, unknown>> = []
+) {
+  try {
+    return await sendWhatsAppTemplate(phone, templateName, variables, "es_MX", buttonComponents);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const shouldFallbackToEs =
+      message.includes("does not exist in es_MX") ||
+      message.includes("does not exist in the translation");
+
+    if (!shouldFallbackToEs) {
+      throw error;
+    }
+
+    console.warn(`[whatsapp] ${templateName} no existe en es_MX, reintentando con es`);
+    return sendWhatsAppTemplate(phone, templateName, variables, "es", buttonComponents);
+  }
+}
 export async function sendWhatsAppMessage(to: string, message: string) {
   const normalizedPhone = normalizeWhatsAppPhone(to);
 
@@ -145,35 +167,10 @@ export async function sendOrderConfirmation(
   name: string,
   orderNumber: string
 ) {
-  const truncatedName = name.substring(0, 30);
-  const truncatedOrder = orderNumber.substring(0, 30);
-
-  try {
-    return await sendWhatsAppTemplate(
-      phone,
-      "confirmacion_pedido",
-      [truncatedName, truncatedOrder],
-      "es_MX"
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const shouldFallbackToEs =
-      message.includes("does not exist in es_MX") ||
-      message.includes("does not exist in the translation");
-
-    if (!shouldFallbackToEs) {
-      throw error;
-    }
-
-    console.warn("[whatsapp] confirmacion_pedido no existe en es_MX, reintentando con es");
-
-    return sendWhatsAppTemplate(
-      phone,
-      "confirmacion_pedido",
-      [truncatedName, truncatedOrder],
-      "es"
-    );
-  }
+  return sendSpanishTemplate(phone, "confirmacion_pedido", [
+    name.substring(0, 30),
+    orderNumber.substring(0, 30),
+  ]);
 }
 
 export async function sendOrderOnTheWay(
@@ -181,7 +178,10 @@ export async function sendOrderOnTheWay(
   name: string,
   orderNumber: string
 ) {
-  return sendWhatsAppTemplate(phone, "pedido_en_camino", [name, orderNumber], "es_MX");
+  return sendSpanishTemplate(phone, "pedido_en_camino", [
+    name.substring(0, 30),
+    orderNumber.substring(0, 30),
+  ]);
 }
 
 export async function sendOrderDelivered(
@@ -189,7 +189,10 @@ export async function sendOrderDelivered(
   name: string,
   orderNumber: string
 ) {
-  return sendWhatsAppTemplate(phone, "pedido_entregado", [name, orderNumber], "es_MX");
+  return sendSpanishTemplate(phone, "pedido_entregado", [
+    name.substring(0, 30),
+    orderNumber.substring(0, 30),
+  ]);
 }
 
 export async function sendOrderCancelled(
@@ -197,7 +200,10 @@ export async function sendOrderCancelled(
   name: string,
   orderNumber: string
 ) {
-  return sendWhatsAppTemplate(phone, "pedido_cancelado", [name, orderNumber], "es_MX");
+  return sendSpanishTemplate(phone, "pedido_cancelado", [
+    name.substring(0, 30),
+    orderNumber.substring(0, 30),
+  ]);
 }
 
 export async function sendDeliveryOffer(
@@ -270,7 +276,10 @@ export async function sendClienteRepartidorEnPuerta(
   customerName: string,
   orderNumber: string
 ) {
-  return sendWhatsAppTemplate(phone, "cliente_repartidor_en_puerta", [customerName, orderNumber], "es_MX");
+  return sendSpanishTemplate(phone, "cliente_repartidor_en_puerta", [
+    customerName.substring(0, 30),
+    orderNumber.substring(0, 30),
+  ]);
 }
 
 // Mensajes de texto libre del bot hacia repartidores (respuestas a comandos y recordatorios)
