@@ -88,20 +88,27 @@ export async function POST(request: NextRequest) {
     const customerName = clean(metadata.customerName) || "Cliente";
     const orderNumber = clean(metadata.orderNumber);
 
+    const notifications: Promise<void>[] = [];
+
     if (customerPhone && orderNumber) {
-      try {
-        await sendOrderConfirmation(customerPhone, customerName, orderNumber);
-      } catch (whatsappError) {
-        console.error("[create-cod-order] WhatsApp error:", whatsappError);
-      }
-    }
-    // Disparar oferta de reparto si es delivery
-    if (orderData.orderType === "delivery") {
-      void dispatchDeliveryOffer(result._id).catch((e) =>
-        console.error("[create-cod-order] dispatchDeliveryOffer error:", e)
+      notifications.push(
+        sendOrderConfirmation(customerPhone, customerName, orderNumber)
+          .then(() => undefined)
+          .catch((whatsappError) => {
+            console.error("[create-cod-order] WhatsApp error:", whatsappError);
+          })
       );
     }
 
+    if (orderData.orderType === "delivery") {
+      notifications.push(
+        dispatchDeliveryOffer(result._id).catch((e) => {
+          console.error("[create-cod-order] dispatchDeliveryOffer error:", e);
+        })
+      );
+    }
+
+    await Promise.all(notifications);
     return NextResponse.json({ success: true, orderId: result._id, orderNumber: metadata.orderNumber });
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Error interno";
