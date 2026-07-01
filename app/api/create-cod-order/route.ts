@@ -89,13 +89,12 @@ export async function POST(request: NextRequest) {
     const orderNumber = clean(metadata.orderNumber);
 
     if (customerPhone && orderNumber) {
-      void sendOrderConfirmation(customerPhone, customerName, orderNumber).catch(
-        (whatsappError) => {
-          console.error("[create-cod-order] WhatsApp error:", whatsappError);
-        }
-      );
+      try {
+        await sendOrderConfirmation(customerPhone, customerName, orderNumber);
+      } catch (whatsappError) {
+        console.error("[create-cod-order] WhatsApp error:", whatsappError);
+      }
     }
-
     // Disparar oferta de reparto si es delivery
     if (orderData.orderType === "delivery") {
       void dispatchDeliveryOffer(result._id).catch((e) =>
@@ -135,3 +134,4 @@ function transformCustomizations(
     };
   });
 }
+

@@ -6,6 +6,7 @@ const ADMIN_PHONE = process.env.ADMIN_WHATSAPP_PHONE;
 
 const ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   _id,
+  _rev,
   orderNumber,
   customerName,
   phone,
@@ -98,6 +99,32 @@ export async function dispatchDeliveryOffer(orderId: string): Promise<void> {
       ? `https://maps.google.com/maps?q=${encodeURIComponent(order.shippingAddress.line1)}`
       : `https://maps.google.com/maps?q=${encodeURIComponent(address)}`;
 
+    const now = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + OFFER_TTL_MINUTES * 60 * 1000).toISOString();
+
+    try {
+      await backendClient
+        .patch(orderId)
+        .ifRevisionId(order._rev)
+        .set({ deliveryOfertaEnviada: true, deliveryOfertaExpiresAt: expiresAt })
+        .commit();
+    } catch {
+      console.log(`[delivery-dispatch] Oferta ya enviada o modificada para orden ${order.orderNumber}, saliendo`);
+      return;
+    }
+
+    await Promise.allSettled(
+      uniqueDrivers.map((driver) =>
+        backendClient
+          .patch(driver._id)
+          .set({
+            ultimoPedidoOfertado: { _type: "reference", _ref: orderId },
+            ultimaActividad: now,
+          })
+          .commit()
+      )
+    );
+
     console.log(`[delivery-dispatch] Enviando oferta a ${uniqueDrivers.length} repartidor(es) | dirección: ${address} | total: ${total} | pago: ${paymentMethodDisplay}`);
 
     // Enviar oferta a todos los repartidores únicos simultáneamente
@@ -126,32 +153,10 @@ export async function dispatchDeliveryOffer(orderId: string): Promise<void> {
     const failed = results.filter((r) => r.status === "rejected").length;
     console.log(`[delivery-dispatch] Resultado: ${sent} enviados ✅, ${failed} fallidos ❌`);
 
-    // Actualizar ultimoPedidoOfertado y ultimaActividad en cada repartidor que recibió la oferta
-    const now = new Date().toISOString();
-    void Promise.allSettled(
-      uniqueDrivers
-        .filter((_, i) => results[i].status === "fulfilled")
-        .map((driver) =>
-          backendClient
-            .patch(driver._id)
-            .set({
-              ultimoPedidoOfertado: { _type: "reference", _ref: orderId },
-              ultimaActividad: now,
-            })
-            .commit()
-        )
-    ).catch((e) => console.error("[delivery-dispatch] Error actualizando repartidores:", e));
-
-    // Actualizar orden en Sanity
-    const expiresAt = new Date(Date.now() + OFFER_TTL_MINUTES * 60 * 1000).toISOString();
-    await backendClient
-      .patch(orderId)
-      .set({ deliveryOfertaEnviada: true, deliveryOfertaExpiresAt: expiresAt })
-      .commit();
-
-    console.log(`[delivery-dispatch] ✅ Orden ${order.orderNumber} actualizada — oferta expira: ${expiresAt}`);
+    console.log(`[delivery-dispatch] Orden ${order.orderNumber} marcada con oferta; expira: ${expiresAt}`);
 
   } catch (error) {
     console.error("[delivery-dispatch] ❌ Error general:", error);
   }
 }
+
