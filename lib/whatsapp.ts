@@ -1,4 +1,47 @@
 const WHATSAPP_API_URL = "https://graph.facebook.com/v25.0";
+const WHATSAPP_FETCH_TIMEOUT_MS = 8000;
+
+function isRetryableWhatsAppError(error: unknown) {
+  const err = error as { name?: string; message?: string; cause?: { code?: string } };
+  return (
+    err.name === "AbortError" ||
+    err.message?.includes("fetch failed") ||
+    err.cause?.code === "UND_ERR_SOCKET"
+  );
+}
+
+async function fetchWhatsAppApi(
+  endpoint: string,
+  accessToken: string,
+  body: Record<string, unknown>,
+  attempts = 1
+) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), WHATSAPP_FETCH_TIMEOUT_MS);
+
+    try {
+      return await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (error) {
+      if (attempt === attempts || !isRetryableWhatsAppError(error)) {
+        throw error;
+      }
+      console.warn(`[whatsapp] Fetch fallo, reintentando (${attempt + 1}/${attempts})`, error);
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  throw new Error("Error enviando WhatsApp");
+}
 
 function getWhatsAppEndpoint() {
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
@@ -47,32 +90,25 @@ async function sendWhatsAppTemplate(
 
   const { endpoint, accessToken } = getWhatsAppEndpoint();
 
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
+  const response = await fetchWhatsAppApi(endpoint, accessToken, {
+    messaging_product: "whatsapp",
+    to: normalizedPhone,
+    type: "template",
+    template: {
+      name: templateName,
+      language: { code: languageCode },
+      components: [
+        {
+          type: "body",
+          parameters: variables.map((text) => ({
+            type: "text",
+            text: String(text).substring(0, 60),
+          })),
+        },
+        ...buttonComponents,
+      ],
     },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
-      to: normalizedPhone,
-      type: "template",
-      template: {
-        name: templateName,
-        language: { code: languageCode },
-        components: [
-          {
-            type: "body",
-            parameters: variables.map((text) => ({
-              type: "text",
-              text: String(text).substring(0, 60),
-            })),
-          },
-          ...buttonComponents,
-        ],
-      },
-    }),
-  });
+  }, 2);
 
   const data = await response.json();
 
@@ -106,19 +142,12 @@ export async function sendWhatsAppMessage(to: string, message: string) {
   }
 
   const { endpoint, accessToken } = getWhatsAppEndpoint();
-  const response = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      messaging_product: "whatsapp",
+  const response = await fetchWhatsAppApi(endpoint, accessToken, {
+    messaging_product: "whatsapp",
       to: normalizedPhone,
       type: "text",
       text: { body: message },
-    }),
-  });
+    }, 2);
 
   const data = await response.json();
 
@@ -267,5 +296,4 @@ export async function sendClienteRepartidorEnPuerta(
 export async function sendBotMessage(phone: string, message: string) {
   return sendWhatsAppMessage(phone, message);
 }
-
 
