@@ -86,13 +86,16 @@ async function sendWhatsAppTemplate(
 
 function toWhatsAppUrlButtonParam(value: string) {
   const trimmed = String(value || "").trim();
-  const mapsPrefix = "https://maps.google.com/maps?q=";
+  let param = trimmed;
 
-  if (trimmed.startsWith(mapsPrefix)) {
-    return trimmed.slice(mapsPrefix.length);
+  try {
+    const url = new URL(trimmed);
+    param = url.searchParams.get("q") || url.search.replace(/^\?/, "");
+  } catch {
+    param = encodeURIComponent(trimmed);
   }
 
-  return trimmed;
+  return param.substring(0, 1800);
 }
 
 export async function sendWhatsAppMessage(to: string, message: string) {
@@ -264,4 +267,5 @@ export async function sendClienteRepartidorEnPuerta(
 export async function sendBotMessage(phone: string, message: string) {
   return sendWhatsAppMessage(phone, message);
 }
+
 
