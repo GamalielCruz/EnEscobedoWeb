@@ -1,6 +1,41 @@
 const WHATSAPP_API_URL = "https://graph.facebook.com/v25.0";
 const WHATSAPP_FETCH_TIMEOUT_MS = 8000;
 
+type WhatsAppErrorPayload = {
+  message?: string;
+  type?: string;
+  code?: number;
+  error_subcode?: number;
+  error_data?: {
+    details?: string;
+  };
+  error_user_msg?: string;
+};
+
+class WhatsAppApiError extends Error {
+  code?: number;
+  errorSubcode?: number;
+  details?: string;
+  type?: string;
+
+  constructor(payload: WhatsAppErrorPayload) {
+    const details = [
+      payload.message,
+      payload.error_data?.details,
+      payload.error_user_msg,
+    ]
+      .filter(Boolean)
+      .join(" | ");
+
+    super(details || "Error enviando plantilla");
+    this.name = "WhatsAppApiError";
+    this.code = payload.code;
+    this.errorSubcode = payload.error_subcode;
+    this.details = payload.error_data?.details;
+    this.type = payload.type;
+  }
+}
+
 async function fetchWhatsAppApi(
   endpoint: string,
   accessToken: string,
@@ -95,7 +130,7 @@ async function sendWhatsAppTemplate(
 
   if (!response.ok) {
     console.error("[whatsapp] Error:", data);
-    throw new Error(data.error?.message || "Error enviando plantilla");
+    throw new WhatsAppApiError((data?.error ?? {}) as WhatsAppErrorPayload);
   }
 
   return data;
@@ -124,16 +159,33 @@ async function sendSpanishTemplate(
   try {
     return await sendWhatsAppTemplate(phone, templateName, variables, "es_MX", buttonComponents);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
     const shouldFallbackToEs =
-      message.includes("does not exist in es_MX") ||
-      message.includes("does not exist in the translation");
+      message.includes("does not exist in es_mx") ||
+      message.includes("does not exist in the translation") ||
+      message.includes("template name does not exist") ||
+      (message.includes("does not exist") && message.includes("es_mx")) ||
+      (message.includes("translation") && message.includes("es_mx")) ||
+      (message.includes("language") && message.includes("es_mx"));
 
     if (!shouldFallbackToEs) {
       throw error;
     }
 
-    console.warn(`[whatsapp] ${templateName} no existe en es_MX, reintentando con es`);
+    if (error instanceof WhatsAppApiError) {
+      console.warn(
+        `[whatsapp] ${templateName} fallo en es_MX; reintentando con es`,
+        {
+          code: error.code,
+          errorSubcode: error.errorSubcode,
+          details: error.details,
+          type: error.type,
+        }
+      );
+    } else {
+      console.warn(`[whatsapp] ${templateName} fallo en es_MX; reintentando con es:`, error);
+    }
+
     return sendWhatsAppTemplate(phone, templateName, variables, "es", buttonComponents);
   }
 }

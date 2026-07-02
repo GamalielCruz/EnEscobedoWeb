@@ -89,18 +89,26 @@ export async function POST(request: NextRequest) {
     const orderNumber = clean(metadata.orderNumber);
 
     after(async () => {
-      await Promise.all([
+      const postOrderTasks: Array<Promise<unknown>> = [
         customerPhone && orderNumber
-          ? sendOrderConfirmation(customerPhone, customerName, orderNumber).catch((whatsappError) => {
-              console.error("[create-cod-order] WhatsApp error:", whatsappError);
-            })
+          ? sendOrderConfirmation(customerPhone, customerName, orderNumber)
           : Promise.resolve(),
         orderData.orderType === "delivery"
-          ? dispatchDeliveryOffer(result._id).catch((e) => {
-              console.error("[create-cod-order] dispatchDeliveryOffer error:", e);
-            })
+          ? dispatchDeliveryOffer(result._id)
           : Promise.resolve(),
-      ]);
+      ];
+
+      const [confirmationResult, dispatchResult] = await Promise.allSettled(postOrderTasks);
+
+      if (confirmationResult.status === "rejected") {
+        console.error("[create-cod-order] sendOrderConfirmation error:", confirmationResult.reason);
+      } else if (customerPhone && orderNumber) {
+        console.log("[create-cod-order] WhatsApp confirmacion procesada para:", customerPhone);
+      }
+
+      if (dispatchResult.status === "rejected") {
+        console.error("[create-cod-order] dispatchDeliveryOffer error:", dispatchResult.reason);
+      }
     });
 
     return NextResponse.json({ success: true, orderId: result._id, orderNumber: metadata.orderNumber });
