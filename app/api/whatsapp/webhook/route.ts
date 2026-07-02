@@ -36,6 +36,26 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   "shippingAddress": shippingAddress
 }`
 
+const LATEST_OPEN_OFFER_QUERY = `*[
+  _type == "order" &&
+  deliveryOfertaEnviada == true &&
+  !defined(repartidorAsignado)
+] | order(deliveryOfertaExpiresAt desc, orderDate desc)[0]{
+  _id,
+  _rev,
+  orderNumber,
+  customerName,
+  phone,
+  status,
+  paymentMethod,
+  deliveryOfertaEnviada,
+  deliveryOfertaExpiresAt,
+  "repartidorAsignadoRef": repartidorAsignado._ref,
+  "storeAddress": affiliateStore->address.street,
+  "storeName": affiliateStore->name,
+  "shippingAddress": shippingAddress
+}`
+
 // Busca repartidor probando teléfono normalizado y luego raw
 async function findRepartidor(fromPhone: string) {
   const normalizedPhone = normalizeWhatsAppPhone(fromPhone)
@@ -192,12 +212,9 @@ export async function POST(req: NextRequest) {
         .commit()
         .catch(() => null)
 
-      if (!repartidor.ultimoPedidoOfertadoRef) {
-        await sendBotMessage(fromPhone, `No tienes ningun pedido pendiente de aceptar.`).catch(() => null)
-        return NextResponse.json({ status: 'ok' })
-      }
-
-      const order = await backendClient.fetch(ORDER_BY_ID_QUERY, { orderId: repartidor.ultimoPedidoOfertadoRef })
+      const order = repartidor.ultimoPedidoOfertadoRef
+        ? await backendClient.fetch(ORDER_BY_ID_QUERY, { orderId: repartidor.ultimoPedidoOfertadoRef })
+        : await backendClient.fetch(LATEST_OPEN_OFFER_QUERY)
 
       if (!order) {
         await sendBotMessage(fromPhone, `No tienes ningun pedido pendiente de aceptar.`).catch(() => null)
