@@ -241,11 +241,15 @@ export async function sendConfirmacionRepartidor(
   restaurantMapsUrl: string,
   clientMapsUrl: string
 ) {
-  return sendWhatsAppTemplate(
+  return sendSpanishTemplate(
     phone,
     "confirmacion_repartidor",
-    [orderNumber, restaurantName, deliveryAddress, paymentMethod],
-    "es_MX",
+    [
+      orderNumber.substring(0, 30),
+      restaurantName.substring(0, 30),
+      deliveryAddress.substring(0, 60),
+      paymentMethod.substring(0, 30),
+    ],
     [
       {
         type: "button",
@@ -264,11 +268,11 @@ export async function sendConfirmacionRepartidor(
 }
 
 export async function sendRepartidorEnCamino(phone: string, orderNumber: string) {
-  return sendWhatsAppTemplate(phone, "repartidor_en_camino", [orderNumber], "es_MX");
+  return sendSpanishTemplate(phone, "repartidor_en_camino", [orderNumber.substring(0, 30)]);
 }
 
 export async function sendRepartidorEnPuerta(phone: string, orderNumber: string) {
-  return sendWhatsAppTemplate(phone, "repartidor_en_puerta", [orderNumber], "es_MX");
+  return sendSpanishTemplate(phone, "repartidor_en_puerta", [orderNumber.substring(0, 30)]);
 }
 
 export async function sendClienteRepartidorEnPuerta(

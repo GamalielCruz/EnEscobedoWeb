@@ -193,24 +193,24 @@ export async function POST(req: NextRequest) {
         .catch(() => null)
 
       if (!repartidor.ultimoPedidoOfertadoRef) {
-        void sendBotMessage(fromPhone, `No tienes ningún pedido pendiente de aceptar.`).catch(() => null)
+        await sendBotMessage(fromPhone, `No tienes ningun pedido pendiente de aceptar.`).catch(() => null)
         return NextResponse.json({ status: 'ok' })
       }
 
       const order = await backendClient.fetch(ORDER_BY_ID_QUERY, { orderId: repartidor.ultimoPedidoOfertadoRef })
 
       if (!order) {
-        void sendBotMessage(fromPhone, `No tienes ningún pedido pendiente de aceptar.`).catch(() => null)
+        await sendBotMessage(fromPhone, `No tienes ningun pedido pendiente de aceptar.`).catch(() => null)
         return NextResponse.json({ status: 'ok' })
       }
 
       if (!order.deliveryOfertaEnviada) {
-        void sendBotMessage(fromPhone, `Lo sentimos, este pedido ya no está disponible.`).catch(() => null)
+        await sendBotMessage(fromPhone, `Lo sentimos, este pedido ya no esta disponible.`).catch(() => null)
         return NextResponse.json({ status: 'ok' })
       }
 
       if (order.repartidorAsignadoRef) {
-        void sendBotMessage(fromPhone, `Lo sentimos, el pedido #${order.orderNumber} ya fue tomado por otro repartidor.`).catch(() => null)
+        await sendBotMessage(fromPhone, `Lo sentimos, el pedido #${order.orderNumber} ya fue tomado por otro repartidor.`).catch(() => null)
         return NextResponse.json({ status: 'ok' })
       }
 
@@ -287,6 +287,10 @@ export async function POST(req: NextRequest) {
       const [confirmationResult] = confirmationResults
       if (confirmationResult?.status === 'rejected') {
         console.error('[webhook ACEPTO] Error sendConfirmacionRepartidor:', confirmationResult.reason)
+        await sendBotMessage(
+          fromPhone,
+          `Pedido #${order.orderNumber} asignado. Recoge en ${order.storeName ?? 'La Tienda'} y entrega en ${clientAddressStr}. Pago: ${paymentMethodDisplay}.`
+        ).catch(() => null)
       }
 
       // Notificar al cliente
@@ -492,3 +496,4 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({ status: 'ok' })
 }
+

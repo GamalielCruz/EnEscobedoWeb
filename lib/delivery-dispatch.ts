@@ -113,7 +113,7 @@ export async function dispatchDeliveryOffer(orderId: string): Promise<void> {
       return;
     }
 
-    await Promise.allSettled(
+    const driverPatchResults = await Promise.allSettled(
       uniqueDrivers.map((driver) =>
         backendClient
           .patch(driver._id)
@@ -125,11 +125,23 @@ export async function dispatchDeliveryOffer(orderId: string): Promise<void> {
       )
     );
 
-    console.log(`[delivery-dispatch] Enviando oferta a ${uniqueDrivers.length} repartidor(es) | dirección: ${address} | total: ${total} | pago: ${paymentMethodDisplay}`);
+    const offerDrivers = uniqueDrivers.filter((driver, i) => {
+      const patched = driverPatchResults[i].status === "fulfilled";
+      if (!patched) {
+        console.error(`[delivery-dispatch] No se pudo preparar a ${driver.nombre} (${driver.telefono}) para aceptar oferta`);
+      }
+      return patched;
+    });
 
-    // Enviar oferta a todos los repartidores únicos simultáneamente
+    if (offerDrivers.length === 0) {
+      console.error(`[delivery-dispatch] Ningun repartidor quedo preparado para aceptar la orden ${order.orderNumber}`);
+      return;
+    }
+
+    console.log(`[delivery-dispatch] Enviando oferta a ${offerDrivers.length} repartidor(es) | direccion: ${address} | total: ${total} | pago: ${paymentMethodDisplay}`);
+
     const results = await Promise.allSettled(
-      uniqueDrivers.map((driver) =>
+      offerDrivers.map((driver) =>
         sendDeliveryOffer(
           driver.telefono,
           order.orderNumber,
