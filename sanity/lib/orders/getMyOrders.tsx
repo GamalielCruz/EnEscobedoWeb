@@ -25,15 +25,20 @@ export async function getMyOrders(userId: string) {
     }
  `);
 
- try {
-  const orders = await sanityFetch({
-    query: MY_ORDERS_QUERY,
-    params: { userId },
-  });
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const orders = await sanityFetch({
+        query: MY_ORDERS_QUERY,
+        params: { userId },
+      });
 
-  return orders.data || [];
- } catch (error) {
-  console.error("Error fetching orders: ", error);
-  throw new Error("Error fetching orders");
- }
+      return orders.data || [];
+    } catch (error) {
+      console.error("Error fetching orders: ", error);
+      if (attempt === 2) return [];
+    }
+  }
+
+  return [];
 }
+

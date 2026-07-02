@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { revalidatePath } from 'next/cache'
 import { backendClient } from '@/sanity/lib/backendClient'
 import {
   sendBotMessage,
@@ -260,8 +259,6 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ status: 'ok' })
       }
 
-      revalidatePath('/orders')
-
       // Limpiar ultimoPedidoOfertado del repartidor
       void backendClient
         .patch(repartidor._id)
@@ -465,8 +462,6 @@ export async function POST(req: NextRequest) {
           console.log(`[whatsapp webhook] Race condition evitada en ENTREGADO para ${shippedOrder.orderNumber}`)
           return NextResponse.json({ status: 'ok' })
         }
-
-        revalidatePath('/orders')
 
         // Notificar al cliente
         const customerPhone = normalizeWhatsAppPhone(shippedOrder.phone)
