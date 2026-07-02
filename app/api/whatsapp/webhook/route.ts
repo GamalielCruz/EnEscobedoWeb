@@ -98,6 +98,16 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ status: 'ok' })
   }
 
+  // #region debug-point A:webhook-entry
+  const traceId = `wa-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  console.info('[whatsapp webhook][debug] entry', {
+    traceId,
+    method: req.method,
+    url: req.url,
+    hasEntry: Array.isArray(body?.entry),
+  })
+  // #endregion
+
   console.log('[whatsapp webhook] Mensaje recibido:', JSON.stringify(body, null, 2))
 
   try {
@@ -107,6 +117,16 @@ export async function POST(req: NextRequest) {
     const value = changes?.value as Record<string, unknown> | undefined
     const messages = value?.messages as Record<string, unknown>[] | undefined
     const message = messages?.[0]
+
+    // #region debug-point B:payload-shape
+    console.info('[whatsapp webhook][debug] payload-shape', {
+      traceId,
+      messageCount: messages?.length ?? 0,
+      messageType: message?.type,
+      fromPhone: message?.from,
+      hasStatuses: Array.isArray(value?.statuses),
+    })
+    // #endregion
 
     if (!message) {
       return NextResponse.json({ status: 'ok' })
@@ -125,11 +145,38 @@ export async function POST(req: NextRequest) {
       const btn = message.button as Record<string, unknown>
       textBody = normalizeText(btn?.payload as string ?? btn?.text as string ?? '')
     } else {
+      // #region debug-point C:unsupported-message
+      console.info('[whatsapp webhook][debug] unsupported-message', {
+        traceId,
+        messageType: message.type,
+      })
+      // #endregion
       return NextResponse.json({ status: 'ok' })
     }
 
+    // #region debug-point D:command-extracted
+    console.info('[whatsapp webhook][debug] command-extracted', {
+      traceId,
+      fromPhone,
+      messageType: message.type,
+      textBody,
+    })
+    // #endregion
+
     // Verificar si el número es un repartidor registrado
     const repartidor = await findRepartidor(fromPhone)
+
+    // #region debug-point E:driver-lookup
+    console.info('[whatsapp webhook][debug] driver-lookup', {
+      traceId,
+      fromPhone,
+      normalizedFromPhone: normalizeWhatsAppPhone(fromPhone),
+      found: !!repartidor,
+      repartidorId: repartidor?._id,
+      repartidorTelefono: repartidor?.telefono,
+      repartidorNombre: repartidor?.nombre,
+    })
+    // #endregion
 
     // Si no es repartidor → ignorar silenciosamente
     if (!repartidor) {
@@ -215,6 +262,20 @@ export async function POST(req: NextRequest) {
         ? await backendClient.fetch(ORDER_BY_ID_QUERY, { orderId: repartidor.ultimoPedidoOfertadoRef })
         : await backendClient.fetch(LATEST_OPEN_OFFER_QUERY)
 
+      // #region debug-point F:accept-order-resolution
+      console.info('[whatsapp webhook][debug] accept-order-resolution', {
+        traceId,
+        repartidorId: repartidor._id,
+        ultimoPedidoOfertadoRef: repartidor.ultimoPedidoOfertadoRef,
+        orderFound: !!order,
+        orderId: order?._id,
+        orderNumber: order?.orderNumber,
+        orderAssignedTo: order?.repartidorAsignadoRef,
+        deliveryOfertaEnviada: order?.deliveryOfertaEnviada,
+        deliveryOfertaExpiresAt: order?.deliveryOfertaExpiresAt,
+      })
+      // #endregion
+
       if (!order) {
         await sendBotMessage(fromPhone, `No tienes ningun pedido pendiente de aceptar.`).catch(() => null)
         return NextResponse.json({ status: 'ok' })
@@ -254,7 +315,24 @@ export async function POST(req: NextRequest) {
           })
           .unset(['deliveryOfertaExpiresAt'])
           .commit()
+        // #region debug-point G:accept-assign-success
+        console.info('[whatsapp webhook][debug] accept-assign-success', {
+          traceId,
+          orderId: order._id,
+          orderNumber: order.orderNumber,
+          repartidorId: repartidor._id,
+        })
+        // #endregion
       } catch (patchError) {
+        // #region debug-point H:accept-assign-failure
+        console.error('[whatsapp webhook][debug] accept-assign-failure', {
+          traceId,
+          orderId: order._id,
+          orderNumber: order.orderNumber,
+          repartidorId: repartidor._id,
+          patchError,
+        })
+        // #endregion
         console.log(`[whatsapp webhook] Race condition evitada en ACEPTO para ${order.orderNumber}`)
         return NextResponse.json({ status: 'ok' })
       }
