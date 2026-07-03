@@ -46,6 +46,32 @@ export const repartidorType = defineType({
       description: "Cuándo se conectó al servicio",
     }),
     defineField({
+      name: "disponibleHasta",
+      title: "Disponible Hasta",
+      type: "datetime",
+      description: "Cuándo termina la sesión de disponibilidad actual",
+    }),
+    defineField({
+      name: "duracionDisponibilidadMinutos",
+      title: "Duración de Disponibilidad (Minutos)",
+      type: "number",
+      description: "Duración total de la sesión vigente en minutos",
+    }),
+    defineField({
+      name: "estadoDisponibilidad",
+      title: "Estado de Disponibilidad",
+      type: "string",
+      initialValue: "offline",
+      options: {
+        list: [
+          { title: "Disponible", value: "available" },
+          { title: "Desconectado", value: "offline" },
+          { title: "Ocupado", value: "busy" },
+        ],
+      },
+      description: "Estado operativo actual del repartidor",
+    }),
+    defineField({
       name: "ultimaActividad",
       title: "Última Actividad",
       type: "datetime",
@@ -63,6 +89,38 @@ export const repartidorType = defineType({
       title: "Confirmación Enviada At",
       type: "datetime",
       description: "Cuándo se mandó el recordatorio de confirmación",
+    }),
+    defineField({
+      name: "esperandoSeleccionDisponibilidad",
+      title: "Esperando Selección de Disponibilidad",
+      type: "boolean",
+      initialValue: false,
+      description: "Indica si el repartidor debe elegir la duración de su sesión",
+    }),
+    defineField({
+      name: "extensionPendiente",
+      title: "Extensión Pendiente",
+      type: "boolean",
+      initialValue: false,
+      description: "Indica si se le preguntó si desea extender su sesión",
+    }),
+    defineField({
+      name: "extensionPreguntadaAt",
+      title: "Extensión Preguntada At",
+      type: "datetime",
+      description: "Cuándo se envió la pregunta para extender la sesión",
+    }),
+    defineField({
+      name: "autoDesconectadoAt",
+      title: "Auto Desconectado At",
+      type: "datetime",
+      description: "Cuándo se desconectó automáticamente por fin de sesión",
+    }),
+    defineField({
+      name: "motivoDesconexion",
+      title: "Motivo de Desconexión",
+      type: "string",
+      description: "Motivo por el que quedó fuera de línea",
     }),
     defineField({
       name: "ultimoPedidoOfertado",

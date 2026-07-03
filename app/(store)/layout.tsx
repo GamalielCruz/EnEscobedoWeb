@@ -9,12 +9,12 @@ import HydrationErrorSuppressor from "@/components/HydrationErrorSuppressor";
 
 export const metadata: Metadata = {
   title: "ElMenu | Digital comunitario",
-  description: "La imaginación se imprime.",
+  description: "Tu Menu en línea.",
   metadataBase: new URL(process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'),
   openGraph: {
     title: "En Escobedo | Plaza en linea",
-    description: "La imaginación se imprime.",
-    images: ["/og-image.png"],
+    description: "Tu Menu en línea.",
+    images: ["/open.png"],
     url: "https://elmenu.site",
   },
 };

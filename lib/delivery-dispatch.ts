@@ -21,11 +21,11 @@ const ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   "storeAddress": affiliateStore->address.street
 }`;
 
-const STORE_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && disponible == true && tiendaAsignada._ref == $storeId]{
+const STORE_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && disponible == true && estadoDisponibilidad == "available" && tiendaAsignada._ref == $storeId]{
   _id, nombre, telefono
 }`;
 
-const COMMUNITY_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && disponible == true && !defined(tiendaAsignada)]{
+const COMMUNITY_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && disponible == true && estadoDisponibilidad == "available" && !defined(tiendaAsignada)]{
   _id, nombre, telefono
 }`;
 

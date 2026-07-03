@@ -12,9 +12,41 @@ import {
 } from '@/lib/whatsapp'
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'garoga_verify_token'
+const MEXICO_TIME_ZONE = 'America/Mexico_City'
+const SESSION_OPTIONS = {
+  '1': { minutes: 60, label: '1 hora' },
+  '2': { minutes: 120, label: '2 horas' },
+  '3': { minutes: 240, label: '4 horas' },
+  '4': { minutes: 360, label: '6 horas' },
+  '5': { minutes: 480, label: '8 horas' },
+} as const
+const EXTENSION_OPTIONS = {
+  '1': 60,
+  '2': 120,
+} as const
+const mexicoTimeFormatter = new Intl.DateTimeFormat('es-MX', {
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+  timeZone: MEXICO_TIME_ZONE,
+})
 
 const REPARTIDOR_BY_PHONE_QUERY = `*[_type == "repartidor" && telefono == $telefono][0]{
-  _id, nombre, telefono, activo, disponible, pendienteConfirmacion,
+  _id,
+  nombre,
+  telefono,
+  activo,
+  disponible,
+  disponibleDesde,
+  disponibleHasta,
+  duracionDisponibilidadMinutos,
+  estadoDisponibilidad,
+  pendienteConfirmacion,
+  esperandoSeleccionDisponibilidad,
+  extensionPendiente,
+  extensionPreguntadaAt,
+  autoDesconectadoAt,
+  motivoDesconexion,
   "ultimoPedidoOfertadoRef": ultimoPedidoOfertado._ref,
   "repartidorAsignadoRef": *[_type == "order" && repartidorAsignado._ref == ^._id && status == "shipped"][0]._id
 }`
@@ -73,6 +105,99 @@ function normalizeText(text: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .trim()
+}
+
+function getSessionSelectionPrompt(): string {
+  return `¿Cuánto tiempo estarás disponible?
+
+1️⃣ 1 hora
+2️⃣ 2 horas
+3️⃣ 4 horas
+4️⃣ 6 horas
+5️⃣ 8 horas
+
+Responde con el número de la opción.`
+}
+
+function getInvalidSessionSelectionPrompt(): string {
+  return `No pude entender la opción.
+
+Responde solo con un número:
+
+1️⃣ 1 hora
+2️⃣ 2 horas
+3️⃣ 4 horas
+4️⃣ 6 horas
+5️⃣ 8 horas`
+}
+
+function getExtensionPrompt(): string {
+  return `Tu sesión termina en aproximadamente 10 minutos.
+
+¿Quieres extender tu disponibilidad?
+
+1️⃣ Extender 1 hora
+2️⃣ Extender 2 horas
+3️⃣ Terminar al finalizar`
+}
+
+function getInvalidExtensionPrompt(): string {
+  return `No pude entender la opción.
+
+Responde solo con un número:
+
+1️⃣ Extender 1 hora
+2️⃣ Extender 2 horas
+3️⃣ Terminar al finalizar`
+}
+
+function formatDurationLabel(minutes: number): string {
+  if (minutes % 60 === 0) {
+    const hours = minutes / 60
+    return hours === 1 ? '1 hora' : `${hours} horas`
+  }
+
+  return `${minutes} minutos`
+}
+
+function formatMexicoTime(isoDate: string): string {
+  return mexicoTimeFormatter.format(new Date(isoDate))
+}
+
+function calculateSessionWindow(baseDate: Date, minutes: number) {
+  const availableUntil = new Date(baseDate.getTime() + minutes * 60 * 1000)
+
+  return {
+    availableUntilIso: availableUntil.toISOString(),
+    totalMinutes: minutes,
+  }
+}
+
+function calculateExtendedSessionWindow(
+  nowDate: Date,
+  availableFrom: string | undefined,
+  currentAvailableUntil: string | undefined,
+  extraMinutes: number
+) {
+  const parsedAvailableUntil = currentAvailableUntil ? new Date(currentAvailableUntil) : nowDate
+  const safeBaseDate = Number.isNaN(parsedAvailableUntil.getTime()) ? nowDate : parsedAvailableUntil
+  const availableUntil = new Date(safeBaseDate.getTime() + extraMinutes * 60 * 1000)
+
+  let totalMinutes = extraMinutes
+  if (availableFrom) {
+    const parsedAvailableFrom = new Date(availableFrom)
+    if (!Number.isNaN(parsedAvailableFrom.getTime())) {
+      totalMinutes = Math.max(
+        extraMinutes,
+        Math.round((availableUntil.getTime() - parsedAvailableFrom.getTime()) / (60 * 1000))
+      )
+    }
+  }
+
+  return {
+    availableUntilIso: availableUntil.toISOString(),
+    totalMinutes,
+  }
 }
 
 // Meta llama este GET para verificar el webhook
@@ -184,26 +309,75 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: 'ok' })
     }
 
-    const now = new Date().toISOString()
+    const nowDate = new Date()
+    const now = nowDate.toISOString()
     console.log(`[whatsapp webhook] Comando "${textBody}" de ${repartidor.nombre} (${fromPhone})`)
 
-    // --- INICIO ---
-    if (textBody === 'INICIO') {
+    // --- FIN ---
+    if (textBody === 'FIN') {
+      console.log('[webhook disponibilidad] FIN manual recibido', {
+        repartidorId: repartidor._id,
+        repartidorNombre: repartidor.nombre,
+      })
+
       await backendClient
         .patch(repartidor._id)
         .set({
-          disponible: true,
-          disponibleDesde: now,
+          disponible: false,
+          estadoDisponibilidad: 'offline',
+          esperandoSeleccionDisponibilidad: false,
+          extensionPendiente: false,
+          pendienteConfirmacion: false,
+          motivoDesconexion: 'manual',
           ultimaActividad: now,
+        })
+        .unset([
+          'confirmacionEnviadaAt',
+          'disponibleHasta',
+          'disponibleDesde',
+          'duracionDisponibilidadMinutos',
+          'extensionPreguntadaAt',
+          'autoDesconectadoAt',
+        ])
+        .commit()
+
+      void sendBotMessage(
+        fromPhone,
+        `Te desconectamos correctamente. Responde INICIO cuando quieras volver a estar disponible.`
+      ).catch(() => null)
+      return NextResponse.json({ status: 'ok' })
+    }
+
+    // --- INICIO ---
+    if (textBody === 'INICIO') {
+      console.log('[webhook disponibilidad] INICIO recibido', {
+        repartidorId: repartidor._id,
+        repartidorNombre: repartidor.nombre,
+      })
+
+      await backendClient
+        .patch(repartidor._id)
+        .set({
+          disponible: false,
+          estadoDisponibilidad: 'offline',
+          ultimaActividad: now,
+          esperandoSeleccionDisponibilidad: true,
+          extensionPendiente: false,
           pendienteConfirmacion: false,
         })
+        .unset([
+          'confirmacionEnviadaAt',
+          'disponibleDesde',
+          'disponibleHasta',
+          'duracionDisponibilidadMinutos',
+          'extensionPreguntadaAt',
+          'autoDesconectadoAt',
+          'motivoDesconexion',
+        ])
         .commit()
 
       try {
-        await sendBotMessage(
-          fromPhone,
-          `Bienvenido ${repartidor.nombre}, ahora estás disponible para recibir pedidos. Manda FIN cuando termines tu turno.`
-        )
+        await sendBotMessage(fromPhone, getSessionSelectionPrompt())
       } catch (err) {
         console.error('[webhook INICIO] Error enviando mensaje:', err)
       }
@@ -211,14 +385,134 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ status: 'ok' })
     }
 
-    // --- FIN ---
-    if (textBody === 'FIN') {
+    if (repartidor.esperandoSeleccionDisponibilidad) {
+      const selectedSession = SESSION_OPTIONS[textBody as keyof typeof SESSION_OPTIONS]
+
+      if (!selectedSession) {
+        console.log('[webhook disponibilidad] Selección inválida de duración', {
+          repartidorId: repartidor._id,
+          repartidorNombre: repartidor.nombre,
+          textBody,
+        })
+
+        await backendClient
+          .patch(repartidor._id)
+          .set({ ultimaActividad: now })
+          .commit()
+
+        void sendBotMessage(fromPhone, getInvalidSessionSelectionPrompt()).catch(() => null)
+        return NextResponse.json({ status: 'ok' })
+      }
+
+      const sessionWindow = calculateSessionWindow(nowDate, selectedSession.minutes)
+      console.log('[webhook disponibilidad] Selección de duración confirmada', {
+        repartidorId: repartidor._id,
+        repartidorNombre: repartidor.nombre,
+        durationMinutes: selectedSession.minutes,
+        availableUntil: sessionWindow.availableUntilIso,
+      })
+
       await backendClient
         .patch(repartidor._id)
-        .set({ disponible: false, ultimaActividad: now, pendienteConfirmacion: false })
+        .set({
+          disponible: true,
+          disponibleDesde: now,
+          disponibleHasta: sessionWindow.availableUntilIso,
+          duracionDisponibilidadMinutos: sessionWindow.totalMinutes,
+          estadoDisponibilidad: 'available',
+          ultimaActividad: now,
+          esperandoSeleccionDisponibilidad: false,
+          extensionPendiente: false,
+          pendienteConfirmacion: false,
+        })
+        .unset([
+          'confirmacionEnviadaAt',
+          'extensionPreguntadaAt',
+          'autoDesconectadoAt',
+          'motivoDesconexion',
+        ])
         .commit()
 
-      void sendBotMessage(fromPhone, `Has terminado tu turno. ¡Hasta pronto!`).catch(() => null)
+      void sendBotMessage(
+        fromPhone,
+        `Listo. Estás disponible por ${formatDurationLabel(selectedSession.minutes)}.
+Tu sesión termina a las ${formatMexicoTime(sessionWindow.availableUntilIso)}.
+Te avisaremos 10 minutos antes de finalizar.`
+      ).catch(() => null)
+      return NextResponse.json({ status: 'ok' })
+    }
+
+    if (repartidor.extensionPendiente) {
+      if (textBody === '3') {
+        console.log('[webhook disponibilidad] Extensión rechazada; termina en horario programado', {
+          repartidorId: repartidor._id,
+          repartidorNombre: repartidor.nombre,
+          availableUntil: repartidor.disponibleHasta,
+        })
+
+        await backendClient
+          .patch(repartidor._id)
+          .set({
+            extensionPendiente: false,
+            ultimaActividad: now,
+          })
+          .unset(['extensionPreguntadaAt'])
+          .commit()
+
+        void sendBotMessage(
+          fromPhone,
+          `Perfecto. Tu sesión terminará a la hora programada.`
+        ).catch(() => null)
+        return NextResponse.json({ status: 'ok' })
+      }
+
+      const extensionMinutes = EXTENSION_OPTIONS[textBody as keyof typeof EXTENSION_OPTIONS]
+      if (!extensionMinutes) {
+        console.log('[webhook disponibilidad] Respuesta inválida a extensión', {
+          repartidorId: repartidor._id,
+          repartidorNombre: repartidor.nombre,
+          textBody,
+        })
+
+        await backendClient
+          .patch(repartidor._id)
+          .set({ ultimaActividad: now })
+          .commit()
+
+        void sendBotMessage(fromPhone, getInvalidExtensionPrompt()).catch(() => null)
+        return NextResponse.json({ status: 'ok' })
+      }
+
+      const extendedWindow = calculateExtendedSessionWindow(
+        nowDate,
+        repartidor.disponibleDesde,
+        repartidor.disponibleHasta,
+        extensionMinutes
+      )
+      console.log('[webhook disponibilidad] Extensión aceptada', {
+        repartidorId: repartidor._id,
+        repartidorNombre: repartidor.nombre,
+        extensionMinutes,
+        availableUntil: extendedWindow.availableUntilIso,
+      })
+
+      await backendClient
+        .patch(repartidor._id)
+        .set({
+          disponible: true,
+          disponibleHasta: extendedWindow.availableUntilIso,
+          duracionDisponibilidadMinutos: extendedWindow.totalMinutes,
+          estadoDisponibilidad: 'available',
+          extensionPendiente: false,
+          ultimaActividad: now,
+        })
+        .unset(['extensionPreguntadaAt'])
+        .commit()
+
+      void sendBotMessage(
+        fromPhone,
+        `Listo. Extendimos tu disponibilidad ${formatDurationLabel(extensionMinutes)} más.`
+      ).catch(() => null)
       return NextResponse.json({ status: 'ok' })
     }
 
@@ -392,7 +686,7 @@ export async function POST(req: NextRequest) {
       // Notificar a los demás repartidores disponibles
       const otherDrivers: Array<{ _id: string; nombre: string; telefono: string }> =
         await backendClient.fetch(
-          `*[_type == "repartidor" && activo == true && disponible == true && _id != $assignedId]{_id, nombre, telefono}`,
+          `*[_type == "repartidor" && activo == true && disponible == true && estadoDisponibilidad == "available" && _id != $assignedId]{_id, nombre, telefono}`,
           { assignedId: repartidor._id }
         )
 

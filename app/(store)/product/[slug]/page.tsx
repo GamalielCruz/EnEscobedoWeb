@@ -51,12 +51,12 @@ export async function generateMetadata({
     title: product.name
       ? `${product.name} | Pixel A Plástico`
       : "Pixel A Plástico | Querétaro",
-    description: descriptionText || "La imaginación se imprime.",
+    description: descriptionText || "El Menu.",
     openGraph: {
       title: product.name
         ? `${product.name} | Pixel A Plástico`
         : "Pixel A Plástico | Querétaro",
-      description: descriptionText || "La imaginación se imprime.",
+      description: descriptionText || "El Menu.",
       images: imageUrl
         ? [imageUrl]
         : [
@@ -309,7 +309,7 @@ export default async function ProductPage({
             <ShareButton
               url={shareUrl}
               title={product.name || ""}
-              text="La imaginación se imprime."
+              text="El Menu."
             />
           </div>
         </div>

@@ -11,7 +11,7 @@ type ShareButtonProps = {
 export default function ShareButton({ url, title, text }: ShareButtonProps) {
 	const [showShareOptions, setShowShareOptions] = useState(false);
 
-	const descriptionText = text || "La imaginación se imprime.";
+	const descriptionText = text || "El Menu.";
 
 	const handleNativeShare = async () => {
 		if (navigator.share) {
