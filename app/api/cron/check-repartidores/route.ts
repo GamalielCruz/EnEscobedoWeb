@@ -11,9 +11,9 @@ type RepartidorCron = {
   nombre: string
   telefono: string
   disponibleHasta?: string
+  estadoDisponibilidad?: 'available' | 'offline' | 'busy'
   extensionPendiente?: boolean
   extensionPreguntadaAt?: string
-  tienePedidoActivo?: boolean
 }
 
 function getExtensionPrompt(): string {
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
   const summary = {
     extensionesPreguntadas: 0,
     desconectadosPorFinSesion: 0,
-    pedidosActivosOmitidos: 0,
+    ocupadosOmitidos: 0,
     errores: 0,
   }
 
@@ -50,17 +50,17 @@ export async function GET(req: NextRequest) {
       `*[
         _type == "repartidor" &&
         disponible == true &&
-        estadoDisponibilidad == "available" &&
+        estadoDisponibilidad in ["available", "busy"] &&
         defined(disponibleHasta) &&
         disponibleHasta <= $now
       ]{
         _id,
         nombre,
         telefono,
+        estadoDisponibilidad,
         disponibleHasta,
         extensionPendiente,
-        extensionPreguntadaAt,
-        "tienePedidoActivo": count(*[_type == "order" && repartidorAsignado._ref == ^._id && status == "shipped"]) > 0
+        extensionPreguntadaAt
       }`,
       { now: nowIso }
     )
@@ -71,20 +71,21 @@ export async function GET(req: NextRequest) {
       repartidores: candidatosDesconectar.map((rep) => ({
         id: rep._id,
         nombre: rep.nombre,
+        estadoDisponibilidad: rep.estadoDisponibilidad,
         disponibleHasta: rep.disponibleHasta,
         extensionPendiente: rep.extensionPendiente ?? false,
-        tienePedidoActivo: rep.tienePedidoActivo ?? false,
       })),
     })
 
     await Promise.allSettled(
       candidatosDesconectar.map(async (rep) => {
         try {
-          if (rep.tienePedidoActivo) {
-            summary.pedidosActivosOmitidos++
-            console.log('[cron/check-repartidores] Repartidor saltado por pedido activo', {
+          if (rep.estadoDisponibilidad === 'busy') {
+            summary.ocupadosOmitidos++
+            console.log('[cron/check-repartidores] Repartidor saltado por estado ocupado', {
               id: rep._id,
               nombre: rep.nombre,
+              estadoDisponibilidad: rep.estadoDisponibilidad,
               disponibleHasta: rep.disponibleHasta,
             })
             return
