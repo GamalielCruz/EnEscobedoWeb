@@ -65,14 +65,28 @@ export async function GET(req: NextRequest) {
       { now: nowIso }
     )
 
+    console.log('[cron/check-repartidores] Repartidores vencidos encontrados', {
+      total: candidatosDesconectar.length,
+      now: nowIso,
+      repartidores: candidatosDesconectar.map((rep) => ({
+        id: rep._id,
+        nombre: rep.nombre,
+        disponibleHasta: rep.disponibleHasta,
+        extensionPendiente: rep.extensionPendiente ?? false,
+        tienePedidoActivo: rep.tienePedidoActivo ?? false,
+      })),
+    })
+
     await Promise.allSettled(
       candidatosDesconectar.map(async (rep) => {
         try {
           if (rep.tienePedidoActivo) {
             summary.pedidosActivosOmitidos++
-            console.log(
-              `[cron/check-repartidores] TODO sesión vencida pero con pedido activo para ${rep.nombre}; se omite auto-desconexión`
-            )
+            console.log('[cron/check-repartidores] Repartidor saltado por pedido activo', {
+              id: rep._id,
+              nombre: rep.nombre,
+              disponibleHasta: rep.disponibleHasta,
+            })
             return
           }
 
@@ -100,10 +114,20 @@ Responde INICIO cuando quieras volver a estar disponible.`
           )
 
           summary.desconectadosPorFinSesion++
-          console.log(`[cron/check-repartidores] Desconexión automática por fin de sesión: ${rep.nombre}`)
+          console.log('[cron/check-repartidores] Repartidor desconectado', {
+            id: rep._id,
+            nombre: rep.nombre,
+            disponibleHasta: rep.disponibleHasta,
+            desconectadoAt: nowIso,
+          })
         } catch (e) {
           summary.errores++
-          console.error(`[cron/check-repartidores] Error cerrando sesión de ${rep.nombre}:`, e)
+          console.error('[cron/check-repartidores] Error al actualizar Sanity', {
+            id: rep._id,
+            nombre: rep.nombre,
+            disponibleHasta: rep.disponibleHasta,
+            error: e,
+          })
         }
       })
     )
