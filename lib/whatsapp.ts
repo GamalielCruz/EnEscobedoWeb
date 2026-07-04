@@ -284,6 +284,21 @@ export async function sendDeliveryOffer(
   );
 }
 
+export async function sendBundleDeliveryOffer(
+  phone: string,
+  restaurantName: string,
+  orderNumbers: string[],
+  total: string,
+  deliveries: number
+) {
+  const ordersLabel = orderNumbers.map((orderNumber) => `#${orderNumber.substring(0, 30)}`).join(", ");
+
+  return sendBotMessage(
+    phone,
+    `Tienes una oferta multiple del mismo restaurante.\n\nRestaurante: ${restaurantName.substring(0, 60)}\nPedidos: ${deliveries}\nFolios: ${ordersLabel}\nPago total estimado: ${total}\nEntregas: ${deliveries}\n\nAceptas llevar ambos pedidos?\n\n1. Aceptar\n2. Rechazar\n\nResponde ACEPTO o RECHAZAR.`
+  );
+}
+
 export async function sendConfirmacionRepartidor(
   phone: string,
   orderNumber: string,
@@ -343,4 +358,5 @@ export async function sendClienteRepartidorEnPuerta(
 export async function sendBotMessage(phone: string, message: string) {
   return sendWhatsAppMessage(phone, message);
 }
+
 

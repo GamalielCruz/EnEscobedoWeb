@@ -1,0 +1,23 @@
+{
+  "name": "ElMenu | Digital comunitario",
+  "short_name": "ElMenu",
+  "description": "Plataforma digital comunitaria para restaurantes, repartidores y clientes.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#09193B",
+  "theme_color": "#09193B",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

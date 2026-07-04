@@ -5,8 +5,20 @@ import "./globals.css";
 import { ClerkRedirectInterceptor } from "@/components/ClerkRedirectInterceptor";
 
 export const metadata: Metadata = {
-  title: "Store - Delivery & Pickup",
-  description: "Order delivery and pickup management system",
+  title: "ElMenu | Digital comunitario",
+  description:
+    "Plataforma digital comunitaria para restaurantes, repartidores y clientes.",
+  manifest: "/manifest.json",
+  icons: {
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
+    apple: "/apple-touch-icon.png",
+  },
+  appleWebApp: {
+    capable: true,
+    title: "ElMenu",
+    statusBarStyle: "black-translucent",
+  },
 };
 
 export default function RootLayout({

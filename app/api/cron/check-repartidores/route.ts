@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { backendClient } from '@/sanity/lib/backendClient'
+import { redispatchOrders } from '@/lib/delivery-dispatch'
 import { sendBotMessage } from '@/lib/whatsapp'
 
 export const dynamic = "force-dynamic";
@@ -11,9 +12,13 @@ type RepartidorCron = {
   nombre: string
   telefono: string
   disponibleHasta?: string
-  estadoDisponibilidad?: 'available' | 'offline' | 'busy'
+  estadoDisponibilidad?: 'available' | 'offline' | 'busy' | 'offer_pending'
   extensionPendiente?: boolean
   extensionPreguntadaAt?: string
+  ofertaTipo?: 'single' | 'bundle'
+  ofertaExpiraAt?: string
+  ultimoPedidoOfertadoRef?: string
+  pedidosOfertadosRefs?: string[]
 }
 
 function getExtensionPrompt(): string {
@@ -26,8 +31,15 @@ function getExtensionPrompt(): string {
 3️⃣ Terminar al finalizar`
 }
 
+function getPendingOfferOrderIds(rep: RepartidorCron): string[] {
+  if (Array.isArray(rep.pedidosOfertadosRefs) && rep.pedidosOfertadosRefs.length > 0) {
+    return rep.pedidosOfertadosRefs.filter(Boolean).slice(0, 2)
+  }
+
+  return rep.ultimoPedidoOfertadoRef ? [rep.ultimoPedidoOfertadoRef] : []
+}
+
 export async function GET(req: NextRequest) {
-  // Protección con Bearer token
   const authHeader = req.headers.get('authorization') ?? ''
   const cronSecret = process.env.CRON_SECRET
 
@@ -38,19 +50,95 @@ export async function GET(req: NextRequest) {
   const now = new Date()
   const nowIso = now.toISOString()
   const summary = {
+    ofertasExpiradas: 0,
+    bundlesExpirados: 0,
     extensionesPreguntadas: 0,
     desconectadosPorFinSesion: 0,
     ocupadosOmitidos: 0,
+    ofertasPendientesOmitidas: 0,
     errores: 0,
   }
 
   try {
-    // --- FASE 1: Sesiones finalizadas ---
+    const candidatosOfertasExpiradas: RepartidorCron[] = await backendClient.fetch(
+      `*[
+        _type == "repartidor" &&
+        disponible == true &&
+        estadoDisponibilidad == "offer_pending" &&
+        defined(ofertaExpiraAt) &&
+        ofertaExpiraAt <= $now
+      ]{
+        _id,
+        nombre,
+        telefono,
+        estadoDisponibilidad,
+        ofertaTipo,
+        ofertaExpiraAt,
+        "ultimoPedidoOfertadoRef": ultimoPedidoOfertado._ref,
+        "pedidosOfertadosRefs": pedidosOfertados[]._ref
+      }`,
+      { now: nowIso }
+    )
+
+    await Promise.allSettled(
+      candidatosOfertasExpiradas.map(async (rep) => {
+        const orderIds = getPendingOfferOrderIds(rep)
+
+        try {
+          await backendClient
+            .patch(rep._id)
+            .set({
+              estadoDisponibilidad: 'available',
+              ultimaActividad: nowIso,
+            })
+            .unset([
+              'ultimoPedidoOfertado',
+              'pedidosOfertados',
+              'restauranteOferta',
+              'ofertaTipo',
+              'ofertaEnviadaAt',
+              'ofertaExpiraAt',
+            ])
+            .commit()
+
+          if (rep.ofertaTipo === 'bundle') {
+            summary.bundlesExpirados++
+            console.log('[cron/check-repartidores] bundle expirado', {
+              repartidorId: rep._id,
+              repartidorNombre: rep.nombre,
+              orderIds,
+              ofertaExpiraAt: rep.ofertaExpiraAt,
+            })
+          } else {
+            summary.ofertasExpiradas++
+            console.log('[cron/check-repartidores] oferta individual expirada', {
+              repartidorId: rep._id,
+              repartidorNombre: rep.nombre,
+              orderIds,
+              ofertaExpiraAt: rep.ofertaExpiraAt,
+            })
+          }
+
+          if (orderIds.length > 0) {
+            await redispatchOrders(orderIds, [rep._id])
+          }
+        } catch (e) {
+          summary.errores++
+          console.error('[cron/check-repartidores] Error expirando oferta pendiente', {
+            id: rep._id,
+            nombre: rep.nombre,
+            orderIds,
+            error: e,
+          })
+        }
+      })
+    )
+
     const candidatosDesconectar: RepartidorCron[] = await backendClient.fetch(
       `*[
         _type == "repartidor" &&
         disponible == true &&
-        estadoDisponibilidad in ["available", "busy"] &&
+        estadoDisponibilidad in ["available", "busy", "offer_pending"] &&
         defined(disponibleHasta) &&
         disponibleHasta <= $now
       ]{
@@ -83,6 +171,17 @@ export async function GET(req: NextRequest) {
           if (rep.estadoDisponibilidad === 'busy') {
             summary.ocupadosOmitidos++
             console.log('[cron/check-repartidores] Repartidor saltado por estado ocupado', {
+              id: rep._id,
+              nombre: rep.nombre,
+              estadoDisponibilidad: rep.estadoDisponibilidad,
+              disponibleHasta: rep.disponibleHasta,
+            })
+            return
+          }
+
+          if (rep.estadoDisponibilidad === 'offer_pending') {
+            summary.ofertasPendientesOmitidas++
+            console.log('[cron/check-repartidores] Repartidor omitido por oferta pendiente', {
               id: rep._id,
               nombre: rep.nombre,
               estadoDisponibilidad: rep.estadoDisponibilidad,
@@ -133,7 +232,6 @@ Responde INICIO cuando quieras volver a estar disponible.`
       })
     )
 
-    // --- FASE 2: Sesiones por expirar en <= 10 minutos ---
     const extensionThreshold = new Date(now.getTime() + TEN_MINUTES_MS).toISOString()
 
     const candidatosExtension: RepartidorCron[] = await backendClient.fetch(
@@ -174,7 +272,6 @@ Responde INICIO cuando quieras volver a estar disponible.`
         }
       })
     )
-
   } catch (error) {
     console.error('[cron/check-repartidores] Error general:', error)
     return NextResponse.json({ error: 'Error interno' }, { status: 500 })

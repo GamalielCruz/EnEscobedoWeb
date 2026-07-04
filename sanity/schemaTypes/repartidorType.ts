@@ -67,6 +67,7 @@ export const repartidorType = defineType({
           { title: "Disponible", value: "available" },
           { title: "Desconectado", value: "offline" },
           { title: "Ocupado", value: "busy" },
+          { title: "Oferta Pendiente", value: "offer_pending" },
         ],
       },
       description: "Estado operativo actual del repartidor",
@@ -130,6 +131,45 @@ export const repartidorType = defineType({
       description: "El último pedido que se le envió al repartidor como oferta",
     }),
     defineField({
+      name: "ofertaTipo",
+      title: "Tipo de Oferta",
+      type: "string",
+      options: {
+        list: [
+          { title: "Individual", value: "single" },
+          { title: "Bundle", value: "bundle" },
+        ],
+      },
+      description: "Tipo de oferta activa enviada por WhatsApp",
+    }),
+    defineField({
+      name: "pedidosOfertados",
+      title: "Pedidos Ofertados",
+      type: "array",
+      of: [{ type: "reference", to: [{ type: "order" }] }],
+      validation: (Rule) => Rule.max(2),
+      description: "Pedidos incluidos en la oferta activa",
+    }),
+    defineField({
+      name: "restauranteOferta",
+      title: "Restaurante de la Oferta",
+      type: "reference",
+      to: [{ type: "affiliateStore" }],
+      description: "Restaurante al que pertenece la oferta activa",
+    }),
+    defineField({
+      name: "ofertaEnviadaAt",
+      title: "Oferta Enviada At",
+      type: "datetime",
+      description: "Momento en que se envió la oferta actual",
+    }),
+    defineField({
+      name: "ofertaExpiraAt",
+      title: "Oferta Expira At",
+      type: "datetime",
+      description: "Momento en que expira la oferta actual",
+    }),
+    defineField({
       name: "notas",
       title: "Notas",
       type: "text",
@@ -137,3 +177,5 @@ export const repartidorType = defineType({
     }),
   ],
 });
+
+
