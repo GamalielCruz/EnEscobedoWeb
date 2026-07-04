@@ -16,6 +16,7 @@ import {
 
 import { OrdersRefresh } from "@/components/OrdersRefresh";
 import { RefreshOrdersButton } from "@/components/RefreshOrdersButton";
+import { OrdersStatusNotifications } from "@/components/OrdersStatusNotifications";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 
@@ -291,6 +292,8 @@ async function Orders() {
       <OrdersRefresh userId={userId} />
 
       <div className="w-full max-w-3xl space-y-8">
+        <OrdersStatusNotifications />
+
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-gray-900">Mis Pedidos</h1>
