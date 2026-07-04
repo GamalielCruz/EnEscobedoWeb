@@ -62,6 +62,7 @@ export async function POST(request: NextRequest) {
       shippingCost: Number(shippingCost.toFixed(2)),
       orderType: metadata.storeInfo?.deliveryMethod === "pickup" ? "pickup" : "delivery",
       status: metadata.storeInfo?.deliveryMethod === "pickup" ? "pending_pickup" : "pending_delivery",
+      dispatchStatus: metadata.storeInfo?.deliveryMethod === "pickup" ? undefined : "waiting_for_driver",
       orderDate: new Date().toISOString(),
       shippingAddress: {
         line1: clean(metadata.shippingAddress?.line1) || "Dirección no especificada",

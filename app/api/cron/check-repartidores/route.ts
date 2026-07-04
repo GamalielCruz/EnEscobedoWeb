@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { backendClient } from '@/sanity/lib/backendClient'
-import { redispatchOrders } from '@/lib/delivery-dispatch'
+import { redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
 import { sendBotMessage } from '@/lib/whatsapp'
 
 export const dynamic = "force-dynamic";
@@ -120,7 +120,10 @@ export async function GET(req: NextRequest) {
           }
 
           if (orderIds.length > 0) {
-            await redispatchOrders(orderIds, [rep._id])
+            const releasedOrderIds = await releaseOrdersForDriver(orderIds, rep._id, 'offer_expired')
+            if (releasedOrderIds.length > 0) {
+              await redispatchOrders(releasedOrderIds, [rep._id])
+            }
           }
         } catch (e) {
           summary.errores++

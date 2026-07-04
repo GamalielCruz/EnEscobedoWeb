@@ -14,6 +14,11 @@ type OrderNotificationItem = {
   isClickCollect: boolean;
 };
 
+type BeforeInstallPromptEvent = Event & {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+};
+
 const statusLabels: Record<string, string> = {
   pending: "Recibido",
   paid: "Recibido",
@@ -89,6 +94,9 @@ async function showOrderNotification(order: OrderNotificationItem) {
 export function OrdersStatusNotifications() {
   const [permission, setPermission] = useState<NotificationPermission | "unsupported">("default");
   const [isEnabling, setIsEnabling] = useState(false);
+  const [installPrompt, setInstallPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [showIosInstallHint, setShowIosInstallHint] = useState(false);
 
   useEffect(() => {
     if (typeof window === "undefined" || !("Notification" in window)) {
@@ -98,9 +106,39 @@ export function OrdersStatusNotifications() {
 
     setPermission(Notification.permission);
 
+    const standalone =
+      window.matchMedia("(display-mode: standalone)").matches ||
+      window.matchMedia("(display-mode: fullscreen)").matches ||
+      (window.navigator as Navigator & { standalone?: boolean }).standalone === true;
+    setIsStandalone(standalone);
+
+    const userAgent = window.navigator.userAgent.toLowerCase();
+    const isIos = /iphone|ipad|ipod/.test(userAgent);
+    const isSafari = /safari/.test(userAgent) && !/crios|fxios/.test(userAgent);
+    setShowIosInstallHint(isIos && isSafari && !standalone);
+
     registerServiceWorker().catch(() => {
       // ponytail: fallback to direct Notification if the service worker is unavailable.
     });
+
+    const handleBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault();
+      setInstallPrompt(event as BeforeInstallPromptEvent);
+    };
+
+    const handleAppInstalled = () => {
+      setIsStandalone(true);
+      setInstallPrompt(null);
+      setShowIosInstallHint(false);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    window.addEventListener("appinstalled", handleAppInstalled);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", handleAppInstalled);
+    };
   }, []);
 
   useEffect(() => {
@@ -171,6 +209,22 @@ export function OrdersStatusNotifications() {
     return "Activa avisos para enterarte cuando tu pedido cambie de estado.";
   }, [permission]);
 
+  const installHelperText = useMemo(() => {
+    if (isStandalone) {
+      return "La app ya esta agregada a tu pantalla de inicio.";
+    }
+
+    if (installPrompt) {
+      return "Agrega la app a tu pantalla de inicio para abrirla como app y tenerla mas a la mano.";
+    }
+
+    if (showIosInstallHint) {
+      return 'En iPhone, toca Compartir y luego "Agregar a pantalla de inicio".';
+    }
+
+    return null;
+  }, [installPrompt, isStandalone, showIosInstallHint]);
+
   const enableNotifications = async () => {
     if (!("Notification" in window)) {
       setPermission("unsupported");
@@ -187,6 +241,16 @@ export function OrdersStatusNotifications() {
     }
   };
 
+  const handleInstall = async () => {
+    if (!installPrompt) {
+      return;
+    }
+
+    await installPrompt.prompt();
+    await installPrompt.userChoice;
+    setInstallPrompt(null);
+  };
+
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -201,6 +265,21 @@ export function OrdersStatusNotifications() {
           </Button>
         )}
       </div>
+
+      {installHelperText ? (
+        <div className="mt-4 flex flex-col gap-3 rounded-lg border border-orange-100 bg-orange-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">App en pantalla de inicio</p>
+            <p className="text-sm text-gray-600">{installHelperText}</p>
+          </div>
+
+          {installPrompt ? (
+            <Button onClick={handleInstall} size="sm" variant="outline">
+              Agregar app
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

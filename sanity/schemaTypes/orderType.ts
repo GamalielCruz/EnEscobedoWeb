@@ -329,6 +329,29 @@ export const orderType = defineType({
       description: "Momento en que expira la oferta enviada a repartidores",
     }),
     defineField({
+      name: "dispatchStatus",
+      title: "Estado de Dispatch",
+      type: "string",
+      initialValue: "waiting_for_driver",
+      options: {
+        list: [
+          { title: "Esperando repartidor", value: "waiting_for_driver" },
+          { title: "Ofrecida", value: "offered" },
+          { title: "Aceptada", value: "accepted" },
+          { title: "En puerta", value: "at_door" },
+          { title: "Completada", value: "completed" },
+        ],
+      },
+      description: "Estado operativo del flujo de reparto",
+    }),
+    defineField({
+      name: "offeredTo",
+      title: "Oferta enviada a",
+      type: "reference",
+      to: [{ type: "repartidor" }],
+      description: "Repartidor que tiene la oferta activa de esta orden",
+    }),
+    defineField({
       name: "pickupStore",
       title: "Tienda de Recogida",
       type: "reference",

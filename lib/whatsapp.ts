@@ -150,6 +150,15 @@ function toWhatsAppUrlButtonParam(value: string) {
   return encodeURIComponent(trimmed).substring(0, 1800);
 }
 
+function buildQuickReplyPayloadButton(index: string, payload: string) {
+  return {
+    type: "button",
+    sub_type: "quick_reply",
+    index,
+    parameters: [{ type: "payload", payload: String(payload).substring(0, 128) }],
+  };
+}
+
 async function sendSpanishTemplate(
   phone: string,
   templateName: string,
@@ -334,12 +343,22 @@ export async function sendConfirmacionRepartidor(
   );
 }
 
-export async function sendRepartidorEnCamino(phone: string, orderNumber: string) {
-  return sendSpanishTemplate(phone, "repartidor_en_camino", [orderNumber.substring(0, 30)]);
+export async function sendRepartidorEnCamino(phone: string, orderNumber: string, orderId: string) {
+  return sendSpanishTemplate(
+    phone,
+    "repartidor_en_camino",
+    [orderNumber.substring(0, 30)],
+    [buildQuickReplyPayloadButton("0", `EN_PUERTA|${orderId}`)]
+  );
 }
 
-export async function sendRepartidorEnPuerta(phone: string, orderNumber: string) {
-  return sendSpanishTemplate(phone, "repartidor_en_puerta", [orderNumber.substring(0, 30)]);
+export async function sendRepartidorEnPuerta(phone: string, orderNumber: string, orderId: string) {
+  return sendSpanishTemplate(
+    phone,
+    "repartidor_en_puerta",
+    [orderNumber.substring(0, 30)],
+    [buildQuickReplyPayloadButton("0", `ENTREGADO|${orderId}`)]
+  );
 }
 
 export async function sendClienteRepartidorEnPuerta(
