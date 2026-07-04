@@ -139,6 +139,8 @@ export type PromoBanner = {
   bannerType?:
     "promotion" | "announcement" | "info" | "featured" | "warning" | "event";
   mainColor?:
+    | "#FFFFFF"
+    | "#000000"
     | "#09193B"
     | "#850C22"
     | "#111827"
@@ -294,10 +296,27 @@ export type Repartidor = {
   activo?: boolean;
   disponible?: boolean;
   disponibleDesde?: string;
+  disponibleHasta?: string;
+  duracionDisponibilidadMinutos?: number;
+  estadoDisponibilidad?: "available" | "offline" | "busy" | "offer_pending";
   ultimaActividad?: string;
   pendienteConfirmacion?: boolean;
   confirmacionEnviadaAt?: string;
+  esperandoSeleccionDisponibilidad?: boolean;
+  extensionPendiente?: boolean;
+  extensionPreguntadaAt?: string;
+  autoDesconectadoAt?: string;
+  motivoDesconexion?: string;
   ultimoPedidoOfertado?: OrderReference;
+  ofertaTipo?: "single" | "bundle";
+  pedidosOfertados?: Array<
+    {
+      _key: string;
+    } & OrderReference
+  >;
+  restauranteOferta?: AffiliateStoreReference;
+  ofertaEnviadaAt?: string;
+  ofertaExpiraAt?: string;
   notas?: string;
 };
 
@@ -1051,7 +1070,7 @@ export type ALL_CATEGORIES_QUERY_RESULT = Array<{
 
 // Source: sanity/lib/products/getAllProducts.ts
 // Variable: ALL_PRODUCTS_QUERY
-// Query: *[           _type == "product"        ] | order(name asc) {           ...,           affiliateStore->{               _id,               name,               storeId,               deliveryFee,               deliveryTimeMin,               deliveryTimeMax,               averageDeliveryTime           }        }
+// Query: *[           _type == "product"           && approvalStatus == "approved"           && isVisible != false        ] | order(name asc) {           ...,           affiliateStore->{               _id,               name,               storeId,               deliveryFee,               deliveryTimeMin,               deliveryTimeMax,               averageDeliveryTime           }        }
 export type ALL_PRODUCTS_QUERY_RESULT = Array<{
   _id: string;
   _type: "product";
@@ -1169,7 +1188,7 @@ export type ALL_STORE_CATEGORIES_QUERY_RESULT = Array<{
 
 // Source: sanity/lib/products/getProductBySlug.ts
 // Variable: PRODUCT_BY_ID_QUERY
-// Query: *[            _type == "product" && slug.current == $slug        ] | order(name asc) [0]{          ...,          affiliateStore->{            _id,            name,            image,            averageDeliveryTime,            deliveryFee,            deliveryTimeMin,            deliveryTimeMax          },          optionGroups        }
+// Query: *[            _type == "product"            && slug.current == $slug            && approvalStatus == "approved"            && isVisible != false        ] | order(name asc) [0]{          ...,          affiliateStore->{            _id,            name,            image,            averageDeliveryTime,            deliveryFee,            deliveryTimeMin,            deliveryTimeMax          },          optionGroups        }
 export type PRODUCT_BY_ID_QUERY_RESULT = {
   _id: string;
   _type: "product";
@@ -1271,7 +1290,7 @@ export type PRODUCT_BY_ID_QUERY_RESULT = {
 
 // Source: sanity/lib/products/getProductsByCategory.tsx
 // Variable: PRODUCTS_BY_CATEGORY_QUERY
-// Query: *[            _type == "product"            && references(*[_type == "category" && slug.current == $categorySlug]._id)            ] | order(name asc)
+// Query: *[            _type == "product"            && references(*[_type == "category" && slug.current == $categorySlug]._id)            && approvalStatus == "approved"            && isVisible != false            ] | order(name asc)
 export type PRODUCTS_BY_CATEGORY_QUERY_RESULT = Array<{
   _id: string;
   _type: "product";
@@ -1359,7 +1378,7 @@ export type PRODUCTS_BY_CATEGORY_QUERY_RESULT = Array<{
 
 // Source: sanity/lib/products/getProductsByStore.ts
 // Variable: PRODUCTS_BY_STORE_QUERY
-// Query: *[_type == "product" && affiliateStore._ref == $storeId] | order(name asc) {      _id,      _createdAt,      name,      slug,      image,      price,      stock,      description,      categories[]->{        _id,        title,        slug      },      optionGroups,      affiliateStore->{        _id,        name,        categories,        averageDeliveryTime,        deliveryFee,        deliveryTimeMin,        deliveryTimeMax      }    }
+// Query: *[      _type == "product" &&      affiliateStore._ref == $storeId &&      approvalStatus == "approved" &&      isVisible != false    ] | order(name asc) {      _id,      _createdAt,      name,      slug,      image,      price,      stock,      approvalStatus,      isVisible,      description,      categories[]->{        _id,        title,        slug      },      optionGroups,      affiliateStore->{        _id,        name,        categories,        averageDeliveryTime,        deliveryFee,        deliveryTimeMin,        deliveryTimeMax      }    }
 export type PRODUCTS_BY_STORE_QUERY_RESULT = Array<{
   _id: string;
   _createdAt: string;
@@ -1374,6 +1393,8 @@ export type PRODUCTS_BY_STORE_QUERY_RESULT = Array<{
   } | null;
   price: number | null;
   stock: number | null;
+  approvalStatus: "approved" | "pending" | "rejected" | null;
+  isVisible: boolean | null;
   description: BlockContent | null;
   categories: Array<{
     _id: string;
@@ -1485,7 +1506,7 @@ export type STORE_BY_ID_QUERY_RESULT = {
 
 // Source: sanity/lib/products/searchProductsByName.ts
 // Variable: PRODUCT_SEARCH_QUERY
-// Query: *[        _type == "product"        && name match $searchParam     ] | order(name asc)    {      ...,      affiliateStore->{ _id, name }    }
+// Query: *[        _type == "product"        && name match $searchParam        && approvalStatus == "approved"        && isVisible != false     ] | order(name asc)    {      ...,      affiliateStore->{ _id, name }    }
 export type PRODUCT_SEARCH_QUERY_RESULT = Array<{
   _id: string;
   _type: "product";
@@ -1590,6 +1611,7 @@ export type ACTIVE_PROMO_BANNERS_QUERY_RESULT = Array<{
     | "warning"
     | null;
   mainColor:
+    | "#000000"
     | "#09193B"
     | "#0F766E"
     | "#111827"
@@ -1597,6 +1619,7 @@ export type ACTIVE_PROMO_BANNERS_QUERY_RESULT = Array<{
     | "#6D28D9"
     | "#850C22"
     | "#C2410C"
+    | "#FFFFFF"
     | null;
   desktopImage: {
     asset?: SanityImageAssetReference;
@@ -1661,13 +1684,13 @@ declare module "@sanity/client" {
     '\n    *[_type == "order" && clerkUserId == $userId] | order(orderDate desc) {\n      ...,\n      "isClickCollect": orderType == "pickup",\n      "storeInfo": select(\n        orderType == "pickup" => {\n          "storeName": pickupStore->name,\n          "storeAddress": pickupStore->address.street,\n          "storePhone": pickupStore->contact.phone\n        }\n      ),\n      products[]{\n        ...,\n        product->\n      }\n    }\n ': MY_ORDERS_QUERY_RESULT;
     '\n        *[_type == "affiliateStore" && isActive == true] | order(name asc) {\n            _id,\n            _type,\n            _createdAt,\n            _updatedAt,\n            _rev,\n            name,\n            storeId,\n            image,\n            coverImage,\n            storeCategories[]->{\n                _id,\n                title,\n                slug,\n                icon {\n                    type,\n                    emoji,\n                    image {\n                        asset->{\n                            _id,\n                            url\n                        },\n                        alt\n                    }\n                }\n            },\n            address,\n            coordinates,\n            contact,\n            operatingHours,\n            isActive,\n            isOpen,\n            manualOperationalStatus,\n            highDemandMode,\n            capacity,\n            averageDeliveryTime,\n            deliveryFee,\n            deliveryTimeMin,\n            deliveryTimeMax,\n            serviceTypes\n        }\n    ': ALL_STORES_QUERY_RESULT;
     '\n        *[_type == "category"] | order(name asc)\n        ': ALL_CATEGORIES_QUERY_RESULT;
-    '\n       *[\n           _type == "product"\n        ] | order(name asc) {\n           ...,\n           affiliateStore->{\n               _id,\n               name,\n               storeId,\n               deliveryFee,\n               deliveryTimeMin,\n               deliveryTimeMax,\n               averageDeliveryTime\n           }\n        }\n    ': ALL_PRODUCTS_QUERY_RESULT;
+    '\n       *[\n           _type == "product"\n           && approvalStatus == "approved"\n           && isVisible != false\n        ] | order(name asc) {\n           ...,\n           affiliateStore->{\n               _id,\n               name,\n               storeId,\n               deliveryFee,\n               deliveryTimeMin,\n               deliveryTimeMax,\n               averageDeliveryTime\n           }\n        }\n    ': ALL_PRODUCTS_QUERY_RESULT;
     '\n    *[_type == "storeCategory"] | order(order asc, title asc) {\n      _id,\n      title,\n      slug,\n      description,\n      icon {\n        type,\n        emoji,\n        image {\n          asset->{\n            _id,\n            url\n          },\n          alt\n        }\n      },\n      order\n    }\n  ': ALL_STORE_CATEGORIES_QUERY_RESULT;
-    '\n        *[\n            _type == "product" && slug.current == $slug\n        ] | order(name asc) [0]{\n          ...,\n          affiliateStore->{\n            _id,\n            name,\n            image,\n            averageDeliveryTime,\n            deliveryFee,\n            deliveryTimeMin,\n            deliveryTimeMax\n          },\n          optionGroups\n        }\n        ': PRODUCT_BY_ID_QUERY_RESULT;
-    '\n        *[\n            _type == "product"\n            && references(*[_type == "category" && slug.current == $categorySlug]._id)\n            ] | order(name asc)\n        ': PRODUCTS_BY_CATEGORY_QUERY_RESULT;
-    '\n    *[_type == "product" && affiliateStore._ref == $storeId] | order(name asc) {\n      _id,\n      _createdAt,\n      name,\n      slug,\n      image,\n      price,\n      stock,\n      description,\n      categories[]->{\n        _id,\n        title,\n        slug\n      },\n      optionGroups,\n      affiliateStore->{\n        _id,\n        name,\n        categories,\n        averageDeliveryTime,\n        deliveryFee,\n        deliveryTimeMin,\n        deliveryTimeMax\n      }\n    }\n  ': PRODUCTS_BY_STORE_QUERY_RESULT;
+    '\n        *[\n            _type == "product"\n            && slug.current == $slug\n            && approvalStatus == "approved"\n            && isVisible != false\n        ] | order(name asc) [0]{\n          ...,\n          affiliateStore->{\n            _id,\n            name,\n            image,\n            averageDeliveryTime,\n            deliveryFee,\n            deliveryTimeMin,\n            deliveryTimeMax\n          },\n          optionGroups\n        }\n        ': PRODUCT_BY_ID_QUERY_RESULT;
+    '\n        *[\n            _type == "product"\n            && references(*[_type == "category" && slug.current == $categorySlug]._id)\n            && approvalStatus == "approved"\n            && isVisible != false\n            ] | order(name asc)\n        ': PRODUCTS_BY_CATEGORY_QUERY_RESULT;
+    '\n    *[\n      _type == "product" &&\n      affiliateStore._ref == $storeId &&\n      approvalStatus == "approved" &&\n      isVisible != false\n    ] | order(name asc) {\n      _id,\n      _createdAt,\n      name,\n      slug,\n      image,\n      price,\n      stock,\n      approvalStatus,\n      isVisible,\n      description,\n      categories[]->{\n        _id,\n        title,\n        slug\n      },\n      optionGroups,\n      affiliateStore->{\n        _id,\n        name,\n        categories,\n        averageDeliveryTime,\n        deliveryFee,\n        deliveryTimeMin,\n        deliveryTimeMax\n      }\n    }\n  ': PRODUCTS_BY_STORE_QUERY_RESULT;
     '\n    *[_type == "affiliateStore" && _id == $storeId][0] {\n      _id,\n      name,\n      storeId,\n      image,\n      coverImage,\n      categories,\n      address,\n      coordinates,\n      contact,\n      operatingHours,\n      isActive,\n      isOpen,\n      manualOperationalStatus,\n      highDemandMode,\n      capacity,\n      averageDeliveryTime,\n      deliveryFee,\n      deliveryTimeMin,\n      deliveryTimeMax,\n      serviceTypes\n    }\n  ': STORE_BY_ID_QUERY_RESULT;
-    '\n     *[\n        _type == "product"\n        && name match $searchParam\n     ] | order(name asc)\n    {\n      ...,\n      affiliateStore->{ _id, name }\n    }\n    ': PRODUCT_SEARCH_QUERY_RESULT;
+    '\n     *[\n        _type == "product"\n        && name match $searchParam\n        && approvalStatus == "approved"\n        && isVisible != false\n     ] | order(name asc)\n    {\n      ...,\n      affiliateStore->{ _id, name }\n    }\n    ': PRODUCT_SEARCH_QUERY_RESULT;
     '\n  *[\n    _type == "promoBanner"\n    && isActive == true\n    && (!defined(validFrom) || validFrom <= now())\n    && (!defined(validUntil) || validUntil >= now())\n  ] | order(sortOrder asc, _createdAt desc) {\n    _id,\n    title,\n    description,\n    bannerType,\n    mainColor,\n    desktopImage,\n    mobileImage,\n    sortOrder,\n    displayDurationSeconds,\n    ctaText,\n    ctaLink,\n    affiliateStore-> {\n      _id,\n      name,\n      image\n    },\n\n    "sale": select(\n      defined(sale)\n      && sale->isActive == true\n      && (!defined(sale->validFrom) || sale->validFrom <= now())\n      && (!defined(sale->validUntil) || sale->validUntil >= now()) => sale->{\n        _id,\n        title,\n        description,\n        discountAmount,\n        couponCode\n      },\n      null\n    )\n  }\n': ACTIVE_PROMO_BANNERS_QUERY_RESULT;
     '\n        *[\n            _type == "sale"\n            && isActive == true \n            && couponCode == $couponCode\n        ] | order(validFrom desc)[0]\n        ': ACTIVE_SALE_BY_COUPON_QUERY_RESULT;
   }

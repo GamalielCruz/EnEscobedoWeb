@@ -757,6 +757,14 @@
           "of": [
             {
               "type": "string",
+              "value": "#FFFFFF"
+            },
+            {
+              "type": "string",
+              "value": "#000000"
+            },
+            {
+              "type": "string",
               "value": "#09193B"
             },
             {
@@ -1714,6 +1722,45 @@
         },
         "optional": true
       },
+      "disponibleHasta": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "duracionDisponibilidadMinutos": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "estadoDisponibilidad": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "available"
+            },
+            {
+              "type": "string",
+              "value": "offline"
+            },
+            {
+              "type": "string",
+              "value": "busy"
+            },
+            {
+              "type": "string",
+              "value": "offer_pending"
+            }
+          ]
+        },
+        "optional": true
+      },
       "ultimaActividad": {
         "type": "objectAttribute",
         "value": {
@@ -1735,11 +1782,107 @@
         },
         "optional": true
       },
+      "esperandoSeleccionDisponibilidad": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
+        },
+        "optional": true
+      },
+      "extensionPendiente": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
+        },
+        "optional": true
+      },
+      "extensionPreguntadaAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "autoDesconectadoAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "motivoDesconexion": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
       "ultimoPedidoOfertado": {
         "type": "objectAttribute",
         "value": {
           "type": "inline",
           "name": "order.reference"
+        },
+        "optional": true
+      },
+      "ofertaTipo": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "single"
+            },
+            {
+              "type": "string",
+              "value": "bundle"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "pedidosOfertados": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "array",
+          "of": {
+            "type": "object",
+            "attributes": {
+              "_key": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "string"
+                }
+              }
+            },
+            "rest": {
+              "type": "inline",
+              "name": "order.reference"
+            }
+          }
+        },
+        "optional": true
+      },
+      "restauranteOferta": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "inline",
+          "name": "affiliateStore.reference"
+        },
+        "optional": true
+      },
+      "ofertaEnviadaAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "ofertaExpiraAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
         },
         "optional": true
       },
