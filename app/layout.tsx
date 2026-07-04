@@ -5,7 +5,7 @@ import "./globals.css";
 import { ClerkRedirectInterceptor } from "@/components/ClerkRedirectInterceptor";
 
 export const metadata: Metadata = {
-  title: "ElMenu | Digital comunitario",
+  title: "ElMenu",
   description:
     "Plataforma digital comunitaria para restaurantes, repartidores y clientes.",
   manifest: "/manifest.json",

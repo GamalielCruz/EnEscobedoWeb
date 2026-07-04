@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth, useUser } from "@clerk/nextjs";
 import type { Metadata } from "@/actions/createCheckoutSession";
@@ -17,6 +17,11 @@ import { ArrowLeft, CreditCard, MapPin, Loader2 } from "lucide-react";
 import Loader from "@/components/Loader";
 
 export const dynamic = "force-dynamic";
+const isVisibleBasketProduct = (product: any) => {
+  const approvalStatus = product?.approvalStatus;
+  return approvalStatus !== "pending" && approvalStatus !== "rejected" && product?.isVisible !== false;
+};
+
 interface ClickCollectStore {
   storeId: string;
   storeName: string;
@@ -31,7 +36,8 @@ export default function CheckoutPage() {
   const searchParams = useSearchParams();
   const { isSignedIn } = useAuth();
   const { user } = useUser();
-  const groupedItems = useBasketStore((state) => state.getGroupedItems());
+  const basketItems = useBasketStore((state) => state.items);
+  const groupedItems = useMemo(() => basketItems.filter((item) => isVisibleBasketProduct(item.product)), [basketItems]);
 
   const [isClient, setIsClient] = useState(false);
   const [loading, setLoading] = useState(false);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth, useUser } from "@clerk/nextjs";
 import { Button } from "@/components/ui/button";
@@ -11,6 +11,11 @@ import { CustomerAddress } from "@/lib/clickCollect";
 import { calculateDistance } from '@/lib/clickCollect';
 import { ArrowLeft, ShoppingCart } from "lucide-react";
 import Loader from "@/components/Loader";
+
+const isVisibleBasketProduct = (product: any) => {
+  const approvalStatus = product?.approvalStatus;
+  return approvalStatus !== "pending" && approvalStatus !== "rejected" && product?.isVisible !== false;
+};
 
 // Tipo para los datos de la tienda seleccionada (debe coincidir con StoreData del componente)
 interface StoreData {
@@ -40,7 +45,8 @@ export default function SelectStorePage() {
   const router = useRouter();
   const { isSignedIn } = useAuth();
   const { user } = useUser();
-  const groupedItems = useBasketStore((state) => state.getGroupedItems());
+  const basketItems = useBasketStore((state) => state.items);
+  const groupedItems = useMemo(() => basketItems.filter((item) => isVisibleBasketProduct(item.product)), [basketItems]);
   
   const [selectedStore, setSelectedStore] = useState<StoreData | null>(null);
   // Allow storing optional coordinates along with address

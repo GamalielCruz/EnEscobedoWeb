@@ -7,7 +7,7 @@ import Image from "next/image";
 import useBasketStore from "@/store/store";
 import { SignInButton, useAuth, useUser } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { SafeLocationBasedStoreSelector } from '@/components/SafeLocationBasedStoreSelector';
 import { calculateDistance } from '@/lib/clickCollect';
 import { Truck, Store, CreditCard, Banknote, MapPin, X, CheckCircle, Loader2 } from "lucide-react";
@@ -61,8 +61,14 @@ const fetchStoreServiceTypes = async (storeId: string) => {
   }
 };
 
+const isVisibleBasketProduct = (product: any) => {
+  const approvalStatus = product?.approvalStatus;
+  return approvalStatus !== "pending" && approvalStatus !== "rejected" && product?.isVisible !== false;
+};
+
 function BasketPage() {
-  const groupedItems = useBasketStore((state) => state.getGroupedItems());
+  const basketItems = useBasketStore((state) => state.items);
+  const groupedItems = useMemo(() => basketItems.filter((item) => isVisibleBasketProduct(item.product)), [basketItems]);
   const clearBasket = useBasketStore((state) => state.clearBasket);
   const { isSignedIn } = useAuth();
   const { user } = useUser();
@@ -1466,6 +1472,7 @@ function BasketPage() {
 }
 
 export default BasketPage;
+
 
 
 

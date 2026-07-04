@@ -8,7 +8,7 @@ import CookieConsent from "@/components/cookie-consent";
 import HydrationErrorSuppressor from "@/components/HydrationErrorSuppressor";
 
 export const metadata: Metadata = {
-  title: "ElMenu | Digital comunitario",
+  title: "ElMenu",
   description: "Tu Menu en línea.",
   metadataBase: new URL(process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'),
   openGraph: {
