@@ -2,6 +2,11 @@ import { Product } from "@/sanity.types";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+const isPublicProduct = (product: Product) => {
+  const approvalStatus = (product as any).approvalStatus;
+  return approvalStatus !== "pending" && approvalStatus !== "rejected" && (product as any).isVisible !== false;
+};
+
 export interface BasketItem {
   product: Product;
   quantity: number;
@@ -130,23 +135,23 @@ const useBasketStore = create<BasketState>()(
       clearBasket: () => set({ items: [], currentStoreId: null }),
       
       getSubtotalPrice: () => {
-        return get().items.reduce(
+        return get().getGroupedItems().reduce(
           (total, item) => total + (item.customPrice ?? item.product.price ?? 0) * item.quantity,
           0
         );
       },
       getTotalPrice: () => {
-        return get().items.reduce(
+        return get().getGroupedItems().reduce(
           (total, item) => total + (item.customPrice ?? item.product.price ?? 0) * item.quantity,
           0
         );
       },
       getItemCount: (productId) => {
-        return get().items
+        return get().getGroupedItems()
           .filter((item) => item.product._id === productId)
           .reduce((total, item) => total + item.quantity, 0);
       },
-      getGroupedItems: () => get().items,
+      getGroupedItems: () => get().items.filter((item) => isPublicProduct(item.product)),
     }),
     {
       name: "basket-store",

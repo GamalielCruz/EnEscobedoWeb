@@ -24,14 +24,14 @@ export async function generateMetadata({
   let descriptionText = "";
   if (Array.isArray(product.description)) {
     const firstBlock = product.description.find(
-      (block) =>
+      (block: any) =>
         block._type === "block" &&
         "children" in block &&
         Array.isArray(block.children)
     );
     if (firstBlock && "children" in firstBlock && firstBlock.children) {
       descriptionText = firstBlock.children
-        .map((child) => child.text || "")
+        .map((child: any) => child.text || "")
         .join(" ");
     }
   } else if (typeof product.description === "string") {
@@ -92,7 +92,7 @@ export default async function ProductPage({
   const allImages = [...mainImage, ...extraImages];
 
   // Get product categories for lazy loading related products
-  const productCategories = product.categories?.map((cat) => cat._ref) || [];
+  const productCategories = product.categories?.map((cat: any) => cat._ref) || [];
   const shareUrl = buildStoreProductUrl(
     product.affiliateStore?._id || "",
     product.slug?.current || slug,

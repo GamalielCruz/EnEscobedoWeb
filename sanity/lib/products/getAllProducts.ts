@@ -3,9 +3,12 @@ import type { ALL_PRODUCTS_QUERY_RESULT } from "@/sanity.types";
 import { sanityFetch } from "../live";
 
 export const getAllProducts = async (): Promise<ALL_PRODUCTS_QUERY_RESULT> => {
+    // Soft delete publico: solo productos aprobados y no ocultos; docs viejos sin isVisible siguen visibles.
     const ALL_PRODUCTS_QUERY = defineQuery(`
        *[
            _type == "product"
+           && approvalStatus == "approved"
+           && isVisible != false
         ] | order(name asc) {
            ...,
            affiliateStore->{

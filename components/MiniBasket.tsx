@@ -8,7 +8,8 @@ import useBasketStore from "@/store/store";
 import { ShoppingCart, X } from "lucide-react";
 
 export default function MiniBasket() {
-  const { items, getTotalPrice, getItemCount } = useBasketStore();
+  const { getTotalPrice, getGroupedItems } = useBasketStore();
+  const items = getGroupedItems();
   const [isVisible, setIsVisible] = useState(false);
 
   // Mostrar mini-canasta solo si hay productos
