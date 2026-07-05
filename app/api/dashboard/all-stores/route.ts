@@ -1,25 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { client } from "@/sanity/lib/client";
+
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+
 export async function GET(request: NextRequest) {
+  void request;
+
   try {
     const { userId } = await auth();
     if (!userId) {
       return NextResponse.json({ error: "No autorizado" }, { status: 401 });
     }
 
-    // Fetch all stores with their owners
-    const stores = await client.fetch(`*[_type == "affiliateStore"] {
-      _id,
-      name,
-      ownerClerkUserId
-    }`);
-
-    return NextResponse.json({ stores });
+    return NextResponse.json(
+      {
+        error:
+          "La lista global de tiendas ya no esta disponible para cuentas sin asignacion administrativa.",
+        stores: [],
+      },
+      { status: 403 }
+    );
   } catch (e) {
     console.error("[all-stores GET]", e);
-    return NextResponse.json({ error: "Error al cargar tiendas" }, { status: 500 });
+    return NextResponse.json({ error: "Error al cargar tiendas", stores: [] }, { status: 500 });
   }
 }

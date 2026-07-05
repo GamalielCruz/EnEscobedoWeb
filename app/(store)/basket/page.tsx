@@ -497,10 +497,10 @@ function BasketPage() {
     }
   };
 
-  const handleCashOnDeliveryStart = () => {
+  const handleCashOnDeliveryStart = (forceEdit = false) => {
     setCodError("");
     setCashOnDeliveryPhone((prev) => prev || clerkPhone || user?.primaryPhoneNumber?.phoneNumber || "");
-    setShowCodPhoneForm(true);
+    setShowCodPhoneForm(forceEdit || !hasPhoneAndConsent);
   };
 
   const handleCashOnDeliverySubmit = async () => {
@@ -539,7 +539,9 @@ function BasketPage() {
       return;
     }
 
-    if (!cashOnDeliveryPhone.trim()) {
+    const resolvedCodPhone = showCodPhoneForm ? cashOnDeliveryPhone.trim() : (clerkPhone || cashOnDeliveryPhone).trim();
+
+    if (!resolvedCodPhone) {
       setCodError("Ingresa tu número de teléfono");
       return;
     }
@@ -589,7 +591,7 @@ function BasketPage() {
             customerName: user.fullName || user.firstName || "Cliente",
             customerEmail: user.emailAddresses[0]?.emailAddress || "",
             clerkUserId: user.id,
-            phone: (hasPhoneAndConsent && !showCodPhoneForm ? clerkPhone : cashOnDeliveryPhone).trim(),
+            phone: resolvedCodPhone,
             shippingAddress: normalizedAddress,
             storeInfo: {
               storeId: selectedStoreId,
@@ -611,8 +613,7 @@ function BasketPage() {
       }
 
       // Persist phone to Clerk for cross-device use
-      const codPhone = hasPhoneAndConsent && !showCodPhoneForm ? clerkPhone : cashOnDeliveryPhone.trim();
-      await savePhoneToClerk(codPhone, true);
+      await savePhoneToClerk(resolvedCodPhone, true);
       clearBasket();
       window.location.href = `/success-cod?orderNumber=${orderNumber}`;
     } catch (error: any) {
@@ -623,10 +624,10 @@ function BasketPage() {
     }
   };
 
-  const handlePickupStart = () => {
+  const handlePickupStart = (forceEdit = false) => {
     setPickupError("");
     setPickupPhone((prev) => prev || clerkPhone || user?.primaryPhoneNumber?.phoneNumber || "");
-    setShowPickupPhoneForm(true);
+    setShowPickupPhoneForm(forceEdit || !hasPhoneAndConsent);
   };
 
   const handlePickupPayment = async () => {
@@ -1248,7 +1249,7 @@ function BasketPage() {
                                     </div>
                                     <button
                                       type="button"
-                                      onClick={handleCashOnDeliveryStart}
+                                      onClick={() => handleCashOnDeliveryStart(true)}
                                       className="text-xs font-semibold text-gray-500 hover:text-gray-800 underline underline-offset-2 transition-colors"
                                     >
                                       Cambiar
@@ -1319,7 +1320,7 @@ function BasketPage() {
 
                               {!hasPhoneAndConsent && !showCodPhoneForm && (
                                 <button
-                                  onClick={handleCashOnDeliveryStart}
+                                  onClick={() => handleCashOnDeliveryStart()}
                                   disabled={isLoading}
                                   className="w-full bg-white text-[#eb1902] border-2 border-[#eb1902] px-4 py-3.5 rounded-xl hover:bg-rose-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
                                 >
@@ -1349,7 +1350,7 @@ function BasketPage() {
                                     </div>
                                     <button
                                       type="button"
-                                      onClick={handlePickupStart}
+                                      onClick={() => handlePickupStart(true)}
                                       className="text-xs font-semibold text-gray-500 hover:text-gray-800 underline underline-offset-2 transition-colors"
                                     >
                                       Cambiar
@@ -1420,7 +1421,7 @@ function BasketPage() {
 
                               {!hasPhoneAndConsent && !showPickupPhoneForm && (
                                 <button
-                                  onClick={handlePickupStart}
+                                  onClick={() => handlePickupStart()}
                                   disabled={isLoading}
                                   className="w-full bg-white text-green-700 border-2 border-green-600 px-4 py-3.5 rounded-xl hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
                                 >

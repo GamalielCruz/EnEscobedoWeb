@@ -10,7 +10,7 @@ import {
   sendRepartidorEnPuerta,
   sendClienteRepartidorEnPuerta,
 } from '@/lib/whatsapp'
-import { redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
+import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'garoga_verify_token'
 const MEXICO_TIME_ZONE = 'America/Mexico_City'
@@ -702,6 +702,10 @@ export async function POST(req: NextRequest) {
           'ofertaExpiraAt',
         ])
         .commit()
+
+      void dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => {
+        console.error('[webhook disponibilidad] Error reintentando ordenes en espera:', error)
+      })
 
       void sendBotMessage(
         fromPhone,

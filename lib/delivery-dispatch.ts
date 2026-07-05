@@ -36,6 +36,7 @@ type DispatchDriver = {
   disponible?: boolean;
   disponibleHasta?: string;
   estadoDisponibilidad?: "available" | "offline" | "busy" | "offer_pending";
+  storeId?: string;
 };
 
 type DispatchOptions = {
@@ -100,6 +101,36 @@ const COMMUNITY_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && di
   disponible,
   disponibleHasta,
   estadoDisponibilidad
+}`;
+
+const DRIVER_BY_ID_QUERY = `*[_type == "repartidor" && _id == $driverId][0]{
+  _id,
+  nombre,
+  telefono,
+  disponible,
+  disponibleHasta,
+  estadoDisponibilidad,
+  "storeId": tiendaAsignada._ref
+}`;
+
+const STORE_WAITING_ORDERS_QUERY = `*[
+  _type == "order" &&
+  dispatchStatus == "waiting_for_driver" &&
+  !defined(repartidorAsignado) &&
+  !defined(offeredTo) &&
+  affiliateStore._ref == $storeId
+] | order(orderDate asc)[0...2]{
+  _id
+}`;
+
+const COMMUNITY_WAITING_ORDERS_QUERY = `*[
+  _type == "order" &&
+  dispatchStatus == "waiting_for_driver" &&
+  !defined(repartidorAsignado) &&
+  !defined(offeredTo) &&
+  affiliateStore->hasOwnDelivery != true
+] | order(orderDate asc)[0...2]{
+  _id
 }`;
 
 function createOrderRef(orderId: string) {
@@ -438,6 +469,25 @@ export async function redispatchOrders(orderIds: string[], excludedDriverIds: st
   return sentAny;
 }
 
+export async function dispatchWaitingOrdersForDriver(driverId: string): Promise<boolean> {
+  const driver = await backendClient.fetch(DRIVER_BY_ID_QUERY, { driverId }) as DispatchDriver | null;
+
+  if (!driver || !driver.disponible || driver.estadoDisponibilidad !== "available") {
+    return false;
+  }
+
+  const waitingOrders = driver.storeId
+    ? await backendClient.fetch(STORE_WAITING_ORDERS_QUERY, { storeId: driver.storeId }) as Array<{ _id: string }>
+    : await backendClient.fetch(COMMUNITY_WAITING_ORDERS_QUERY, {}) as Array<{ _id: string }>;
+
+  const waitingOrderIds = waitingOrders.map((order) => order._id).filter(Boolean);
+  if (waitingOrderIds.length === 0) {
+    return false;
+  }
+
+  return redispatchOrders(waitingOrderIds);
+}
+
 export async function dispatchDeliveryOffer(orderId: string, options: DispatchOptions = {}): Promise<boolean> {
   console.log(`[delivery-dispatch] iniciando dispatch ${orderId}`);
 
@@ -473,3 +523,4 @@ export async function dispatchDeliveryOffer(orderId: string, options: DispatchOp
     return false;
   }
 }
+
