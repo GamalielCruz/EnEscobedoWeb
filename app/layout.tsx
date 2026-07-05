@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
 import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import { esMX } from '@clerk/localizations';
 import "./globals.css";
 import { ClerkRedirectInterceptor } from "@/components/ClerkRedirectInterceptor";
@@ -37,6 +38,7 @@ export default function RootLayout({
         >
           <ClerkRedirectInterceptor>{children}</ClerkRedirectInterceptor>
           <Analytics />
+          <SpeedInsights />
         </ClerkProvider>
       </body>
     </html>
