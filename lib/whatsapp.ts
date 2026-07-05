@@ -304,7 +304,7 @@ export async function sendBundleDeliveryOffer(
 
   return sendBotMessage(
     phone,
-    `Tienes una oferta multiple del mismo restaurante.\n\nRestaurante: ${restaurantName.substring(0, 60)}\nPedidos: ${deliveries}\nFolios: ${ordersLabel}\nPago total estimado: ${total}\nEntregas: ${deliveries}\n\nAceptas llevar ambos pedidos?\n\n1. Aceptar\n2. Rechazar\n\nResponde ACEPTO o RECHAZAR.`
+    `Tienes una oferta multiple del mismo restaurante.\n\nRestaurante: ${restaurantName.substring(0, 60)}\nFolios: ${ordersLabel}\nPago total estimado: ${total}\nEntregas: ${deliveries}\n\nResponde ACEPTO para tomar ambos pedidos o RECHAZAR para liberarlos.`
   );
 }
 

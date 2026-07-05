@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { ClerkProvider } from "@clerk/nextjs";
+import { Analytics } from "@vercel/analytics/next";
 import { esMX } from '@clerk/localizations';
 import "./globals.css";
 import { ClerkRedirectInterceptor } from "@/components/ClerkRedirectInterceptor";
@@ -35,6 +36,7 @@ export default function RootLayout({
           signUpFallbackRedirectUrl="/"
         >
           <ClerkRedirectInterceptor>{children}</ClerkRedirectInterceptor>
+          <Analytics />
         </ClerkProvider>
       </body>
     </html>

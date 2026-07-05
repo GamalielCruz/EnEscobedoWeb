@@ -57,6 +57,31 @@ const REPARTIDOR_BY_PHONE_QUERY = `*[_type == "repartidor" && telefono == $telef
   "repartidorAsignadoRef": *[_type == "order" && repartidorAsignado._ref == ^._id && status == "shipped"][0]._id
 }`
 
+const REPARTIDOR_BY_ID_QUERY = `*[_type == "repartidor" && _id == $repartidorId][0]{
+  _id,
+  nombre,
+  telefono,
+  activo,
+  disponible,
+  disponibleDesde,
+  disponibleHasta,
+  duracionDisponibilidadMinutos,
+  estadoDisponibilidad,
+  pendienteConfirmacion,
+  esperandoSeleccionDisponibilidad,
+  extensionPendiente,
+  extensionPreguntadaAt,
+  autoDesconectadoAt,
+  motivoDesconexion,
+  ofertaTipo,
+  ofertaEnviadaAt,
+  ofertaExpiraAt,
+  "restauranteOfertaRef": restauranteOferta._ref,
+  "pedidosOfertadosRefs": pedidosOfertados[]._ref,
+  "ultimoPedidoOfertadoRef": ultimoPedidoOfertado._ref,
+  "repartidorAsignadoRef": *[_type == "order" && repartidorAsignado._ref == ^._id && status == "shipped"][0]._id
+}`
+
 const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   _id,
   _rev,
@@ -111,7 +136,7 @@ const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._r
   "shippingAddress": shippingAddress
 }`
 
-// Busca repartidor probando telÃ©fono normalizado y luego raw
+// Busca repartidor probando telefono normalizado y luego raw
 async function findRepartidor(fromPhone: string) {
   const normalizedPhone = normalizeWhatsAppPhone(fromPhone)
 
@@ -121,6 +146,10 @@ async function findRepartidor(fromPhone: string) {
   }
 
   return backendClient.fetch(REPARTIDOR_BY_PHONE_QUERY, { telefono: fromPhone })
+}
+
+async function findRepartidorById(repartidorId: string) {
+  return backendClient.fetch(REPARTIDOR_BY_ID_QUERY, { repartidorId })
 }
 
 function normalizeText(text: string): string {
@@ -149,47 +178,47 @@ function parseButtonActionPayload(rawValue: string) {
 }
 
 function getSessionSelectionPrompt(): string {
-  return `Â¿CuÃ¡nto tiempo estarÃ¡s disponible?
+  return `Cuanto tiempo estaras disponible?
 
-1ï¸âƒ£ 1 hora
-2ï¸âƒ£ 2 horas
-3ï¸âƒ£ 4 horas
-4ï¸âƒ£ 6 horas
-5ï¸âƒ£ 8 horas
+1. 1 hora
+2. 2 horas
+3. 4 horas
+4. 6 horas
+5. 8 horas
 
-Responde con el nÃºmero de la opciÃ³n.`
+Responde con el numero de la opcion.`
 }
 
 function getInvalidSessionSelectionPrompt(): string {
-  return `No pude entender la opciÃ³n.
+  return `No pude entender la opcion.
 
-Responde solo con un nÃºmero:
+Responde solo con un numero:
 
-1ï¸âƒ£ 1 hora
-2ï¸âƒ£ 2 horas
-3ï¸âƒ£ 4 horas
-4ï¸âƒ£ 6 horas
-5ï¸âƒ£ 8 horas`
+1. 1 hora
+2. 2 horas
+3. 4 horas
+4. 6 horas
+5. 8 horas`
 }
 
 function getExtensionPrompt(): string {
-  return `Tu sesiÃ³n termina en aproximadamente 10 minutos.
+  return `Tu sesion termina en aproximadamente 10 minutos.
 
-Â¿Quieres extender tu disponibilidad?
+Quieres extender tu disponibilidad?
 
-1ï¸âƒ£ Extender 1 hora
-2ï¸âƒ£ Extender 2 horas
-3ï¸âƒ£ Terminar al finalizar`
+1. Extender 1 hora
+2. Extender 2 horas
+3. Terminar al finalizar`
 }
 
 function getInvalidExtensionPrompt(): string {
-  return `No pude entender la opciÃ³n.
+  return `No pude entender la opcion.
 
-Responde solo con un nÃºmero:
+Responde solo con un numero:
 
-1ï¸âƒ£ Extender 1 hora
-2ï¸âƒ£ Extender 2 horas
-3ï¸âƒ£ Terminar al finalizar`
+1. Extender 1 hora
+2. Extender 2 horas
+3. Terminar al finalizar`
 }
 
 function formatDurationLabel(minutes: number): string {
@@ -349,7 +378,7 @@ function getAmbiguousOrderPrompt(command: string, orders: Array<Record<string, u
 
   if (command === 'EN PUERTA' || command === 'ENTREGADO') {
     return [
-      'Tienes mas de un pedido activo. Responde con el folio:',
+      'Tienes mas de un pedido activo. Responde con el folio exacto:',
       'EN PUERTA ' + firstOrder,
       'ENTREGADO ' + firstOrder,
       'Activos: ' + orderList,
@@ -419,7 +448,7 @@ export async function GET(req: NextRequest) {
   return new NextResponse('Forbidden', { status: 403 })
 }
 
-// Meta envÃ­a los mensajes entrantes aquÃ­
+// Meta envia los mensajes entrantes aqui
 export async function POST(req: NextRequest) {
   let body: Record<string, unknown>
   try {
@@ -526,7 +555,7 @@ export async function POST(req: NextRequest) {
     })
     // #endregion
 
-    // Verificar si el nÃºmero es un repartidor registrado
+    // Verificar si el numero es un repartidor registrado
     const repartidor = await findRepartidor(fromPhone)
 
     // #region debug-point E:driver-lookup
@@ -547,9 +576,9 @@ export async function POST(req: NextRequest) {
       repartidorNombre: repartidor?.nombre,
     })
 
-    // Si no es repartidor â†’ ignorar silenciosamente
+    // Si no es repartidor, ignorar silenciosamente
     if (!repartidor) {
-      console.log(`[whatsapp webhook] NÃºmero desconocido ${fromPhone}, ignorando`)
+      console.log(`[whatsapp webhook] Numero desconocido ${fromPhone}, ignorando`)
       return NextResponse.json({ status: 'ok' })
     }
 
@@ -653,7 +682,7 @@ export async function POST(req: NextRequest) {
       const selectedSession = SESSION_OPTIONS[textBody as keyof typeof SESSION_OPTIONS]
 
       if (!selectedSession) {
-        console.log('[webhook disponibilidad] SelecciÃ³n invÃ¡lida de duraciÃ³n', {
+        console.log('[webhook disponibilidad] Seleccion invalida de duracion', {
           repartidorId: repartidor._id,
           repartidorNombre: repartidor.nombre,
           textBody,
@@ -669,7 +698,7 @@ export async function POST(req: NextRequest) {
       }
 
       const sessionWindow = calculateSessionWindow(nowDate, selectedSession.minutes)
-      console.log('[webhook disponibilidad] SelecciÃ³n de duraciÃ³n confirmada', {
+      console.log('[webhook disponibilidad] Seleccion de duracion confirmada', {
         repartidorId: repartidor._id,
         repartidorNombre: repartidor.nombre,
         durationMinutes: selectedSession.minutes,
@@ -709,8 +738,8 @@ export async function POST(req: NextRequest) {
 
       void sendBotMessage(
         fromPhone,
-        `Listo. EstÃ¡s disponible por ${formatDurationLabel(selectedSession.minutes)}.
-Tu sesiÃ³n termina a las ${formatMexicoTime(sessionWindow.availableUntilIso)}.
+        `Listo. Estas disponible por ${formatDurationLabel(selectedSession.minutes)}.
+Tu sesion termina a las ${formatMexicoTime(sessionWindow.availableUntilIso)}.
 Te avisaremos 10 minutos antes de finalizar.`
       ).catch(() => null)
       return NextResponse.json({ status: 'ok' })
@@ -718,7 +747,7 @@ Te avisaremos 10 minutos antes de finalizar.`
 
     if (repartidor.extensionPendiente) {
       if (textBody === '3') {
-        console.log('[webhook disponibilidad] ExtensiÃ³n rechazada; termina en horario programado', {
+        console.log('[webhook disponibilidad] Extension rechazada; termina en horario programado', {
           repartidorId: repartidor._id,
           repartidorNombre: repartidor.nombre,
           availableUntil: repartidor.disponibleHasta,
@@ -735,14 +764,14 @@ Te avisaremos 10 minutos antes de finalizar.`
 
         void sendBotMessage(
           fromPhone,
-          `Perfecto. Tu sesiÃ³n terminarÃ¡ a la hora programada.`
+          `Perfecto. Tu sesion terminara a la hora programada.`
         ).catch(() => null)
         return NextResponse.json({ status: 'ok' })
       }
 
       const extensionMinutes = EXTENSION_OPTIONS[textBody as keyof typeof EXTENSION_OPTIONS]
       if (!extensionMinutes) {
-        console.log('[webhook disponibilidad] Respuesta invÃ¡lida a extensiÃ³n', {
+        console.log('[webhook disponibilidad] Respuesta invalida a extension', {
           repartidorId: repartidor._id,
           repartidorNombre: repartidor.nombre,
           textBody,
@@ -763,7 +792,7 @@ Te avisaremos 10 minutos antes de finalizar.`
         repartidor.disponibleHasta,
         extensionMinutes
       )
-      console.log('[webhook disponibilidad] ExtensiÃ³n aceptada', {
+      console.log('[webhook disponibilidad] Extension aceptada', {
         repartidorId: repartidor._id,
         repartidorNombre: repartidor.nombre,
         extensionMinutes,
@@ -785,7 +814,7 @@ Te avisaremos 10 minutos antes de finalizar.`
 
       void sendBotMessage(
         fromPhone,
-        `Listo. Extendimos tu disponibilidad ${formatDurationLabel(extensionMinutes)} mÃ¡s.`
+        `Listo. Extendimos tu disponibilidad ${formatDurationLabel(extensionMinutes)} mas.`
       ).catch(() => null)
       return NextResponse.json({ status: 'ok' })
     }
@@ -799,7 +828,7 @@ Te avisaremos 10 minutos antes de finalizar.`
 
       void sendBotMessage(
         fromPhone,
-        `Perfecto, sigues activo. Te avisamos cuando haya un pedido.`
+        `Perfecto, sigues activo. Te avisaremos cuando haya un pedido.`
       ).catch(() => null)
       return NextResponse.json({ status: 'ok' })
     }
@@ -811,20 +840,34 @@ Te avisaremos 10 minutos antes de finalizar.`
         .set({ disponible: false, pendienteConfirmacion: false, estadoDisponibilidad: 'offline', ultimaActividad: now })
         .commit()
 
-      void sendBotMessage(fromPhone, `Te hemos desconectado. Â¡Hasta pronto!`).catch(() => null)
+      void sendBotMessage(fromPhone, `Te hemos desconectado. Hasta pronto.`).catch(() => null)
       return NextResponse.json({ status: 'ok' })
     }
 
     // --- ACEPTO ---
     if (textBody === 'ACEPTO' || textBody === 'ACEPTAR' || textBody.startsWith('ACEPTO ') || textBody.startsWith('ACEPTAR ')) {
       const orderToken = extractOrderToken(textBody, textBody.startsWith('ACEPTAR') ? 'ACEPTAR' : 'ACEPTO')
-      const offerOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, nowDate, orderToken)
+      let offerOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, nowDate, orderToken)
 
       void backendClient.patch(repartidor._id).set({ ultimaActividad: now }).commit().catch(() => null)
 
+      if (offerOrders.length === 0 && getDriverNextState(repartidor, nowDate) === 'available') {
+        const dispatchedWaitingOrders = await dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => {
+          console.error('[webhook ACEPTO] Error redisparando pedidos en espera:', error)
+          return false
+        })
+
+        if (dispatchedWaitingOrders) {
+          const refreshedRepartidor = await findRepartidorById(repartidor._id)
+          if (refreshedRepartidor) {
+            offerOrders = await resolvePendingOfferOrders(refreshedRepartidor as Record<string, unknown>, nowDate, orderToken)
+          }
+        }
+      }
+
       if (offerOrders.length === 0) {
         await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
-        await sendBotMessage(fromPhone, 'No tienes ninguna oferta vigente para aceptar.').catch(() => null)
+        await sendBotMessage(fromPhone, 'No tienes ninguna oferta vigente para aceptar. Si acabas de activarte, espera unos segundos y vuelve a intentar.').catch(() => null)
         console.warn('[whatsapp webhook] intento de aceptar sin oferta valida', {
           repartidorId: repartidor._id,
           orderToken,
@@ -962,7 +1005,7 @@ Te avisaremos 10 minutos antes de finalizar.`
 
         if (!targetOrder) {
           if (!shippedOrders || shippedOrders.length === 0) {
-            void sendBotMessage(fromPhone, 'No tienes ningún pedido en camino actualmente.').catch(() => null)
+            void sendBotMessage(fromPhone, 'No tienes ningun pedido en camino actualmente.').catch(() => null)
           } else {
             void sendBotMessage(fromPhone, getAmbiguousOrderPrompt('PEDIDO EN DIRECCION AL DOMICILIO', shippedOrders as Array<Record<string, unknown>>)).catch(() => null)
           }
@@ -1092,6 +1135,12 @@ Te avisaremos 10 minutos antes de finalizar.`
             .set({ estadoDisponibilidad: nextState, ultimaActividad: now })
             .commit()
 
+          if (nextState === 'available') {
+            void dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => {
+              console.error('[webhook ENTREGADO] Error redisparando pedidos en espera:', error)
+            })
+          }
+
           console.log('[whatsapp webhook] orden actualizada', { accion: 'entregado', orderId: (resolvedTargetOrder as Record<string, unknown>)._id, repartidorId: repartidor._id })
           console.log('[whatsapp webhook] entregado con orderId', {
             repartidorId: repartidor._id,
@@ -1128,7 +1177,7 @@ Te avisaremos 10 minutos antes de finalizar.`
 // --- Cualquier otro mensaje de un repartidor registrado ---
       void sendBotMessage(
         fromPhone,
-        `Comandos disponibles: INICIO, FIN, ACEPTO, RECHAZAR, PEDIDO EN DIRECCIÃ“N AL DOMICILIO, EN PUERTA, ENTREGADO.`
+        `Comandos disponibles: INICIO, FIN, ACEPTO, RECHAZAR, PEDIDO EN DIRECCION AL DOMICILIO, EN PUERTA, ENTREGADO.`
       ).catch(() => null)
 
   } catch (error) {
