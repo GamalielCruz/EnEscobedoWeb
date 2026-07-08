@@ -1,0 +1,9 @@
+{
+  "servers": {
+    "codebase-memory-mcp": {
+      "type": "stdio",
+      "command": "C:/Users/gamal/AppData/Local/Programs/codebase-memory-mcp/codebase-memory-mcp.exe",
+      "args": []
+    }
+  }
+}

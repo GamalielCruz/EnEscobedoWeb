@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { client, writeClient } from "@/sanity/lib/client";
+import { isAdminUser } from "@/lib/admin";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { userId } = await auth();
     if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+    if (!isAdminUser(userId)) return NextResponse.json({ error: "Sin permisos" }, { status: 403 });
     const { id } = await params;
 
     console.log("[approve] Starting approval for request:", id);
@@ -61,6 +63,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ success: true, product: updatedProduct });
   } catch (e) {
     console.error("[approve]", e);
-    return NextResponse.json({ error: "Error aprobando solicitud: " + String(e) }, { status: 500 });
+    return NextResponse.json({ error: "Error aprobando solicitud" }, { status: 500 });
   }
 }

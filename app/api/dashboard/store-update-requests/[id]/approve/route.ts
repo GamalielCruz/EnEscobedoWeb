@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { writeClient } from "@/sanity/lib/client";
+import { isAdminUser } from "@/lib/admin";
 
 export async function POST(
   request: NextRequest,
@@ -9,10 +10,11 @@ export async function POST(
 ) {
   try {
     const { userId } = await auth();
-    // In a real app check if user is admin. For now, we assume user visiting this endpoint is authorized 
-    // (though verify if you want strict admin check here like in PendingProductsPage)
     if (!userId) {
         return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+    }
+    if (!isAdminUser(userId)) {
+        return NextResponse.json({ error: "Sin permisos" }, { status: 403 });
     }
 
     const { id } = await params;
@@ -67,7 +69,7 @@ export async function POST(
   } catch (e) {
     console.error("[approve-store]", e);
     return NextResponse.json(
-      { error: "Error aprobando solicitud: " + String(e) },
+      { error: "Error aprobando solicitud" },
       { status: 500 }
     );
   }

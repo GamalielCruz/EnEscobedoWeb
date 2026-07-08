@@ -8,6 +8,7 @@ const PRODUCT_OPTION_GROUPS_QUERY = `*[_type == "product" && _id in $ids]{
 }`;
 
 export async function POST(request: NextRequest) {
+  const requestId = crypto.randomUUID();
   try {
     const body = await request.json();
 
@@ -147,66 +148,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // NOTA: Simulación automática deshabilitada para permitir ver el estado inicial
-    // En producción, este proceso sería manejado por el administrador o un sistema de inventario
-    
-    // Opcional: Descomentar para habilitar la simulación automática después de 10 segundos
-    /*
-    setTimeout(async () => {
-      try {
-        console.log("🔄 Simulando tránsito de pedido...");
-        console.log("📦 Pedido llegó a la tienda - Estado: listo para recoger");
-
-        // Actualizar estado en Sanity
-        await writeClient
-          .patch(order._id)
-          .set({
-            status: "ready_for_pickup",
-            readyAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          })
-          .commit();
-
-        console.log("✅ Estado actualizado en Sanity: ready_for_pickup");
-
-        // Enviar notificación
-        const notifyResponse = await fetch(
-          `${process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000"}/api/notify-pickup-ready`,
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              orderNumber,
-              pickupCode,
-              customerName,
-              customerEmail,
-              phone,
-              storeName,
-              storeAddress,
-              storePhone,
-              total,
-            }),
-          }
-        );
-
-        if (notifyResponse.ok) {
-          console.log("📧 Notificación de recogida enviada exitosamente");
-        } else {
-          console.error(
-            "❌ Error enviando notificación:",
-            await notifyResponse.text()
-          );
-        }
-      } catch (error) {
-        console.error("❌ Error en simulación de tránsito:", error);
-      }
-    }, 10000); // 10 segundos para demo (en producción serían 2-3 días)
-    */
-
     return NextResponse.json({
       success: true,
+      requestId,
       data: {
         orderId: order._id,
         orderNumber,
@@ -221,12 +165,12 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error("❌ Error creando orden Click & Collect:", error);
+    console.error("❌ Error creando orden Click & Collect:", { requestId, error });
     return NextResponse.json(
       {
         success: false,
         error: "Error interno del servidor",
-        details: error instanceof Error ? error.message : "Error desconocido",
+        requestId,
       },
       { status: 500 }
     );

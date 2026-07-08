@@ -2,7 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { client, writeClient } from "@/sanity/lib/client";
 
+const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
+const PRODUCT_STORE_QUERY = `*[_type == "product" && _id == $productId][0]{
+  _id,
+  "storeId": affiliateStore._ref
+}`;
+
 export async function GET(request: NextRequest) {
+  const requestId = crypto.randomUUID();
   try {
     const { userId } = await auth();
     if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
@@ -24,11 +31,21 @@ export async function GET(request: NextRequest) {
         ? ["pending", "rejected"]
         : ["pending"];
 
+    const ownedStores = await writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
+      userId,
+    });
+    const ownedStoreIds = ownedStores?.map((store) => store._id) ?? [];
+    if (storeId && !ownedStoreIds.includes(storeId)) {
+      return NextResponse.json({ error: "No tienes permiso para esta tienda", requestId }, { status: 403 });
+    }
+
     const statusFilter =
       requestedStatuses.length === 1
         ? `status == '${requestedStatuses[0]}'`
         : `status in [${requestedStatuses.map((status) => `'${status}'`).join(", ")}]`;
-    const storeFilter = storeId ? ` && product->affiliateStore._ref == $storeId` : "";
+    const storeFilter = storeId
+      ? ` && product->affiliateStore._ref == $storeId`
+      : ` && product->affiliateStore._ref in $ownedStoreIds`;
     const query = `*[_type == "productUpdateRequest" && ${statusFilter}${storeFilter}]{
       _id,
       product->{_id, name, affiliateStore->{_id, name}},
@@ -39,9 +56,9 @@ export async function GET(request: NextRequest) {
       rejectionReason
     } | order(submittedAt desc)`;
     console.log("[product-update-requests GET] Fetching with query:", query);
-    const items = await writeClient.fetch(query, storeId ? { storeId } : {});
+    const items = await writeClient.fetch(query, storeId ? { storeId } : { ownedStoreIds });
     console.log("[product-update-requests GET] Found items:", items.length);
-    return NextResponse.json({ success: true, items: items ?? [] }, {
+    return NextResponse.json({ success: true, items: items ?? [], requestId }, {
       headers: {
         "Cache-Control": "no-cache, no-store, must-revalidate",
         "Pragma": "no-cache",
@@ -49,12 +66,13 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (e) {
-    console.error("[product-update-requests GET]", e);
-    return NextResponse.json({ error: "Error cargando solicitudes" }, { status: 500 });
+    console.error("[product-update-requests GET]", { requestId, error: e });
+    return NextResponse.json({ error: "Error cargando solicitudes", requestId }, { status: 500 });
   }
 }
 
 export async function POST(request: NextRequest) {
+  const requestId = crypto.randomUUID();
   try {
     const { userId } = await auth();
     if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
@@ -62,6 +80,22 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { productId, changes } = body;
     if (!productId || !changes) return NextResponse.json({ error: "productId y changes son requeridos" }, { status: 400 });
+
+    const product = await writeClient.fetch<{ _id: string; storeId?: string } | null>(
+      PRODUCT_STORE_QUERY,
+      { productId }
+    );
+    if (!product) {
+      return NextResponse.json({ error: "Producto no encontrado", requestId }, { status: 404 });
+    }
+
+    const ownedStores = await writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
+      userId,
+    });
+    const ownsStore = ownedStores?.some((store) => store._id === product.storeId);
+    if (!ownsStore) {
+      return NextResponse.json({ error: "No tienes permiso para este producto", requestId }, { status: 403 });
+    }
 
     console.log("[product-update-requests POST] Creating request for product:", productId);
     console.log("[product-update-requests POST] Changes:", changes);
@@ -79,9 +113,9 @@ export async function POST(request: NextRequest) {
 
     const created = await writeClient.create(doc);
     console.log("[product-update-requests POST] Created successfully:", created._id);
-    return NextResponse.json({ success: true, request: created });
+    return NextResponse.json({ success: true, request: created, requestId });
   } catch (e) {
-    console.error("[product-update-requests POST] Error:", e);
-    return NextResponse.json({ error: String(e) || "Error creando solicitud" }, { status: 500 });
+    console.error("[product-update-requests POST] Error:", { requestId, error: e });
+    return NextResponse.json({ error: "Error creando solicitud", requestId }, { status: 500 });
   }
 }

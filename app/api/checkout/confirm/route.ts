@@ -2,6 +2,7 @@ import { ensureOrderFromCheckoutSession } from "@/lib/stripe-order";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest) {
+  const requestId = crypto.randomUUID();
   try {
     const { sessionId, orderNumber } = await request.json();
 
@@ -16,6 +17,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      requestId,
       order: {
         id: order._id,
         orderNumber: order.orderNumber,
@@ -23,15 +25,13 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error("[checkout/confirm] Error confirming checkout:", error);
+    console.error("[checkout/confirm] Error confirming checkout:", { requestId, error });
 
     return NextResponse.json(
       {
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : "No se pudo confirmar la orden",
+        error: "No se pudo confirmar la orden",
+        requestId,
       },
       { status: 500 }
     );

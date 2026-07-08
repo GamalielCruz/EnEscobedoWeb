@@ -105,6 +105,7 @@ function getSanityClients() {
 }
 
 export async function GET(request: NextRequest) {
+  const requestId = crypto.randomUUID();
   try {
     const { userId } = await auth();
     if (!userId) {
@@ -136,7 +137,7 @@ export async function GET(request: NextRequest) {
     const sanity = getSanityClients();
     if ("error" in sanity) {
       return NextResponse.json(
-        { error: "Error al cargar pedidos", details: sanity.error },
+        { error: "Error al cargar pedidos", requestId },
         { status: 500 }
       );
     }
@@ -172,7 +173,7 @@ export async function GET(request: NextRequest) {
 
     const orders = await readSanity.fetch(query, queryParams);
 
-    return NextResponse.json({ success: true, orders: orders ?? [] }, {
+    return NextResponse.json({ success: true, orders: orders ?? [], requestId }, {
       headers: {
         'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0',
         'Pragma': 'no-cache',
@@ -180,40 +181,13 @@ export async function GET(request: NextRequest) {
       }
     });
   } catch (e) {
-    console.error("[dashboard/store-orders GET]", e);
-    const baseError =
-      e instanceof Error
-        ? {
-            name: e.name,
-            message: e.message,
-            stack: e.stack,
-          }
-        : { message: String(e) };
-
-    const statusCode =
-      typeof e === "object" && e !== null && typeof (e as { statusCode?: unknown }).statusCode === "number"
-        ? (e as { statusCode: number }).statusCode
-        : undefined;
-    const status =
-      typeof e === "object" && e !== null && typeof (e as { status?: unknown }).status === "number"
-        ? (e as { status: number }).status
-        : undefined;
-
-    return NextResponse.json(
-      {
-        error: "Error al cargar pedidos",
-        details: {
-          ...baseError,
-          ...(statusCode ? { statusCode } : {}),
-          ...(status ? { status } : {}),
-        },
-      },
-      { status: 500 }
-    );
+    console.error("[dashboard/store-orders GET]", { requestId, error: e });
+    return NextResponse.json({ error: "Error al cargar pedidos", requestId }, { status: 500 });
   }
 }
 
 export async function PATCH(request: NextRequest) {
+  const requestId = crypto.randomUUID();
   try {
     const { userId } = await auth();
     if (!userId) {
@@ -233,7 +207,7 @@ export async function PATCH(request: NextRequest) {
     const sanity = getSanityClients();
     if ("error" in sanity) {
       return NextResponse.json(
-        { error: "Error al actualizar pedido", details: sanity.error },
+        { error: "Error al actualizar pedido", requestId },
         { status: 500 }
       );
     }
@@ -242,7 +216,7 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json(
         {
           error: "Error al actualizar pedido",
-          details: { message: "Missing SANITY_API_TOKEN" },
+          requestId,
         },
         { status: 500 }
       );
@@ -297,7 +271,7 @@ export async function PATCH(request: NextRequest) {
       },
     });
   } catch (e) {
-    console.error("[dashboard/store-orders PATCH]", e);
-    return NextResponse.json({ error: "Error al actualizar pedido" }, { status: 500 });
+    console.error("[dashboard/store-orders PATCH]", { requestId, error: e });
+    return NextResponse.json({ error: "Error al actualizar pedido", requestId }, { status: 500 });
   }
 }

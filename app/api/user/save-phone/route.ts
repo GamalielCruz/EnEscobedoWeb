@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth, clerkClient } from "@clerk/nextjs/server";
 
 export async function POST(request: NextRequest) {
+  const requestId = crypto.randomUUID();
   try {
     const { userId } = await auth();
     if (!userId) {
@@ -23,10 +24,9 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, requestId });
   } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : "Error interno";
-    console.error("❌ save-phone API ERROR:", msg);
-    return NextResponse.json({ success: false, error: msg }, { status: 500 });
+    console.error("❌ save-phone API ERROR:", { requestId, error });
+    return NextResponse.json({ success: false, error: "Error interno del servidor", requestId }, { status: 500 });
   }
 }

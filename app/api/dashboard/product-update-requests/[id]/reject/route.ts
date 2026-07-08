@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { writeClient } from "@/sanity/lib/client";
+import { isAdminUser } from "@/lib/admin";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { userId } = await auth();
     if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+    if (!isAdminUser(userId)) return NextResponse.json({ error: "Sin permisos" }, { status: 403 });
     const { id } = await params;
 
     const body = await request.json();
@@ -25,6 +27,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ success: true, request: updated });
   } catch (e) {
     console.error("[reject]", e);
-    return NextResponse.json({ error: "Error rechazando solicitud: " + String(e) }, { status: 500 });
+    return NextResponse.json({ error: "Error rechazando solicitud" }, { status: 500 });
   }
 }

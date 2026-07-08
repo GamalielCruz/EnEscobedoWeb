@@ -6,6 +6,7 @@ import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
 import { randomUUID } from "crypto";
 
 export async function POST(request: NextRequest) {
+  const requestId = crypto.randomUUID();
   try {
     const { userId } = await auth();
     if (!userId) {
@@ -112,11 +113,10 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    return NextResponse.json({ success: true, orderId: result._id, orderNumber: metadata.orderNumber });
+    return NextResponse.json({ success: true, orderId: result._id, orderNumber: metadata.orderNumber, requestId });
   } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : "Error interno";
-    console.error("❌ COD API ERROR:", msg);
-    return NextResponse.json({ success: false, error: msg }, { status: 500 });
+    console.error("❌ COD API ERROR:", { requestId, error });
+    return NextResponse.json({ success: false, error: "Error interno del servidor", requestId }, { status: 500 });
   }
 }
 

@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { writeClient } from "@/sanity/lib/client";
+import { isAdminUser } from "@/lib/admin";
 
 export async function POST(
   request: NextRequest,
@@ -11,6 +12,9 @@ export async function POST(
     const { userId } = await auth();
     if (!userId) {
       return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+    }
+    if (!isAdminUser(userId)) {
+      return NextResponse.json({ error: "Sin permisos" }, { status: 403 });
     }
 
     const { id } = await params;
@@ -31,7 +35,7 @@ export async function POST(
   } catch (e) {
     console.error("[reject-store]", e);
     return NextResponse.json(
-      { error: "Error rechazando solicitud: " + String(e) },
+      { error: "Error rechazando solicitud" },
       { status: 500 }
     );
   }

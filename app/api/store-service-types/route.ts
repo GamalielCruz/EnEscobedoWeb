@@ -11,6 +11,7 @@ const STORE_SERVICE_TYPES_QUERY = `*[_type == "affiliateStore" && _id == $storeI
 }`;
 
 export async function GET(request: NextRequest) {
+  const requestId = crypto.randomUUID();
   try {
     const { searchParams } = new URL(request.url);
     const storeId = searchParams.get('storeId');
@@ -101,6 +102,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       success: true,
+      requestId,
       storeId,
       storeName,
       isOpen,
@@ -113,12 +115,12 @@ export async function GET(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error en /api/store-service-types:', error);
+    console.error('Error en /api/store-service-types:', { requestId, error });
 
     return NextResponse.json(
       {
         error: 'Error interno del servidor',
-        details: error instanceof Error ? error.message : 'Error desconocido'
+        requestId
       },
       { status: 500 }
     );

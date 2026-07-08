@@ -29,6 +29,7 @@ const STORES_QUERY = `*[_type == "affiliateStore" && isActive == true] {
 }`;
 
 export async function POST(request: NextRequest) {
+  const requestId = crypto.randomUUID();
   try {
     const body = await request.json();
     const { address, latitude, longitude, useGoogleMaps = false, filterStoreId } = body;
@@ -357,12 +358,12 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error en /api/nearest-store:', error);
+    console.error('Error en /api/nearest-store:', { requestId, error });
     
     return NextResponse.json(
       { 
         error: 'Error interno del servidor',
-        details: error instanceof Error ? error.message : 'Error desconocido'
+        requestId
       },
       { status: 500 }
     );
@@ -371,6 +372,7 @@ export async function POST(request: NextRequest) {
 
 // Endpoint GET para obtener todas las tiendas (útil para debugging)
 export async function GET(request: NextRequest) {
+  const requestId = crypto.randomUUID();
   try {
     console.log('GET /api/nearest-store - Obteniendo tiendas...');
     let stores: AffiliateStore[] = [];
@@ -563,10 +565,10 @@ export async function GET(request: NextRequest) {
       }
     });
   } catch (error) {
-    console.error('Error obteniendo tiendas:', error);
+    console.error('Error obteniendo tiendas:', { requestId, error });
     
     return NextResponse.json(
-      { error: 'Error al obtener tiendas afiliadas', details: error instanceof Error ? error.message : 'Error desconocido' },
+      { error: 'Error al obtener tiendas afiliadas', requestId },
       { status: 500 }
     );
   }

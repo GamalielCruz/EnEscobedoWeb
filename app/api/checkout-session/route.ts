@@ -29,14 +29,9 @@ export async function POST(request: NextRequest) {
       requestId,
       error,
     });
-    const details =
-      error instanceof Error
-        ? { message: error.message, name: error.name, stack: error.stack }
-        : { message: String(error) };
     return NextResponse.json(
       {
         error: "Error al crear la sesión de checkout",
-        details,
         requestId,
       },
       { status: 500 }
