@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { writeClient } from "@/sanity/lib/client";
 import { sendOrderConfirmation } from "@/lib/whatsapp";
+import { notifyRestaurantNewOrder } from "@/lib/restaurant-notifications";
 
 const PRODUCT_OPTION_GROUPS_QUERY = `*[_type == "product" && _id in $ids]{
   _id,
@@ -147,6 +148,8 @@ export async function POST(request: NextRequest) {
         }
       );
     }
+
+    void notifyRestaurantNewOrder(order._id);
 
     return NextResponse.json({
       success: true,

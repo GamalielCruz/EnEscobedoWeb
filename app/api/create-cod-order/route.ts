@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { writeClient } from "@/sanity/lib/client";
 import { sendOrderConfirmation } from "@/lib/whatsapp";
 import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
+import { notifyRestaurantNewOrder } from "@/lib/restaurant-notifications";
 import { randomUUID } from "crypto";
 
 export async function POST(request: NextRequest) {
@@ -95,6 +96,7 @@ export async function POST(request: NextRequest) {
         customerPhone && orderNumber
           ? sendOrderConfirmation(customerPhone, customerName, orderNumber)
           : Promise.resolve(),
+        notifyRestaurantNewOrder(result._id),
         orderData.orderType === "delivery"
           ? dispatchDeliveryOffer(result._id)
           : Promise.resolve(),

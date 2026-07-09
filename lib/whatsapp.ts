@@ -96,7 +96,8 @@ async function sendWhatsAppTemplate(
   templateName: string,
   variables: string[],
   languageCode: string = "es",
-  buttonComponents: Array<Record<string, unknown>> = []
+  buttonComponents: Array<Record<string, unknown>> = [],
+  maxTextLength: number = 60
 ) {
   const normalizedPhone = normalizeWhatsAppPhone(to);
 
@@ -118,7 +119,7 @@ async function sendWhatsAppTemplate(
           type: "body",
           parameters: variables.map((text) => ({
             type: "text",
-            text: String(text).substring(0, 60),
+            text: String(text).substring(0, maxTextLength),
           })),
         },
         ...buttonComponents,
@@ -163,10 +164,18 @@ async function sendSpanishTemplate(
   phone: string,
   templateName: string,
   variables: string[],
-  buttonComponents: Array<Record<string, unknown>> = []
+  buttonComponents: Array<Record<string, unknown>> = [],
+  maxTextLength: number = 60
 ) {
   try {
-    return await sendWhatsAppTemplate(phone, templateName, variables, "es_MX", buttonComponents);
+    return await sendWhatsAppTemplate(
+      phone,
+      templateName,
+      variables,
+      "es_MX",
+      buttonComponents,
+      maxTextLength
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
     const shouldFallbackToEs =
@@ -195,7 +204,14 @@ async function sendSpanishTemplate(
       console.warn(`[whatsapp] ${templateName} fallo en es_MX; reintentando con es:`, error);
     }
 
-    return sendWhatsAppTemplate(phone, templateName, variables, "es", buttonComponents);
+    return sendWhatsAppTemplate(
+      phone,
+      templateName,
+      variables,
+      "es",
+      buttonComponents,
+      maxTextLength
+    );
   }
 }
 export async function sendWhatsAppMessage(to: string, message: string) {
@@ -230,6 +246,42 @@ export async function sendOrderConfirmation(
 ) {
   return sendSpanishTemplate(phone, "confirmacion_pedido", [
     name.substring(0, 30),
+    orderNumber.substring(0, 30),
+  ]);
+}
+
+export async function sendNuevoPedidoRestaurante(
+  phone: string,
+  restaurantName: string,
+  orderNumber: string,
+  customerName: string,
+  products: string,
+  total: string,
+  deliveryType: string
+) {
+  return sendSpanishTemplate(
+    phone,
+    "nuevo_pedido_restaurante",
+    [
+      restaurantName.substring(0, 60),
+      orderNumber.substring(0, 30),
+      customerName.substring(0, 60),
+      products,
+      total.substring(0, 30),
+      deliveryType.substring(0, 30),
+    ],
+    [],
+    1024
+  );
+}
+
+export async function sendRepartidorEnCaminoRestaurante(
+  phone: string,
+  driverName: string,
+  orderNumber: string
+) {
+  return sendSpanishTemplate(phone, "repartidor_en_camino_restaurante", [
+    driverName.substring(0, 60),
     orderNumber.substring(0, 30),
   ]);
 }

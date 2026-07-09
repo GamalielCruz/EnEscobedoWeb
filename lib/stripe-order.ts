@@ -1,6 +1,7 @@
 import type { Metadata } from "@/actions/createCheckoutSession";
 import { getStripe } from "@/lib/stripe";
 import { extractSpeiDetails } from "@/lib/spei-reference-extractor";
+import { notifyRestaurantNewOrder } from "@/lib/restaurant-notifications";
 import { sendOrderConfirmation } from "@/lib/whatsapp";
 import { backendClient } from "@/sanity/lib/backendClient";
 import Stripe from "stripe";
@@ -344,6 +345,10 @@ export async function createOrderInSanity(
     } catch (err) {
       console.error("[stripe-order] Error sendOrderConfirmation:", err);
     }
+  }
+
+  if (isNewOrder) {
+    void notifyRestaurantNewOrder(order._id);
   }
 
   console.log("[stripe-order] Order stored in Sanity:", order._id);

@@ -11,6 +11,7 @@ import {
   sendClienteRepartidorEnPuerta,
 } from '@/lib/whatsapp'
 import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
+import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'garoga_verify_token'
 const MEXICO_TIME_ZONE = 'America/Mexico_City'
@@ -98,6 +99,7 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   "offeredToRef": offeredTo._ref,
   "storeId": affiliateStore._ref,
   "storeAddress": affiliateStore->address.street,
+  "storeCoordinates": affiliateStore->coordinates,
   "storeName": affiliateStore->name,
   "shippingAddress": shippingAddress
 }`
@@ -118,6 +120,7 @@ const ORDERS_BY_IDS_QUERY = `*[_type == "order" && _id in $orderIds]{
   "offeredToRef": offeredTo._ref,
   "storeId": affiliateStore._ref,
   "storeAddress": affiliateStore->address.street,
+  "storeCoordinates": affiliateStore->coordinates,
   "storeName": affiliateStore->name,
   "shippingAddress": shippingAddress
 }`
@@ -158,6 +161,10 @@ function normalizeText(text: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .trim()
+}
+
+function isValidCoordinate(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
 }
 
 function normalizeDriverActionToken(text: string): string {
@@ -891,6 +898,12 @@ Te avisaremos 10 minutos antes de finalizar.`
             .unset(['deliveryOfertaExpiresAt', 'offeredTo'])
             .commit()
 
+          void notifyRestaurantDriverEnRoute(
+            String(order._id),
+            String(repartidor.nombre),
+            String(order.orderNumber)
+          ).catch(() => null)
+
           console.log('[whatsapp webhook] oferta aceptada con orderId', {
             repartidorId: repartidor._id,
             orderId: order._id,
@@ -931,9 +944,26 @@ Te avisaremos 10 minutos antes de finalizar.`
             ? 'COBRAR EN EFECTIVO'
             : 'YA PAGADO'
 
-        const restaurantMapsUrl = order.storeAddress
-          ? `https://maps.google.com/maps?q=${encodeURIComponent(String(order.storeAddress))}`
-          : `https://maps.google.com/maps?q=${encodeURIComponent(storeAddress)}`
+        const storeCoordinates = order.storeCoordinates as
+          | { latitude?: unknown; longitude?: unknown }
+          | undefined
+        const restaurantLatitude = storeCoordinates?.latitude
+        const restaurantLongitude = storeCoordinates?.longitude
+
+        const restaurantMapsUrl =
+          isValidCoordinate(restaurantLatitude) && isValidCoordinate(restaurantLongitude)
+            ? `https://www.google.com/maps?q=${restaurantLatitude},${restaurantLongitude}`
+            : `https://maps.google.com/maps?q=${encodeURIComponent(storeAddress)}`
+
+        if (!(isValidCoordinate(restaurantLatitude) && isValidCoordinate(restaurantLongitude))) {
+          console.warn('[whatsapp webhook] usando fallback de direccion para maps del restaurante', {
+            orderId: order._id,
+            orderNumber: order.orderNumber,
+            storeName: order.storeName,
+            storeAddress,
+            storeCoordinates: order.storeCoordinates ?? null,
+          })
+        }
 
         const clientAddressStr = buildClientAddress(order as { shippingAddress?: { line1?: string; street?: string; city?: string } })
         const clientMapsUrl = (order.shippingAddress as Record<string, string> | undefined)?.line1
