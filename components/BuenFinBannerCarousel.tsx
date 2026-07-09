@@ -50,8 +50,8 @@ function getContentOverlayStyle(mainColor: string) {
 
   return {
     background: isLightText
-      ? "linear-gradient(90deg, rgba(7, 15, 28, 0.82) 0%, rgba(7, 15, 28, 0.64) 38%, rgba(7, 15, 28, 0.22) 70%, rgba(7, 15, 28, 0.04) 100%)"
-      : "linear-gradient(90deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0.68) 38%, rgba(255, 255, 255, 0.2) 70%, rgba(255, 255, 255, 0.02) 100%)",
+      ? "linear-gradient(90deg, rgba(7, 15, 28, 0.58) 0%, rgba(7, 15, 28, 0.42) 45%, rgba(7, 15, 28, 0.12) 78%, rgba(7, 15, 28, 0) 100%)"
+      : "linear-gradient(90deg, rgba(255, 255, 255, 0.62) 0%, rgba(255, 255, 255, 0.46) 45%, rgba(255, 255, 255, 0.14) 78%, rgba(255, 255, 255, 0) 100%)",
   } as const;
 }
 
@@ -123,8 +123,7 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
         </>
       ) : null}
 
-      <div className="absolute inset-0 z-0" style={contentOverlayStyle} />
-      <div className="absolute inset-0 z-0 backdrop-blur-[1.5px]" />
+      <div className="absolute inset-y-0 left-0 z-0 w-[58%] sm:w-[54%] lg:w-1/2" style={contentOverlayStyle} />
 
       <div className="relative z-10 flex h-full min-h-0 flex-col gap-4 p-4 sm:p-5 lg:p-6" style={{ color: mainColor }}>
         <div className="flex flex-wrap items-start justify-between gap-3">
