@@ -1,5 +1,9 @@
 const WHATSAPP_API_URL = "https://graph.facebook.com/v25.0";
 const WHATSAPP_FETCH_TIMEOUT_MS = 8000;
+const NUEVO_PEDIDO_RESTAURANTE_BODY_LIMIT = 1024;
+const NUEVO_PEDIDO_RESTAURANTE_SAFETY_MARGIN = 48;
+const NUEVO_PEDIDO_RESTAURANTE_FIXED_BODY =
+  "Tienes un nuevo pedido en .\n\nPedido: #\nCliente: \nProductos:\n\n\nTotal: $\nTipo: \n\nGracias por utilizar ElMenu.";
 
 type WhatsAppErrorPayload = {
   message?: string;
@@ -160,6 +164,31 @@ function buildQuickReplyPayloadButton(index: string, payload: string) {
   };
 }
 
+function fitTextToBudget(text: string, maxLength: number, fallback: string) {
+  const normalized = String(text || "").trim();
+  if (maxLength <= 0) {
+    return fallback;
+  }
+
+  if (normalized.length <= maxLength) {
+    return normalized || fallback;
+  }
+
+  const ellipsis = "...";
+  if (maxLength <= ellipsis.length) {
+    return ellipsis.substring(0, maxLength);
+  }
+
+  const candidate = normalized.slice(0, maxLength - ellipsis.length);
+  const lastLineBreak = candidate.lastIndexOf("\n");
+  const truncatedBase =
+    lastLineBreak >= Math.floor(candidate.length * 0.6)
+      ? candidate.slice(0, lastLineBreak).trimEnd()
+      : candidate.trimEnd();
+
+  return `${truncatedBase || candidate.trimEnd()}${ellipsis}`;
+}
+
 async function sendSpanishTemplate(
   phone: string,
   templateName: string,
@@ -259,16 +288,43 @@ export async function sendNuevoPedidoRestaurante(
   total: string,
   deliveryType: string
 ) {
+  const safeRestaurantName = restaurantName.substring(0, 60);
+  const safeOrderNumber = orderNumber.substring(0, 30);
+  const safeCustomerName = customerName.substring(0, 60);
+  const safeTotal = total.substring(0, 30);
+  const safeDeliveryType = deliveryType.substring(0, 30);
+
+  const reservedLength =
+    NUEVO_PEDIDO_RESTAURANTE_FIXED_BODY.length +
+    NUEVO_PEDIDO_RESTAURANTE_SAFETY_MARGIN +
+    safeRestaurantName.length +
+    safeOrderNumber.length +
+    safeCustomerName.length +
+    safeTotal.length +
+    safeDeliveryType.length;
+
+  const productsBudget = NUEVO_PEDIDO_RESTAURANTE_BODY_LIMIT - reservedLength;
+  const safeProducts = fitTextToBudget(products, productsBudget, "Productos varios");
+
+  if (String(products || "").trim().length > safeProducts.length) {
+    console.warn("[whatsapp] nuevo_pedido_restaurante truncado por limite de body", {
+      originalProductsLength: String(products || "").trim().length,
+      finalProductsLength: safeProducts.length,
+      productsBudget,
+      reservedLength,
+    });
+  }
+
   return sendSpanishTemplate(
     phone,
     "nuevo_pedido_restaurante",
     [
-      restaurantName.substring(0, 60),
-      orderNumber.substring(0, 30),
-      customerName.substring(0, 60),
-      products,
-      total.substring(0, 30),
-      deliveryType.substring(0, 30),
+      safeRestaurantName,
+      safeOrderNumber,
+      safeCustomerName,
+      safeProducts,
+      safeTotal,
+      safeDeliveryType,
     ],
     [],
     1024
