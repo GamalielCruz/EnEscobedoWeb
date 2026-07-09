@@ -45,11 +45,13 @@ function isExternalLink(link: string) {
   return /^https?:\/\//i.test(link);
 }
 
-function getSoftTextOutline(mainColor: string) {
-  const outlineColor = mainColor.toLowerCase() === "#ffffff" ? "rgba(0, 0, 0, 0.65)" : "rgba(255, 255, 255, 0.82)";
+function getContentOverlayStyle(mainColor: string) {
+  const isLightText = mainColor.toLowerCase() === "#ffffff";
 
   return {
-    textShadow: `-1px -1px 0 ${outlineColor}, 1px -1px 0 ${outlineColor}, -1px 1px 0 ${outlineColor}, 1px 1px 0 ${outlineColor}`,
+    background: isLightText
+      ? "linear-gradient(90deg, rgba(7, 15, 28, 0.82) 0%, rgba(7, 15, 28, 0.64) 38%, rgba(7, 15, 28, 0.22) 70%, rgba(7, 15, 28, 0.04) 100%)"
+      : "linear-gradient(90deg, rgba(255, 255, 255, 0.88) 0%, rgba(255, 255, 255, 0.68) 38%, rgba(255, 255, 255, 0.2) 70%, rgba(255, 255, 255, 0.02) 100%)",
   } as const;
 }
 
@@ -92,7 +94,7 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
   const mainColor = banner.mainColor?.trim() || DEFAULT_MAIN_COLOR;
   const buttonTextColor = mainColor.toLowerCase() === "#ffffff" ? "#111827" : mainColor;
   const bannerTypeLabel = getBannerTypeLabel(banner.bannerType);
-  const softTextOutline = getSoftTextOutline(mainColor);
+  const contentOverlayStyle = getContentOverlayStyle(mainColor);
 
   const body = (
     <article className="relative isolate h-[220px] w-full max-w-full min-w-0 overflow-hidden bg-[#09193B] shadow-[0_18px_50px_rgba(0,0,0,0.18)] sm:h-[250px] lg:h-[290px]">
@@ -121,6 +123,9 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
         </>
       ) : null}
 
+      <div className="absolute inset-0 z-0" style={contentOverlayStyle} />
+      <div className="absolute inset-0 z-0 backdrop-blur-[1.5px]" />
+
       <div className="relative z-10 flex h-full min-h-0 flex-col gap-4 p-4 sm:p-5 lg:p-6" style={{ color: mainColor }}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex max-w-full flex-wrap items-center gap-2">
@@ -142,17 +147,11 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
 
         <div className="flex flex-1 min-h-0 min-w-0 items-center">
           <div className="min-w-0 max-w-[96%] space-y-2 overflow-hidden sm:max-w-[82%] sm:space-y-3 lg:max-w-[72%]">
-            <h2
-              className="line-clamp-2 break-words text-2xl font-black leading-tight sm:text-3xl md:text-4xl"
-              style={softTextOutline}
-            >
+            <h2 className="line-clamp-2 break-words text-2xl font-black leading-tight sm:text-3xl md:text-4xl">
               {title}
             </h2>
             {description ? (
-              <p
-                className="line-clamp-3 max-w-full break-words text-sm leading-relaxed opacity-90 sm:text-base md:text-lg"
-                style={softTextOutline}
-              >
+              <p className="line-clamp-3 max-w-full break-words text-sm leading-relaxed opacity-90 sm:text-base md:text-lg">
                 {description}
               </p>
             ) : null}
@@ -165,7 +164,7 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
               {buttonText && buttonLink ? (
                 <span
                   className="inline-flex rounded-full bg-white px-5 py-2.5 text-sm font-bold shadow-sm transition-transform duration-200 hover:scale-[1.02]"
-                  style={{ color: buttonTextColor, ...getSoftTextOutline(buttonTextColor) }}
+                  style={{ color: buttonTextColor }}
                 >
                   {buttonText}
                 </span>
