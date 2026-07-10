@@ -211,12 +211,19 @@ export type Order = {
   phone?: string;
   orderType?: "delivery" | "pickup";
   paymentMethod?:
-    | "card"
-    | "oxxo"
-    | "bank_transfer"
+    | "stripe"
     | "cash_on_delivery"
+    | "cash_at_store"
+    | "card_at_store"
+    | "manual"
+    | "bank_transfer"
+    | "oxxo"
+    | "card"
     | "cash_on_pickup"
     | "card_on_pickup";
+  paymentProvider?: "stripe" | "cash" | "external_pos" | "none";
+  paidOnline?: boolean;
+  requiresStripeReconciliation?: boolean;
   stripePaymentIntentId?: string;
   products?: Array<{
     product?: ProductReference;
@@ -247,7 +254,25 @@ export type Order = {
     | "delivered"
     | "cancelled"
     | "ready_for_pickup"
-    | "picked_up";
+    | "picked_up"
+    | "completed";
+  orderStatus?:
+    | "pending"
+    | "processing"
+    | "shipped"
+    | "delivered"
+    | "cancelled"
+    | "ready_for_pickup"
+    | "picked_up"
+    | "completed";
+  paymentStatus?:
+    | "pending"
+    | "paid"
+    | "failed"
+    | "expired"
+    | "unpaid"
+    | "refunded"
+    | "requires_refund";
   expiredAt?: string;
   paidAt?: string;
   bankTransferReference?: string;
@@ -256,6 +281,17 @@ export type Order = {
   orderDate?: string;
   subtotal?: number;
   shippingCost?: number;
+  productsSubtotal?: number;
+  shippingFee?: number;
+  discount?: number;
+  tax?: number;
+  platformCommission?: number;
+  stripeFee?: number;
+  stripeNetAmount?: number;
+  driverPayout?: number;
+  grossTotal?: number;
+  storeNetTotal?: number;
+  platformNetTotal?: number;
   shippingAddress?: {
     line1?: string;
     line2?: string;
@@ -263,6 +299,8 @@ export type Order = {
     state?: string;
     postal_code?: string;
     country?: string;
+    latitude?: number;
+    longitude?: number;
   };
   codInstructions?: string;
   deliveryNotes?: string;
@@ -270,11 +308,35 @@ export type Order = {
   repartidorAsignadoAt?: string;
   deliveryOfertaEnviada?: boolean;
   deliveryOfertaExpiresAt?: string;
+  dispatchStatus?:
+    | "not_required"
+    | "waiting_for_driver"
+    | "offered"
+    | "accepted"
+    | "at_door"
+    | "completed";
+  settlementStatus?: "pending" | "ready" | "settled" | "cancelled" | "refunded";
+  cashCollectedBy?:
+    "store" | "community_driver" | "store_driver" | "admin" | "none";
+  driverType?: "store" | "community" | "none";
+  offeredTo?: RepartidorReference;
   pickupStore?: AffiliateStoreReference;
   estimatedPickupDate?: string;
   pickupStatus?: "in_transit" | "ready_for_pickup" | "picked_up" | "expired";
   pickupCode?: string;
   affiliateStore?: AffiliateStoreReference;
+  cancelledAt?: string;
+  refundedAt?: string;
+  settlementDate?: string;
+  orderEvents?: Array<{
+    type?: string;
+    at?: string;
+    actor?: string;
+    source?: string;
+    reason?: string;
+    payloadJson?: string;
+    _key: string;
+  }>;
 };
 
 export type OrderReference = {
@@ -815,11 +877,18 @@ export type MY_ORDERS_QUERY_RESULT = Array<{
   orderType?: "delivery" | "pickup";
   paymentMethod?:
     | "bank_transfer"
+    | "card_at_store"
     | "card_on_pickup"
     | "card"
+    | "cash_at_store"
     | "cash_on_delivery"
     | "cash_on_pickup"
-    | "oxxo";
+    | "manual"
+    | "oxxo"
+    | "stripe";
+  paymentProvider?: "cash" | "external_pos" | "none" | "stripe";
+  paidOnline?: boolean;
+  requiresStripeReconciliation?: boolean;
   stripePaymentIntentId?: string;
   products: Array<{
     product: {
@@ -924,6 +993,7 @@ export type MY_ORDERS_QUERY_RESULT = Array<{
   amountDiscount?: number;
   status?:
     | "cancelled"
+    | "completed"
     | "delivered"
     | "expired"
     | "failed"
@@ -934,6 +1004,23 @@ export type MY_ORDERS_QUERY_RESULT = Array<{
     | "picked_up"
     | "ready_for_pickup"
     | "shipped";
+  orderStatus?:
+    | "cancelled"
+    | "completed"
+    | "delivered"
+    | "pending"
+    | "picked_up"
+    | "processing"
+    | "ready_for_pickup"
+    | "shipped";
+  paymentStatus?:
+    | "expired"
+    | "failed"
+    | "paid"
+    | "pending"
+    | "refunded"
+    | "requires_refund"
+    | "unpaid";
   expiredAt?: string;
   paidAt?: string;
   bankTransferReference?: string;
@@ -942,6 +1029,17 @@ export type MY_ORDERS_QUERY_RESULT = Array<{
   orderDate?: string;
   subtotal?: number;
   shippingCost?: number;
+  productsSubtotal?: number;
+  shippingFee?: number;
+  discount?: number;
+  tax?: number;
+  platformCommission?: number;
+  stripeFee?: number;
+  stripeNetAmount?: number;
+  driverPayout?: number;
+  grossTotal?: number;
+  storeNetTotal?: number;
+  platformNetTotal?: number;
   shippingAddress?: {
     line1?: string;
     line2?: string;
@@ -949,6 +1047,8 @@ export type MY_ORDERS_QUERY_RESULT = Array<{
     state?: string;
     postal_code?: string;
     country?: string;
+    latitude?: number;
+    longitude?: number;
   };
   codInstructions?: string;
   deliveryNotes?: string;
@@ -956,11 +1056,35 @@ export type MY_ORDERS_QUERY_RESULT = Array<{
   repartidorAsignadoAt?: string;
   deliveryOfertaEnviada?: boolean;
   deliveryOfertaExpiresAt?: string;
+  dispatchStatus?:
+    | "accepted"
+    | "at_door"
+    | "completed"
+    | "not_required"
+    | "offered"
+    | "waiting_for_driver";
+  settlementStatus?: "cancelled" | "pending" | "ready" | "refunded" | "settled";
+  cashCollectedBy?:
+    "admin" | "community_driver" | "none" | "store_driver" | "store";
+  driverType?: "community" | "none" | "store";
+  offeredTo?: RepartidorReference;
   pickupStore?: AffiliateStoreReference;
   estimatedPickupDate?: string;
   pickupStatus?: "expired" | "in_transit" | "picked_up" | "ready_for_pickup";
   pickupCode?: string;
   affiliateStore?: AffiliateStoreReference;
+  cancelledAt?: string;
+  refundedAt?: string;
+  settlementDate?: string;
+  orderEvents?: Array<{
+    type?: string;
+    at?: string;
+    actor?: string;
+    source?: string;
+    reason?: string;
+    payloadJson?: string;
+    _key: string;
+  }>;
   isClickCollect: false | true;
   storeInfo: {
     storeName: string | null;

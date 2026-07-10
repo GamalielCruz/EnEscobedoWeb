@@ -1188,11 +1188,23 @@
           "of": [
             {
               "type": "string",
-              "value": "card"
+              "value": "stripe"
             },
             {
               "type": "string",
-              "value": "oxxo"
+              "value": "cash_on_delivery"
+            },
+            {
+              "type": "string",
+              "value": "cash_at_store"
+            },
+            {
+              "type": "string",
+              "value": "card_at_store"
+            },
+            {
+              "type": "string",
+              "value": "manual"
             },
             {
               "type": "string",
@@ -1200,7 +1212,11 @@
             },
             {
               "type": "string",
-              "value": "cash_on_delivery"
+              "value": "oxxo"
+            },
+            {
+              "type": "string",
+              "value": "card"
             },
             {
               "type": "string",
@@ -1211,6 +1227,45 @@
               "value": "card_on_pickup"
             }
           ]
+        },
+        "optional": true
+      },
+      "paymentProvider": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "stripe"
+            },
+            {
+              "type": "string",
+              "value": "cash"
+            },
+            {
+              "type": "string",
+              "value": "external_pos"
+            },
+            {
+              "type": "string",
+              "value": "none"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "paidOnline": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
+        },
+        "optional": true
+      },
+      "requiresStripeReconciliation": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
         },
         "optional": true
       },
@@ -1402,6 +1457,88 @@
             {
               "type": "string",
               "value": "picked_up"
+            },
+            {
+              "type": "string",
+              "value": "completed"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "orderStatus": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "pending"
+            },
+            {
+              "type": "string",
+              "value": "processing"
+            },
+            {
+              "type": "string",
+              "value": "shipped"
+            },
+            {
+              "type": "string",
+              "value": "delivered"
+            },
+            {
+              "type": "string",
+              "value": "cancelled"
+            },
+            {
+              "type": "string",
+              "value": "ready_for_pickup"
+            },
+            {
+              "type": "string",
+              "value": "picked_up"
+            },
+            {
+              "type": "string",
+              "value": "completed"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "paymentStatus": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "pending"
+            },
+            {
+              "type": "string",
+              "value": "paid"
+            },
+            {
+              "type": "string",
+              "value": "failed"
+            },
+            {
+              "type": "string",
+              "value": "expired"
+            },
+            {
+              "type": "string",
+              "value": "unpaid"
+            },
+            {
+              "type": "string",
+              "value": "refunded"
+            },
+            {
+              "type": "string",
+              "value": "requires_refund"
             }
           ]
         },
@@ -1463,6 +1600,83 @@
         },
         "optional": true
       },
+      "productsSubtotal": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "shippingFee": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "discount": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "tax": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "platformCommission": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "stripeFee": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "stripeNetAmount": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "driverPayout": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "grossTotal": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "storeNetTotal": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "platformNetTotal": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
       "shippingAddress": {
         "type": "objectAttribute",
         "value": {
@@ -1507,6 +1721,20 @@
               "type": "objectAttribute",
               "value": {
                 "type": "string"
+              },
+              "optional": true
+            },
+            "latitude": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "number"
+              },
+              "optional": true
+            },
+            "longitude": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "number"
               },
               "optional": true
             }
@@ -1554,6 +1782,126 @@
         "type": "objectAttribute",
         "value": {
           "type": "string"
+        },
+        "optional": true
+      },
+      "dispatchStatus": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "not_required"
+            },
+            {
+              "type": "string",
+              "value": "waiting_for_driver"
+            },
+            {
+              "type": "string",
+              "value": "offered"
+            },
+            {
+              "type": "string",
+              "value": "accepted"
+            },
+            {
+              "type": "string",
+              "value": "at_door"
+            },
+            {
+              "type": "string",
+              "value": "completed"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "settlementStatus": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "pending"
+            },
+            {
+              "type": "string",
+              "value": "ready"
+            },
+            {
+              "type": "string",
+              "value": "settled"
+            },
+            {
+              "type": "string",
+              "value": "cancelled"
+            },
+            {
+              "type": "string",
+              "value": "refunded"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "cashCollectedBy": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "store"
+            },
+            {
+              "type": "string",
+              "value": "community_driver"
+            },
+            {
+              "type": "string",
+              "value": "store_driver"
+            },
+            {
+              "type": "string",
+              "value": "admin"
+            },
+            {
+              "type": "string",
+              "value": "none"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "driverType": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "store"
+            },
+            {
+              "type": "string",
+              "value": "community"
+            },
+            {
+              "type": "string",
+              "value": "none"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "offeredTo": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "inline",
+          "name": "repartidor.reference"
         },
         "optional": true
       },
@@ -1609,6 +1957,92 @@
         "value": {
           "type": "inline",
           "name": "affiliateStore.reference"
+        },
+        "optional": true
+      },
+      "cancelledAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "refundedAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "settlementDate": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "orderEvents": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "array",
+          "of": {
+            "type": "object",
+            "attributes": {
+              "type": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "string"
+                },
+                "optional": true
+              },
+              "at": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "string"
+                },
+                "optional": true
+              },
+              "actor": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "string"
+                },
+                "optional": true
+              },
+              "source": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "string"
+                },
+                "optional": true
+              },
+              "reason": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "string"
+                },
+                "optional": true
+              },
+              "payloadJson": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "string"
+                },
+                "optional": true
+              }
+            },
+            "rest": {
+              "type": "object",
+              "attributes": {
+                "_key": {
+                  "type": "objectAttribute",
+                  "value": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
         },
         "optional": true
       }
