@@ -24,7 +24,7 @@ export function getPublicUrl(): string {
   if (process.env.NODE_ENV === "production") {
     // In production, NEXT_PUBLIC_SITE_URL must be set in Vercel environment variables
     console.warn("NEXT_PUBLIC_SITE_URL not set in production, using NEXT_PUBLIC_APP_URL fallback");
-    return process.env.NEXT_PUBLIC_APP_URL || "https://en-escobedo-web.vercel.app";
+    return process.env.NEXT_PUBLIC_APP_URL || "https://elmenu.site";
   }
   
   return "http://localhost:3000";
