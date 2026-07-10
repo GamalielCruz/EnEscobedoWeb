@@ -43,8 +43,17 @@ function buildOrderItems(items: GroupedBasketItem[]): OrderItemInput[] {
 function buildShippingAddress(metadata: Metadata): OrderAddressInput | undefined {
   if (metadata.shippingAddress) return metadata.shippingAddress;
   if (!metadata.customerAddress) return undefined;
+
+  const [line1Raw = "", citySegmentRaw = "", stateRaw = ""] = metadata.customerAddress
+    .split(",")
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+  const city = citySegmentRaw.replace(/^\d{4,5}\s+/, "").trim();
+
   return {
-    line1: metadata.customerAddress,
+    line1: line1Raw,
+    city,
+    state: stateRaw,
     country: "MX",
   };
 }
@@ -133,7 +142,7 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
         currency: "mxn",
         unit_amount: Math.round(item.unitTotalPrice * 100),
         product_data: {
-          name: String(frontendProduct?.name || "Producto" ).slice(0, 250),
+          name: String(frontendProduct?.name || "Producto").slice(0, 250),
           description: `Product ID: ${item.product._ref}`.slice(0, 500),
           metadata: {
             id: String(item.product._ref).slice(0, 500),
@@ -182,4 +191,3 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
 
   return session.client_secret;
 }
-
