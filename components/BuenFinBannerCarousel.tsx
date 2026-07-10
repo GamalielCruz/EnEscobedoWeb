@@ -125,15 +125,15 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
 
       <div className="absolute inset-y-0 left-0 z-0 w-[58%] sm:w-[54%] lg:w-1/2" style={contentOverlayStyle} />
 
-      <div className="relative z-10 flex h-full min-h-0 flex-col gap-4 p-4 sm:p-5 lg:p-6" style={{ color: mainColor }}>
+      <div className="relative z-10 flex h-full min-h-0 min-w-0 flex-col gap-2.5 p-4 sm:gap-4 sm:p-5 lg:p-6" style={{ color: mainColor }}>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex max-w-full flex-wrap items-center gap-2">
-            <span className="rounded-full bg-white/14 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-white backdrop-blur-md ring-1 ring-white/10 sm:text-xs">
+            <span className="rounded-full bg-white/12 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-white backdrop-blur-sm ring-1 ring-white/10 sm:px-3 sm:text-[11px]">
               {bannerTypeLabel}
             </span>
             {hasSale ? (
-              <span className="inline-flex items-center gap-2 rounded-full bg-white/90 px-3 py-1 text-[11px] font-bold text-[#850C22] shadow-sm sm:text-xs">
-                <TicketPercent className="h-4 w-4" />
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-white/85 px-2.5 py-1 text-[10px] font-bold text-[#850C22] shadow-sm sm:px-3 sm:text-[11px]">
+                <TicketPercent className="h-3.5 w-3.5" />
                 {banner.sale?.discountAmount ? `${banner.sale.discountAmount}% de descuento` : "Cupon disponible"}
               </span>
             ) : null}
@@ -145,24 +145,24 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
         </div>
 
         <div className="flex flex-1 min-h-0 min-w-0 items-center">
-          <div className="min-w-0 max-w-[96%] space-y-2 overflow-hidden sm:max-w-[82%] sm:space-y-3 lg:max-w-[72%]">
-            <h2 className="line-clamp-2 break-words text-2xl font-black leading-tight sm:text-3xl md:text-4xl">
+          <div className="min-w-0 max-w-[88%] space-y-1.5 overflow-hidden sm:max-w-[75%] sm:space-y-2.5 lg:max-w-[72%]">
+            <h2 className="break-words text-[1.4rem] font-black leading-[1] sm:line-clamp-2 sm:text-[2rem] md:text-[2.35rem]">
               {title}
             </h2>
             {description ? (
-              <p className="line-clamp-3 max-w-full break-words text-sm leading-relaxed opacity-90 sm:text-base md:text-lg">
+              <p className="line-clamp-2 max-w-full break-words text-[0.9rem] leading-[1.35] opacity-95 sm:line-clamp-3 sm:text-[1.02rem] md:text-[1.08rem]">
                 {description}
               </p>
             ) : null}
           </div>
         </div>
 
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-2.5 sm:gap-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2.5">
               {buttonText && buttonLink ? (
                 <span
-                  className="inline-flex rounded-full bg-white px-5 py-2.5 text-sm font-bold shadow-sm transition-transform duration-200 hover:scale-[1.02]"
+                  className="inline-flex rounded-full border border-white/35 bg-white/14 px-4 py-2 text-sm font-bold shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_8px_20px_rgba(0,0,0,0.12)] backdrop-blur-md transition-transform duration-200 hover:scale-[1.02] sm:px-4.5"
                   style={{ color: buttonTextColor }}
                 >
                   {buttonText}
@@ -170,7 +170,7 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
               ) : null}
 
               {banner.sale?.couponCode ? (
-                <span className="max-w-[76vw] truncate rounded-full border border-current bg-white/10 px-4 py-2 text-sm font-semibold backdrop-blur-md">
+                <span className="max-w-[76vw] truncate rounded-full border border-white/25 bg-white/10 px-3.5 py-2 text-sm font-semibold backdrop-blur-md">
                   Codigo: {banner.sale.couponCode}
                 </span>
               ) : null}
