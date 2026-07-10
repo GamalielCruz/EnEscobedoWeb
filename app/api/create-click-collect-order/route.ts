@@ -1,249 +1,105 @@
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
+import { auth } from "@clerk/nextjs/server";
 import { writeClient } from "@/sanity/lib/client";
-import { sendOrderConfirmation } from "@/lib/whatsapp";
 import { notifyRestaurantNewOrder } from "@/lib/restaurant-notifications";
+import { sendOrderConfirmation } from "@/lib/whatsapp";
+import { appendOrderEvent } from "@/lib/order-events";
+import { buildOrderDocument, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
 
-const PRODUCT_OPTION_GROUPS_QUERY = `*[_type == "product" && _id in $ids]{
-  _id,
-  optionGroups
-}`;
+function normalizeItems(items: Array<any>): OrderItemInput[] {
+  return (items || []).map((item) => ({
+    productId: String(item?.productId || item?.product?._id || item?.product?.id || ""),
+    quantity: Number(item?.quantity || 0),
+    customizations: item?.customizations,
+  }));
+}
+
+function generatePickupCode(): string {
+  return crypto.randomUUID().split("-")[0].toUpperCase();
+}
 
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
   try {
-    const body = await request.json();
-
-    const {
-      orderNumber,
-      customerName,
-      customerEmail,
-      clerkUserId,
-      phone,
-      notes,
-      storeId,
-      storeName,
-      storeAddress,
-      storePhone,
-      estimatedDelivery,
-      items,
-      total,
-      paymentMethod = "cash_on_pickup",
-    } = body;
-
-    // Validar datos requeridos
-    if (
-      !orderNumber ||
-      !customerEmail ||
-      !clerkUserId ||
-      !phone ||
-      !storeId ||
-      !items ||
-      items.length === 0
-    ) {
-      return NextResponse.json(
-        { success: false, error: "Faltan datos requeridos" },
-        { status: 400 }
-      );
+    const { userId } = await auth();
+    if (!userId) {
+      return NextResponse.json({ success: false, error: "No autorizado" }, { status: 401 });
     }
 
-    // Generar código de recogida único
-    const pickupCode = generatePickupCode();
-    const productIds = Array.from(
-      new Set(
-        items
-          .map((item: any) => item.product?._id || item.product?.id)
-          .filter(Boolean)
-      )
-    );
-    const productsWithOptions = await writeClient.fetch<
-      Array<{ _id: string; optionGroups?: ProductOptionGroup[] }>
-    >(PRODUCT_OPTION_GROUPS_QUERY, { ids: productIds });
-    const optionGroupsByProductId = new Map(
-      productsWithOptions.map((product) => [product._id, product.optionGroups || []])
-    );
+    const body = await request.json();
+    const orderItems = normalizeItems(body?.items || []);
+    const storeId = String(body?.storeId || body?.metadata?.storeId || "");
+    const paymentMethod = String(body?.paymentMethod || "cash_at_store");
+    const deliveryNotes = [body?.notes, body?.estimatedDelivery ? `Tiempo estimado: ${body.estimatedDelivery}` : null]
+      .filter(Boolean)
+      .join(" | ");
 
-    // Construir los productos como referencias (schema unificado `order`).
-    // Se preserva el precio del momento como snapshot en las notas del ítem.
-    const sanityProducts = items.map((item: any) => {
-      const productId = item.product?._id || item.product?.id;
-      const optionGroups =
-        item.product?.optionGroups?.length > 0
-          ? item.product.optionGroups
-          : optionGroupsByProductId.get(productId);
-
-      const transformedCustomizations = transformCustomizations(
-        item.customizations,
-        optionGroups
-      );
-
-      const unitPrice = item.customPrice ?? item.product?.price;
-      const priceNote = `Precio original al ordenar: $${unitPrice ?? "?"}`;
-      const existingNote = (item.notes || "").trim();
-
-      return {
-        _key: crypto.randomUUID(),
-        product: { _type: "reference", _ref: productId },
-        quantity: item.quantity,
-        customizations: transformedCustomizations,
-        notes: existingNote ? `${existingNote}\n${priceNote}` : priceNote,
-      };
+    const quote = await validateAndQuoteOrder({
+      storeId,
+      items: orderItems,
+      orderType: "pickup",
+      paymentMethod,
     });
 
-    // El campo estimatedPickupDate es datetime; solo lo seteamos si es ISO válido.
-    // De lo contrario (p.ej. "10-20 minutos") lo guardamos en deliveryNotes.
-    const estimatedIsIso =
-      typeof estimatedDelivery === "string" &&
-      !Number.isNaN(Date.parse(estimatedDelivery));
-    const deliveryNotesParts: string[] = [];
-    if (!estimatedIsIso && estimatedDelivery)
-      deliveryNotesParts.push(`Tiempo estimado de recogida: ${estimatedDelivery}`);
-    if (notes) deliveryNotesParts.push(`Notas del cliente: ${notes}`);
-
-    // Crear orden en Sanity (schema unificado `order` con orderType: "pickup")
-    const normalizedCustomerPhone = typeof phone === "string" ? phone.trim() : "";
-
-    const orderData: { _type: string; [key: string]: any } = {
-      _type: "order",
-      orderNumber,
+    const orderData = buildOrderDocument({
+      orderNumber: String(body?.orderNumber || ""),
+      clerkUserId: String(body?.clerkUserId || userId),
+      customerName: String(body?.customerName || "Cliente").trim(),
+      customerEmail: String(body?.customerEmail || "").trim(),
+      phone: String(body?.phone || "").trim(),
+      storeId,
       orderType: "pickup",
-      currency: "mxn",
-      customerName: customerName || "Cliente",
-      email: customerEmail,
-      clerkUserId,
-      phone: normalizedCustomerPhone || undefined,
-      pickupStore: storeId ? { _type: "reference", _ref: storeId } : undefined,
-      affiliateStore: storeId ? { _type: "reference", _ref: storeId } : undefined,
-      products: sanityProducts,
-      totalPrice: total,
-      subtotal: total,
-      shippingCost: 0,
       paymentMethod,
-      status: "pending_pickup",
-      pickupStatus: "in_transit",
-      pickupCode,
-      orderDate: new Date().toISOString(),
-    };
+      quote,
+      paymentStatus: paymentMethod === "card_at_store" ? "pending" : "unpaid",
+      dispatchStatus: "not_required",
+      orderStatus: "pending",
+      deliveryNotes: deliveryNotes || undefined,
+    }) as { _type: string; [key: string]: unknown };
 
-    if (estimatedIsIso) orderData.estimatedPickupDate = estimatedDelivery;
-    if (deliveryNotesParts.length)
-      orderData.deliveryNotes = deliveryNotesParts.join(" | ");
+    orderData.pickupStatus = "in_transit";
+    orderData.pickupCode = generatePickupCode();
 
-    let order;
-    try {
-      order = await writeClient.create(orderData);
-    } catch (sanityError) {
-      console.error("❌ Error guardando en Sanity:", sanityError);
-      throw new Error(
-        `Error guardando la orden en la base de datos: ${sanityError instanceof Error ? sanityError.message : "Error desconocido"}`
-      );
-    }
+    const result = await writeClient.create(orderData);
 
-    if (normalizedCustomerPhone && orderNumber) {
-      void sendOrderConfirmation(normalizedCustomerPhone, customerName || "Cliente", orderNumber).catch(
-        (whatsappError) => {
-          console.error(
-            "[create-click-collect-order] WhatsApp error:",
-            whatsappError
-          );
-        }
-      );
-    }
+    await appendOrderEvent(result._id, { type: "created", source: "api/create-click-collect-order", actor: userId });
+    await appendOrderEvent(result._id, { type: "sent_to_restaurant", source: "api/create-click-collect-order" });
 
-    void notifyRestaurantNewOrder(order._id);
+    after(async () => {
+      const phone = String(orderData.phone || "");
+      const customerName = String(orderData.customerName || "Cliente");
+      const orderNumber = String(orderData.orderNumber || "");
+
+      await Promise.allSettled([
+        phone && orderNumber ? sendOrderConfirmation(phone, customerName, orderNumber) : Promise.resolve(),
+        notifyRestaurantNewOrder(result._id),
+      ]);
+    });
 
     return NextResponse.json({
       success: true,
       requestId,
       data: {
-        orderId: order._id,
-        orderNumber,
-        pickupCode,
-        estimatedPickupDate: estimatedDelivery,
-        storeInfo: {
-          name: storeName,
-          address: storeAddress,
-          phone: storePhone,
+        orderId: result._id,
+        orderNumber: orderData.orderNumber,
+        pickupCode: orderData.pickupCode,
+        totals: {
+          productsSubtotal: orderData.productsSubtotal,
+          grossTotal: orderData.grossTotal,
         },
-        total,
       },
     });
   } catch (error) {
-    console.error("❌ Error creando orden Click & Collect:", { requestId, error });
+    console.error("[create-click-collect-order]", { requestId, error });
     return NextResponse.json(
       {
         success: false,
-        error: "Error interno del servidor",
+        error: error instanceof Error ? error.message : "Error interno del servidor",
         requestId,
       },
-      { status: 500 }
+      { status: 400 }
     );
   }
 }
 
-// Generar código de recogida único (6 caracteres alfanuméricos)
-function generatePickupCode(): string {
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-  let result = "";
-  for (let i = 0; i < 6; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-}
 
-type ProductOptionGroup = {
-  title?: string;
-  description?: string;
-  required?: boolean;
-  selectionType?: "single" | "multiple";
-  options?: Array<{
-    label?: string;
-    description?: string;
-    priceDelta?: number;
-    isDefault?: boolean;
-  }>;
-};
-
-// Transformar customizaciones del formato del store al formato de Sanity
-function transformCustomizations(
-  customizations: { [key: string]: string | string[] } | undefined,
-  optionGroups: ProductOptionGroup[] | undefined
-): Array<{
-  _key: string;
-  title?: string;
-  options?: Array<{
-    _key: string;
-    label?: string;
-    priceDelta?: number;
-  }>;
-}> {
-  if (!customizations || Object.keys(customizations).length === 0) {
-    return [];
-  }
-
-  return Object.entries(customizations).map(([groupKey, selection]) => {
-    // Extraer el índice del grupo (e.g., "group-0" -> 0)
-    const groupIndex = parseInt(groupKey.replace("group-", ""), 10);
-    const group = optionGroups?.[groupIndex];
-
-    // Convertir la selección a array
-    const selectedOptions = Array.isArray(selection) ? selection : [selection];
-
-    // Buscar las opciones seleccionadas en el grupo (si hay optionGroups disponibles)
-    const options = selectedOptions
-      .filter((label) => !!label)
-      .map((selectedLabel) => {
-        const option = group?.options?.find((opt) => opt.label === selectedLabel);
-        return {
-          label: selectedLabel,
-          priceDelta: option?.priceDelta || 0,
-        };
-      });
-
-    return {
-      _key: crypto.randomUUID(),
-      // Usar el título del grupo si está disponible, sino usar el groupKey como fallback
-      title: group?.title || groupKey,
-      options: options.map((opt) => ({ _key: crypto.randomUUID(), ...opt })),
-    };
-  });
-}

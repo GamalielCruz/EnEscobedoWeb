@@ -12,6 +12,7 @@ import {
 } from '@/lib/whatsapp'
 import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
 import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
+import { appendOrderEvent } from '@/lib/order-events'
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'garoga_verify_token'
 const MEXICO_TIME_ZONE = 'America/Mexico_City'
@@ -891,12 +892,16 @@ Te avisaremos 10 minutos antes de finalizar.`
               repartidorAsignado: { _type: 'reference', _ref: repartidor._id },
               repartidorAsignadoAt: now,
               status: 'shipped',
+              orderStatus: 'shipped',
               dispatchStatus: 'accepted',
               deliveryOfertaEnviada: false,
               updatedAt: now,
             })
             .unset(['deliveryOfertaExpiresAt', 'offeredTo'])
             .commit()
+
+          await appendOrderEvent(String(order._id), { type: 'offer_accepted', source: 'whatsapp/webhook', actor: repartidor._id })
+          await appendOrderEvent(String(order._id), { type: 'driver_assigned', source: 'whatsapp/webhook', actor: repartidor._id, payload: { driverId: repartidor._id } })
 
           void notifyRestaurantDriverEnRoute(
             String(order._id),
@@ -1101,6 +1106,8 @@ Te avisaremos 10 minutos antes de finalizar.`
           .set({ dispatchStatus: 'at_door', updatedAt: now })
           .commit()
 
+        await appendOrderEvent(String((resolvedTargetOrder as Record<string, unknown>)._id), { type: 'at_door', source: 'whatsapp/webhook', actor: repartidor._id })
+
         const notifications: Promise<unknown>[] = [
           sendRepartidorEnPuerta(fromPhone, String((resolvedTargetOrder as Record<string, unknown>).orderNumber), String((resolvedTargetOrder as Record<string, unknown>)._id)),
         ]
@@ -1153,7 +1160,7 @@ Te avisaremos 10 minutos antes de finalizar.`
           await backendClient
             .patch(String((resolvedTargetOrder as Record<string, unknown>)._id))
             .ifRevisionId(String((resolvedTargetOrder as Record<string, unknown>)._rev))
-            .set({ status: 'delivered', dispatchStatus: 'completed', deliveredAt: now, updatedAt: now })
+.set({ status: 'delivered', orderStatus: 'delivered', dispatchStatus: 'completed', deliveredAt: now, settlementStatus: 'ready', updatedAt: now })
             .commit()
 
           const remainingOrders = (await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>)
@@ -1170,6 +1177,8 @@ Te avisaremos 10 minutos antes de finalizar.`
               console.error('[webhook ENTREGADO] Error redisparando pedidos en espera:', error)
             })
           }
+
+          await appendOrderEvent(String((resolvedTargetOrder as Record<string, unknown>)._id), { type: 'delivered', source: 'whatsapp/webhook', actor: repartidor._id })
 
           console.log('[whatsapp webhook] orden actualizada', { accion: 'entregado', orderId: (resolvedTargetOrder as Record<string, unknown>)._id, repartidorId: repartidor._id })
           console.log('[whatsapp webhook] entregado con orderId', {
@@ -1216,6 +1225,7 @@ Te avisaremos 10 minutos antes de finalizar.`
 
   return NextResponse.json({ status: 'ok' })
 }
+
 
 
 

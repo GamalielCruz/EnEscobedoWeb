@@ -1,0 +1,98 @@
+export type OrderTypeValue = "delivery" | "pickup";
+
+export type OrderStatusValue =
+  | "pending"
+  | "processing"
+  | "shipped"
+  | "delivered"
+  | "cancelled"
+  | "ready_for_pickup"
+  | "picked_up"
+  | "completed";
+
+export type PaymentStatusValue =
+  | "pending"
+  | "paid"
+  | "failed"
+  | "expired"
+  | "unpaid"
+  | "refunded"
+  | "requires_refund";
+
+export type DispatchStatusValue =
+  | "not_required"
+  | "waiting_for_driver"
+  | "offered"
+  | "accepted"
+  | "at_door"
+  | "completed";
+
+export type SettlementStatusValue =
+  | "pending"
+  | "ready"
+  | "settled"
+  | "cancelled"
+  | "refunded";
+
+export function buildLegacyStatus(input: {
+  orderType: OrderTypeValue;
+  orderStatus: OrderStatusValue;
+  paymentStatus: PaymentStatusValue;
+  paymentMethod?: string;
+}) {
+  const { orderType, orderStatus, paymentStatus, paymentMethod } = input;
+
+  if (orderStatus === "cancelled") return "cancelled";
+  if (paymentStatus === "failed") return "failed";
+  if (paymentStatus === "expired") return "expired";
+  if (orderStatus === "delivered") return "delivered";
+  if (orderStatus === "picked_up") return "picked_up";
+  if (orderStatus === "completed") return "completed";
+  if (orderStatus === "ready_for_pickup") return "ready_for_pickup";
+  if (orderStatus === "shipped") return "shipped";
+  if (orderStatus === "processing") return "processing";
+
+  if (orderType === "delivery" && paymentMethod === "cash_on_delivery") {
+    return "pending_delivery";
+  }
+
+  if (
+    orderType === "pickup" &&
+    (paymentMethod === "cash_on_pickup" ||
+      paymentMethod === "card_on_pickup" ||
+      paymentMethod === "cash_at_store" ||
+      paymentMethod === "card_at_store")
+  ) {
+    return "pending_pickup";
+  }
+
+  if (
+    (paymentMethod === "stripe" ||
+      paymentMethod === "card" ||
+      paymentMethod === "bank_transfer" ||
+      paymentMethod === "oxxo") &&
+    paymentStatus === "paid"
+  ) {
+    return "paid";
+  }
+
+  return "pending";
+}
+
+export function buildStateFields(input: {
+  orderType: OrderTypeValue;
+  orderStatus: OrderStatusValue;
+  paymentStatus: PaymentStatusValue;
+  dispatchStatus?: DispatchStatusValue;
+  settlementStatus?: SettlementStatusValue;
+  paymentMethod?: string;
+}) {
+  return {
+    orderStatus: input.orderStatus,
+    paymentStatus: input.paymentStatus,
+    dispatchStatus:
+      input.dispatchStatus ?? (input.orderType === "delivery" ? "waiting_for_driver" : "not_required"),
+    settlementStatus: input.settlementStatus ?? "pending",
+    status: buildLegacyStatus(input),
+  };
+}

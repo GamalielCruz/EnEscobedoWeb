@@ -4,7 +4,16 @@ import { writeClient } from "@/sanity/lib/client";
 import { sendOrderConfirmation } from "@/lib/whatsapp";
 import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
 import { notifyRestaurantNewOrder } from "@/lib/restaurant-notifications";
-import { randomUUID } from "crypto";
+import { appendOrderEvent } from "@/lib/order-events";
+import { buildOrderDocument, OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
+
+function normalizeItems(items: Array<any>): OrderItemInput[] {
+  return (items || []).map((item) => ({
+    productId: String(item?.productId || item?.product?._id || item?.product?.id || ""),
+    quantity: Number(item?.quantity || 0),
+    customizations: item?.customizations,
+  }));
+}
 
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
@@ -15,135 +24,78 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { items, metadata, shippingCost = 0 } = body;
+    const metadata = body?.metadata || {};
+    const storeId = String(metadata?.storeInfo?.storeId || "");
+    const orderType = metadata?.storeInfo?.deliveryMethod === "pickup" ? "pickup" : "delivery";
+    const paymentMethod = orderType === "pickup" ? "cash_at_store" : "cash_on_delivery";
+    const orderItems = normalizeItems(body?.items || []);
+    const shippingAddress = (metadata?.shippingAddress || null) as OrderAddressInput | null;
 
-
-    if (!items || items.length === 0) {
-      return NextResponse.json({ success: false, error: "La lista de productos está vacía" }, { status: 400 });
-    }
-
-    const subtotal = (items as Array<{product: {price?: number}, quantity: number}>).reduce(
-      (total, item) => total + ((item.product?.price ?? 0) * item.quantity),
-      0
-    );
-    const totalPrice = subtotal + shippingCost;
-
-    const sanityProducts = (items as Array<{
-      product: { _id: string; price?: number; optionGroups?: Array<{title?: string; options?: Array<{label?: string; priceDelta?: number}>}> };
-      quantity: number;
-      customizations?: { [key: string]: string | string[] };
-    }>).map((item, index) => {
-      const transformedCustomizations = transformCustomizations(
-        item.customizations,
-        item.product?.optionGroups
-      );
-      return {
-        _key: `item-${index}-${Date.now()}`,
-        product: { _type: "reference", _ref: item.product._id },
-        quantity: item.quantity,
-        customizations: transformedCustomizations,
-      };
+    const quote = await validateAndQuoteOrder({
+      storeId,
+      items: orderItems,
+      orderType,
+      paymentMethod,
+      shippingAddress,
     });
 
-    const clean = (text: unknown): string => String(text || "").trim();
+    const orderData = buildOrderDocument({
+      orderNumber: String(metadata.orderNumber || ""),
+      clerkUserId: String(metadata.clerkUserId || userId),
+      customerName: String(metadata.customerName || "Cliente").trim(),
+      customerEmail: String(metadata.customerEmail || "").trim(),
+      phone: String(metadata.phone || "").trim(),
+      storeId,
+      orderType,
+      paymentMethod,
+      quote,
+      shippingAddress,
+      paymentStatus: "unpaid",
+      dispatchStatus: orderType === "delivery" ? "waiting_for_driver" : "not_required",
+    }) as { _type: string; [key: string]: unknown };
 
-    const customerPhone = clean(metadata.phone);
-
-    const orderData: { _type: string; [key: string]: unknown } = {
-      _type: "order",
-      orderNumber: metadata.orderNumber,
-      customerName: clean(metadata.customerName),
-      email: clean(metadata.customerEmail),
-      phone: customerPhone || undefined,
-      clerkUserId: metadata.clerkUserId,
-      paymentMethod: "cash_on_delivery",
-      currency: "mxn",
-      products: sanityProducts,
-      totalPrice: Number(totalPrice.toFixed(2)),
-      subtotal: Number(subtotal.toFixed(2)),
-      shippingCost: Number(shippingCost.toFixed(2)),
-      orderType: metadata.storeInfo?.deliveryMethod === "pickup" ? "pickup" : "delivery",
-      status: metadata.storeInfo?.deliveryMethod === "pickup" ? "pending_pickup" : "pending_delivery",
-      dispatchStatus: metadata.storeInfo?.deliveryMethod === "pickup" ? undefined : "waiting_for_driver",
-      orderDate: new Date().toISOString(),
-      shippingAddress: {
-        line1: clean(metadata.shippingAddress?.line1) || "Dirección no especificada",
-        line2: clean(metadata.shippingAddress?.line2),
-        city: clean(metadata.shippingAddress?.city),
-        state: clean(metadata.shippingAddress?.state),
-        postal_code: clean(metadata.shippingAddress?.postal_code),
-        country: "MX",
-      },
-      stripeCustomerId: `cod_${metadata.clerkUserId}`,
-      stripePaymentIntentId: `cod_${metadata.orderNumber}`,
-    };
-
-    if (metadata.storeInfo?.storeId) {
-      orderData.pickupStore = { _type: "reference", _ref: metadata.storeInfo.storeId };
-      orderData.affiliateStore = { _type: "reference", _ref: metadata.storeInfo.storeId };
-      if (metadata.storeInfo.deliveryMethod === "pickup") {
-        orderData.pickupStatus = "in_transit";
-        orderData.pickupCode = randomUUID().split("-")[0].toUpperCase();
-      }
+    if (orderType === "pickup") {
+      orderData.pickupStatus = "in_transit";
+      orderData.pickupCode = crypto.randomUUID().split("-")[0].toUpperCase();
     }
 
     const result = await writeClient.create(orderData);
-    const customerName = clean(metadata.customerName) || "Cliente";
-    const orderNumber = clean(metadata.orderNumber);
+
+    await appendOrderEvent(result._id, { type: "created", source: "api/create-cod-order", actor: userId });
+    await appendOrderEvent(result._id, { type: "sent_to_restaurant", source: "api/create-cod-order" });
+    if (orderType === "delivery") {
+      await appendOrderEvent(result._id, { type: "dispatch_started", source: "api/create-cod-order" });
+    }
 
     after(async () => {
-      const postOrderTasks: Array<Promise<unknown>> = [
-        customerPhone && orderNumber
-          ? sendOrderConfirmation(customerPhone, customerName, orderNumber)
-          : Promise.resolve(),
+      const customerPhone = String(orderData.phone || "");
+      const customerName = String(orderData.customerName || "Cliente");
+      const orderNumber = String(orderData.orderNumber || "");
+
+      const tasks: Array<Promise<unknown>> = [
+        customerPhone && orderNumber ? sendOrderConfirmation(customerPhone, customerName, orderNumber) : Promise.resolve(),
         notifyRestaurantNewOrder(result._id),
-        orderData.orderType === "delivery"
-          ? dispatchDeliveryOffer(result._id)
-          : Promise.resolve(),
+        orderType === "delivery" ? dispatchDeliveryOffer(result._id) : Promise.resolve(),
       ];
 
-      const [confirmationResult, dispatchResult] = await Promise.allSettled(postOrderTasks);
-
-      if (confirmationResult.status === "rejected") {
-        console.error("[create-cod-order] sendOrderConfirmation error:", confirmationResult.reason);
-      } else if (customerPhone && orderNumber) {
-        console.log("[create-cod-order] WhatsApp confirmacion procesada para:", customerPhone);
-      }
-
-      if (dispatchResult.status === "rejected") {
-        console.error("[create-cod-order] dispatchDeliveryOffer error:", dispatchResult.reason);
-      }
+      await Promise.allSettled(tasks);
     });
 
-    return NextResponse.json({ success: true, orderId: result._id, orderNumber: metadata.orderNumber, requestId });
+    return NextResponse.json({
+      success: true,
+      orderId: result._id,
+      orderNumber: orderData.orderNumber,
+      requestId,
+      totals: {
+        productsSubtotal: orderData.productsSubtotal,
+        shippingFee: orderData.shippingFee,
+        grossTotal: orderData.grossTotal,
+      },
+    });
   } catch (error: unknown) {
-    console.error("❌ COD API ERROR:", { requestId, error });
-    return NextResponse.json({ success: false, error: "Error interno del servidor", requestId }, { status: 500 });
+    console.error("[create-cod-order]", { requestId, error });
+    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Error interno del servidor", requestId }, { status: 400 });
   }
 }
 
-function transformCustomizations(
-  customizations: { [key: string]: string | string[] } | undefined,
-  optionGroups?: Array<{ title?: string; options?: Array<{ label?: string; priceDelta?: number }> }>
-): Array<{ _key: string; title?: string; options?: Array<{ _key: string; label?: string; priceDelta?: number }> }> {
-  if (!customizations || Object.keys(customizations).length === 0) return [];
-
-  return Object.entries(customizations).map(([groupKey, selection]) => {
-    const groupIndex = parseInt(groupKey.replace("group-", ""), 10);
-    const group = optionGroups?.[groupIndex];
-    const selectedOptions = Array.isArray(selection) ? selection : [selection];
-
-    return {
-      _key: randomUUID(),
-      title: group?.title || groupKey,
-      options: selectedOptions
-        .filter((label) => !!label)
-        .map((label) => ({
-          _key: randomUUID(),
-          label,
-          priceDelta: group?.options?.find((o) => o.label === label)?.priceDelta || 0,
-        })),
-    };
-  });
-}
 

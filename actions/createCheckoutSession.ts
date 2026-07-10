@@ -2,8 +2,9 @@ import "server-only";
 
 import { imageUrl } from "@/lib/imageUrl";
 import { getStripe } from "@/lib/stripe";
-import { BasketItem } from "@/store/store";
 import { buildUrl } from "@/lib/urls";
+import { BasketItem } from "@/store/store";
+import { OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
 
 export type Metadata = {
   orderNumber: string;
@@ -17,6 +18,7 @@ export type Metadata = {
   pickupStoreName?: string;
   customerAddress?: string;
   shippingCost?: number;
+  shippingAddress?: OrderAddressInput;
 };
 
 export type GroupedBasketItem = {
@@ -26,226 +28,158 @@ export type GroupedBasketItem = {
   customPrice?: number;
 };
 
-export async function createCheckoutSession(
-  items: GroupedBasketItem[],
-  metadata: Metadata
-) {
-  try {
-    const stripe = getStripe();
-    if (!Array.isArray(items) || items.length === 0) {
-      throw new Error("No hay productos para procesar el pago");
-    }
+function normalizeDeliveryMethod(deliveryMethod?: string) {
+  return deliveryMethod === "pickup" ? "click_collect" : deliveryMethod;
+}
 
-    if (
-      !metadata.orderNumber ||
-      !metadata.customerName ||
-      !metadata.customerEmail ||
-      !metadata.clerkUserId
-    ) {
-      throw new Error("Faltan datos del cliente para procesar el pago");
-    }
+function buildOrderItems(items: GroupedBasketItem[]): OrderItemInput[] {
+  return items.map((item) => ({
+    productId: item.product._id,
+    quantity: item.quantity,
+    customizations: item.customizations,
+  }));
+}
 
-    const itemsWithoutPrice = items.filter(
-      (item) =>
-        !item.product?.price ||
-        Number.isNaN(item.product.price) ||
-        item.product.price <= 0
-    );
-    if (itemsWithoutPrice.length > 0) {
-      throw new Error(
-        "No se puede crear una sesión de checkout con productos sin precio"
-      );
-    }
+function buildShippingAddress(metadata: Metadata): OrderAddressInput | undefined {
+  if (metadata.shippingAddress) return metadata.shippingAddress;
+  if (!metadata.customerAddress) return undefined;
+  return {
+    line1: metadata.customerAddress,
+    country: "MX",
+  };
+}
 
-    const normalizedDeliveryMethod =
-      metadata.deliveryMethod === "pickup"
-        ? "click_collect"
-        : metadata.deliveryMethod;
-    const metadataForStripe: Metadata = {
-      ...metadata,
-      deliveryMethod: normalizedDeliveryMethod,
-    };
+export async function createCheckoutSession(items: GroupedBasketItem[], metadata: Metadata) {
+  const stripe = getStripe();
+  if (!Array.isArray(items) || items.length === 0) {
+    throw new Error("No hay productos para procesar el pago");
+  }
 
-    const customers = await stripe.customers.list({
-      email: metadataForStripe.customerEmail,
-      limit: 1,
-    });
+  if (!metadata.orderNumber || !metadata.customerName || !metadata.customerEmail || !metadata.clerkUserId) {
+    throw new Error("Faltan datos del cliente para procesar el pago");
+  }
 
-    let customerId: string;
-    if (customers.data.length > 0) {
-      customerId = customers.data[0].id;
-    } else {
-      const newCustomer = await stripe.customers.create({
-        email: metadataForStripe.customerEmail,
-        name: metadataForStripe.customerName,
+  const normalizedMethod = normalizeDeliveryMethod(metadata.deliveryMethod);
+  const orderType = normalizedMethod === "click_collect" || normalizedMethod === "pickup" ? "pickup" : "delivery";
+  const storeId = metadata.pickupStoreId;
+  if (!storeId) {
+    throw new Error("Tienda requerida para procesar el pedido");
+  }
+
+  const quotedOrder = await validateAndQuoteOrder({
+    storeId,
+    items: buildOrderItems(items),
+    orderType,
+    paymentMethod: "stripe",
+    shippingAddress: buildShippingAddress(metadata),
+  });
+
+  const customers = await stripe.customers.list({
+    email: metadata.customerEmail,
+    limit: 1,
+  });
+
+  const customerId =
+    customers.data[0]?.id ??
+    (
+      await stripe.customers.create({
+        email: metadata.customerEmail,
+        name: metadata.customerName,
         metadata: {
-          clerkUserId: metadataForStripe.clerkUserId,
+          clerkUserId: metadata.clerkUserId,
         },
-      });
-      customerId = newCustomer.id;
-    }
+      })
+    ).id;
 
-    const return_url = buildUrl(
-      `/success?session_id={CHECKOUT_SESSION_ID}&orderNumber=${metadataForStripe.orderNumber}`
-    );
+  const returnUrl = buildUrl(`/success?session_id={CHECKOUT_SESSION_ID}&orderNumber=${metadata.orderNumber}`);
+  const stripeMetadata: Record<string, string> = {
+    orderNumber: metadata.orderNumber,
+    customerName: metadata.customerName,
+    customerEmail: metadata.customerEmail,
+    clerkUserId: metadata.clerkUserId,
+    phone: metadata.phone ? String(metadata.phone) : "",
+    deliveryMethod: normalizedMethod || "delivery",
+    pickupStoreId: storeId,
+    pickupStoreName: metadata.pickupStoreName || quotedOrder.store.name || "",
+    shippingFee: String(quotedOrder.shippingFee),
+    productsSubtotal: String(quotedOrder.productsSubtotal),
+    grossTotal: String(quotedOrder.grossTotal),
+    discount: String(quotedOrder.discount),
+    tax: String(quotedOrder.tax),
+  };
 
-    const stripeMetadata: Record<string, string> = {};
-    for (const [key, value] of Object.entries(metadataForStripe)) {
-      if (value !== undefined && value !== null) {
-        stripeMetadata[key] = String(value).slice(0, 500);
-      }
-    }
+  const shippingAddress = buildShippingAddress(metadata);
+  if (shippingAddress?.line1) stripeMetadata.shippingLine1 = shippingAddress.line1;
+  if (shippingAddress?.line2) stripeMetadata.shippingLine2 = shippingAddress.line2;
+  if (shippingAddress?.city) stripeMetadata.shippingCity = shippingAddress.city;
+  if (shippingAddress?.state) stripeMetadata.shippingState = shippingAddress.state;
+  if (shippingAddress?.postal_code) stripeMetadata.shippingPostalCode = shippingAddress.postal_code;
+  if (shippingAddress?.country) stripeMetadata.shippingCountry = shippingAddress.country;
+  if (typeof shippingAddress?.latitude === "number") stripeMetadata.shippingLatitude = String(shippingAddress.latitude);
+  if (typeof shippingAddress?.longitude === "number") stripeMetadata.shippingLongitude = String(shippingAddress.longitude);
 
-    const itemsWithCustomizations = items.map((item) => ({
-      productId: item.product._id,
-      quantity: item.quantity,
-      price: item.product.price,
-      customizations: item.customizations,
-      customPrice: item.customPrice,
-      optionGroups: item.product.optionGroups?.map((group) => ({
-        title: group.title,
-        options: group.options?.map((option) => ({
-          label: option.label,
-          priceDelta: option.priceDelta,
-        })),
-      })),
-    }));
-    const itemsWithCustomizationsJson = JSON.stringify(itemsWithCustomizations);
+  const compactOrderItems = JSON.stringify(buildOrderItems(items));
+  if (compactOrderItems.length > 500) {
+    throw new Error("Los detalles del pedido exceden el limite permitido");
+  }
+  stripeMetadata.orderItems = compactOrderItems;
 
-    if (itemsWithCustomizationsJson.length <= 500) {
-      stripeMetadata.itemsWithCustomizations = itemsWithCustomizationsJson;
-    } else {
-      const minimalItems = items.map((item) => ({
-        productId: item.product._id,
-        quantity: item.quantity,
-        price: item.product.price,
-        customPrice: item.customPrice,
-      }));
-      const minimalItemsJson = JSON.stringify(minimalItems);
-
-      if (minimalItemsJson.length <= 500) {
-        stripeMetadata.itemsWithCustomizations = minimalItemsJson;
-      } else {
-        throw new Error("Los detalles del pedido exceden el límite permitido");
-      }
-    }
-
-    const lineItems = items.map((item) => {
-      if (!Number.isFinite(item.quantity) || item.quantity <= 0) {
-        throw new Error("Cantidad inválida en los productos");
-      }
-      const unitAmount = Math.round(item.product.price! * 100);
-      if (!Number.isFinite(unitAmount) || unitAmount <= 0) {
-        throw new Error("Precio inválido en los productos");
-      }
-      const image = item.product.image
-        ? imageUrl(item.product.image).url()
-        : undefined;
-      const safeImages =
-        image && image.startsWith("https://") ? [image] : undefined;
-      return {
-        price_data: {
-          currency: "mxn",
-          unit_amount: unitAmount,
-          product_data: {
-            name: (item.product.name || "Producto sin nombre").slice(0, 250),
-            description: `Product ID: ${item.product._id}`.slice(0, 500),
-            metadata: {
-              id: String(item.product._id).slice(0, 500),
-            },
-            images: safeImages,
+  const itemLookup = new Map(items.map((item) => [item.product._id, item.product]));
+  const lineItems = quotedOrder.items.map((item) => {
+    const frontendProduct = itemLookup.get(item.product._ref);
+    const image = frontendProduct?.image ? imageUrl(frontendProduct.image).url() : undefined;
+    return {
+      price_data: {
+        currency: "mxn",
+        unit_amount: Math.round(item.unitTotalPrice * 100),
+        product_data: {
+          name: String(frontendProduct?.name || "Producto" ).slice(0, 250),
+          description: `Product ID: ${item.product._ref}`.slice(0, 500),
+          metadata: {
+            id: String(item.product._ref).slice(0, 500),
           },
+          images: image && image.startsWith("https://") ? [image] : undefined,
         },
-        quantity: Math.floor(item.quantity),
-      };
-    });
-
-    // Validar el monto mínimo de Stripe ($10.00 MXN / 1000 centavos)
-    const totalLineItemsAmount = lineItems.reduce((sum, item) => {
-      return sum + (item.price_data.unit_amount * item.quantity);
-    }, 0);
-
-    const shippingAmount = (normalizedDeliveryMethod !== "click_collect" &&
-      metadataForStripe.shippingCost &&
-      metadataForStripe.shippingCost > 0)
-        ? Math.round(metadataForStripe.shippingCost * 100)
-        : 0;
-
-    const totalStripeAmount = totalLineItemsAmount + shippingAmount;
-
-    if (totalStripeAmount < 1000) {
-      throw new Error(
-        "El monto mínimo para procesar el pago con tarjeta es de $10.00 MXN. Agrega más productos para pagar en línea, o selecciona pagar en efectivo."
-      );
-    }
-
-    const session = await stripe.checkout.sessions.create({
-      customer: customerId,
-      metadata: stripeMetadata,
-      mode: "payment",      allow_promotion_codes: true,
-      payment_method_types: ["card"], // Solo tarjeta
-      phone_number_collection: {
-        enabled: false,
       },
-      ui_mode: "embedded",
-      return_url: return_url,
-      line_items: lineItems,
-      // Solo agregar opciones de envío si NO es Click & Collect y hay costo de envío
-      ...(normalizedDeliveryMethod !== "click_collect" &&
-        metadataForStripe.shippingCost &&
-        metadataForStripe.shippingCost > 0 && {
+      quantity: item.quantity,
+    };
+  });
+
+  const totalStripeAmount = lineItems.reduce((sum, item) => sum + item.price_data.unit_amount * item.quantity, 0) + Math.round(quotedOrder.shippingFee * 100);
+  if (totalStripeAmount < 1000) {
+    throw new Error("El monto minimo para procesar el pago con tarjeta es de $10.00 MXN.");
+  }
+
+  const session = await stripe.checkout.sessions.create({
+    customer: customerId,
+    metadata: stripeMetadata,
+    mode: "payment",
+    allow_promotion_codes: true,
+    payment_method_types: ["card"],
+    phone_number_collection: {
+      enabled: false,
+    },
+    ui_mode: "embedded",
+    return_url: returnUrl,
+    line_items: lineItems,
+    ...(orderType === "delivery" && quotedOrder.shippingFee > 0
+      ? {
           shipping_options: [
             {
               shipping_rate_data: {
                 type: "fixed_amount",
                 fixed_amount: {
-                  amount: Math.round(metadataForStripe.shippingCost * 100),
+                  amount: Math.round(quotedOrder.shippingFee * 100),
                   currency: "mxn",
                 },
-                display_name: "Envío a domicilio",
+                display_name: "Envio a domicilio",
               },
             },
           ],
-        }),
-    });
+        }
+      : {}),
+  });
 
-    return session.client_secret;
-  } catch (error: unknown) {
-    console.error("Error al crear la sesión de checkout", error);
-
-    // Type guard to check if error is a Stripe error or has expected properties
-    const isStripeError = (
-      err: unknown
-    ): err is { code?: string; param?: string; message?: string; type?: string } => {
-      return typeof err === "object" && err !== null;
-    };
-
-    if (isStripeError(error) && error.code === "card_declined") {
-      throw new Error(
-        "Tu tarjeta fue rechazada. Por favor intenta con otra tarjeta."
-      );
-    }
-
-    if (isStripeError(error) && error.code === "payment_method_not_available") {
-      throw new Error(
-        "El método de pago no está disponible temporalmente. Por favor intenta de nuevo."
-      );
-    }
-
-    if (
-      isStripeError(error) &&
-      (error.type === "StripeInvalidRequestError" ||
-        (error.message &&
-          error.message.toLowerCase().includes("metadata")))
-    ) {
-      const paramInfo = error.param ? ` (${error.param})` : "";
-      throw new Error(
-        `Datos de pago inválidos: ${error.message || "Revisa los productos y vuelve a intentar."}${paramInfo}`
-      );
-    }
-
-    throw error;
-  }
+  return session.client_secret;
 }
-
 

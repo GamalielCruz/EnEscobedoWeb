@@ -1,4 +1,5 @@
-﻿import { backendClient } from "@/sanity/lib/backendClient";
+import { appendOrderEvent } from "@/lib/order-events";
+import { backendClient } from "@/sanity/lib/backendClient";
 import { sendBundleDeliveryOffer, sendDeliveryOffer, sendWhatsAppMessage } from "./whatsapp";
 
 const OFFER_TTL_SECONDS = 90;
@@ -119,9 +120,7 @@ const STORE_WAITING_ORDERS_QUERY = `*[
   !defined(repartidorAsignado) &&
   !defined(offeredTo) &&
   affiliateStore._ref == $storeId
-] | order(orderDate asc)[0...2]{
-  _id
-}`;
+] | order(orderDate asc)[0...2]{ _id }`;
 
 const COMMUNITY_WAITING_ORDERS_QUERY = `*[
   _type == "order" &&
@@ -129,9 +128,7 @@ const COMMUNITY_WAITING_ORDERS_QUERY = `*[
   !defined(repartidorAsignado) &&
   !defined(offeredTo) &&
   affiliateStore->hasOwnDelivery != true
-] | order(orderDate asc)[0...2]{
-  _id
-}`;
+] | order(orderDate asc)[0...2]{ _id }`;
 
 function createOrderRef(orderId: string) {
   return { _type: "reference" as const, _ref: orderId };
@@ -144,24 +141,12 @@ function createDriverRef(driverId: string) {
 function buildOfferWindow() {
   const now = new Date();
   const expiresAt = new Date(now.getTime() + OFFER_TTL_SECONDS * 1000);
-
-  return {
-    nowIso: now.toISOString(),
-    expiresAtIso: expiresAt.toISOString(),
-  };
+  return { nowIso: now.toISOString(), expiresAtIso: expiresAt.toISOString() };
 }
 
 function buildAddress(order: DispatchOrder) {
-  if (!order.shippingAddress) {
-    return "Ver pedido";
-  }
-
-  return (
-    [order.shippingAddress.line1, order.shippingAddress.street, order.shippingAddress.city]
-      .filter(Boolean)
-      .join(", ")
-      .trim() || "Ver pedido"
-  );
+  if (!order.shippingAddress) return "Ver pedido";
+  return [order.shippingAddress.line1, order.shippingAddress.street, order.shippingAddress.city].filter(Boolean).join(", ").trim() || "Ver pedido";
 }
 
 function buildTotalLabel(total?: number) {
@@ -169,9 +154,7 @@ function buildTotalLabel(total?: number) {
 }
 
 function buildPaymentMethodLabel(paymentMethod?: string) {
-  return paymentMethod === "cash_on_delivery" || paymentMethod === "cash_on_pickup"
-    ? "COBRAR EN EFECTIVO"
-    : "YA PAGADO";
+  return paymentMethod === "cash_on_delivery" || paymentMethod === "cash_on_pickup" ? "COBRAR EN EFECTIVO" : "YA PAGADO";
 }
 
 function buildMapsUrl(order: DispatchOrder, address: string) {
@@ -181,10 +164,7 @@ function buildMapsUrl(order: DispatchOrder, address: string) {
 
 async function fetchOrders(orderIds: string[]): Promise<DispatchOrder[]> {
   const uniqueOrderIds = [...new Set(orderIds.filter(Boolean))];
-  if (uniqueOrderIds.length === 0) {
-    return [];
-  }
-
+  if (uniqueOrderIds.length === 0) return [];
   const orders = await backendClient.fetch(ORDERS_QUERY, { orderIds: uniqueOrderIds });
   const orderMap = new Map(orders.map((order: DispatchOrder) => [order._id, order]));
   return uniqueOrderIds.map((orderId) => orderMap.get(orderId)).filter(Boolean) as DispatchOrder[];
@@ -201,10 +181,7 @@ async function fetchCandidateDrivers(order: DispatchOrder, excludedDriverIds: st
     drivers = await backendClient.fetch(COMMUNITY_DRIVERS_QUERY, {});
   }
 
-  const deduped = drivers.filter(
-    (driver, index, self) => index === self.findIndex((candidate) => candidate.telefono === driver.telefono)
-  );
-
+  const deduped = drivers.filter((driver, index, self) => index === self.findIndex((candidate) => candidate.telefono === driver.telefono));
   return deduped.filter((driver) => !excludedDriverIds.includes(driver._id));
 }
 
@@ -226,6 +203,18 @@ async function setOrdersWaiting(orderIds: string[], reason: string) {
           })
           .unset(["deliveryOfertaExpiresAt", "offeredTo"])
           .commit()
+      )
+  );
+
+  await Promise.allSettled(
+    orders
+      .filter((order) => !order.repartidorAsignado)
+      .map((order) =>
+        appendOrderEvent(order._id, {
+          type: reason === "offer_expired" ? "offer_expired" : "offer_rejected",
+          source: "delivery-dispatch",
+          reason,
+        })
       )
   );
 
@@ -253,6 +242,17 @@ async function markOrdersAsOffered(orderIds: string[], driverId: string, expires
         .commit()
     )
   );
+
+  await Promise.allSettled(
+    orders.map((order) =>
+      appendOrderEvent(order._id, {
+        type: "offer_sent",
+        source: "delivery-dispatch",
+        actor: driverId,
+        payload: { driverId, expiresAt: expiresAtIso },
+      })
+    )
+  );
 }
 
 async function prepareDriverForOffer(driver: DispatchDriver, orderIds: string[], storeId: string, offerType: "single" | "bundle", nowIso: string, expiresAtIso: string) {
@@ -272,15 +272,11 @@ async function prepareDriverForOffer(driver: DispatchDriver, orderIds: string[],
 }
 
 async function notifyNoDrivers(orderNumbers: string[]) {
-  if (!ADMIN_PHONE) {
-    return;
-  }
-
+  if (!ADMIN_PHONE) return;
   const label = orderNumbers.map((orderNumber) => `#${orderNumber}`).join(", ");
-  await sendWhatsAppMessage(
-    ADMIN_PHONE,
-    `Sin repartidores disponibles para ${label}. Por favor asigna manualmente.`
-  ).catch((error) => console.error("[delivery-dispatch] error notificando admin:", error));
+  await sendWhatsAppMessage(ADMIN_PHONE, `Sin repartidores disponibles para ${label}. Por favor asigna manualmente.`).catch((error) =>
+    console.error("[delivery-dispatch] error notificando admin:", error)
+  );
 }
 
 function buildBundleTotal(orders: DispatchOrder[]) {
@@ -290,18 +286,8 @@ function buildBundleTotal(orders: DispatchOrder[]) {
 async function rollbackDriverOffer(driverId: string) {
   await backendClient
     .patch(driverId)
-    .set({
-      estadoDisponibilidad: "available",
-      ultimaActividad: new Date().toISOString(),
-    })
-    .unset([
-      "ultimoPedidoOfertado",
-      "pedidosOfertados",
-      "restauranteOferta",
-      "ofertaTipo",
-      "ofertaEnviadaAt",
-      "ofertaExpiraAt",
-    ])
+    .set({ estadoDisponibilidad: "available", ultimaActividad: new Date().toISOString() })
+    .unset(["ultimoPedidoOfertado", "pedidosOfertados", "restauranteOferta", "ofertaTipo", "ofertaEnviadaAt", "ofertaExpiraAt"])
     .commit()
     .catch(() => null);
 }
@@ -351,15 +337,12 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
     repartidorNombre: selectedDriver.nombre,
     expiraAt: expiresAtIso,
   });
-
   return true;
 }
 
 export async function dispatchDeliveryBundle(orderIds: string[], options: DispatchOptions = {}): Promise<boolean> {
   const uniqueOrderIds = [...new Set(orderIds.filter(Boolean))].slice(0, 2);
-  if (uniqueOrderIds.length <= 1) {
-    return uniqueOrderIds[0] ? dispatchDeliveryOffer(uniqueOrderIds[0], options) : false;
-  }
+  if (uniqueOrderIds.length <= 1) return uniqueOrderIds[0] ? dispatchDeliveryOffer(uniqueOrderIds[0], options) : false;
 
   const orders = await fetchOrders(uniqueOrderIds);
   if (orders.length !== uniqueOrderIds.length) {
@@ -369,13 +352,9 @@ export async function dispatchDeliveryBundle(orderIds: string[], options: Dispat
 
   const [firstOrder, ...restOrders] = orders;
   if (!firstOrder.storeId || restOrders.some((order) => order.storeId !== firstOrder.storeId)) {
-    console.log("[delivery-dispatch] bundle omitido por tiendas distintas", {
-      orderIds: uniqueOrderIds,
-      stores: orders.map((order) => order.storeId),
-    });
+    console.log("[delivery-dispatch] bundle omitido por tiendas distintas", { orderIds: uniqueOrderIds, stores: orders.map((order) => order.storeId) });
     return false;
   }
-
   if (orders.some((order) => order.repartidorAsignado)) {
     console.log("[delivery-dispatch] bundle omitido porque ya hay pedido asignado", { orderIds: uniqueOrderIds });
     return false;
@@ -383,12 +362,8 @@ export async function dispatchDeliveryBundle(orderIds: string[], options: Dispat
 
   const candidateDrivers = await fetchCandidateDrivers(firstOrder, options.excludedDriverIds ?? []);
   const selectedDriver = candidateDrivers[0];
-
   if (!selectedDriver) {
-    console.warn("[delivery-dispatch] sin repartidores para bundle", {
-      orderIds: uniqueOrderIds,
-      orderNumbers: orders.map((order) => order.orderNumber),
-    });
+    console.warn("[delivery-dispatch] sin repartidores para bundle", { orderIds: uniqueOrderIds, orderNumbers: orders.map((order) => order.orderNumber) });
     await setOrdersWaiting(uniqueOrderIds, "no_drivers_available_bundle");
     await notifyNoDrivers(orders.map((order) => order.orderNumber));
     return false;
@@ -420,44 +395,28 @@ export async function dispatchDeliveryBundle(orderIds: string[], options: Dispat
     repartidorNombre: selectedDriver.nombre,
     expiraAt: expiresAtIso,
   });
-
   return true;
 }
 
 export async function releaseOrdersForDriver(orderIds: string[], driverId: string, reason: string): Promise<string[]> {
   const orders = await fetchOrders(orderIds);
-  const releasable = orders.filter(
-    (order) => !order.repartidorAsignado && order.offeredToRef === driverId
-  );
-
-  if (releasable.length === 0) {
-    return [];
-  }
+  const releasable = orders.filter((order) => !order.repartidorAsignado && order.offeredToRef === driverId);
+  if (releasable.length === 0) return [];
 
   await setOrdersWaiting(releasable.map((order) => order._id), reason);
-  console.log("[delivery-dispatch] ofertas liberadas", {
-    reason,
-    repartidorId: driverId,
-    orderIds: releasable.map((order) => order._id),
-  });
+  console.log("[delivery-dispatch] ofertas liberadas", { reason, repartidorId: driverId, orderIds: releasable.map((order) => order._id) });
   return releasable.map((order) => order._id);
 }
 
 export async function redispatchOrders(orderIds: string[], excludedDriverIds: string[] = []): Promise<boolean> {
   const openOrders = await fetchOrders(orderIds);
   const redispatchableIds = openOrders.filter((order) => !order.repartidorAsignado).map((order) => order._id);
-
-  if (redispatchableIds.length === 0) {
-    return false;
-  }
+  if (redispatchableIds.length === 0) return false;
 
   await setOrdersWaiting(redispatchableIds, "redispatch");
-
   if (redispatchableIds.length > 1) {
     const bundled = await dispatchDeliveryBundle(redispatchableIds, { excludedDriverIds });
-    if (bundled) {
-      return true;
-    }
+    if (bundled) return true;
   }
 
   let sentAny = false;
@@ -465,26 +424,19 @@ export async function redispatchOrders(orderIds: string[], excludedDriverIds: st
     const sent = await dispatchDeliveryOffer(orderId, { excludedDriverIds });
     sentAny = sentAny || sent;
   }
-
   return sentAny;
 }
 
 export async function dispatchWaitingOrdersForDriver(driverId: string): Promise<boolean> {
-  const driver = await backendClient.fetch(DRIVER_BY_ID_QUERY, { driverId }) as DispatchDriver | null;
-
-  if (!driver || !driver.disponible || driver.estadoDisponibilidad !== "available") {
-    return false;
-  }
+  const driver = (await backendClient.fetch(DRIVER_BY_ID_QUERY, { driverId })) as DispatchDriver | null;
+  if (!driver || !driver.disponible || driver.estadoDisponibilidad !== "available") return false;
 
   const waitingOrders = driver.storeId
-    ? await backendClient.fetch(STORE_WAITING_ORDERS_QUERY, { storeId: driver.storeId }) as Array<{ _id: string }>
-    : await backendClient.fetch(COMMUNITY_WAITING_ORDERS_QUERY, {}) as Array<{ _id: string }>;
+    ? ((await backendClient.fetch(STORE_WAITING_ORDERS_QUERY, { storeId: driver.storeId })) as Array<{ _id: string }>)
+    : ((await backendClient.fetch(COMMUNITY_WAITING_ORDERS_QUERY, {})) as Array<{ _id: string }>);
 
   const waitingOrderIds = waitingOrders.map((order) => order._id).filter(Boolean);
-  if (waitingOrderIds.length === 0) {
-    return false;
-  }
-
+  if (waitingOrderIds.length === 0) return false;
   return redispatchOrders(waitingOrderIds);
 }
 
@@ -492,30 +444,20 @@ export async function dispatchDeliveryOffer(orderId: string, options: DispatchOp
   console.log(`[delivery-dispatch] iniciando dispatch ${orderId}`);
 
   try {
-    const order = await backendClient.fetch(ORDER_QUERY, { orderId }) as DispatchOrder | null;
-
+    const order = (await backendClient.fetch(ORDER_QUERY, { orderId })) as DispatchOrder | null;
     if (!order) {
       console.error(`[delivery-dispatch] orden no encontrada ${orderId}`);
       return false;
     }
-
     if (order.repartidorAsignado) {
       console.log("[delivery-dispatch] pedido ya asignado", { orderId: order._id, orderNumber: order.orderNumber });
       return false;
     }
-
     if (order.deliveryOfertaEnviada && order.offeredToRef) {
-      console.log("[delivery-dispatch] orden ya ofrecida", {
-        orderId: order._id,
-        orderNumber: order.orderNumber,
-        offeredTo: order.offeredToRef,
-      });
+      console.log("[delivery-dispatch] orden ya ofrecida", { orderId: order._id, orderNumber: order.orderNumber, offeredTo: order.offeredToRef });
       return false;
     }
-
-    if (order.status === "delivered" || order.status === "cancelled") {
-      return false;
-    }
+    if (order.status === "delivered" || order.status === "cancelled") return false;
 
     return dispatchSingleOffer(order, options.excludedDriverIds ?? []);
   } catch (error) {
@@ -523,4 +465,3 @@ export async function dispatchDeliveryOffer(orderId: string, options: DispatchOp
     return false;
   }
 }
-

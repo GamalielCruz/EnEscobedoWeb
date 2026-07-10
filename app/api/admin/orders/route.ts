@@ -4,12 +4,18 @@ import { client, readClient, writeClient } from "@/sanity/lib/client";
 import { isAdminUser } from "@/lib/admin";
 import { sendOrderCancelled } from "@/lib/whatsapp";
 import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
+import { appendOrderEvent } from "@/lib/order-events";
+import { buildStateFields, OrderStatusValue, PaymentStatusValue, DispatchStatusValue, SettlementStatusValue } from "@/lib/order-state";
 
 const ORDER_PROJECTION = `{
   _id,
   _type,
   orderNumber,
   orderType,
+  orderStatus,
+  paymentStatus,
+  dispatchStatus,
+  settlementStatus,
   pickupCode,
   "fulfillmentType": select(orderType == "pickup" => "pickup", "delivery"),
   "customerInfo": {
@@ -30,19 +36,26 @@ const ORDER_PROJECTION = `{
     "productName": product->name,
     "productId": product->_id,
     quantity,
-    "price": product->price,
     notes
   },
   "totalAmount": totalPrice,
   paymentMethod,
   status,
-  dispatchStatus,
-  "offeredToRef": offeredTo._ref,
-  "repartidorAsignadoRef": repartidorAsignado._ref,
   estimatedPickupDate,
   readyAt,
   pickedUpAt,
   deliveredAt,
+  cancelledAt,
+  refundedAt,
+  grossTotal,
+  storeNetTotal,
+  platformNetTotal,
+  driverPayout,
+  stripeFee,
+  tax,
+  shippingFee,
+  productsSubtotal,
+  orderEvents,
   "notes": deliveryNotes,
   "createdAt": orderDate,
   updatedAt
@@ -54,47 +67,54 @@ const ORDER_BY_NUMBER_QUERY = `*[_type == "order" && orderNumber == $orderNumber
   orderType,
   customerName,
   phone,
+  paymentMethod,
   status,
+  orderStatus,
+  paymentStatus,
+  dispatchStatus,
+  settlementStatus,
   readyAt,
   pickedUpAt,
   deliveredAt
 }`;
 
 function getReader() {
-  if (process.env.SANITY_API_READ_TOKEN) {
-    return readClient;
-  }
-
-  if (process.env.SANITY_API_TOKEN) {
-    return writeClient;
-  }
-
+  if (process.env.SANITY_API_READ_TOKEN) return readClient;
+  if (process.env.SANITY_API_TOKEN) return writeClient;
   return client;
 }
 
-function isFinalStatus(status: string) {
-  return ["cancelled", "completed", "delivered", "picked_up", "failed"].includes(status);
+function getStatusNotification(orderStatus: string) {
+  if (orderStatus === "cancelled") return sendOrderCancelled;
+  return null;
 }
 
-function getStatusNotification(status: string) {
+function mapLegacyStatus(orderType: "pickup" | "delivery", status: string): Partial<{ orderStatus: OrderStatusValue; paymentStatus: PaymentStatusValue; dispatchStatus: DispatchStatusValue }> {
   switch (status) {
     case "cancelled":
-      return sendOrderCancelled;
+      return { orderStatus: "cancelled", paymentStatus: undefined, dispatchStatus: orderType === "pickup" ? "not_required" : undefined };
+    case "processing":
+      return { orderStatus: "processing" };
+    case "ready_for_pickup":
+      return { orderStatus: "ready_for_pickup", dispatchStatus: "not_required" };
+    case "picked_up":
+      return { orderStatus: "picked_up", dispatchStatus: "not_required" };
+    case "completed":
+      return { orderStatus: "completed", dispatchStatus: orderType === "pickup" ? "not_required" : "completed" };
+    case "shipped":
+      return { orderStatus: "shipped", dispatchStatus: "accepted" };
+    case "delivered":
+      return { orderStatus: "delivered", dispatchStatus: orderType === "delivery" ? "completed" : "not_required" };
     default:
-      return null;
+      return { orderStatus: status as OrderStatusValue };
   }
 }
 
 export async function GET(request: NextRequest) {
   try {
     const { userId } = await auth();
-    if (!userId) {
-      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-    }
-
-    if (!isAdminUser(userId)) {
-      return NextResponse.json({ error: "No tienes permisos" }, { status: 403 });
-    }
+    if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+    if (!isAdminUser(userId)) return NextResponse.json({ error: "No tienes permisos" }, { status: 403 });
 
     const { searchParams } = new URL(request.url);
     const status = searchParams.get("status");
@@ -106,14 +126,11 @@ export async function GET(request: NextRequest) {
     const filters = [`!(_id in path('drafts.**'))`, `_type == "order"`];
     const params: Record<string, string> = {};
 
-    if (type === "pickup") {
-      filters.push(`orderType == "pickup"`);
-    } else if (type === "delivery") {
-      filters.push(`orderType == "delivery"`);
-    }
+    if (type === "pickup") filters.push(`orderType == "pickup"`);
+    else if (type === "delivery") filters.push(`orderType == "delivery"`);
 
     if (status && status !== "all") {
-      filters.push(`status == $status`);
+      filters.push(`(status == $status || orderStatus == $status || paymentStatus == $status || dispatchStatus == $status || settlementStatus == $status)`);
       params.status = status;
     }
 
@@ -133,25 +150,17 @@ export async function GET(request: NextRequest) {
             .filter(Boolean)
             .join(" ")
             .toLowerCase();
-
           return haystack.includes(q);
         })
       : orders ?? [];
 
-    return NextResponse.json(
-      {
-        success: true,
-        orders: filteredOrders,
-        count: filteredOrders.length,
+    return NextResponse.json({ success: true, orders: filteredOrders, count: filteredOrders.length }, {
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+        Pragma: "no-cache",
+        Expires: "0",
       },
-      {
-        headers: {
-          "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-          Pragma: "no-cache",
-          Expires: "0",
-        },
-      }
-    );
+    });
   } catch (error) {
     console.error("[admin/orders GET]", error);
     return NextResponse.json({ error: "Error al cargar pedidos" }, { status: 500 });
@@ -161,90 +170,88 @@ export async function GET(request: NextRequest) {
 export async function PATCH(request: NextRequest) {
   try {
     const { userId } = await auth();
-    if (!userId) {
-      return NextResponse.json({ error: "No autorizado" }, { status: 401 });
-    }
-
-    if (!isAdminUser(userId)) {
-      return NextResponse.json({ error: "No tienes permisos" }, { status: 403 });
-    }
-
+    if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+    if (!isAdminUser(userId)) return NextResponse.json({ error: "No tienes permisos" }, { status: 403 });
     if (!process.env.SANITY_API_TOKEN) {
-      return NextResponse.json(
-        { error: "Error al actualizar pedido", details: { message: "Missing SANITY_API_TOKEN" } },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Error al actualizar pedido", details: { message: "Missing SANITY_API_TOKEN" } }, { status: 500 });
     }
 
     const body = await request.json();
     const { orderNumber, status } = body;
-
-    if (!orderNumber || !status) {
-      return NextResponse.json(
-        { error: "orderNumber y status son requeridos" },
-        { status: 400 }
-      );
+    if (!orderNumber) {
+      return NextResponse.json({ error: "orderNumber es requerido" }, { status: 400 });
     }
 
     const order = await client.fetch(ORDER_BY_NUMBER_QUERY, { orderNumber });
-
-    if (!order) {
-      return NextResponse.json({ error: "Orden no encontrada" }, { status: 404 });
-    }
+    if (!order) return NextResponse.json({ error: "Orden no encontrada" }, { status: 404 });
 
     const now = new Date().toISOString();
-    const updateData: Record<string, string> = {
-      status,
+    const orderType = order.orderType === "pickup" ? "pickup" : "delivery";
+    const legacyMapped: Partial<{ orderStatus: OrderStatusValue; paymentStatus: PaymentStatusValue; dispatchStatus: DispatchStatusValue }> = status ? mapLegacyStatus(orderType, status) : {};
+    const orderStatus = (body.orderStatus || legacyMapped.orderStatus || order.orderStatus || "pending") as OrderStatusValue;
+    const paymentStatus = (body.paymentStatus || legacyMapped.paymentStatus || order.paymentStatus || "pending") as PaymentStatusValue;
+    const dispatchStatus = (body.dispatchStatus || legacyMapped.dispatchStatus || order.dispatchStatus || (orderType === "pickup" ? "not_required" : "waiting_for_driver")) as DispatchStatusValue;
+    const settlementStatus = (body.settlementStatus || order.settlementStatus || "pending") as SettlementStatusValue;
+
+    const stateFields = buildStateFields({
+      orderType,
+      orderStatus,
+      paymentStatus,
+      dispatchStatus,
+      settlementStatus,
+      paymentMethod: order.paymentMethod,
+    });
+
+    const updateData: Record<string, unknown> = {
+      ...stateFields,
       updatedAt: now,
     };
 
-    if (order.orderType === "pickup") {
-      if (status === "ready_for_pickup" && !order.readyAt) {
+    if (orderType === "pickup") {
+      if (orderStatus === "ready_for_pickup" && !order.readyAt) {
         updateData.readyAt = now;
-      }
-
-      if ((status === "picked_up" || status === "completed") && !order.pickedUpAt) {
-        updateData.pickedUpAt = now;
-      }
-
-      if (status === "ready_for_pickup") {
         updateData.pickupStatus = "ready_for_pickup";
-      } else if (status === "picked_up" || status === "completed") {
+      }
+      if ((orderStatus === "picked_up" || orderStatus === "completed") && !order.pickedUpAt) {
+        updateData.pickedUpAt = now;
         updateData.pickupStatus = "picked_up";
-      } else if (status === "cancelled") {
+      }
+      if (orderStatus === "cancelled") {
         updateData.pickupStatus = "expired";
-      } else if (!isFinalStatus(status)) {
-        updateData.pickupStatus = "in_transit";
+        updateData.cancelledAt = now;
       }
     }
 
-    if (status === "delivered" && !order.deliveredAt) {
+    if (orderStatus === "delivered" && !order.deliveredAt) {
       updateData.deliveredAt = now;
+    }
+    if (orderStatus === "cancelled") {
+      updateData.cancelledAt = now;
+      updateData.settlementStatus = "cancelled";
+    }
+    if (paymentStatus === "refunded") {
+      updateData.refundedAt = now;
+      updateData.settlementStatus = "refunded";
     }
 
     const updated = await writeClient.patch(order._id).set(updateData).commit();
+    await appendOrderEvent(order._id, {
+      type: "manual_admin_action",
+      source: "api/admin/orders",
+      actor: userId,
+      payload: { orderStatus, paymentStatus, dispatchStatus, settlementStatus },
+    });
 
-    // Disparar oferta de reparto si es un delivery que pasa a processing
-    if (status === "processing" && order.orderType === "delivery") {
-      void dispatchDeliveryOffer(order._id).catch((e) =>
-        console.error("[admin/orders PATCH] dispatchDeliveryOffer error:", e)
-      );
+    if (dispatchStatus === "waiting_for_driver" && orderType === "delivery") {
+      void dispatchDeliveryOffer(order._id).catch((e) => console.error("[admin/orders PATCH] dispatchDeliveryOffer error:", e));
     }
 
-    const shouldNotify = order.status !== status;
-    const notify = shouldNotify ? getStatusNotification(status) : null;
-
+    const notify = getStatusNotification(orderStatus);
     if (notify && order.phone && order.orderNumber) {
-      const customerName =
-        typeof order.customerName === "string" && order.customerName
-          ? order.customerName
-          : "Cliente";
-
-      void notify(order.phone, customerName, order.orderNumber).catch(
-        (whatsappError) => {
-          console.error("[admin/orders PATCH] WhatsApp error:", whatsappError);
-        }
-      );
+      const customerName = typeof order.customerName === "string" && order.customerName ? order.customerName : "Cliente";
+      void notify(order.phone, customerName, order.orderNumber).catch((whatsappError) => {
+        console.error("[admin/orders PATCH] WhatsApp error:", whatsappError);
+      });
     }
 
     return NextResponse.json({
@@ -252,7 +259,11 @@ export async function PATCH(request: NextRequest) {
       data: {
         orderId: updated._id,
         orderNumber,
-        status,
+        status: updateData.status,
+        orderStatus,
+        paymentStatus,
+        dispatchStatus,
+        settlementStatus: updateData.settlementStatus,
         updatedAt: now,
       },
     });
@@ -261,3 +272,5 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Error al actualizar pedido" }, { status: 500 });
   }
 }
+
+

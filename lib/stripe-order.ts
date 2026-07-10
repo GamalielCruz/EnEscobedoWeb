@@ -1,7 +1,8 @@
-import type { Metadata } from "@/actions/createCheckoutSession";
+import { appendOrderEvent } from "@/lib/order-events";
+import { buildOrderDocument, OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
+import { notifyRestaurantNewOrder } from "@/lib/restaurant-notifications";
 import { getStripe } from "@/lib/stripe";
 import { extractSpeiDetails } from "@/lib/spei-reference-extractor";
-import { notifyRestaurantNewOrder } from "@/lib/restaurant-notifications";
 import { sendOrderConfirmation } from "@/lib/whatsapp";
 import { backendClient } from "@/sanity/lib/backendClient";
 import Stripe from "stripe";
@@ -11,60 +12,70 @@ type ExistingOrder = {
   orderNumber?: string;
   stripeCheckoutSessionId?: string;
   status?: string;
+  orderType?: "delivery" | "pickup";
+  paymentStatus?: string;
   paidAt?: string;
 };
 
+type StripeSessionMetadata = {
+  orderNumber?: string;
+  customerName?: string;
+  customerEmail?: string;
+  clerkUserId?: string;
+  phone?: string;
+  deliveryMethod?: string;
+  pickupStoreId?: string;
+  pickupStoreName?: string;
+  shippingLine1?: string;
+  shippingLine2?: string;
+  shippingCity?: string;
+  shippingState?: string;
+  shippingPostalCode?: string;
+  shippingCountry?: string;
+  shippingLatitude?: string;
+  shippingLongitude?: string;
+  orderItems?: string;
+};
+
+type OrderDocumentRecord = {
+  _id?: string;
+  _type: string;
+  orderType?: "delivery" | "pickup";
+  paymentStatus?: string;
+  phone?: string;
+  customerName?: string;
+  orderNumber?: string;
+  [key: string]: unknown;
+};
+
+function getMetadata(session: Stripe.Checkout.Session) {
+  return (session.metadata ?? {}) as StripeSessionMetadata;
+}
+
 async function findExistingOrder(sessionId: string, orderNumber?: string) {
   return backendClient.fetch<ExistingOrder | null>(
-    `*[
-      _type == "order" &&
-      (
-        stripeCheckoutSessionId == $sessionId ||
-        orderNumber == $orderNumber
-      )
-    ][0]`,
+    `*[_type == "order" && (stripeCheckoutSessionId == $sessionId || orderNumber == $orderNumber)][0]`,
     { sessionId, orderNumber }
   );
 }
 
-function inferPaymentMethod(
-  session: Stripe.Checkout.Session,
-  paymentMethodType?: string | null
-) {
+function inferPaymentMethod(session: Stripe.Checkout.Session, paymentMethodType?: string | null) {
   if (paymentMethodType) {
-    return paymentMethodType === "customer_balance"
-      ? "bank_transfer"
-      : paymentMethodType;
+    if (paymentMethodType === "customer_balance") return "bank_transfer";
+    if (paymentMethodType === "card") return "stripe";
+    return paymentMethodType;
   }
-
-  if (session.payment_method_types?.includes("oxxo")) {
-    return "oxxo";
-  }
-
-  if (session.payment_method_types?.includes("customer_balance")) {
-    return "bank_transfer";
-  }
-
-  return "card";
+  if (session.payment_method_types?.includes("oxxo")) return "oxxo";
+  if (session.payment_method_types?.includes("customer_balance")) return "bank_transfer";
+  return "stripe";
 }
 
-async function resolvePaymentMethod(
-  stripe: Stripe,
-  session: Stripe.Checkout.Session
-) {
-  if (!session.payment_intent) {
-    return inferPaymentMethod(session);
-  }
+async function resolvePaymentMethod(stripe: Stripe, session: Stripe.Checkout.Session) {
+  if (!session.payment_intent) return inferPaymentMethod(session);
 
   try {
-    const pi = await stripe.paymentIntents.retrieve(
-      session.payment_intent as string
-    );
-
-    if (!pi.payment_method) {
-      return inferPaymentMethod(session);
-    }
-
+    const pi = await stripe.paymentIntents.retrieve(session.payment_intent as string);
+    if (!pi.payment_method) return inferPaymentMethod(session);
     const pm = await stripe.paymentMethods.retrieve(pi.payment_method as string);
     return inferPaymentMethod(session, pm.type);
   } catch (error) {
@@ -73,275 +84,184 @@ async function resolvePaymentMethod(
   }
 }
 
-function transformCustomizations(
-  customizations: { [key: string]: string | string[] } | undefined,
-  optionGroups:
-    | Array<{
-        title?: string;
-        options?: Array<{ label?: string; priceDelta?: number }>;
-      }>
-    | undefined
-) {
-  if (!customizations || Object.keys(customizations).length === 0) {
-    return [];
-  }
-
-  return Object.entries(customizations).map(([groupKey, selection]) => {
-    const groupIndex = parseInt(groupKey.replace("group-", ""), 10);
-    const group = optionGroups?.[groupIndex];
-    const selectedOptions = Array.isArray(selection) ? selection : [selection];
-
-    return {
-      title: group?.title || groupKey,
-      options: selectedOptions
-        .filter((label) => !!label)
-        .map((selectedLabel) => {
-          const option = group?.options?.find((opt) => opt.label === selectedLabel);
-          return {
-            _key: crypto.randomUUID(),
-            label: selectedLabel,
-            priceDelta: option?.priceDelta || 0,
-          };
-        }),
-    };
-  });
+function getOrderType(metadata: StripeSessionMetadata) {
+  return metadata.deliveryMethod === "click_collect" || metadata.deliveryMethod === "pickup" ? "pickup" : "delivery";
 }
 
-async function buildOrderData(
-  session: Stripe.Checkout.Session,
-  stripe: Stripe
-) {
-  const {
-    id,
-    amount_total,
-    currency,
-    metadata,
-    payment_intent,
-    customer,
-    total_details,
-    customer_details,
-  } = session;
+function parseOrderItems(metadata: StripeSessionMetadata) {
+  if (!metadata.orderItems) throw new Error("Missing order items metadata");
+  const parsed = JSON.parse(metadata.orderItems) as OrderItemInput[];
+  if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid order items metadata");
+  return parsed;
+}
 
-  if (!metadata) {
-    throw new Error("No metadata found in session");
-  }
+function parseShippingAddress(metadata: StripeSessionMetadata): OrderAddressInput | undefined {
+  const line1 = String(metadata.shippingLine1 || "").trim();
+  if (!line1) return undefined;
 
-  const {
-    orderNumber,
-    customerName,
-    customerEmail,
-    clerkUserId,
-    deliveryMethod,
-    pickupStoreId,
-    customerAddress,
-  } = metadata as unknown as Metadata;
+  const latitude = metadata.shippingLatitude ? Number(metadata.shippingLatitude) : undefined;
+  const longitude = metadata.shippingLongitude ? Number(metadata.shippingLongitude) : undefined;
 
-  if (!orderNumber || !customerName || !customerEmail || !clerkUserId) {
-    throw new Error("Missing required order metadata");
-  }
+  return {
+    line1,
+    line2: metadata.shippingLine2,
+    city: metadata.shippingCity,
+    state: metadata.shippingState,
+    postal_code: metadata.shippingPostalCode,
+    country: metadata.shippingCountry || "MX",
+    latitude: Number.isFinite(latitude) ? latitude : undefined,
+    longitude: Number.isFinite(longitude) ? longitude : undefined,
+  };
+}
 
-  const paymentMethod = await resolvePaymentMethod(stripe, session);
-
-  const lineItemsWithProducts = await stripe.checkout.sessions.listLineItems(id, {
-    expand: ["data.price.product"],
-  });
-
-  let itemsWithCustomizations: Array<{
-    productId: string;
-    quantity: number;
-    price: number;
-    customizations?: { [key: string]: string | string[] };
-    customPrice?: number;
-    optionGroups?: Array<{
-      title?: string;
-      options?: Array<{
-        label?: string;
-        priceDelta?: number;
-      }>;
-    }>;
-  }> = [];
+async function resolveStripeFee(stripe: Stripe, session: Stripe.Checkout.Session) {
+  if (!session.payment_intent) return 0;
 
   try {
-    if (metadata.itemsWithCustomizations) {
-      itemsWithCustomizations = JSON.parse(metadata.itemsWithCustomizations);
-    }
+    const pi = await stripe.paymentIntents.retrieve(session.payment_intent as string, {
+      expand: ["latest_charge.balance_transaction"],
+    });
+    const latestCharge = pi.latest_charge as Stripe.Charge | null;
+    const balanceTx = latestCharge?.balance_transaction as Stripe.BalanceTransaction | null;
+    return Math.round((balanceTx?.fee ?? 0)) / 100;
   } catch (error) {
-    console.error("[stripe-order] Error parsing itemsWithCustomizations:", error);
+    console.log("[stripe-order] Could not retrieve Stripe fee:", error);
+    return 0;
   }
+}
 
-  const sanityProducts = lineItemsWithProducts.data
-    .map((item, index) => {
-      const stripeProduct = item.price?.product as Stripe.Product | undefined;
-      const stripeProductId = stripeProduct?.metadata?.id;
-      const itemWithCustomizations = stripeProductId
-        ? itemsWithCustomizations.find((i) => i.productId === stripeProductId)
-        : itemsWithCustomizations[index];
-      const productId = stripeProductId || itemWithCustomizations?.productId;
-
-      if (!productId) {
-        console.log("[stripe-order] Missing productId for line item", {
-          lineItemId: item.id,
-          index,
-        });
-        return null;
-      }
-
-      return {
-        _key: crypto.randomUUID(),
-        product: {
-          _type: "reference",
-          _ref: productId,
-        },
-        quantity: item.quantity || 0,
-        price:
-          itemWithCustomizations?.customPrice ||
-          itemWithCustomizations?.price ||
-          0,
-        customizations: transformCustomizations(
-          itemWithCustomizations?.customizations,
-          itemWithCustomizations?.optionGroups
-        ),
-      };
-    })
-    .filter((item): item is NonNullable<typeof item> => !!item);
-
+async function resolveOfflinePaymentData(stripe: Stripe, session: Stripe.Checkout.Session, paymentMethod: string) {
   let bankTransferReference: string | undefined;
   let bankTransferClabe: string | undefined;
   let oxxoReference: string | undefined;
 
-  if (paymentMethod === "bank_transfer" && payment_intent) {
+  if (paymentMethod === "bank_transfer" && session.payment_intent) {
     try {
-      const speiDetails = await extractSpeiDetails(payment_intent as string);
+      const speiDetails = await extractSpeiDetails(session.payment_intent as string);
       bankTransferReference = speiDetails.reference;
       bankTransferClabe = speiDetails.clabe;
     } catch (error) {
       console.log("[stripe-order] Could not extract SPEI details:", error);
-      bankTransferReference = orderNumber.replace(/-/g, "").slice(-8);
+      bankTransferReference = String(getMetadata(session).orderNumber || "").replace(/-/g, "").slice(-8);
     }
   }
 
-  if (paymentMethod === "oxxo" && payment_intent) {
+  if (paymentMethod === "oxxo" && session.payment_intent) {
     try {
-      const pi = (await stripe.paymentIntents.retrieve(payment_intent as string, {
+      const pi = (await stripe.paymentIntents.retrieve(session.payment_intent as string, {
         expand: ["charges.data.payment_method_details"],
       })) as Stripe.PaymentIntent & { charges?: { data: Stripe.Charge[] } };
 
-      const nextAction = pi.next_action?.oxxo_display_details as
-        | { number?: string; reference?: string }
-        | undefined;
-      const chargeOxxo = pi.charges?.data?.[0]?.payment_method_details?.oxxo as
-        | { number?: string; reference?: string }
-        | undefined;
-
-      oxxoReference =
-        nextAction?.number ||
-        nextAction?.reference ||
-        chargeOxxo?.number ||
-        chargeOxxo?.reference;
+      const nextAction = pi.next_action?.oxxo_display_details as { number?: string; reference?: string } | undefined;
+      const chargeOxxo = pi.charges?.data?.[0]?.payment_method_details?.oxxo as { number?: string; reference?: string } | undefined;
+      oxxoReference = nextAction?.number || nextAction?.reference || chargeOxxo?.number || chargeOxxo?.reference;
     } catch (error) {
       console.log("[stripe-order] Could not extract OXXO reference:", error);
     }
   }
 
-  const orderData: { _id: string; _type: string; [key: string]: unknown } = {
-    _id: `stripe-order-${id}`,
-    _type: "order",
-    orderNumber,
-    stripeCheckoutSessionId: id,
-    stripePaymentIntentId: payment_intent,
-    customerName,
-    stripeCustomerId: customer,
-    clerkUserId,
-    email: customerEmail,
-    phone: (metadata as unknown as Metadata).phone || customer_details?.phone || undefined,
-    paymentMethod,
-    bankTransferReference,
-    bankTransferClabe,
-    oxxoReference,
-    currency,
-    amountDiscount: total_details?.amount_discount
-      ? total_details.amount_discount / 100
-      : 0,
-    products: sanityProducts,
-    totalPrice: amount_total ? amount_total / 100 : 0,
-    status: session.payment_status === "paid" ? "paid" : "pending",
-    orderDate: new Date().toISOString(),
-  };
-
-  if (deliveryMethod) {
-    const isPickup = deliveryMethod === "click_collect" || deliveryMethod === "pickup";
-    orderData.orderType = isPickup ? "pickup" : "delivery";
-  }
-
-  if (pickupStoreId) {
-    const isPickup = deliveryMethod === "click_collect" || deliveryMethod === "pickup";
-    if (isPickup) {
-      orderData.pickupStore = {
-        _type: "reference",
-        _ref: pickupStoreId,
-      };
-    }
-
-    orderData.affiliateStore = {
-      _type: "reference",
-      _ref: pickupStoreId,
-    };
-  }
-
-  if (metadata.shippingCost && Number(metadata.shippingCost) > 0) {
-    orderData.shippingCost = Number(metadata.shippingCost);
-  }
-
-  if (customerAddress) {
-    orderData.shippingAddress = {
-      line1: customerAddress,
-    };
-  }
-
-  return orderData;
+  return { bankTransferReference, bankTransferClabe, oxxoReference };
 }
 
-export async function createOrderInSanity(
-  session: Stripe.Checkout.Session,
-  stripe: Stripe
-) {
-  const orderNumber = session.metadata?.orderNumber;
-  const existingOrder = await findExistingOrder(session.id, orderNumber);
+function getPaymentStatus(session: Stripe.Checkout.Session) {
+  return session.payment_status === "paid" ? ("paid" as const) : ("pending" as const);
+}
 
-  if (existingOrder) {
-    return existingOrder;
+async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe): Promise<OrderDocumentRecord> {
+  const metadata = getMetadata(session);
+  const orderNumber = String(metadata.orderNumber || "");
+  const customerName = String(metadata.customerName || "").trim();
+  const customerEmail = String(metadata.customerEmail || "").trim();
+  const clerkUserId = String(metadata.clerkUserId || "").trim();
+  const storeId = String(metadata.pickupStoreId || "").trim();
+
+  if (!orderNumber || !customerName || !customerEmail || !clerkUserId || !storeId) {
+    throw new Error("Missing required order metadata");
   }
 
+  const orderType = getOrderType(metadata);
+  const paymentMethod = await resolvePaymentMethod(stripe, session);
+  const shippingAddress = parseShippingAddress(metadata);
+  const orderItems = parseOrderItems(metadata);
+  const quote = await validateAndQuoteOrder({
+    storeId,
+    items: orderItems,
+    orderType,
+    paymentMethod,
+    shippingAddress,
+  });
+
+  const stripeFee = await resolveStripeFee(stripe, session);
+  const paymentStatus = getPaymentStatus(session);
+  const deliveryNotes = orderType === "pickup" && metadata.pickupStoreName ? `Recoger en: ${metadata.pickupStoreName}` : undefined;
+
+  const orderData = buildOrderDocument({
+    orderNumber,
+    clerkUserId,
+    customerName,
+    customerEmail,
+    phone: String(metadata.phone || session.customer_details?.phone || "").trim(),
+    storeId,
+    orderType,
+    paymentMethod,
+    quote,
+    shippingAddress,
+    paymentStatus,
+    dispatchStatus: orderType === "delivery" ? "waiting_for_driver" : "not_required",
+    stripeCheckoutSessionId: session.id,
+    stripePaymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : null,
+    stripeCustomerId: typeof session.customer === "string" ? session.customer : null,
+    amountDiscount: session.total_details?.amount_discount ? session.total_details.amount_discount / 100 : 0,
+    stripeFee,
+    deliveryNotes,
+  }) as OrderDocumentRecord;
+
+  orderData._id = `stripe-order-${session.id}`;
+  const offlineData = await resolveOfflinePaymentData(stripe, session, paymentMethod);
+  return { ...orderData, ...offlineData } as OrderDocumentRecord;
+}
+
+export async function createOrderInSanity(session: Stripe.Checkout.Session, stripe: Stripe) {
+  const orderNumber = getMetadata(session).orderNumber;
+  const existingOrder = await findExistingOrder(session.id, orderNumber);
+  if (existingOrder) return existingOrder;
+
   const orderData = await buildOrderData(session, stripe);
-  
-  let order;
+  let order: any;
   let isNewOrder = false;
-  
+
   try {
     order = await backendClient.create(orderData);
     isNewOrder = true;
   } catch (error: any) {
     if (error.statusCode === 409 || error.message?.includes("already exists")) {
-      order = await backendClient.getDocument(orderData._id);
-      if (!order) throw error; // Failsafe
+      order = await backendClient.getDocument(String(orderData._id));
+      if (!order) throw error;
     } else {
       throw error;
     }
   }
 
-  const customerPhone =
-    typeof orderData.phone === "string" ? orderData.phone : "";
-  const customerName =
-    typeof orderData.customerName === "string" && orderData.customerName
-      ? orderData.customerName
-      : "Cliente";
-  const createdOrderNumber =
-    typeof orderData.orderNumber === "string" ? orderData.orderNumber : "";
+  if (isNewOrder) {
+    await appendOrderEvent(order._id, { type: "created", source: "stripe-webhook", actor: "stripe" });
+    await appendOrderEvent(order._id, {
+      type: orderData.paymentStatus === "paid" ? "paid" : "payment_pending",
+      source: "stripe-webhook",
+      actor: "stripe",
+    });
+    await appendOrderEvent(order._id, { type: "sent_to_restaurant", source: "stripe-webhook", actor: "stripe" });
+    if (orderData.orderType === "delivery" && orderData.paymentStatus === "paid") {
+      await appendOrderEvent(order._id, { type: "dispatch_started", source: "stripe-webhook", actor: "stripe" });
+    }
+  }
+
+  const customerPhone = typeof orderData.phone === "string" ? orderData.phone : "";
+  const safeCustomerName = typeof orderData.customerName === "string" && orderData.customerName ? orderData.customerName : "Cliente";
+  const createdOrderNumber = typeof orderData.orderNumber === "string" ? orderData.orderNumber : "";
 
   if (isNewOrder && customerPhone && createdOrderNumber) {
     try {
-      await sendOrderConfirmation(customerPhone, customerName, createdOrderNumber);
-      console.log("[stripe-order] WhatsApp confirmacion enviada a:", customerPhone);
+      await sendOrderConfirmation(customerPhone, safeCustomerName, createdOrderNumber);
     } catch (err) {
       console.error("[stripe-order] Error sendOrderConfirmation:", err);
     }
@@ -355,23 +275,12 @@ export async function createOrderInSanity(
   return order;
 }
 
-export async function ensureOrderFromCheckoutSession(
-  sessionId: string,
-  expectedOrderNumber?: string
-) {
+export async function ensureOrderFromCheckoutSession(sessionId: string, expectedOrderNumber?: string) {
   const stripe = getStripe();
   const session = await stripe.checkout.sessions.retrieve(sessionId);
-  const actualOrderNumber = session.metadata?.orderNumber;
+  const actualOrderNumber = getMetadata(session).orderNumber;
 
-  if (!session.metadata) {
-    throw new Error("Checkout session does not contain metadata");
-  }
-
-  if (
-    expectedOrderNumber &&
-    actualOrderNumber &&
-    expectedOrderNumber !== actualOrderNumber
-  ) {
+  if (expectedOrderNumber && actualOrderNumber && expectedOrderNumber !== actualOrderNumber) {
     throw new Error("Order number does not match checkout session");
   }
 
@@ -388,19 +297,15 @@ export async function markOrderPaidBySession(sessionId: string) {
     { sessionId }
   );
 
-  if (!existingOrder) {
-    return null;
-  }
+  if (!existingOrder) return null;
+  if (existingOrder.paymentStatus === "paid" && existingOrder.paidAt) return existingOrder;
 
-  if (existingOrder.status === "paid" && existingOrder.paidAt) {
-    return existingOrder;
-  }
-
-  return backendClient
+  const now = new Date().toISOString();
+  const updated = await backendClient
     .patch(existingOrder._id)
-    .set({
-      status: "paid",
-      paidAt: new Date().toISOString(),
-    })
+    .set({ status: "paid", paymentStatus: "paid", paidAt: now, updatedAt: now })
     .commit();
+
+  await appendOrderEvent(existingOrder._id, { type: "paid", source: "stripe-webhook", actor: "stripe", at: now });
+  return updated;
 }

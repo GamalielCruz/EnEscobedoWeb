@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { backendClient } from '@/sanity/lib/backendClient'
+import { appendOrderEvent } from '@/lib/order-events'
 import { redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
 import { sendBotMessage } from '@/lib/whatsapp'
 
@@ -122,6 +123,7 @@ export async function GET(req: NextRequest) {
           if (orderIds.length > 0) {
             const releasedOrderIds = await releaseOrdersForDriver(orderIds, rep._id, 'offer_expired')
             if (releasedOrderIds.length > 0) {
+              await Promise.allSettled(releasedOrderIds.map((orderId) => appendOrderEvent(orderId, { type: 'offer_expired', source: 'cron/check-repartidores', actor: rep._id })))
               await redispatchOrders(releasedOrderIds, [rep._id])
             }
           }
@@ -282,3 +284,4 @@ Responde INICIO cuando quieras volver a estar disponible.`
 
   return NextResponse.json({ success: true, ...summary, timestamp: now.toISOString() })
 }
+
