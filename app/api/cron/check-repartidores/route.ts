@@ -23,13 +23,13 @@ type RepartidorCron = {
 }
 
 function getExtensionPrompt(): string {
-  return `Tu sesión termina en aproximadamente 10 minutos.
+  return `Tu sesion termina en aproximadamente 10 minutos.
 
-¿Quieres extender tu disponibilidad?
+Quieres extender tu disponibilidad?
 
-1️⃣ Extender 1 hora
-2️⃣ Extender 2 horas
-3️⃣ Terminar al finalizar`
+1. Extender 1 hora
+2. Extender 2 horas
+3. Terminar al finalizar`
 }
 
 function getPendingOfferOrderIds(rep: RepartidorCron): string[] {
@@ -212,8 +212,8 @@ export async function GET(req: NextRequest) {
 
           await sendBotMessage(
             rep.telefono,
-            `Tu sesión de disponibilidad terminó.
-Te desconectamos automáticamente.
+            `Tu sesion de disponibilidad termino.
+Te desconectamos automaticamente.
 
 Responde INICIO cuando quieras volver a estar disponible.`
           )
@@ -270,10 +270,10 @@ Responde INICIO cuando quieras volver a estar disponible.`
           await sendBotMessage(rep.telefono, getExtensionPrompt())
 
           summary.extensionesPreguntadas++
-          console.log(`[cron/check-repartidores] Extensión enviada a ${rep.nombre}`)
+          console.log(`[cron/check-repartidores] Extension enviada a ${rep.nombre}`)
         } catch (e) {
           summary.errores++
-          console.error(`[cron/check-repartidores] Error enviando extensión a ${rep.nombre}:`, e)
+          console.error(`[cron/check-repartidores] Error enviando extension a ${rep.nombre}:`, e)
         }
       })
     )
@@ -284,4 +284,5 @@ Responde INICIO cuando quieras volver a estar disponible.`
 
   return NextResponse.json({ success: true, ...summary, timestamp: now.toISOString() })
 }
+
 

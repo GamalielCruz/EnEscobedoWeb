@@ -199,10 +199,11 @@ export const orderType = defineType({
       const typeBadge = select.orderType === "pickup" ? "Pickup" : "Delivery";
       const amount = select.amount ?? select.fallbackAmount ?? 0;
       return {
-        title: `${typeBadge} · ${select.name} (${orderIdSnippet})`,
+        title: `${typeBadge} - ${select.name} (${orderIdSnippet})`,
         subtitle: `${amount} ${select.currency ?? "mxn"}, ${select.email}`,
         media: BasketIcon,
       };
     },
   },
 });
+
