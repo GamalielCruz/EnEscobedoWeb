@@ -13,6 +13,7 @@ import {
 import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
 import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
 import { appendOrderEvent } from '@/lib/order-events'
+import { resolveSettlementStatusOnDelivery } from '@/lib/order-state'
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'garoga_verify_token'
 const MEXICO_TIME_ZONE = 'America/Mexico_City'
@@ -92,7 +93,12 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   phone,
   status,
   dispatchStatus,
+  orderStatus,
   paymentMethod,
+  paymentProvider,
+  paymentStatus,
+  settlementStatus,
+  cashCollectedBy,
   totalPrice,
   deliveryOfertaEnviada,
   deliveryOfertaExpiresAt,
@@ -113,7 +119,12 @@ const ORDERS_BY_IDS_QUERY = `*[_type == "order" && _id in $orderIds]{
   phone,
   status,
   dispatchStatus,
+  orderStatus,
   paymentMethod,
+  paymentProvider,
+  paymentStatus,
+  settlementStatus,
+  cashCollectedBy,
   totalPrice,
   deliveryOfertaEnviada,
   deliveryOfertaExpiresAt,
@@ -134,7 +145,12 @@ const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._r
   orderNumber,
   status,
   dispatchStatus,
+  orderStatus,
   paymentMethod,
+  paymentProvider,
+  paymentStatus,
+  settlementStatus,
+  cashCollectedBy,
   "storeName": affiliateStore->name,
   "storeAddress": affiliateStore->address.street,
   "shippingAddress": shippingAddress
@@ -423,6 +439,17 @@ async function clearPendingOfferForDriver(repartidorId: string, now: string, nex
       'ofertaExpiraAt',
     ])
     .commit()
+}
+
+function resolveDeliveredSettlement(order: Record<string, unknown>) {
+  return resolveSettlementStatusOnDelivery({
+    paymentProvider: String(order.paymentProvider ?? ''),
+    paymentMethod: String(order.paymentMethod ?? ''),
+    paymentStatus: String(order.paymentStatus ?? ''),
+    cashCollectedBy: String(order.cashCollectedBy ?? ''),
+    settlementStatus: String(order.settlementStatus ?? ''),
+    orderStatus: 'delivered',
+  })
 }
 
 async function clearCompetingOffers(orderIds: string[], acceptedDriverId: string, orderNumberLabel: string, now: string) {
@@ -1160,7 +1187,7 @@ Te avisaremos 10 minutos antes de finalizar.`
           await backendClient
             .patch(String((resolvedTargetOrder as Record<string, unknown>)._id))
             .ifRevisionId(String((resolvedTargetOrder as Record<string, unknown>)._rev))
-.set({ status: 'delivered', orderStatus: 'delivered', dispatchStatus: 'completed', deliveredAt: now, settlementStatus: 'ready', updatedAt: now })
+.set({ status: 'delivered', orderStatus: 'delivered', dispatchStatus: 'completed', deliveredAt: now, settlementStatus: resolveDeliveredSettlement(resolvedTargetOrder as Record<string, unknown>), updatedAt: now })
             .commit()
 
           const remainingOrders = (await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>)
@@ -1225,6 +1252,9 @@ Te avisaremos 10 minutos antes de finalizar.`
 
   return NextResponse.json({ status: 'ok' })
 }
+
+
+
 
 
 

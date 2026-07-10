@@ -4,8 +4,14 @@ import { client, readClient, writeClient } from "@/sanity/lib/client";
 import { isAdminUser } from "@/lib/admin";
 import { sendOrderCancelled } from "@/lib/whatsapp";
 import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
-import { appendOrderEvent } from "@/lib/order-events";
-import { buildStateFields, OrderStatusValue, PaymentStatusValue, DispatchStatusValue, SettlementStatusValue } from "@/lib/order-state";
+import { appendOrderEvent, OrderEventType } from "@/lib/order-events";
+import {
+  buildStateFields,
+  OrderStatusValue,
+  PaymentStatusValue,
+  DispatchStatusValue,
+  SettlementStatusValue,
+} from "@/lib/order-state";
 
 const ORDER_PROJECTION = `{
   _id,
@@ -68,6 +74,9 @@ const ORDER_BY_NUMBER_QUERY = `*[_type == "order" && orderNumber == $orderNumber
   customerName,
   phone,
   paymentMethod,
+  paymentProvider,
+  requiresStripeReconciliation,
+  stripeFee,
   status,
   orderStatus,
   paymentStatus,
@@ -189,9 +198,22 @@ export async function PATCH(request: NextRequest) {
     const orderType = order.orderType === "pickup" ? "pickup" : "delivery";
     const legacyMapped: Partial<{ orderStatus: OrderStatusValue; paymentStatus: PaymentStatusValue; dispatchStatus: DispatchStatusValue }> = status ? mapLegacyStatus(orderType, status) : {};
     const orderStatus = (body.orderStatus || legacyMapped.orderStatus || order.orderStatus || "pending") as OrderStatusValue;
-    const paymentStatus = (body.paymentStatus || legacyMapped.paymentStatus || order.paymentStatus || "pending") as PaymentStatusValue;
+    let paymentStatus = (body.paymentStatus || legacyMapped.paymentStatus || order.paymentStatus || "pending") as PaymentStatusValue;
     const dispatchStatus = (body.dispatchStatus || legacyMapped.dispatchStatus || order.dispatchStatus || (orderType === "pickup" ? "not_required" : "waiting_for_driver")) as DispatchStatusValue;
-    const settlementStatus = (body.settlementStatus || order.settlementStatus || "pending") as SettlementStatusValue;
+    let settlementStatus = (body.settlementStatus || order.settlementStatus || "pending") as SettlementStatusValue;
+
+    const isCancelled = orderStatus === "cancelled";
+    const isStripeOrder = order.paymentProvider === "stripe";
+    const needsRefund = isCancelled && isStripeOrder && paymentStatus !== "refunded";
+
+    if (needsRefund && paymentStatus === "paid") {
+      paymentStatus = "requires_refund";
+    }
+    if (paymentStatus === "refunded") {
+      settlementStatus = "refunded";
+    } else if (isCancelled) {
+      settlementStatus = "cancelled";
+    }
 
     const stateFields = buildStateFields({
       orderType,
@@ -225,9 +247,15 @@ export async function PATCH(request: NextRequest) {
     if (orderStatus === "delivered" && !order.deliveredAt) {
       updateData.deliveredAt = now;
     }
-    if (orderStatus === "cancelled") {
+    if (isCancelled) {
       updateData.cancelledAt = now;
-      updateData.settlementStatus = "cancelled";
+      updateData.settlementStatus = settlementStatus;
+      if (isStripeOrder) {
+        updateData.requiresStripeReconciliation = true;
+      } else {
+        updateData.requiresStripeReconciliation = false;
+        updateData.stripeFee = 0;
+      }
     }
     if (paymentStatus === "refunded") {
       updateData.refundedAt = now;
@@ -235,12 +263,28 @@ export async function PATCH(request: NextRequest) {
     }
 
     const updated = await writeClient.patch(order._id).set(updateData).commit();
-    await appendOrderEvent(order._id, {
+
+    const events: Array<{ type: OrderEventType; reason?: string; payload?: Record<string, unknown> }> = [];
+    if (isCancelled && order.orderStatus !== "cancelled") {
+      events.push({ type: "cancelled", reason: "admin_cancelled_order" });
+    }
+    if (needsRefund && order.paymentStatus !== "requires_refund" && order.paymentStatus !== "refunded") {
+      events.push({ type: "refund_required", reason: "stripe_order_cancelled", payload: { paymentStatus } });
+    }
+    events.push({
       type: "manual_admin_action",
-      source: "api/admin/orders",
-      actor: userId,
-      payload: { orderStatus, paymentStatus, dispatchStatus, settlementStatus },
+      payload: { orderStatus, paymentStatus, dispatchStatus, settlementStatus: updateData.settlementStatus },
     });
+
+    for (const event of events) {
+      await appendOrderEvent(order._id, {
+        type: event.type,
+        source: "api/admin/orders",
+        actor: userId,
+        reason: event.reason,
+        payload: event.payload,
+      });
+    }
 
     if (dispatchStatus === "waiting_for_driver" && orderType === "delivery") {
       void dispatchDeliveryOffer(order._id).catch((e) => console.error("[admin/orders PATCH] dispatchDeliveryOffer error:", e));
@@ -272,5 +316,3 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Error al actualizar pedido" }, { status: 500 });
   }
 }
-
-

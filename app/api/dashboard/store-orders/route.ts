@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createClient } from "next-sanity";
-import { appendOrderEvent } from "@/lib/order-events";
-import { buildStateFields, DispatchStatusValue, OrderStatusValue, PaymentStatusValue, SettlementStatusValue } from "@/lib/order-state";
+import { appendOrderEvent, OrderEventType } from "@/lib/order-events";
+import {
+  buildStateFields,
+  DispatchStatusValue,
+  OrderStatusValue,
+  PaymentStatusValue,
+  SettlementStatusValue,
+} from "@/lib/order-state";
 
 const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
 const ORDERS_BASE_FILTER = `!(_id in path('drafts.**')) && _type == "order" && (pickupStore._ref == $storeId || affiliateStore._ref == $storeId)`;
@@ -67,7 +73,25 @@ const HISTORY_ORDERS_QUERY = `*[
   ${ORDERS_BASE_FILTER}
   && orderDate < $beforeAt
 ] | order(orderDate desc) [0...100] ${ORDER_PROJECTION}`;
-const ORDER_BY_NUMBER = `*[_type == "order" && orderNumber == $orderNumber][0]`;
+const ORDER_BY_NUMBER = `*[_type == "order" && orderNumber == $orderNumber][0]{
+  _id,
+  orderNumber,
+  orderType,
+  paymentMethod,
+  paymentProvider,
+  requiresStripeReconciliation,
+  stripeFee,
+  orderStatus,
+  paymentStatus,
+  dispatchStatus,
+  settlementStatus,
+  readyAt,
+  pickedUpAt,
+  deliveredAt,
+  pickupStatus,
+  pickupStore,
+  affiliateStore
+}`;
 
 function isValidIsoDate(value: string | null) {
   if (!value) return false;
@@ -105,6 +129,10 @@ function mapStoreStatus(orderType: "pickup" | "delivery", status: string): Parti
     default:
       return { orderStatus: status as OrderStatusValue };
   }
+}
+
+function shouldEmitRestaurantAccepted(previousStatus?: string, nextStatus?: string) {
+  return previousStatus === "pending" && !!nextStatus && nextStatus !== "pending" && nextStatus !== "cancelled";
 }
 
 export async function GET(request: NextRequest) {
@@ -190,9 +218,22 @@ export async function PATCH(request: NextRequest) {
     const orderType = order.orderType === "pickup" ? "pickup" : "delivery";
     const mapped: Partial<{ orderStatus: OrderStatusValue; dispatchStatus: DispatchStatusValue }> = status ? mapStoreStatus(orderType, status) : {};
     const orderStatus = (body.orderStatus || mapped.orderStatus || order.orderStatus || "pending") as OrderStatusValue;
-    const paymentStatus = (body.paymentStatus || order.paymentStatus || "pending") as PaymentStatusValue;
+    let paymentStatus = (body.paymentStatus || order.paymentStatus || "pending") as PaymentStatusValue;
     const dispatchStatus = (body.dispatchStatus || mapped.dispatchStatus || order.dispatchStatus || (orderType === "pickup" ? "not_required" : "waiting_for_driver")) as DispatchStatusValue;
-    const settlementStatus = (body.settlementStatus || order.settlementStatus || "pending") as SettlementStatusValue;
+    let settlementStatus = (body.settlementStatus || order.settlementStatus || "pending") as SettlementStatusValue;
+
+    const isCancelled = orderStatus === "cancelled";
+    const isStripeOrder = order.paymentProvider === "stripe";
+    const needsRefund = isCancelled && isStripeOrder && paymentStatus !== "refunded";
+
+    if (needsRefund && paymentStatus === "paid") {
+      paymentStatus = "requires_refund";
+    }
+    if (paymentStatus === "refunded") {
+      settlementStatus = "refunded";
+    } else if (isCancelled) {
+      settlementStatus = "cancelled";
+    }
 
     const updateData: Record<string, unknown> = {
       ...buildStateFields({ orderType, orderStatus, paymentStatus, dispatchStatus, settlementStatus, paymentMethod: order.paymentMethod }),
@@ -207,19 +248,52 @@ export async function PATCH(request: NextRequest) {
       updateData.pickupStatus = "picked_up";
     } else if (orderStatus === "delivered" && !order.deliveredAt) {
       updateData.deliveredAt = now;
-    } else if (orderStatus === "cancelled") {
+    } else if (isCancelled) {
       updateData.pickupStatus = orderType === "pickup" ? "expired" : order.pickupStatus;
       updateData.cancelledAt = now;
-      updateData.settlementStatus = "cancelled";
+      updateData.settlementStatus = settlementStatus;
+      if (isStripeOrder) {
+        updateData.requiresStripeReconciliation = true;
+      } else {
+        updateData.requiresStripeReconciliation = false;
+        updateData.stripeFee = 0;
+      }
+    }
+
+    if (paymentStatus === "refunded") {
+      updateData.refundedAt = now;
+      updateData.settlementStatus = "refunded";
     }
 
     const updated = await sanity.writeClient.patch(order._id).set(updateData).commit();
-    await appendOrderEvent(order._id, {
+
+    const events: Array<{ type: OrderEventType; reason?: string; payload?: Record<string, unknown> }> = [];
+    if (shouldEmitRestaurantAccepted(order.orderStatus, orderStatus)) {
+      events.push({ type: "restaurant_accepted" });
+    }
+    if (isCancelled && order.orderStatus !== "cancelled") {
+      events.push({ type: order.orderStatus === "pending" ? "restaurant_rejected" : "cancelled", reason: order.orderStatus === "pending" ? "store_rejected_order" : "store_cancelled_order" });
+      if (order.orderStatus === "pending") {
+        events.push({ type: "cancelled", reason: "store_rejected_order" });
+      }
+    }
+    if (needsRefund && order.paymentStatus !== "requires_refund" && order.paymentStatus !== "refunded") {
+      events.push({ type: "refund_required", reason: "stripe_order_cancelled", payload: { paymentStatus } });
+    }
+    events.push({
       type: "manual_admin_action",
-      source: "api/dashboard/store-orders",
-      actor: userId,
-      payload: { orderStatus, paymentStatus, dispatchStatus, settlementStatus },
+      payload: { orderStatus, paymentStatus, dispatchStatus, settlementStatus: updateData.settlementStatus },
     });
+
+    for (const event of events) {
+      await appendOrderEvent(order._id, {
+        type: event.type,
+        source: "api/dashboard/store-orders",
+        actor: userId,
+        reason: event.reason,
+        payload: event.payload,
+      });
+    }
 
     return NextResponse.json({
       success: true,

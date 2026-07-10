@@ -96,3 +96,21 @@ export function buildStateFields(input: {
     status: buildLegacyStatus(input),
   };
 }
+
+export function resolveSettlementStatusOnDelivery(input: {
+  paymentProvider?: string;
+  paymentMethod?: string;
+  paymentStatus?: string;
+  cashCollectedBy?: string;
+  settlementStatus?: string;
+  orderStatus?: string;
+}): SettlementStatusValue {
+  if (input.settlementStatus === "settled") return "settled";
+  if (input.settlementStatus === "refunded" || input.paymentStatus === "refunded") return "refunded";
+  if (input.settlementStatus === "cancelled" || input.orderStatus === "cancelled") return "cancelled";
+  if (input.paymentProvider === "stripe" && input.paymentStatus === "paid") return "ready";
+  if (input.paymentMethod === "cash_on_delivery") return "pending";
+  if (input.cashCollectedBy && input.cashCollectedBy !== "none") return "pending";
+  if (input.settlementStatus === "ready") return "ready";
+  return "pending";
+}
