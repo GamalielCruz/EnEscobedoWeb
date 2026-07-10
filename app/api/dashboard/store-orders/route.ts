@@ -29,6 +29,12 @@ const ORDER_PROJECTION = `{
     "productName": product->name,
     "productId": product->_id,
     "quantity": quantity,
+    "price": select(
+      defined(lineTotal) => lineTotal,
+      defined(totalPrice) => totalPrice,
+      defined(product->price) => product->price * quantity,
+      0
+    ),
     "customizations": customizations[]{
       _key,
       title,
@@ -233,5 +239,3 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Error al actualizar pedido", requestId }, { status: 500 });
   }
 }
-
-

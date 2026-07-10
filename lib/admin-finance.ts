@@ -19,6 +19,9 @@ type FinanceOrder = {
   cashCollectedBy?: string;
   productsSubtotal?: number;
   shippingFee?: number;
+  subtotal?: number;
+  shippingCost?: number;
+  totalPrice?: number;
   platformCommission?: number;
   stripeFee?: number;
   stripeNetAmount?: number;
@@ -41,8 +44,17 @@ type NormalizedFinanceOrder = FinanceOrder & {
   paymentProvider: string;
   paidOnline: boolean;
   cashCollectedBy: string;
+  productsSubtotal: number;
+  shippingFee: number;
+  platformCommission: number;
   stripeFee: number;
   stripeNetAmount: number;
+  tax: number;
+  grossTotal: number;
+  storeNetTotal: number;
+  platformNetTotal: number;
+  driverPayout: number;
+  discount: number;
   paymentMethodLabel: string;
   paymentProviderLabel: string;
 };
@@ -69,6 +81,9 @@ const FINANCE_QUERY = `*[
   cashCollectedBy,
   productsSubtotal,
   shippingFee,
+  subtotal,
+  shippingCost,
+  totalPrice,
   platformCommission,
   stripeFee,
   stripeNetAmount,
@@ -114,8 +129,25 @@ function normalizeOrder(order: FinanceOrder): NormalizedFinanceOrder {
       : paymentMethod === "cash_at_store"
         ? "store"
         : "none");
+
+  const productsSubtotal = money(order.productsSubtotal ?? order.subtotal);
+  const shippingFee = money(order.shippingFee ?? order.shippingCost);
+  const discount = money(order.discount);
+  const tax = money(order.tax);
+  const grossTotal = money(
+    order.grossTotal ??
+      order.totalPrice ??
+      Math.max(productsSubtotal + shippingFee - discount + tax, 0)
+  );
+  const platformCommission = money(order.platformCommission);
+  const driverPayout = money(order.driverPayout);
   const stripeFee = paymentProvider === "stripe" ? money(order.stripeFee) : 0;
-  const stripeNetAmount = paymentProvider === "stripe" ? money(order.stripeNetAmount || money(order.grossTotal) - stripeFee) : 0;
+  const stripeNetAmount =
+    paymentProvider === "stripe" ? money(order.stripeNetAmount ?? grossTotal - stripeFee) : 0;
+  const storeNetTotal = money(
+    order.storeNetTotal ?? Math.max(grossTotal - platformCommission - stripeFee - driverPayout, 0)
+  );
+  const platformNetTotal = money(order.platformNetTotal ?? platformCommission - stripeFee);
 
   return {
     ...order,
@@ -123,8 +155,17 @@ function normalizeOrder(order: FinanceOrder): NormalizedFinanceOrder {
     paymentProvider,
     paidOnline,
     cashCollectedBy,
+    productsSubtotal,
+    shippingFee,
+    platformCommission,
     stripeFee,
     stripeNetAmount,
+    tax,
+    grossTotal,
+    storeNetTotal,
+    platformNetTotal,
+    driverPayout,
+    discount,
     paymentMethodLabel: getPaymentMethodLabel(paymentMethod),
     paymentProviderLabel: getPaymentProviderLabel(paymentProvider),
   };
