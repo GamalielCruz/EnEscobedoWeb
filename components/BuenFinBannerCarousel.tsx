@@ -163,7 +163,7 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
               {buttonText && buttonLink ? (
                 <span
                   className="inline-flex rounded-full border border-white/35 bg-white/14 px-4 py-2 text-sm font-bold shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_8px_20px_rgba(0,0,0,0.12)] backdrop-blur-md transition-transform duration-200 hover:scale-[1.02] sm:px-4.5"
-                  style={{ color: buttonTextColor }}
+                  style={{ color: "#ffffff" }}
                 >
                   {buttonText}
                 </span>

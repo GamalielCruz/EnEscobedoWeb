@@ -14,6 +14,8 @@ export type OrderEventType =
   | "offer_expired"
   | "driver_assigned"
   | "at_door"
+  | "ready_for_pickup"
+  | "picked_up"
   | "delivered"
   | "cancelled"
   | "refund_required"
@@ -48,3 +50,5 @@ export async function appendOrderEvent(
     ])
     .commit();
 }
+
+

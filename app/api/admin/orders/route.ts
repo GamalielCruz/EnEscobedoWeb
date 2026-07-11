@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { client, readClient, writeClient } from "@/sanity/lib/client";
 import { isAdminUser } from "@/lib/admin";
-import { sendOrderCancelled } from "@/lib/whatsapp";
+import { sendOrderCancelled, sendPickupReadyForCustomer } from "@/lib/whatsapp";
 import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
 import { appendOrderEvent, OrderEventType } from "@/lib/order-events";
 import {
@@ -84,7 +84,8 @@ const ORDER_BY_NUMBER_QUERY = `*[_type == "order" && orderNumber == $orderNumber
   settlementStatus,
   readyAt,
   pickedUpAt,
-  deliveredAt
+  deliveredAt,
+  "storeName": coalesce(pickupStore->name, affiliateStore->name)
 }`;
 
 function getReader() {
@@ -268,6 +269,12 @@ export async function PATCH(request: NextRequest) {
     if (isCancelled && order.orderStatus !== "cancelled") {
       events.push({ type: "cancelled", reason: "admin_cancelled_order" });
     }
+    if (orderType === "pickup" && orderStatus === "ready_for_pickup" && order.orderStatus !== "ready_for_pickup") {
+      events.push({ type: "ready_for_pickup", reason: "admin_marked_ready" });
+    }
+    if (orderType === "pickup" && (orderStatus === "picked_up" || orderStatus === "completed") && order.orderStatus !== "picked_up" && order.orderStatus !== "completed") {
+      events.push({ type: "picked_up", reason: "admin_marked_picked_up" });
+    }
     if (needsRefund && order.paymentStatus !== "requires_refund" && order.paymentStatus !== "refunded") {
       events.push({ type: "refund_required", reason: "stripe_order_cancelled", payload: { paymentStatus } });
     }
@@ -288,6 +295,12 @@ export async function PATCH(request: NextRequest) {
 
     if (dispatchStatus === "waiting_for_driver" && orderType === "delivery") {
       void dispatchDeliveryOffer(order._id).catch((e) => console.error("[admin/orders PATCH] dispatchDeliveryOffer error:", e));
+    }
+
+    if (orderType === "pickup" && orderStatus === "ready_for_pickup" && order.phone) {
+      void sendPickupReadyForCustomer(order.phone, order.customerName || "Cliente", order.orderNumber, order.storeName || "Restaurante").catch((whatsappError) => {
+        console.error("[admin/orders PATCH] WhatsApp ready pickup error:", whatsappError);
+      });
     }
 
     const notify = getStatusNotification(orderStatus);
@@ -316,3 +329,7 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Error al actualizar pedido" }, { status: 500 });
   }
 }
+
+
+
+

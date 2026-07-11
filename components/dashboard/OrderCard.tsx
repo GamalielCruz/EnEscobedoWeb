@@ -26,6 +26,10 @@ type OrderCardProps = {
   onUpdateStatus?: (orderId: string, orderNumber: string, status: string) => void;
 };
 
+function isTechnicalItemNote(note?: string) {
+  return /^unitBasePrice=.*lineTotal=/i.test(String(note || "").trim());
+}
+
 async function copyToClipboard(text: string) {
   try {
     await navigator.clipboard.writeText(text);
@@ -60,7 +64,7 @@ export function OrderCard({ order, compact = false, updating = false, onUpdateSt
             </div>
             <p className="mt-2 text-sm font-semibold text-gray-950">{order.customerInfo.name}</p>
             <DashboardDescription className="mt-1 text-[13px]">
-              {itemSummary} · {formatCurrency(order.totalAmount)}
+              {itemSummary} Â· {formatCurrency(order.totalAmount)}
             </DashboardDescription>
           </div>
           <div className="text-right">
@@ -181,7 +185,7 @@ export function OrderCard({ order, compact = false, updating = false, onUpdateSt
                   </div>
                 ) : null}
 
-                {item.notes ? (
+                {item.notes && !isTechnicalItemNote(item.notes) ? (
                   <p className="mt-1.5 pl-3 text-[13px] italic text-amber-700">{item.notes}</p>
                 ) : null}
               </li>

@@ -110,15 +110,17 @@ export function getOrderQuickActions(order: DashboardOrder): OrderQuickAction[] 
 
   const actions: OrderQuickAction[] = [];
 
-  if (order.status === "pending") {
-    actions.push({ label: "Preparando", status: "processing", variant: "primary" });
-  }
+  if (order.deliveryMethod !== "home_delivery") {
+    if (["pending", "pending_pickup", "processing", "paid"].includes(order.status)) {
+      actions.push({ label: "Orden lista", status: "ready_for_pickup", variant: "primary" });
+    }
+  } else {
+    if (order.status === "pending") {
+      actions.push({ label: "Preparando", status: "processing", variant: "primary" });
+    }
 
-  if (order.status === "processing") {
-    if (order.deliveryMethod === "home_delivery") {
+    if (order.status === "processing") {
       actions.push({ label: "En camino", status: "shipped", variant: "primary" });
-    } else {
-      actions.push({ label: "Listo", status: "ready_for_pickup", variant: "primary" });
     }
   }
 
@@ -127,7 +129,7 @@ export function getOrderQuickActions(order: DashboardOrder): OrderQuickAction[] 
   }
 
   if (order.status === "ready_for_pickup") {
-    actions.push({ label: "Recogido", status: "picked_up", variant: "primary" });
+    actions.push({ label: "Marcar como recogido", status: "picked_up", variant: "primary" });
   }
 
   actions.push({ label: "Cancelar", status: "cancelled", variant: "destructive" });

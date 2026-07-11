@@ -1,11 +1,12 @@
 import { after, NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { writeClient } from "@/sanity/lib/client";
-import { sendOrderConfirmation } from "@/lib/whatsapp";
+import { sendOrderConfirmation, sendPickupOrderReceived } from "@/lib/whatsapp";
 import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
 import { notifyRestaurantNewOrder } from "@/lib/restaurant-notifications";
 import { appendOrderEvent } from "@/lib/order-events";
 import { buildOrderDocument, OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
+import { getPaymentMethodLabel } from "@/lib/payment";
 
 function normalizeItems(items: Array<any>): OrderItemInput[] {
   return (items || []).map((item) => ({
@@ -73,7 +74,7 @@ export async function POST(request: NextRequest) {
       const orderNumber = String(orderData.orderNumber || "");
 
       const tasks: Array<Promise<unknown>> = [
-        customerPhone && orderNumber ? sendOrderConfirmation(customerPhone, customerName, orderNumber) : Promise.resolve(),
+        customerPhone && orderNumber ? (orderType === "pickup" ? sendPickupOrderReceived(customerPhone, customerName, orderNumber, String(quote.store.name || "Restaurante"), String(orderData.grossTotal || orderData.totalPrice || "0"), getPaymentMethodLabel(String(orderData.paymentMethod || "")), `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(String(quote.store.name || "Restaurante"))}`) : sendOrderConfirmation(customerPhone, customerName, orderNumber)) : Promise.resolve(),
         notifyRestaurantNewOrder(result._id),
         orderType === "delivery" ? dispatchDeliveryOffer(result._id) : Promise.resolve(),
       ];
@@ -97,5 +98,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Error interno del servidor", requestId }, { status: 400 });
   }
 }
+
 
 

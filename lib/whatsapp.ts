@@ -279,6 +279,76 @@ export async function sendOrderConfirmation(
   ]);
 }
 
+export async function sendPickupOrderReceived(
+  phone: string,
+  name: string,
+  orderNumber: string,
+  storeName: string,
+  total: string,
+  paymentMethod: string,
+  storeMapsUrl: string
+) {
+  return sendSpanishTemplate(
+    phone,
+    "cliente_pickup_recibido",
+    [
+      name.substring(0, 30),
+      orderNumber.substring(0, 30),
+      storeName.substring(0, 60),
+      total.substring(0, 30),
+      paymentMethod.substring(0, 40),
+    ],
+    [
+      {
+        type: "button",
+        sub_type: "url",
+        index: "0",
+        parameters: [{ type: "text", text: toWhatsAppUrlButtonParam(storeMapsUrl) }],
+      },
+    ]
+  );
+}
+
+export async function sendRestaurantePickupPedido(
+  phone: string,
+  orderNumber: string,
+  customerName: string,
+  customerPhone: string,
+  products: string,
+  total: string,
+  paymentMethod: string,
+  orderId: string
+) {
+  return sendSpanishTemplate(
+    phone,
+    "restaurante_pickup_pedido",
+    [
+      orderNumber.substring(0, 30),
+      customerName.substring(0, 60),
+      customerPhone.substring(0, 30),
+      products,
+      total.substring(0, 30),
+      paymentMethod.substring(0, 40),
+    ],
+    [
+      buildQuickReplyPayloadButton("0", `ORDEN_LISTA_PICKUP|${orderId}`),
+      buildQuickReplyPayloadButton("1", `CANCELAR_PICKUP|${orderId}`),
+    ],
+    1024
+  );
+}
+
+export async function sendPickupReadyForCustomer(
+  phone: string,
+  name: string,
+  orderNumber: string,
+  storeName: string
+) {
+  return sendWhatsAppMessage(
+    phone,
+    `Hola ${name.substring(0, 30)}, tu pedido ${orderNumber.substring(0, 30)} ya esta listo para recoger en ${storeName.substring(0, 60)}.`
+  );
+}
 export async function sendNuevoPedidoRestaurante(
   phone: string,
   restaurantName: string,
@@ -481,7 +551,7 @@ export async function sendClienteRepartidorEnPuerta(
 }
 
 // Mensajes de texto libre del bot hacia repartidores (respuestas a comandos y recordatorios)
-// Se puede usar porque el repartidor habrá iniciado conversación con INICIO
+// Se puede usar porque el repartidor habrÃ¡ iniciado conversaciÃ³n con INICIO
 export async function sendBotMessage(phone: string, message: string) {
   return sendWhatsAppMessage(phone, message);
 }

@@ -1,4 +1,5 @@
-import { sendNuevoPedidoRestaurante, sendRepartidorEnCaminoRestaurante } from "@/lib/whatsapp";
+import { sendNuevoPedidoRestaurante, sendRepartidorEnCaminoRestaurante, sendRestaurantePickupPedido } from "@/lib/whatsapp";
+import { getPaymentMethodLabel } from "@/lib/payment";
 import { readClient } from "@/sanity/lib/client";
 
 type RestaurantOrderProduct = {
@@ -11,6 +12,7 @@ type RestaurantOrderProduct = {
 type RestaurantOrderAffiliateStore = {
   _id: string;
   name?: string | null;
+  address?: { street?: string | null } | null;
   contact?: {
     phone?: string | null;
   } | null;
@@ -20,17 +22,22 @@ type RestaurantOrder = {
   _id: string;
   orderNumber?: string | null;
   customerName?: string | null;
+  phone?: string | null;
   orderType?: "delivery" | "pickup" | string | null;
+  paymentMethod?: string | null;
   totalPrice?: number | null;
   products?: RestaurantOrderProduct[] | null;
   affiliateStore?: RestaurantOrderAffiliateStore;
+  pickupStore?: RestaurantOrderAffiliateStore;
 } | null;
 
 const RESTAURANT_ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   _id,
   orderNumber,
   customerName,
+  phone,
   orderType,
+  paymentMethod,
   totalPrice,
   products[]{
     quantity,
@@ -39,6 +46,13 @@ const RESTAURANT_ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   affiliateStore->{
     _id,
     name,
+    address{street},
+    contact{phone}
+  },
+  pickupStore->{
+    _id,
+    name,
+    address{street},
     contact{phone}
   }
 }`;
@@ -74,7 +88,11 @@ function formatTotal(totalPrice: unknown) {
 }
 
 function mapOrderTypeLabel(orderType: unknown) {
-  return orderType === "pickup" ? "Recolección en tienda" : "Domicilio";
+  return orderType === "pickup" ? "Recoleccion en tienda" : "Domicilio";
+}
+
+function getOrderStore(order: NonNullable<RestaurantOrder>) {
+  return order.orderType === "pickup" ? order.pickupStore || order.affiliateStore : order.affiliateStore;
 }
 
 export async function notifyRestaurantNewOrder(orderId: string) {
@@ -85,9 +103,10 @@ export async function notifyRestaurantNewOrder(orderId: string) {
       return;
     }
 
-    const storeId = order.affiliateStore?._id;
-    const storeName = String(order.affiliateStore?.name || "").trim() || "Restaurante";
-    const storePhone = order.affiliateStore?.contact?.phone;
+    const store = getOrderStore(order);
+    const storeId = store?._id;
+    const storeName = String(store?.name || "").trim() || "Restaurante";
+    const storePhone = store?.contact?.phone;
 
     if (!storePhone) {
       console.error("[notify-restaurant] Restaurante sin WhatsApp configurado:", {
@@ -101,17 +120,29 @@ export async function notifyRestaurantNewOrder(orderId: string) {
     const customerName = String(order.customerName || "").trim() || "Cliente";
     const productsText = formatProducts(order.products);
     const totalText = formatTotal(order.totalPrice);
-    const orderTypeLabel = mapOrderTypeLabel(order.orderType);
 
-    await sendNuevoPedidoRestaurante(
-      storePhone,
-      storeName,
-      orderNumber,
-      customerName,
-      productsText,
-      totalText,
-      orderTypeLabel
-    );
+    if (order.orderType === "pickup") {
+      await sendRestaurantePickupPedido(
+        storePhone,
+        orderNumber,
+        customerName,
+        String(order.phone || "Sin telefono"),
+        productsText,
+        totalText,
+        getPaymentMethodLabel(order.paymentMethod || undefined),
+        order._id
+      );
+    } else {
+      await sendNuevoPedidoRestaurante(
+        storePhone,
+        storeName,
+        orderNumber,
+        customerName,
+        productsText,
+        totalText,
+        mapOrderTypeLabel(order.orderType)
+      );
+    }
 
     console.log("[notify-restaurant] Notificacion nuevo pedido enviada:", {
       orderId: order._id,
@@ -134,8 +165,9 @@ export async function notifyRestaurantDriverEnRoute(
       return;
     }
 
-    const storeId = order.affiliateStore?._id;
-    const storePhone = order.affiliateStore?.contact?.phone;
+    const store = order.affiliateStore;
+    const storeId = store?._id;
+    const storePhone = store?.contact?.phone;
 
     if (!storePhone) {
       console.error("[notify-restaurant] Restaurante sin WhatsApp configurado:", {

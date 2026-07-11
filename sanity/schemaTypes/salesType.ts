@@ -39,6 +39,46 @@ export const salesType = defineType({
       title: "Valid Until",
     }),
     defineField({
+      name: "stripePromotionCodeId",
+      type: "string",
+      title: "Stripe Promotion Code ID",
+      description: "ID promo_... de Stripe. No usar el codigo visible.",
+    }),
+    defineField({
+      name: "autoApply",
+      type: "boolean",
+      title: "Aplicar automaticamente",
+      initialValue: false,
+    }),
+    defineField({
+      name: "allowedOrderTypes",
+      type: "array",
+      title: "Tipos de pedido permitidos",
+      options: { list: [
+        { title: "Delivery", value: "delivery" },
+        { title: "Pickup", value: "pickup" },
+      ] },
+      of: [{ type: "string" }],
+      description: "Vacio = cualquier tipo de pedido.",
+    }),
+    defineField({
+      name: "allowedPaymentMethods",
+      type: "array",
+      title: "Metodos de pago permitidos",
+      options: { list: [
+        { title: "Stripe / tarjeta", value: "stripe" },
+      ] },
+      of: [{ type: "string" }],
+      description: "Actualmente aplica a pagos Stripe; vacio = cualquier checkout Stripe.",
+    }),
+    defineField({
+      name: "allowedStores",
+      type: "array",
+      title: "Tiendas permitidas",
+      of: [{ type: "reference", to: [{ type: "affiliateStore" }] }],
+      description: "Vacio = todas las tiendas.",
+    }),
+    defineField({
       name: "isActive",
       type: "boolean",
       title: "Is Active",
@@ -63,3 +103,6 @@ export const salesType = defineType({
     },
   },
 });
+
+
+

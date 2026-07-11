@@ -118,6 +118,10 @@ function formatDate(date?: string) {
   });
 }
 
+function isTechnicalItemNote(note?: string) {
+  return /^unitBasePrice=.*lineTotal=/i.test(String(note || "").trim());
+}
+
 function formatDeliveryAddress(order: AdminOrder) {
   const address = order.deliveryAddress;
   if (!address) {
@@ -132,13 +136,10 @@ function getStatusActions(order: AdminOrder) {
     switch (order.status) {
       case "pending":
       case "pending_pickup":
-        return [
-          { label: "Procesar", status: "processing", variant: "outline" as const },
-          { label: "Cancelar", status: "cancelled", variant: "destructive" as const },
-        ];
       case "processing":
+      case "paid":
         return [
-          { label: "Marcar listo", status: "ready_for_pickup", variant: "default" as const },
+          { label: "Orden lista", status: "ready_for_pickup", variant: "default" as const },
           { label: "Cancelar", status: "cancelled", variant: "destructive" as const },
         ];
       case "ready_for_pickup":
@@ -438,7 +439,7 @@ export default function AdminOrdersPanel() {
                               <p className="font-medium text-gray-900">
                                 {item.productName || "Producto sin nombre"} x{item.quantity}
                               </p>
-                              {item.notes ? (
+                              {item.notes && !isTechnicalItemNote(item.notes) ? (
                                 <p className="text-gray-500">Nota: {item.notes}</p>
                               ) : null}
                             </div>

@@ -9,6 +9,8 @@ import {
   sendRepartidorEnCamino,
   sendRepartidorEnPuerta,
   sendClienteRepartidorEnPuerta,
+  sendOrderCancelled,
+  sendPickupReadyForCustomer,
 } from '@/lib/whatsapp'
 import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
 import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
@@ -137,6 +139,22 @@ const ORDERS_BY_IDS_QUERY = `*[_type == "order" && _id in $orderIds]{
   "shippingAddress": shippingAddress
 }`
 
+const PICKUP_ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
+  _id,
+  _rev,
+  orderNumber,
+  orderType,
+  customerName,
+  phone,
+  orderStatus,
+  paymentMethod,
+  paymentProvider,
+  paymentStatus,
+  dispatchStatus,
+  settlementStatus,
+  "storePhone": coalesce(pickupStore->contact.phone, affiliateStore->contact.phone),
+  "storeName": coalesce(pickupStore->name, affiliateStore->name)
+}`
 const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._ref == $repartidorId && status == "shipped"] | order(orderDate asc){
   _id,
   _rev,
@@ -469,6 +487,76 @@ async function clearCompetingOffers(orderIds: string[], acceptedDriverId: string
     })
   )
 }
+async function handlePickupRestaurantAction(action: string, orderId: string | null, fromPhone: string, now: string) {
+  if (!orderId || (action !== 'ORDEN LISTA PICKUP' && action !== 'CANCELAR PICKUP')) {
+    return false
+  }
+
+  const order = await backendClient.fetch(PICKUP_ORDER_BY_ID_QUERY, { orderId }) as Record<string, unknown> | null
+  if (!order || order.orderType !== 'pickup') {
+    console.warn('[whatsapp webhook] accion pickup rechazada: orden invalida', { action, orderId })
+    return true
+  }
+
+  const from = normalizeWhatsAppPhone(fromPhone)
+  const storePhone = normalizeWhatsAppPhone(String(order.storePhone ?? ''))
+  if (storePhone && from && storePhone !== from) {
+    console.warn('[whatsapp webhook] accion pickup rechazada: telefono no corresponde a tienda', { action, orderId })
+    return true
+  }
+
+  const customerPhone = normalizeWhatsAppPhone(String(order.phone ?? ''))
+  const customerName = String(order.customerName ?? 'Cliente')
+  const orderNumber = String(order.orderNumber ?? '')
+  const storeName = String(order.storeName ?? 'Restaurante')
+
+  if (action === 'ORDEN LISTA PICKUP') {
+    await backendClient
+      .patch(String(order._id))
+      .ifRevisionId(String(order._rev))
+      .set({
+        status: 'ready_for_pickup',
+        orderStatus: 'ready_for_pickup',
+        pickupStatus: 'ready_for_pickup',
+        dispatchStatus: 'not_required',
+        readyAt: now,
+        updatedAt: now,
+      })
+      .commit()
+
+    await appendOrderEvent(String(order._id), { type: 'ready_for_pickup', source: 'whatsapp/webhook', actor: 'store' })
+    if (customerPhone) {
+      await sendPickupReadyForCustomer(customerPhone, customerName, orderNumber, storeName).catch(() => null)
+    }
+    return true
+  }
+
+  const isStripeOrder = order.paymentProvider === 'stripe'
+  await backendClient
+    .patch(String(order._id))
+    .ifRevisionId(String(order._rev))
+    .set({
+      status: 'cancelled',
+      orderStatus: 'cancelled',
+      pickupStatus: 'expired',
+      dispatchStatus: 'not_required',
+      paymentStatus: isStripeOrder ? 'requires_refund' : order.paymentStatus,
+      requiresStripeReconciliation: isStripeOrder,
+      stripeFee: isStripeOrder ? order.stripeFee : 0,
+      cancelledAt: now,
+      updatedAt: now,
+    })
+    .commit()
+
+  await appendOrderEvent(String(order._id), { type: 'cancelled', source: 'whatsapp/webhook', actor: 'store', reason: 'store_cancelled_pickup' })
+  if (isStripeOrder) {
+    await appendOrderEvent(String(order._id), { type: 'refund_required', source: 'whatsapp/webhook', actor: 'store', reason: 'stripe_pickup_cancelled' })
+  }
+  if (customerPhone) {
+    await sendOrderCancelled(customerPhone, customerName, orderNumber).catch(() => null)
+  }
+  return true
+}
 // Meta llama este GET para verificar el webhook
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -590,6 +678,9 @@ export async function POST(req: NextRequest) {
     })
     // #endregion
 
+    if (await handlePickupRestaurantAction(textBody, buttonOrderId, fromPhone, new Date().toISOString())) {
+      return NextResponse.json({ status: 'ok' })
+    }
     // Verificar si el numero es un repartidor registrado
     const repartidor = await findRepartidor(fromPhone)
 
@@ -1252,6 +1343,8 @@ Te avisaremos 10 minutos antes de finalizar.`
 
   return NextResponse.json({ status: 'ok' })
 }
+
+
 
 
 

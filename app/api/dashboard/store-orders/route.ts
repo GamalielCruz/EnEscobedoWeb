@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createClient } from "next-sanity";
 import { appendOrderEvent, OrderEventType } from "@/lib/order-events";
+import { sendOrderCancelled, sendPickupReadyForCustomer } from "@/lib/whatsapp";
 import {
   buildStateFields,
   DispatchStatusValue,
@@ -76,6 +77,8 @@ const HISTORY_ORDERS_QUERY = `*[
 const ORDER_BY_NUMBER = `*[_type == "order" && orderNumber == $orderNumber][0]{
   _id,
   orderNumber,
+  customerName,
+  phone,
   orderType,
   paymentMethod,
   paymentProvider,
@@ -90,7 +93,8 @@ const ORDER_BY_NUMBER = `*[_type == "order" && orderNumber == $orderNumber][0]{
   deliveredAt,
   pickupStatus,
   pickupStore,
-  affiliateStore
+  affiliateStore,
+  "storeName": coalesce(pickupStore->name, affiliateStore->name)
 }`;
 
 function isValidIsoDate(value: string | null) {
@@ -277,6 +281,12 @@ export async function PATCH(request: NextRequest) {
         events.push({ type: "cancelled", reason: "store_rejected_order" });
       }
     }
+    if (orderType === "pickup" && orderStatus === "ready_for_pickup" && order.orderStatus !== "ready_for_pickup") {
+      events.push({ type: "ready_for_pickup", reason: "store_marked_ready" });
+    }
+    if (orderType === "pickup" && (orderStatus === "picked_up" || orderStatus === "completed") && order.orderStatus !== "picked_up" && order.orderStatus !== "completed") {
+      events.push({ type: "picked_up", reason: "store_marked_picked_up" });
+    }
     if (needsRefund && order.paymentStatus !== "requires_refund" && order.paymentStatus !== "refunded") {
       events.push({ type: "refund_required", reason: "stripe_order_cancelled", payload: { paymentStatus } });
     }
@@ -284,6 +294,17 @@ export async function PATCH(request: NextRequest) {
       type: "manual_admin_action",
       payload: { orderStatus, paymentStatus, dispatchStatus, settlementStatus: updateData.settlementStatus },
     });
+
+    if (orderType === "pickup" && orderStatus === "ready_for_pickup" && order.phone) {
+      void sendPickupReadyForCustomer(order.phone, order.customerName || "Cliente", order.orderNumber, order.storeName || "Restaurante").catch((whatsappError) => {
+        console.error("[dashboard/store-orders PATCH] WhatsApp ready pickup error:", whatsappError);
+      });
+    }
+    if (orderType === "pickup" && isCancelled && order.phone) {
+      void sendOrderCancelled(order.phone, order.customerName || "Cliente", order.orderNumber).catch((whatsappError) => {
+        console.error("[dashboard/store-orders PATCH] WhatsApp cancel pickup error:", whatsappError);
+      });
+    }
 
     for (const event of events) {
       await appendOrderEvent(order._id, {
@@ -313,3 +334,7 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "Error al actualizar pedido", requestId }, { status: 500 });
   }
 }
+
+
+
+

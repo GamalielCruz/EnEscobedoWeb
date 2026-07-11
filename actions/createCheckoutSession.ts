@@ -5,6 +5,7 @@ import { getStripe } from "@/lib/stripe";
 import { buildUrl } from "@/lib/urls";
 import { BasketItem } from "@/store/store";
 import { OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
+import { backendClient } from "@/sanity/lib/backendClient";
 
 export type Metadata = {
   orderNumber: string;
@@ -56,6 +57,37 @@ function buildShippingAddress(metadata: Metadata): OrderAddressInput | undefined
     state: stateRaw,
     country: "MX",
   };
+}
+
+type AutoPromotion = {
+  stripePromotionCodeId?: string;
+  allowedOrderTypes?: string[];
+  allowedPaymentMethods?: string[];
+  allowedStores?: string[];
+};
+
+async function getEligibleAutoPromotion(orderType: "delivery" | "pickup", paymentMethod: "stripe", storeId: string) {
+  const promotions = await backendClient.fetch<AutoPromotion[]>(`*[
+    _type == "sale"
+    && isActive == true
+    && autoApply == true
+    && defined(stripePromotionCodeId)
+    && (!defined(validFrom) || validFrom <= now())
+    && (!defined(validUntil) || validUntil >= now())
+  ] | order(validFrom desc)[]{
+    stripePromotionCodeId,
+    allowedOrderTypes,
+    allowedPaymentMethods,
+    "allowedStores": allowedStores[]._ref
+  }`);
+
+  const promotion = promotions.find((candidate) =>
+    candidate.stripePromotionCodeId
+    && (!candidate.allowedOrderTypes?.length || candidate.allowedOrderTypes.includes(orderType))
+    && (!candidate.allowedPaymentMethods?.length || candidate.allowedPaymentMethods.includes(paymentMethod))
+    && (!candidate.allowedStores?.length || candidate.allowedStores.includes(storeId))
+  );
+  return promotion?.stripePromotionCodeId ?? null;
 }
 
 export async function createCheckoutSession(items: GroupedBasketItem[], metadata: Metadata) {
@@ -154,7 +186,19 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
     };
   });
 
-  const totalStripeAmount = lineItems.reduce((sum, item) => sum + item.price_data.unit_amount * item.quantity, 0) + Math.round(quotedOrder.shippingFee * 100);
+  if (orderType === "delivery" && quotedOrder.shippingFee > 0) {
+    lineItems.push({
+      price_data: {
+        currency: "mxn",
+        unit_amount: Math.round(quotedOrder.shippingFee * 100),
+        product_data: { name: "Costo de envio", description: "Entrega a domicilio", metadata: { id: "shipping-fee" }, images: undefined },
+      },
+      quantity: 1,
+    });
+  }
+
+  const autoPromotionCode = await getEligibleAutoPromotion(orderType, "stripe", storeId);
+  const totalStripeAmount = lineItems.reduce((sum, item) => sum + item.price_data.unit_amount * item.quantity, 0);
   if (totalStripeAmount < 1000) {
     throw new Error("El monto minimo para procesar el pago con tarjeta es de $10.00 MXN.");
   }
@@ -163,7 +207,9 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
     customer: customerId,
     metadata: stripeMetadata,
     mode: "payment",
-    allow_promotion_codes: true,
+    ...(autoPromotionCode
+      ? { discounts: [{ promotion_code: autoPromotionCode }] }
+      : { allow_promotion_codes: true }),
     payment_method_types: ["card"],
     phone_number_collection: {
       enabled: false,
@@ -171,23 +217,9 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
     ui_mode: "embedded",
     return_url: returnUrl,
     line_items: lineItems,
-    ...(orderType === "delivery" && quotedOrder.shippingFee > 0
-      ? {
-          shipping_options: [
-            {
-              shipping_rate_data: {
-                type: "fixed_amount",
-                fixed_amount: {
-                  amount: Math.round(quotedOrder.shippingFee * 100),
-                  currency: "mxn",
-                },
-                display_name: "Envio a domicilio",
-              },
-            },
-          ],
-        }
-      : {}),
+
   });
 
   return session.client_secret;
 }
+

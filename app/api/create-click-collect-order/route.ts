@@ -2,9 +2,10 @@ import { after, NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { writeClient } from "@/sanity/lib/client";
 import { notifyRestaurantNewOrder } from "@/lib/restaurant-notifications";
-import { sendOrderConfirmation } from "@/lib/whatsapp";
+import { sendPickupOrderReceived } from "@/lib/whatsapp";
 import { appendOrderEvent } from "@/lib/order-events";
 import { buildOrderDocument, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
+import { getPaymentMethodLabel } from "@/lib/payment";
 
 function normalizeItems(items: Array<any>): OrderItemInput[] {
   return (items || []).map((item) => ({
@@ -71,7 +72,7 @@ export async function POST(request: NextRequest) {
       const orderNumber = String(orderData.orderNumber || "");
 
       await Promise.allSettled([
-        phone && orderNumber ? sendOrderConfirmation(phone, customerName, orderNumber) : Promise.resolve(),
+        phone && orderNumber ? sendPickupOrderReceived(phone, customerName, orderNumber, String(quote.store.name || "Restaurante"), String(orderData.grossTotal || orderData.totalPrice || "0"), getPaymentMethodLabel(String(orderData.paymentMethod || "")), `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(String(quote.store.name || "Restaurante"))}`) : Promise.resolve(),
         notifyRestaurantNewOrder(result._id),
       ]);
     });
@@ -101,5 +102,6 @@ export async function POST(request: NextRequest) {
     );
   }
 }
+
 
 

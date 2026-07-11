@@ -186,6 +186,15 @@ export type Sale = {
   couponCode?: string;
   validFrom?: string;
   validUntil?: string;
+  stripePromotionCodeId?: string;
+  autoApply?: boolean;
+  allowedOrderTypes?: Array<string>;
+  allowedPaymentMethods?: Array<string>;
+  allowedStores?: Array<
+    {
+      _key: string;
+    } & AffiliateStoreReference
+  >;
   isActive?: boolean;
 };
 
@@ -1798,6 +1807,15 @@ export type ACTIVE_SALE_BY_COUPON_QUERY_RESULT = {
   couponCode?: string;
   validFrom?: string;
   validUntil?: string;
+  stripePromotionCodeId?: string;
+  autoApply?: boolean;
+  allowedOrderTypes?: Array<string>;
+  allowedPaymentMethods?: Array<string>;
+  allowedStores?: Array<
+    {
+      _key: string;
+    } & AffiliateStoreReference
+  >;
   isActive?: boolean;
 } | null;
 

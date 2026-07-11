@@ -1,9 +1,10 @@
 import { appendOrderEvent } from "@/lib/order-events";
 import { buildOrderDocument, OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
 import { notifyRestaurantNewOrder } from "@/lib/restaurant-notifications";
+import { getPaymentMethodLabel } from "@/lib/payment";
 import { getStripe } from "@/lib/stripe";
 import { extractSpeiDetails } from "@/lib/spei-reference-extractor";
-import { sendOrderConfirmation } from "@/lib/whatsapp";
+import { sendOrderConfirmation, sendPickupOrderReceived } from "@/lib/whatsapp";
 import { backendClient } from "@/sanity/lib/backendClient";
 import Stripe from "stripe";
 
@@ -261,7 +262,11 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
 
   if (isNewOrder && customerPhone && createdOrderNumber) {
     try {
-      await sendOrderConfirmation(customerPhone, safeCustomerName, createdOrderNumber);
+      if (orderData.orderType === "pickup") {
+        await sendPickupOrderReceived(customerPhone, safeCustomerName, createdOrderNumber, String(orderData.pickupStoreName || orderData.storeName || "Restaurante"), String(orderData.grossTotal || orderData.totalPrice || "0"), getPaymentMethodLabel(String(orderData.paymentMethod || "")), `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(String(orderData.pickupStoreName || orderData.storeName || "Restaurante"))}`);
+      } else {
+        await sendOrderConfirmation(customerPhone, safeCustomerName, createdOrderNumber);
+      }
     } catch (err) {
       console.error("[stripe-order] Error sendOrderConfirmation:", err);
     }
@@ -309,3 +314,5 @@ export async function markOrderPaidBySession(sessionId: string) {
   await appendOrderEvent(existingOrder._id, { type: "paid", source: "stripe-webhook", actor: "stripe", at: now });
   return updated;
 }
+
+
