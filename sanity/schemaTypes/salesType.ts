@@ -59,7 +59,8 @@ export const salesType = defineType({
         { title: "Pickup", value: "pickup" },
       ] },
       of: [{ type: "string" }],
-      description: "Vacio = cualquier tipo de pedido.",
+      validation: (Rule) => Rule.required().min(1),
+      description: "Selecciona al menos un tipo de pedido.",
     }),
     defineField({
       name: "allowedPaymentMethods",
@@ -69,14 +70,16 @@ export const salesType = defineType({
         { title: "Stripe / tarjeta", value: "stripe" },
       ] },
       of: [{ type: "string" }],
-      description: "Actualmente aplica a pagos Stripe; vacio = cualquier checkout Stripe.",
+      validation: (Rule) => Rule.required().min(1),
+      description: "Selecciona al menos un metodo de pago.",
     }),
     defineField({
       name: "allowedStores",
       type: "array",
       title: "Tiendas permitidas",
       of: [{ type: "reference", to: [{ type: "affiliateStore" }] }],
-      description: "Vacio = todas las tiendas.",
+      validation: (Rule) => Rule.required().min(1),
+      description: "Selecciona al menos una tienda.",
     }),
     defineField({
       name: "isActive",

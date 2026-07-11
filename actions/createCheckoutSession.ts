@@ -84,9 +84,9 @@ async function getEligibleAutoPromotion(orderType: "delivery" | "pickup", paymen
   }`);
 
   const promotion = promotions.find((candidate) =>
-    (!candidate.allowedOrderTypes?.length || candidate.allowedOrderTypes.includes(orderType))
-    && (!candidate.allowedPaymentMethods?.length || candidate.allowedPaymentMethods.includes(paymentMethod))
-    && (!candidate.allowedStores?.length || candidate.allowedStores.includes(storeId))
+    candidate.allowedOrderTypes?.includes(orderType)
+    && candidate.allowedPaymentMethods?.includes(paymentMethod)
+    && candidate.allowedStores?.includes(storeId)
   );
   if (!promotion) return null;
   if (promotion.stripePromotionCodeId) return promotion.stripePromotionCodeId;
