@@ -61,7 +61,7 @@ function formatProducts(products: RestaurantOrderProduct[] | null | undefined) {
   const lines = (products || [])
     .map((entry) => {
       const quantity = typeof entry?.quantity === "number" ? entry.quantity : 0;
-      const name = String(entry?.product?.name || "").trim();
+      const name = String(entry?.product?.name || "").replace(/\p{Cf}/gu, "").trim();
       if (!name) return null;
       const prefix = quantity > 1 ? `${quantity}x ` : "";
       return `${prefix}${name}`;

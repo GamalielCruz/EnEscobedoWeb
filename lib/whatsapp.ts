@@ -319,6 +319,7 @@ export async function sendRestaurantePickupPedido(
   paymentMethod: string,
   orderId: string
 ) {
+  const safeProducts = fitTextToBudget(products, 500, "Sin productos");
   return sendSpanishTemplate(
     phone,
     "restaurante_pickup_pedido",
@@ -326,7 +327,7 @@ export async function sendRestaurantePickupPedido(
       orderNumber.substring(0, 30),
       customerName.substring(0, 60),
       customerPhone.substring(0, 30),
-      products,
+      safeProducts,
       total.substring(0, 30),
       paymentMethod.substring(0, 40),
     ],
@@ -334,7 +335,7 @@ export async function sendRestaurantePickupPedido(
       buildQuickReplyPayloadButton("0", `ORDEN_LISTA_PICKUP|${orderId}`),
       buildQuickReplyPayloadButton("1", `CANCELAR_PICKUP|${orderId}`),
     ],
-    1024
+    500
   );
 }
 
