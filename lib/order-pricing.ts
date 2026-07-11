@@ -425,6 +425,7 @@ export function buildOrderDocument(input: {
   const driverType = input.orderType === "pickup" ? "none" : input.quote.store.hasOwnDelivery ? "store" : "community";
   const paymentProvider = resolvePaymentProvider(normalizedPaymentMethod);
   const paidOnline = resolvePaidOnline(paymentProvider);
+  const appliedDiscount = roundMoney(input.amountDiscount ?? input.quote.discount);
   const finalFinancials =
     input.stripeFee != null
       ? computeFinancials({
@@ -432,7 +433,7 @@ export function buildOrderDocument(input: {
           storeHasOwnDelivery: input.quote.store.hasOwnDelivery,
           productsSubtotal: input.quote.productsSubtotal,
           shippingFee: input.quote.shippingFee,
-          discount: input.quote.discount,
+          discount: appliedDiscount,
           tax: input.quote.tax,
           paymentMethod: normalizedPaymentMethod,
           stripeFee: input.stripeFee,
@@ -442,7 +443,7 @@ export function buildOrderDocument(input: {
           storeHasOwnDelivery: input.quote.store.hasOwnDelivery,
           productsSubtotal: input.quote.productsSubtotal,
           shippingFee: input.quote.shippingFee,
-          discount: input.quote.discount,
+          discount: appliedDiscount,
           tax: input.quote.tax,
           paymentMethod: normalizedPaymentMethod,
         });
@@ -486,7 +487,7 @@ export function buildOrderDocument(input: {
     totalPrice: finalFinancials.grossTotal,
     subtotal: input.quote.productsSubtotal,
     shippingCost: input.quote.shippingFee,
-    amountDiscount: roundMoney(input.amountDiscount ?? input.quote.discount),
+    amountDiscount: appliedDiscount,
     shippingAddress: shippingAddress ?? undefined,
     deliveryNotes: input.deliveryNotes,
     pickupStore: input.orderType === "pickup" ? { _type: "reference", _ref: input.storeId } : undefined,

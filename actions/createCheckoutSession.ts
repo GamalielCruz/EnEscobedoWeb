@@ -61,6 +61,7 @@ function buildShippingAddress(metadata: Metadata): OrderAddressInput | undefined
 
 type AutoPromotion = {
   stripePromotionCodeId?: string;
+  couponCode?: string;
   allowedOrderTypes?: string[];
   allowedPaymentMethods?: string[];
   allowedStores?: string[];
@@ -70,24 +71,32 @@ async function getEligibleAutoPromotion(orderType: "delivery" | "pickup", paymen
   const promotions = await backendClient.fetch<AutoPromotion[]>(`*[
     _type == "sale"
     && isActive == true
-    && autoApply == true
-    && defined(stripePromotionCodeId)
+    && autoApply != false
+    && (defined(stripePromotionCodeId) || defined(couponCode))
     && (!defined(validFrom) || validFrom <= now())
     && (!defined(validUntil) || validUntil >= now())
   ] | order(validFrom desc)[]{
     stripePromotionCodeId,
+    couponCode,
     allowedOrderTypes,
     allowedPaymentMethods,
     "allowedStores": allowedStores[]._ref
   }`);
 
   const promotion = promotions.find((candidate) =>
-    candidate.stripePromotionCodeId
-    && (!candidate.allowedOrderTypes?.length || candidate.allowedOrderTypes.includes(orderType))
+    (!candidate.allowedOrderTypes?.length || candidate.allowedOrderTypes.includes(orderType))
     && (!candidate.allowedPaymentMethods?.length || candidate.allowedPaymentMethods.includes(paymentMethod))
     && (!candidate.allowedStores?.length || candidate.allowedStores.includes(storeId))
   );
-  return promotion?.stripePromotionCodeId ?? null;
+  if (!promotion) return null;
+  if (promotion.stripePromotionCodeId) return promotion.stripePromotionCodeId;
+
+  const promotionCodes = await getStripe().promotionCodes.list({
+    code: promotion.couponCode,
+    active: true,
+    limit: 1,
+  });
+  return promotionCodes.data[0]?.id ?? null;
 }
 
 export async function createCheckoutSession(items: GroupedBasketItem[], metadata: Metadata) {

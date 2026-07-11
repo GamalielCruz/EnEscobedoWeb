@@ -455,6 +455,16 @@ function BasketPage() {
         metadata.pickupStoreName = selectedStore.store?.name || selectedStore.name || selectedStore.storeName;
         metadata.shippingCost = shippingCost ?? undefined;
         if (customerAddress) {
+          metadata.shippingAddress = {
+            line1: customerAddress.street || customerAddress.line1 || "",
+            line2: customerAddress.line2 || "",
+            city: customerAddress.city || "",
+            state: customerAddress.state || "",
+            postal_code: customerAddress.postalCode || customerAddress.postal_code || "",
+            country: customerAddress.country || "MX",
+            latitude: customerAddress.latitude,
+            longitude: customerAddress.longitude,
+          };
           metadata.customerAddress = typeof customerAddress === 'string'
             ? customerAddress
             : `${customerAddress.street || ''}, ${customerAddress.postalCode || ''} ${customerAddress.city || ''}, ${customerAddress.state || ''}`;
@@ -1473,7 +1483,6 @@ function BasketPage() {
 }
 
 export default BasketPage;
-
 
 
 
