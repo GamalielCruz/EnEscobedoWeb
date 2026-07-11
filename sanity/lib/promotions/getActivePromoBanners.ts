@@ -15,6 +15,7 @@ export type PromoBannerSale = {
   title?: string | null;
   description?: string | null;
   discountAmount?: number | null;
+  discountType?: "fixed_amount" | "percentage" | null;
   couponCode?: string | null;
 };
 
@@ -67,6 +68,7 @@ const ACTIVE_PROMO_BANNERS_QUERY = defineQuery(`
         title,
         description,
         discountAmount,
+        discountType,
         couponCode
       },
       null

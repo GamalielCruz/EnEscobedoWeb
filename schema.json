@@ -1020,6 +1020,23 @@
         },
         "optional": true
       },
+      "discountType": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "fixed_amount"
+            },
+            {
+              "type": "string",
+              "value": "percentage"
+            }
+          ]
+        },
+        "optional": true
+      },
       "couponCode": {
         "type": "objectAttribute",
         "value": {

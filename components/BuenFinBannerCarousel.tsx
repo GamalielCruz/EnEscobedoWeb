@@ -134,7 +134,11 @@ function SlideContent({ banner, priority }: { banner: PromoBannerItem; priority:
             {hasSale ? (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-white/85 px-2.5 py-1 text-[10px] font-bold text-[#850C22] shadow-sm sm:px-3 sm:text-[11px]">
                 <TicketPercent className="h-3.5 w-3.5" />
-                {banner.sale?.discountAmount ? `${banner.sale.discountAmount}% de descuento` : "Cupon disponible"}
+                {banner.sale?.discountAmount
+                  ? banner.sale.discountType === "percentage"
+                    ? `${banner.sale.discountAmount}% de descuento`
+                    : `$${banner.sale.discountAmount} de descuento`
+                  : "Cupon disponible"}
               </span>
             ) : null}
           </div>

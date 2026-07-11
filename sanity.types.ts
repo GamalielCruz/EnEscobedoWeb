@@ -183,6 +183,7 @@ export type Sale = {
   title?: string;
   description?: string;
   discountAmount?: number;
+  discountType?: "fixed_amount" | "percentage";
   couponCode?: string;
   validFrom?: string;
   validUntil?: string;
@@ -1730,7 +1731,7 @@ export type PRODUCT_SEARCH_QUERY_RESULT = Array<{
 
 // Source: sanity/lib/promotions/getActivePromoBanners.ts
 // Variable: ACTIVE_PROMO_BANNERS_QUERY
-// Query: *[    _type == "promoBanner"    && isActive == true    && (!defined(validFrom) || validFrom <= now())    && (!defined(validUntil) || validUntil >= now())  ] | order(sortOrder asc, _createdAt desc) {    _id,    title,    description,    bannerType,    mainColor,    desktopImage,    mobileImage,    sortOrder,    displayDurationSeconds,    ctaText,    ctaLink,    affiliateStore-> {      _id,      name,      image    },    "sale": select(      defined(sale)      && sale->isActive == true      && (!defined(sale->validFrom) || sale->validFrom <= now())      && (!defined(sale->validUntil) || sale->validUntil >= now()) => sale->{        _id,        title,        description,        discountAmount,        couponCode      },      null    )  }
+// Query: *[    _type == "promoBanner"    && isActive == true    && (!defined(validFrom) || validFrom <= now())    && (!defined(validUntil) || validUntil >= now())  ] | order(sortOrder asc, _createdAt desc) {    _id,    title,    description,    bannerType,    mainColor,    desktopImage,    mobileImage,    sortOrder,    displayDurationSeconds,    ctaText,    ctaLink,    affiliateStore-> {      _id,      name,      image    },    "sale": select(      defined(sale)      && sale->isActive == true      && (!defined(sale->validFrom) || sale->validFrom <= now())      && (!defined(sale->validUntil) || sale->validUntil >= now()) => sale->{        _id,        title,        description,        discountAmount,        discountType,        couponCode      },      null    )  }
 export type ACTIVE_PROMO_BANNERS_QUERY_RESULT = Array<{
   _id: string;
   title: string | null;
@@ -1788,6 +1789,7 @@ export type ACTIVE_PROMO_BANNERS_QUERY_RESULT = Array<{
     title: string | null;
     description: string | null;
     discountAmount: number | null;
+    discountType: "fixed_amount" | "percentage" | null;
     couponCode: string | null;
   } | null;
 }>;
@@ -1804,6 +1806,7 @@ export type ACTIVE_SALE_BY_COUPON_QUERY_RESULT = {
   title?: string;
   description?: string;
   discountAmount?: number;
+  discountType?: "fixed_amount" | "percentage";
   couponCode?: string;
   validFrom?: string;
   validUntil?: string;
@@ -1833,7 +1836,7 @@ declare module "@sanity/client" {
     '\n    *[\n      _type == "product" &&\n      affiliateStore._ref == $storeId &&\n      approvalStatus == "approved" &&\n      isVisible != false\n    ] | order(name asc) {\n      _id,\n      _createdAt,\n      name,\n      slug,\n      image,\n      price,\n      stock,\n      approvalStatus,\n      isVisible,\n      description,\n      categories[]->{\n        _id,\n        title,\n        slug\n      },\n      optionGroups,\n      affiliateStore->{\n        _id,\n        name,\n        categories,\n        averageDeliveryTime,\n        deliveryFee,\n        deliveryTimeMin,\n        deliveryTimeMax\n      }\n    }\n  ': PRODUCTS_BY_STORE_QUERY_RESULT;
     '\n    *[_type == "affiliateStore" && _id == $storeId][0] {\n      _id,\n      name,\n      storeId,\n      image,\n      coverImage,\n      categories,\n      address,\n      coordinates,\n      contact,\n      operatingHours,\n      isActive,\n      isOpen,\n      manualOperationalStatus,\n      highDemandMode,\n      capacity,\n      averageDeliveryTime,\n      deliveryFee,\n      deliveryTimeMin,\n      deliveryTimeMax,\n      serviceTypes\n    }\n  ': STORE_BY_ID_QUERY_RESULT;
     '\n     *[\n        _type == "product"\n        && name match $searchParam\n        && approvalStatus == "approved"\n        && isVisible != false\n     ] | order(name asc)\n    {\n      ...,\n      affiliateStore->{ _id, name }\n    }\n    ': PRODUCT_SEARCH_QUERY_RESULT;
-    '\n  *[\n    _type == "promoBanner"\n    && isActive == true\n    && (!defined(validFrom) || validFrom <= now())\n    && (!defined(validUntil) || validUntil >= now())\n  ] | order(sortOrder asc, _createdAt desc) {\n    _id,\n    title,\n    description,\n    bannerType,\n    mainColor,\n    desktopImage,\n    mobileImage,\n    sortOrder,\n    displayDurationSeconds,\n    ctaText,\n    ctaLink,\n    affiliateStore-> {\n      _id,\n      name,\n      image\n    },\n\n    "sale": select(\n      defined(sale)\n      && sale->isActive == true\n      && (!defined(sale->validFrom) || sale->validFrom <= now())\n      && (!defined(sale->validUntil) || sale->validUntil >= now()) => sale->{\n        _id,\n        title,\n        description,\n        discountAmount,\n        couponCode\n      },\n      null\n    )\n  }\n': ACTIVE_PROMO_BANNERS_QUERY_RESULT;
+    '\n  *[\n    _type == "promoBanner"\n    && isActive == true\n    && (!defined(validFrom) || validFrom <= now())\n    && (!defined(validUntil) || validUntil >= now())\n  ] | order(sortOrder asc, _createdAt desc) {\n    _id,\n    title,\n    description,\n    bannerType,\n    mainColor,\n    desktopImage,\n    mobileImage,\n    sortOrder,\n    displayDurationSeconds,\n    ctaText,\n    ctaLink,\n    affiliateStore-> {\n      _id,\n      name,\n      image\n    },\n\n    "sale": select(\n      defined(sale)\n      && sale->isActive == true\n      && (!defined(sale->validFrom) || sale->validFrom <= now())\n      && (!defined(sale->validUntil) || sale->validUntil >= now()) => sale->{\n        _id,\n        title,\n        description,\n        discountAmount,\n        discountType,\n        couponCode\n      },\n      null\n    )\n  }\n': ACTIVE_PROMO_BANNERS_QUERY_RESULT;
     '\n        *[\n            _type == "sale"\n            && isActive == true \n            && couponCode == $couponCode\n        ] | order(validFrom desc)[0]\n        ': ACTIVE_SALE_BY_COUPON_QUERY_RESULT;
   }
 }

@@ -21,7 +21,18 @@ export const salesType = defineType({
       name: "discountAmount",
       type: "number",
       title: "Discount Amount",
-      description: "Amount off in percentage or fixed value",
+      description: "Cantidad descontada según el tipo seleccionado.",
+    }),
+    defineField({
+      name: "discountType",
+      type: "string",
+      title: "Tipo de descuento",
+      initialValue: "fixed_amount",
+      options: { list: [
+        { title: "Monto fijo ($)", value: "fixed_amount" },
+        { title: "Porcentaje (%)", value: "percentage" },
+      ] },
+      validation: (Rule) => Rule.required(),
     }),
     defineField({
       name: "couponCode",
@@ -93,15 +104,17 @@ export const salesType = defineType({
     select: {
         title: "title",
         discountAmount: "discountAmount",
+        discountType: "discountType",
         couponCode: "couponCode",
         isActive: "isActive",
     },
     prepare(selection) {
-        const { title, discountAmount, couponCode, isActive } = selection;
+        const { title, discountAmount, discountType, couponCode, isActive } = selection;
         const status = isActive ? "Active" : "Inactive";
+        const discount = discountType === "percentage" ? `${discountAmount}%` : `$${discountAmount}`;
         return {
             title,
-            subtitle: `${discountAmount}% off - Code: ${couponCode} - ${status}`,
+            subtitle: `${discount} off - Code: ${couponCode} - ${status}`,
         };
     },
   },
