@@ -1,6 +1,6 @@
 import { sendNuevoPedidoRestaurante, sendRepartidorEnCaminoRestaurante, sendRestaurantePickupPedido } from "@/lib/whatsapp";
 import { getPaymentMethodLabel } from "@/lib/payment";
-import { readClient } from "@/sanity/lib/client";
+import { backendClient } from "@/sanity/lib/backendClient";
 
 type RestaurantOrderProduct = {
   quantity?: number;
@@ -97,7 +97,7 @@ function getOrderStore(order: NonNullable<RestaurantOrder>) {
 
 export async function notifyRestaurantNewOrder(orderId: string) {
   try {
-    const order = await readClient.fetch<RestaurantOrder>(RESTAURANT_ORDER_QUERY, { orderId });
+    const order = await backendClient.fetch<RestaurantOrder>(RESTAURANT_ORDER_QUERY, { orderId });
     if (!order) {
       console.error("[notify-restaurant] Orden no encontrada:", orderId);
       return;
@@ -159,7 +159,7 @@ export async function notifyRestaurantDriverEnRoute(
   orderNumberOverride?: string
 ) {
   try {
-    const order = await readClient.fetch<RestaurantOrder>(RESTAURANT_ORDER_QUERY, { orderId });
+    const order = await backendClient.fetch<RestaurantOrder>(RESTAURANT_ORDER_QUERY, { orderId });
     if (!order) {
       console.error("[notify-restaurant] Orden no encontrada:", orderId);
       return;

@@ -273,7 +273,7 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
   }
 
   if (isNewOrder) {
-    void notifyRestaurantNewOrder(order._id);
+    await notifyRestaurantNewOrder(order._id);
   }
 
   console.log("[stripe-order] Order stored in Sanity:", order._id);
