@@ -12,19 +12,16 @@ export function getPublicUrl(): string {
   // 2. NEXT_PUBLIC_BASE_URL (fallback)
   // 3. Environment-specific defaults
   
-  if (process.env.NEXT_PUBLIC_SITE_URL) {
-    return process.env.NEXT_PUBLIC_SITE_URL;
-  }
-  
-  if (process.env.NEXT_PUBLIC_BASE_URL) {
-    return process.env.NEXT_PUBLIC_BASE_URL;
+  const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_BASE_URL;
+
+  if (configuredUrl && !(process.env.NODE_ENV === "production" && configuredUrl.includes("en-escobedo-web.vercel.app"))) {
+    return configuredUrl.replace(/\/$/, "");
   }
   
   // Fallback based on environment
   if (process.env.NODE_ENV === "production") {
-    // In production, NEXT_PUBLIC_SITE_URL must be set in Vercel environment variables
-    console.warn("NEXT_PUBLIC_SITE_URL not set in production, using NEXT_PUBLIC_APP_URL fallback");
-    return process.env.NEXT_PUBLIC_APP_URL || "https://elmenu.site";
+    console.warn("NEXT_PUBLIC_SITE_URL missing or deprecated in production, using canonical domain");
+    return "https://elmenu.site";
   }
   
   return "http://localhost:3000";
