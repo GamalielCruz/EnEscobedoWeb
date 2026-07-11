@@ -89,7 +89,10 @@ async function getEligibleAutoPromotion(orderType: "delivery" | "pickup", paymen
     && candidate.allowedStores?.includes(storeId)
   );
   if (!promotion) return null;
-  if (promotion.stripePromotionCodeId) return promotion.stripePromotionCodeId;
+  if (promotion.stripePromotionCodeId) {
+    const promotionCode = await getStripe().promotionCodes.retrieve(promotion.stripePromotionCodeId);
+    return promotionCode.active ? promotionCode.id : null;
+  }
 
   const promotionCodes = await getStripe().promotionCodes.list({
     code: promotion.couponCode,
@@ -212,22 +215,26 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
     throw new Error("El monto minimo para procesar el pago con tarjeta es de $10.00 MXN.");
   }
 
-  const session = await stripe.checkout.sessions.create({
+  const createSession = (promotionCode?: string | null) => stripe.checkout.sessions.create({
     customer: customerId,
     metadata: stripeMetadata,
     mode: "payment",
-    ...(autoPromotionCode
-      ? { discounts: [{ promotion_code: autoPromotionCode }] }
-      : { allow_promotion_codes: true }),
+    ...(promotionCode ? { discounts: [{ promotion_code: promotionCode }] } : { allow_promotion_codes: true }),
     payment_method_types: ["card"],
-    phone_number_collection: {
-      enabled: false,
-    },
+    phone_number_collection: { enabled: false },
     ui_mode: "embedded",
     return_url: returnUrl,
     line_items: lineItems,
-
   });
+
+  let session;
+  try {
+    session = await createSession(autoPromotionCode);
+  } catch (error) {
+    const isPromotionError = error instanceof Error && /promotion|coupon|discount/i.test(error.message);
+    if (!autoPromotionCode || !isPromotionError) throw error;
+    session = await createSession();
+  }
 
   return session.client_secret;
 }
