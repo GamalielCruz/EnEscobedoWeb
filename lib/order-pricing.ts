@@ -32,6 +32,17 @@ function getNumberEnv(name: string, fallback: number) {
 type StoreRecord = {
   _id: string;
   name?: string;
+  coordinates?: {
+    latitude?: number | string;
+    longitude?: number | string;
+  };
+  address?: {
+    street?: string;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+    country?: string;
+  };
   isActive?: boolean;
   isOpen?: boolean;
   manualOperationalStatus?: "open" | "closed" | "auto" | null;
@@ -125,6 +136,8 @@ export type ValidatedOrderQuote = {
 const STORE_QUERY = `*[_type == "affiliateStore" && _id == $storeId][0]{
   _id,
   name,
+  coordinates,
+  address,
   isActive,
   isOpen,
   manualOperationalStatus,
@@ -153,6 +166,34 @@ async function getDeliveryConfig() {
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function toValidCoordinate(value: unknown) {
+  const coordinate = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(coordinate) ? coordinate : null;
+}
+
+export function buildStoreMapsUrl(store: Pick<StoreRecord, "name" | "address" | "coordinates">, fallbackName: string = "Restaurante") {
+  const latitude = toValidCoordinate(store.coordinates?.latitude);
+  const longitude = toValidCoordinate(store.coordinates?.longitude);
+
+  if (latitude != null && longitude != null) {
+    return `https://www.google.com/maps?q=${latitude},${longitude}`;
+  }
+
+  const address = [
+    store.address?.street,
+    store.address?.city,
+    store.address?.state,
+    store.address?.postalCode,
+    store.address?.country,
+  ]
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join(", ");
+
+  const target = address || String(store.name || "").trim() || fallbackName;
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(target)}`;
 }
 
 function assert(condition: unknown, message: string): asserts condition {

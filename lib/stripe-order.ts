@@ -1,5 +1,5 @@
 import { appendOrderEvent } from "@/lib/order-events";
-import { buildOrderDocument, OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
+import { buildOrderDocument, buildStoreMapsUrl, OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
 import { notifyRestaurantNewOrder } from "@/lib/restaurant-notifications";
 import { getPaymentMethodLabel } from "@/lib/payment";
 import { getStripe } from "@/lib/stripe";
@@ -218,6 +218,7 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
   }) as OrderDocumentRecord;
 
   orderData._id = `stripe-order-${session.id}`;
+  orderData.pickupStoreMapsUrl = buildStoreMapsUrl(quote.store);
   const offlineData = await resolveOfflinePaymentData(stripe, session, paymentMethod);
   return { ...orderData, ...offlineData } as OrderDocumentRecord;
 }
@@ -263,7 +264,7 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
   if (isNewOrder && customerPhone && createdOrderNumber) {
     try {
       if (orderData.orderType === "pickup") {
-        await sendPickupOrderReceived(customerPhone, safeCustomerName, createdOrderNumber, String(orderData.pickupStoreName || orderData.storeName || "Restaurante"), String(orderData.grossTotal || orderData.totalPrice || "0"), getPaymentMethodLabel(String(orderData.paymentMethod || "")), `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(String(orderData.pickupStoreName || orderData.storeName || "Restaurante"))}`);
+        await sendPickupOrderReceived(customerPhone, safeCustomerName, createdOrderNumber, String(orderData.pickupStoreName || orderData.storeName || "Restaurante"), String(orderData.grossTotal || orderData.totalPrice || "0"), getPaymentMethodLabel(String(orderData.paymentMethod || "")), String(orderData.pickupStoreMapsUrl || buildStoreMapsUrl({ name: String(orderData.pickupStoreName || orderData.storeName || "Restaurante") })));
       } else {
         await sendOrderConfirmation(customerPhone, safeCustomerName, createdOrderNumber);
       }
