@@ -12,6 +12,7 @@ import { SafeLocationBasedStoreSelector } from '@/components/SafeLocationBasedSt
 import { calculateDistance } from '@/lib/clickCollect';
 import { Truck, Store, CreditCard, Banknote, MapPin, X, CheckCircle, Loader2 } from "lucide-react";
 import ModernDeliveryFlow from '@/components/ModernDeliveryFlow';
+import { getStoreOperationalState, getStoreServiceTiming } from "@/lib/storeOperationalState";
 
 interface SavedStoreInfo {
   storeId: string;
@@ -30,21 +31,14 @@ const cleanDisplayText = (value: unknown, fallback = "") => {
 };
 
 const getServiceTiming = (storeData: any) => {
-  const serviceTypes = storeData?.store?.serviceTypes || storeData?.serviceTypes || {};
-  const min = Number(storeData?.store?.deliveryTimeMin ?? storeData?.deliveryTimeMin ?? 10) || 10;
-  const max = Number(storeData?.store?.deliveryTimeMax ?? storeData?.deliveryTimeMax ?? min) || min;
-  const onDemand = Boolean(serviceTypes.onDemand);
-  const extra = onDemand ? Number(serviceTypes.onDemandExtraMinutes ?? 15) || 15 : 0;
-  const estimatedMin = min + extra;
-  const estimatedMax = Math.max(max + extra, estimatedMin);
+  const source = storeData?.store ?? storeData;
+  const timing = getStoreServiceTiming(source, 10);
 
   return {
-    onDemand,
-    label: estimatedMin === estimatedMax ? `${estimatedMin} minutos` : `${estimatedMin}-${estimatedMax} minutos`,
+    onDemand: timing.highDemandMode,
+    label: timing.label.replace(/ min$/, " minutos").replace("-", "-"),
   };
 };
-
-import { getStoreOperationalState } from "@/lib/storeOperationalState";
 
 const getStoreOperationalStateLegacy = (storeData: any): ReturnType<typeof getStoreOperationalState> => {
   return getStoreOperationalState(storeData?.store ?? storeData);
@@ -1483,7 +1477,6 @@ function BasketPage() {
 }
 
 export default BasketPage;
-
 
 
 

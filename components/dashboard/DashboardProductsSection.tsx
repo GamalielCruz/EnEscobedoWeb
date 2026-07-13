@@ -37,6 +37,7 @@ type DashboardProductsSectionProps = {
   loadCategories: () => Promise<void>;
   onRefresh: () => void;
   onSubmitProduct: (payload: { editingProductId: string | null; formState: ProductFormState }) => Promise<boolean>;
+  onUpdateAvailability: (productId: string, isVisible: boolean, stock?: number) => Promise<boolean>;
   onImageUpload: (file: File) => Promise<{ _type: string; asset: { _type: string; _ref: string } } | null>;
 };
 
@@ -49,6 +50,7 @@ export function DashboardProductsSection({
   loadCategories,
   onRefresh,
   onSubmitProduct,
+  onUpdateAvailability,
   onImageUpload,
 }: DashboardProductsSectionProps) {
   const [modalOpen, setModalOpen] = React.useState(false);
@@ -101,6 +103,28 @@ export function DashboardProductsSection({
     setUploadingImage(false);
     if (image) {
       setFormState((current) => ({ ...current, image }));
+    }
+  };
+
+  const handleUpdateAvailability = async (product: Product, nextVisible: boolean) => {
+    if (nextVisible && Number(product.stock ?? 0) <= 0) {
+      const value = window.prompt(
+        "Este producto no tiene inventario disponible.\nAgrega existencias antes de publicarlo."
+      );
+      if (value == null) return;
+      const stock = Number(value);
+      if (!Number.isFinite(stock) || stock <= 0) {
+        alert("Ingresa una cantidad mayor a cero.");
+        return;
+      }
+      if (await onUpdateAvailability(product._id, true, Math.floor(stock))) {
+        alert("Producto publicado.");
+      }
+      return;
+    }
+
+    if (await onUpdateAvailability(product._id, nextVisible)) {
+      alert(nextVisible ? "Producto publicado." : "Producto oculto.");
     }
   };
 
@@ -185,6 +209,7 @@ export function DashboardProductsSection({
                   product={product}
                   hasPendingChanges={Boolean(pendingChanges[product._id])}
                   onEdit={() => handleOpenEdit(product)}
+                  onUpdateAvailability={(nextVisible) => handleUpdateAvailability(product, nextVisible)}
                 />
               ))}
             </div>

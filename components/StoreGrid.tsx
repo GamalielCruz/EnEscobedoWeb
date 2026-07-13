@@ -4,7 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
-import { getStoreOperationalState } from "@/lib/storeOperationalState";
+import { getStoreOperationalState, getStoreServiceTiming } from "@/lib/storeOperationalState";
 import { urlFor } from "@/sanity/lib/image";
 
 interface Store {
@@ -66,12 +66,7 @@ export default function StoreGrid({ stores }: StoreGridProps) {
         const storeState = getStoreOperationalState(store);
         const isOpen = mounted ? storeState.effectiveIsOpen : false;
 
-        const deliveryTimeText =
-          store.deliveryTimeMin != null && store.deliveryTimeMax != null
-            ? `${store.deliveryTimeMin}-${store.deliveryTimeMax} min`
-            : store.averageDeliveryTime
-              ? `${store.averageDeliveryTime} dias`
-              : "";
+        const timing = getStoreServiceTiming(store);
 
         return (
           <Link
@@ -124,13 +119,16 @@ export default function StoreGrid({ stores }: StoreGridProps) {
                     {isOpen ? "Abierto" : "Cerrado"}
                   </span>
                 </div>
-                {deliveryTimeText && (
+                {timing.label && (
                   <>
                     <span className="text-gray-900">Entrega:</span>
-                    <span className="text-gray-900">{deliveryTimeText}</span>
+                    <span className="text-gray-900">{timing.label}</span>
                   </>
                 )}
               </div>
+              {timing.highDemandMode ? (
+                <p className="text-xs font-medium text-amber-700">Alta demanda · Los pedidos pueden tardar mas</p>
+              ) : null}
             </div>
           </Link>
         );

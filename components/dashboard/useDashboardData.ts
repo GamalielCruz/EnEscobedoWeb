@@ -96,7 +96,10 @@ export function useDashboardData() {
       revenueToday: validRevenueStatuses.reduce((sum, order) => sum + (order.totalAmount || 0), 0),
       pendingOrders: activeOrders.length,
       activeProducts: products.filter(
-        (product) => product.approvalStatus !== "rejected" && product.isVisible !== false
+        (product) =>
+          product.approvalStatus === "approved" &&
+          product.isVisible !== false &&
+          Number(product.stock ?? 0) > 0
       ).length,
     };
   }, [todayOrdersHook.orders, activeOrders.length, products]);
@@ -365,6 +368,39 @@ export function useDashboardData() {
     [selectedStoreId, refreshProducts, refreshRequests]
   );
 
+  const updateProductAvailability = React.useCallback(
+    async (productId: string, isVisible: boolean, stock?: number) => {
+      if (!selectedStoreId) return false;
+
+      const response = await fetch("/api/dashboard/store-products", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          productId,
+          storeId: selectedStoreId,
+          visibilityOnly: true,
+          isVisible,
+          ...(stock != null ? { stock } : {}),
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        alert(data.error || "No se pudo actualizar la disponibilidad");
+        return false;
+      }
+
+      setProducts((current) =>
+        current.map((product) =>
+          product._id === productId
+            ? { ...product, isVisible, ...(stock != null ? { stock } : {}) }
+            : product
+        )
+      );
+      return true;
+    },
+    [selectedStoreId]
+  );
+
   const submitStoreChanges = React.useCallback(
     async (changes: Record<string, unknown>) => {
       if (!selectedStoreId || Object.keys(changes).length === 0) return false;
@@ -444,6 +480,7 @@ export function useDashboardData() {
     updateOrderStatus,
     uploadProductImage,
     submitProduct,
+    updateProductAvailability,
     submitStoreChanges,
     refreshRequests,
     refreshActiveOrders: todayOrdersHook.refresh,

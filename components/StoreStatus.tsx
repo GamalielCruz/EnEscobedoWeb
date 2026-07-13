@@ -44,7 +44,7 @@ export function StoreStatus({
     );
   }
 
-  const { effectiveIsOpen } = getStoreOperationalState({
+  const { effectiveIsOpen, highDemandMode: isHighDemand } = getStoreOperationalState({
     operatingHours,
     isOpen,
     manualOperationalStatus,
@@ -54,21 +54,28 @@ export function StoreStatus({
   const storeStatus = effectiveIsOpen ? "Abierto" : "Cerrado";
 
   return (
-    <div className="flex items-center gap-1">
-      <div
-        className={`h-2 w-2 rounded-full ${
-          effectiveIsOpen ? "bg-green-500" : "bg-red-500"
-        }`}
-      />
-      <span
-        className={
-          effectiveIsOpen
-            ? "text-green-600 font-medium"
-            : "text-red-600 font-medium"
-        }
-      >
-        {storeStatus}
-      </span>
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="flex items-center gap-1">
+        <div
+          className={`h-2 w-2 rounded-full ${
+            effectiveIsOpen ? "bg-green-500" : "bg-red-500"
+          }`}
+        />
+        <span
+          className={
+            effectiveIsOpen
+              ? "text-green-600 font-medium"
+              : "text-red-600 font-medium"
+          }
+        >
+          {storeStatus}
+        </span>
+      </div>
+      {isHighDemand ? (
+        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">
+          Alta demanda
+        </span>
+      ) : null}
     </div>
   );
 }

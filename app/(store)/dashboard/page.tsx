@@ -55,6 +55,7 @@ export default function DashboardPage() {
     updateOrderStatus,
     uploadProductImage,
     submitProduct,
+    updateProductAvailability,
     submitStoreChanges,
     refreshActiveOrders,
     refreshTodayOrders,
@@ -173,6 +174,7 @@ export default function DashboardPage() {
           loadCategories={loadCategories}
           onRefresh={refreshProducts}
           onSubmitProduct={submitProduct}
+          onUpdateAvailability={updateProductAvailability}
           onImageUpload={uploadProductImage}
         />
       ) : null}

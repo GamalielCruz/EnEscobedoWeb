@@ -14,17 +14,32 @@ type ProductCardProps = {
   product: Product;
   hasPendingChanges: boolean;
   onEdit: () => void;
+  onUpdateAvailability: (isVisible: boolean) => void;
 };
 
-export function ProductCard({ product, hasPendingChanges, onEdit }: ProductCardProps) {
+export function ProductCard({ product, hasPendingChanges, onEdit, onUpdateAvailability }: ProductCardProps) {
+  const stock = Number(product.stock ?? 0);
+  const isApproved = product.approvalStatus === "approved";
+  const isPublished = product.isVisible !== false;
+  const canPublish = isApproved && stock > 0;
   const statusLabel =
     product.approvalStatus === "pending"
       ? { label: "Pendiente", className: "border border-amber-200 bg-amber-50 text-amber-800" }
       : product.approvalStatus === "rejected"
         ? { label: "Rechazado", className: "border border-[#EB1902]/10 bg-[#fff1ef] text-[#EB1902]" }
+        : stock <= 0
+          ? { label: "Agotado", className: "border border-amber-200 bg-amber-50 text-amber-800" }
         : product.isVisible === false
-          ? { label: "Inactivo", className: "border border-gray-200 bg-gray-50 text-gray-700" }
-          : { label: "Activo", className: "border border-[#20096F]/10 bg-[#eff2ff] text-[#20096F]" };
+          ? { label: "Oculto", className: "border border-gray-200 bg-gray-50 text-gray-700" }
+          : { label: "Publicado", className: "border border-[#20096F]/10 bg-[#eff2ff] text-[#20096F]" };
+  const disabledReason =
+    product.approvalStatus === "pending"
+      ? "Pendiente de aprobacion"
+      : product.approvalStatus === "rejected"
+        ? "Producto rechazado"
+        : !canPublish && !isPublished
+          ? "Sin inventario"
+          : "";
 
   return (
     <DashboardPanel className="overflow-hidden">
@@ -69,7 +84,7 @@ export function ProductCard({ product, hasPendingChanges, onEdit }: ProductCardP
                 Inventario
               </p>
               <p className="mt-1 text-sm font-medium text-gray-900">
-                {product.stock ?? "Sin control"}
+                {stock > 0 ? `${stock} disponibles` : "Sin inventario"}
               </p>
             </div>
             <div>
@@ -77,20 +92,31 @@ export function ProductCard({ product, hasPendingChanges, onEdit }: ProductCardP
                 Visibilidad
               </p>
               <p className="mt-1 text-sm font-medium text-gray-900">
-                {product.isVisible === false ? "Oculto" : "Publicado"}
+                {isPublished ? "Publicado" : "Oculto"}
               </p>
+              {disabledReason ? <p className="mt-0.5 text-xs text-gray-500">{disabledReason}</p> : null}
             </div>
-            <div className="flex items-end justify-start sm:justify-end">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="h-8 rounded-lg border-black/8 px-3 shadow-none"
-              onClick={onEdit}
-              disabled={product.approvalStatus === "pending"}
-            >
-              {product.approvalStatus === "pending" ? "En revision" : "Editar"}
-            </Button>
+            <div className="flex flex-wrap items-end justify-start gap-2 sm:justify-end">
+              <Button
+                type="button"
+                variant={isPublished ? "outline" : "default"}
+                size="sm"
+                className="h-8 rounded-lg px-3 shadow-none"
+                onClick={() => onUpdateAvailability(!isPublished)}
+                disabled={!isApproved}
+              >
+                {isPublished ? "Ocultar" : "Disponible"}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 rounded-lg border-black/8 px-3 shadow-none"
+                onClick={onEdit}
+                disabled={product.approvalStatus === "pending"}
+              >
+                {product.approvalStatus === "pending" ? "En revision" : "Editar"}
+              </Button>
             </div>
           </div>
         </div>

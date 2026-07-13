@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
+import { revalidatePath } from "next/cache";
 import { client, writeClient } from "@/sanity/lib/client";
 
 const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
@@ -166,7 +167,7 @@ export async function PATCH(request: NextRequest) {
 
     const body = await request.json();
     console.log('[dashboard/store-products PATCH] incoming body:', JSON.stringify(body));
-    const { productId, name, price, description, storeId, stock, categories, optionGroups, image } = body;
+    const { productId, name, price, description, storeId, stock, categories, optionGroups, image, visibilityOnly, isVisible } = body;
 
     if (!productId || !storeId) {
       return NextResponse.json({ error: "productId y storeId son requeridos" }, { status: 400 });
@@ -182,7 +183,7 @@ export async function PATCH(request: NextRequest) {
 
     // Verificar que el producto pertenece a la tienda
     const existing = await client.fetch(
-      `*[_type == "product" && _id == $productId]{ _id, "storeRef": affiliateStore._ref }[0]`,
+      `*[_type == "product" && _id == $productId]{ _id, approvalStatus, stock, "storeRef": affiliateStore._ref }[0]`,
       { productId }
     );
     if (!existing) {
@@ -190,6 +191,27 @@ export async function PATCH(request: NextRequest) {
     }
     if (existing.storeRef !== storeId) {
       return NextResponse.json({ error: "El producto no pertenece a esa tienda" }, { status: 403 });
+    }
+
+    if (visibilityOnly) {
+      const nextVisible = Boolean(isVisible);
+      const nextStock = stock != null ? Number(stock) : Number(existing.stock ?? 0);
+
+      if (existing.approvalStatus !== "approved") {
+        return NextResponse.json({ error: "Solo puedes publicar productos aprobados" }, { status: 400 });
+      }
+      if (nextVisible && nextStock <= 0) {
+        return NextResponse.json({ error: "Agrega inventario antes de publicar" }, { status: 400 });
+      }
+
+      const updated = await writeClient
+        .patch(productId as string)
+        .set({ isVisible: nextVisible, ...(stock != null ? { stock: nextStock } : {}) })
+        .commit();
+
+      revalidatePath("/");
+      revalidatePath(`/store/${storeId}`);
+      return NextResponse.json({ success: true, product: updated });
     }
 
     // Instead of applying changes immediately, save them under `pendingChanges`

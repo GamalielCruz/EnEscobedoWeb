@@ -8,6 +8,7 @@ import { urlFor } from "@/sanity/lib/image";
 import { StoreProductsClient } from "./StoreProductsClient";
 import { StoreStatus } from "@/components/StoreStatus";
 import { getShareableImageUrl } from "@/sanity/lib/image";
+import { getStoreServiceTiming } from "@/lib/storeOperationalState";
 
 export async function generateMetadata({
   params,
@@ -84,12 +85,7 @@ export default async function StorePage({
 
 
 
-  const deliveryTimeText =
-    store.deliveryTimeMin != null && store.deliveryTimeMax != null
-      ? `${store.deliveryTimeMin}–${store.deliveryTimeMax} min`
-      : store.averageDeliveryTime
-      ? `${store.averageDeliveryTime} días`
-      : "";
+  const timing = getStoreServiceTiming(store);
 
   const deliveryFeeText =
     store.deliveryFee != null ? `$${store.deliveryFee.toFixed(2)}` : "Gratis";
@@ -170,11 +166,16 @@ export default async function StorePage({
                 serviceTypes={store.serviceTypes || undefined}
               />
               
-              {/* Costo de entrega */}
+              {/* Tiempo de entrega */}
               <div className="flex items-center gap-1 text-gray-600">
-                
+                {timing.label ? <span>Entrega estimada: {timing.label}</span> : null}
               </div>
             </div>
+            {timing.highDemandMode ? (
+              <p className="mt-2 text-xs font-medium text-amber-700">
+                Alta demanda · Los pedidos pueden tardar mas
+              </p>
+            ) : null}
             {store.address && (
               <p className="mt-2 text-xs text-black font-medium">
                  {store.address.city}
