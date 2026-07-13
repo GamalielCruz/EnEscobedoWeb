@@ -1,5 +1,7 @@
 const WHATSAPP_API_URL = "https://graph.facebook.com/v25.0";
 const WHATSAPP_FETCH_TIMEOUT_MS = 8000;
+const RESTAURANTE_PICKUP_TEMPLATE_NAME =
+  process.env.WHATSAPP_TEMPLATE_RESTAURANTE_PICKUP?.trim() || "restaurante_pickup_pedido";
 const NUEVO_PEDIDO_RESTAURANTE_BODY_LIMIT = 1024;
 const NUEVO_PEDIDO_RESTAURANTE_SAFETY_MARGIN = 48;
 const NUEVO_PEDIDO_RESTAURANTE_FIXED_BODY =
@@ -322,7 +324,7 @@ export async function sendRestaurantePickupPedido(
   const safeProducts = fitTextToBudget(products, 500, "Sin productos");
   return sendSpanishTemplate(
     phone,
-    "restaurante_pickup_pedido",
+    RESTAURANTE_PICKUP_TEMPLATE_NAME,
     [
       orderNumber.substring(0, 30),
       customerName.substring(0, 60),
