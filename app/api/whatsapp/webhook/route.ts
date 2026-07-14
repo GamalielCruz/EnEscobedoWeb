@@ -114,7 +114,17 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   "shippingAddress": shippingAddress
 }`
 
-const ORDERS_BY_IDS_QUERY = `*[_type == "order" && _id in $orderIds]{
+const ACTIVE_OFFER_ORDERS_BY_DRIVER_QUERY = `*[
+  _type == "order" &&
+  deliveryOfertaEnviada == true &&
+  dispatchStatus == "offered" &&
+  offeredTo._ref == $repartidorId &&
+  !defined(repartidorAsignado) &&
+  status != "delivered" &&
+  status != "cancelled" &&
+  defined(deliveryOfertaExpiresAt) &&
+  deliveryOfertaExpiresAt > $now
+] | order(orderDate asc)[0...2]{
   _id,
   _rev,
   orderNumber,
@@ -122,7 +132,6 @@ const ORDERS_BY_IDS_QUERY = `*[_type == "order" && _id in $orderIds]{
   phone,
   status,
   dispatchStatus,
-  orderStatus,
   paymentMethod,
   paymentProvider,
   paymentStatus,
@@ -366,27 +375,18 @@ function extractOrderToken(textBody: string, command: string) {
 }
 
 async function resolvePendingOfferOrders(repartidor: Record<string, unknown>, nowDate: Date, orderToken?: string | null): Promise<Array<Record<string, unknown>>> {
-  const pendingOrderIds = getPendingOfferOrderIds(repartidor as { pedidosOfertadosRefs?: string[]; ultimoPedidoOfertadoRef?: string })
-  const pendingOrders = await fetchOrdersByIds(pendingOrderIds)
-  const nowMs = nowDate.getTime()
-
-  const validOrders = (pendingOrders as Array<Record<string, unknown>>).filter((order) => {
-    const expiresAtRaw = order.deliveryOfertaExpiresAt
-    const expiresAtMs = typeof expiresAtRaw === 'string' ? new Date(expiresAtRaw).getTime() : NaN
-    return (
-      order.deliveryOfertaEnviada === true &&
-      order.dispatchStatus === 'offered' &&
-      order.offeredToRef === repartidor._id &&
-      !order.repartidorAsignadoRef &&
-      order.status !== 'delivered' &&
-      order.status !== 'cancelled' &&
-      Number.isFinite(expiresAtMs) &&
-      expiresAtMs > nowMs
-    )
-  })
+  const validOrders = await backendClient.fetch(
+    ACTIVE_OFFER_ORDERS_BY_DRIVER_QUERY,
+    { repartidorId: String(repartidor._id), now: nowDate.toISOString() }
+  ) as Array<Record<string, unknown>>
 
   if (orderToken) {
-    return validOrders.filter((order) => String(order.orderNumber) === orderToken)
+    const matchingOrder = validOrders.find((order) => String(order.orderNumber) === orderToken)
+    if (!matchingOrder) {
+      return []
+    }
+
+    return String(repartidor.ofertaTipo ?? '') === 'bundle' ? validOrders : [matchingOrder]
   }
 
   return validOrders
@@ -398,6 +398,10 @@ function resolveExactAssignedOrder(orders: Array<Record<string, unknown>>, order
   }
 
   return orders.length === 1 ? orders[0] : null
+}
+
+function shouldAcceptBundleOffer(repartidor: Record<string, unknown>, offerOrders: Array<Record<string, unknown>>) {
+  return offerOrders.length > 1 && String(repartidor.ofertaTipo ?? '') === 'bundle'
 }
 
 async function resolveAssignedOrderById(orderId: string, repartidorId: string) {
@@ -431,17 +435,6 @@ function getAmbiguousOrderPrompt(command: string, orders: Array<Record<string, u
   }
 
   return 'Tienes varias ordenes activas (' + orderList + '). Responde ' + command + ' <FOLIO> para indicar la orden exacta.'
-}
-
-async function fetchOrdersByIds(orderIds: string[]): Promise<Array<Record<string, unknown>>> {
-  const uniqueOrderIds = [...new Set(orderIds.filter(Boolean))]
-  if (uniqueOrderIds.length === 0) {
-    return []
-  }
-
-  const orders = await backendClient.fetch(ORDERS_BY_IDS_QUERY, { orderIds: uniqueOrderIds }) as Array<Record<string, unknown>>
-  const orderMap = new Map(orders.map((order: Record<string, unknown>) => [String(order._id), order]))
-  return uniqueOrderIds.map((orderId) => orderMap.get(orderId)).filter(Boolean) as Array<Record<string, unknown>>
 }
 
 async function clearPendingOfferForDriver(repartidorId: string, now: string, nextState: 'available' | 'busy' | 'offline') {
@@ -981,30 +974,28 @@ Te avisaremos 10 minutos antes de finalizar.`
     // --- ACEPTO ---
     if (textBody === 'ACEPTO' || textBody === 'ACEPTAR' || textBody.startsWith('ACEPTO ') || textBody.startsWith('ACEPTAR ')) {
       const orderToken = extractOrderToken(textBody, textBody.startsWith('ACEPTAR') ? 'ACEPTAR' : 'ACEPTO')
-      let offerOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, nowDate, orderToken)
+      const offerOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, nowDate, orderToken)
 
       void backendClient.patch(repartidor._id).set({ ultimaActividad: now }).commit().catch(() => null)
 
-      if (offerOrders.length === 0 && getDriverNextState(repartidor, nowDate) === 'available') {
-        const dispatchedWaitingOrders = await dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => {
-          console.error('[webhook ACEPTO] Error redisparando pedidos en espera:', error)
-          return false
-        })
-
-        if (dispatchedWaitingOrders) {
-          const refreshedRepartidor = await findRepartidorById(repartidor._id)
-          if (refreshedRepartidor) {
-            offerOrders = await resolvePendingOfferOrders(refreshedRepartidor as Record<string, unknown>, nowDate, orderToken)
-          }
-        }
-      }
-
       if (offerOrders.length === 0) {
         await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
-        await sendBotMessage(fromPhone, 'No tienes ninguna oferta vigente para aceptar. Si acabas de activarte, espera unos segundos y vuelve a intentar.').catch(() => null)
+        await sendBotMessage(fromPhone, 'No tienes ninguna oferta vigente para aceptar.').catch(() => null)
         console.warn('[whatsapp webhook] intento de aceptar sin oferta valida', {
           repartidorId: repartidor._id,
           orderToken,
+        })
+        return NextResponse.json({ status: 'ok' })
+      }
+
+      const acceptingBundle = shouldAcceptBundleOffer(repartidor as Record<string, unknown>, offerOrders)
+      if (!acceptingBundle && offerOrders.length > 1) {
+        const availableOrders = offerOrders.map((order) => `#${order.orderNumber}`).join(', ')
+        await sendBotMessage(fromPhone, `Tienes mas de una oferta vigente. Responde ACEPTO <FOLIO> para indicar cual tomar.\nOfertas: ${availableOrders}`).catch(() => null)
+        console.warn('[whatsapp webhook] aceptacion ambigua de ofertas', {
+          repartidorId: repartidor._id,
+          orderToken,
+          orderIds: offerOrders.map((order) => order._id),
         })
         return NextResponse.json({ status: 'ok' })
       }
@@ -1044,9 +1035,15 @@ Te avisaremos 10 minutos antes de finalizar.`
 
         await clearPendingOfferForDriver(repartidor._id, now, 'busy')
       } catch (patchError) {
+        const remainingOfferOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, new Date(), orderToken).catch(() => [])
+        if (remainingOfferOrders.length === 0) {
+          await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
+          await sendBotMessage(fromPhone, 'La oferta ya no esta disponible o ya fue tomada.').catch(() => null)
+        }
         console.error('[whatsapp webhook] error asignando oferta', {
           repartidorId: repartidor._id,
           orderIds: offerOrders.map((order: Record<string, unknown>) => order._id),
+          remainingOfferOrderIds: Array.isArray(remainingOfferOrders) ? remainingOfferOrders.map((order: Record<string, unknown>) => order._id) : [],
           patchError,
         })
         return NextResponse.json({ status: 'ok' })
