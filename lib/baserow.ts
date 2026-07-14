@@ -1,4 +1,4 @@
-import "server-only";
+ï»¿import "server-only";
 import { backendClient } from "@/sanity/lib/backendClient";
 
 const BASEROW_API_BASE_URL = process.env.BASEROW_API_URL || "https://api.baserow.io";
@@ -45,7 +45,7 @@ async function baserowRequest(path: string, init: RequestInit) {
     headers: { Authorization: `Token ${token}`, "Content-Type": "application/json", ...init.headers },
   });
   const responseBody = await response.text();
-  if (!response.ok) throw new BaserowError("Baserow rechazó la solicitud", response.status, responseBody);
+  if (!response.ok) throw new BaserowError("Baserow rechazÃ³ la solicitud", response.status, responseBody);
   return responseBody ? JSON.parse(responseBody) : null;
 }
 
@@ -57,7 +57,7 @@ function getPaymentMethod(paymentMethod?: string) {
 
 function getOrderStatus(orderStatus?: string) {
   return {
-    pending: "Nuevo", processing: "En preparación", ready_for_pickup: "Listo", shipped: "En ruta",
+    pending: "Nuevo", processing: "En preparaciÃ³n", ready_for_pickup: "Listo", shipped: "En ruta",
     delivered: "Entregado", completed: "Entregado", cancelled: "Cancelado",
   }[orderStatus || ""];
 }
@@ -90,26 +90,26 @@ export async function createBaserowOrder(order: BaserowOrder) {
   const restaurantRowId = await findRestaurantRowId(order.restaurantName);
   const rowId = order.baserowRowId ?? await findOrderRowId(order._id, ordersTableId);
   const fields = {
-    "Número de pedido": order.orderNumber,
+    "NÃºmero de pedido": order.orderNumber,
     "ID de orden": order._id,
     "Fecha y hora": order.orderDate?.slice(0, 10),
     Cliente: order.customerName,
     "Modalidad de entrega": order.orderType === "pickup" ? "Recogida" : "Entrega",
-    "Método de pago": getPaymentMethod(order.paymentMethod),
+    "MÃ©todo de pago": getPaymentMethod(order.paymentMethod),
     "Estado del pago": order.paymentStatus === "paid" ? "Pagado" : "Pendiente",
     "Estado del pedido": getOrderStatus(order.orderStatus),
     Subtotal: order.productsSubtotal,
-    "Costo de envío": order.shippingFee,
+    "Costo de envÃ­o": order.shippingFee,
     Descuento: order.discount,
     Total: order.grossTotal,
-    "Comisión de ElMenu": order.platformCommission,
+    "ComisiÃ³n de ElMenu": order.platformCommission,
     "Pago al restaurante": order.storeNetTotal,
     "Pago al repartidor": order.driverPayout,
     "ID de Stripe": order.stripeCheckoutSessionId,
     ...(restaurantRowId ? { Restaurante: [restaurantRowId] } : {}),
   };
-  const path = order.baserowRowId
-    ? `/api/database/rows/table/${ordersTableId}/${order.baserowRowId}/?user_field_names=true`
+  const path = rowId
+    ? `/api/database/rows/table/${ordersTableId}/${rowId}/?user_field_names=true`
     : `/api/database/rows/table/${ordersTableId}/?user_field_names=true`;
   return baserowRequest(path, {
     method: rowId ? "PATCH" : "POST",
@@ -131,7 +131,7 @@ export async function syncBaserowOrder(order: BaserowOrder) {
       : error instanceof Error ? error.message : String(error);
     console.error("[baserow] No se pudo sincronizar la orden", { orderId: order._id, error: message });
     await backendClient.patch(order._id).set({ baserowSyncStatus: "failed", baserowSyncError: message }).commit().catch((sanityError) => {
-      console.error("[baserow] No se pudo guardar el error de sincronización", { orderId: order._id, sanityError });
+      console.error("[baserow] No se pudo guardar el error de sincronizaciÃ³n", { orderId: order._id, sanityError });
     });
   }
 }
