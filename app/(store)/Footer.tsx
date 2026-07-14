@@ -6,6 +6,9 @@ export default function Footer() {
       <div className="max-w-7xl mx-auto mt-8 border-t border-[#eb1922] pt-4 flex flex-col items-center justify-between gap-3 text-xs text-gray-700 md:flex-row">
         <span>&copy; {new Date().getFullYear()} ElMenu.site</span>
         <nav className="flex flex-wrap items-center justify-center gap-3">
+          <Link href="/Servicio al cliente" className="hover:underline">
+          Servicio al Cliente
+          </Link>
           <Link href="/privacidad" className="hover:underline">
             Privacidad
           </Link>
@@ -24,7 +27,7 @@ export default function Footer() {
             target="_blank"
             rel="noopener noreferrer"
           >
-            Gamaliel
+            Garoga Communications
           </a>
         </span>
       </div>

@@ -5,6 +5,7 @@ import { SpeedInsights } from "@vercel/speed-insights/next";
 import { esMX } from '@clerk/localizations';
 import "./globals.css";
 import { ClerkRedirectInterceptor } from "@/components/ClerkRedirectInterceptor";
+import { SanityLive } from "@/sanity/lib/live";
 
 export const metadata: Metadata = {
   title: "ElMenu",
@@ -40,6 +41,7 @@ export default function RootLayout({
           <Analytics />
           <SpeedInsights />
         </ClerkProvider>
+        <SanityLive />
       </body>
     </html>
   );

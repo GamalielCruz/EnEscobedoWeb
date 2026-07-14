@@ -87,6 +87,16 @@ export default function ProductSidebar({ product, isOpen, onClose }: ProductSide
 
   const isOutOfStock = product.stock != null && product.stock <= 0;
   const itemCount = getItemCount(product._id);
+  const description =
+    typeof product.description === "string"
+      ? product.description
+      : Array.isArray(product.description)
+        ? product.description
+            .flatMap((block) => ("children" in block ? block.children ?? [] : []))
+            .map((child) => ("text" in child ? child.text ?? "" : ""))
+            .join(" ")
+            .trim()
+        : "";
 
   const sidebarContent = (
     <div className="fixed inset-0 z-[9999]" style={{ zIndex: 9999 }}>
@@ -166,14 +176,11 @@ export default function ProductSidebar({ product, isOpen, onClose }: ProductSide
             </div>
 
             {/* Description */}
-            {product.description && (
+            {description && (
               <div>
                 <h3 className="text-base font-semibold text-gray-900 mb-1">Descripción</h3>
                 <p className="text-gray-600 text-sm leading-relaxed">
-                  {typeof product.description === 'string' 
-                    ? product.description 
-                    : 'Descripción no disponible'
-                  }
+                  {description}
                 </p>
               </div>
             )}
