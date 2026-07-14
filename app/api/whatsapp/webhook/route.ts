@@ -778,9 +778,11 @@ export async function POST(req: NextRequest) {
 
     // --- INICIO ---
     if (textBody === 'INICIO') {
+      const pendingOrderIds = getPendingOfferOrderIds(repartidor)
       console.log('[webhook disponibilidad] INICIO recibido', {
         repartidorId: repartidor._id,
         repartidorNombre: repartidor.nombre,
+        pendingOrderIds,
       })
 
       await backendClient
@@ -809,6 +811,13 @@ export async function POST(req: NextRequest) {
           'ofertaExpiraAt',
         ])
         .commit()
+
+      const releasedOrderIds = await releaseOrdersForDriver(pendingOrderIds, repartidor._id, 'driver_restart')
+      if (releasedOrderIds.length > 0) {
+        void redispatchOrders(releasedOrderIds, [repartidor._id]).catch((error) =>
+          console.error('[webhook INICIO] Error redispatch:', error)
+        )
+      }
 
       try {
         await sendBotMessage(fromPhone, getSessionSelectionPrompt())

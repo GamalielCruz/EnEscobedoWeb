@@ -22,6 +22,12 @@ type RepartidorCron = {
   pedidosOfertadosRefs?: string[]
 }
 
+type ExpiredOfferOrder = {
+  _id: string
+  orderNumber?: string
+  offeredToRef?: string
+}
+
 function getExtensionPrompt(): string {
   return `Tu sesion termina en aproximadamente 10 minutos.
 
@@ -132,6 +138,60 @@ export async function GET(req: NextRequest) {
           console.error('[cron/check-repartidores] Error expirando oferta pendiente', {
             id: rep._id,
             nombre: rep.nombre,
+            orderIds,
+            error: e,
+          })
+        }
+      })
+    )
+
+    const expiredOfferOrders: ExpiredOfferOrder[] = await backendClient.fetch(
+      `*[
+        _type == "order" &&
+        deliveryOfertaEnviada == true &&
+        dispatchStatus == "offered" &&
+        !defined(repartidorAsignado) &&
+        defined(offeredTo) &&
+        defined(deliveryOfertaExpiresAt) &&
+        deliveryOfertaExpiresAt <= $now
+      ]{
+        _id,
+        orderNumber,
+        "offeredToRef": offeredTo._ref
+      }`,
+      { now: nowIso }
+    )
+
+    const expiredOfferGroups = new Map<string, string[]>()
+    for (const order of expiredOfferOrders) {
+      if (!order.offeredToRef) continue
+      const current = expiredOfferGroups.get(order.offeredToRef) ?? []
+      current.push(order._id)
+      expiredOfferGroups.set(order.offeredToRef, current)
+    }
+
+    await Promise.allSettled(
+      Array.from(expiredOfferGroups.entries()).map(async ([driverId, orderIds]) => {
+        try {
+          const releasedOrderIds = await releaseOrdersForDriver(orderIds, driverId, 'offer_expired_orphan')
+          if (releasedOrderIds.length === 0) return
+
+          summary.ofertasExpiradas += releasedOrderIds.length
+          await Promise.allSettled(
+            releasedOrderIds.map((orderId) =>
+              appendOrderEvent(orderId, { type: 'offer_expired', source: 'cron/check-repartidores', actor: driverId })
+            )
+          )
+          await redispatchOrders(releasedOrderIds, [driverId])
+
+          console.log('[cron/check-repartidores] ofertas expiradas huerfanas liberadas', {
+            driverId,
+            orderIds: releasedOrderIds,
+          })
+        } catch (e) {
+          summary.errores++
+          console.error('[cron/check-repartidores] Error liberando ofertas huerfanas', {
+            driverId,
             orderIds,
             error: e,
           })
