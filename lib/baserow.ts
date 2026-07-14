@@ -63,6 +63,10 @@ function getOrderStatus(orderStatus?: string) {
   }[orderStatus || ""];
 }
 
+function roundForIntegerColumn(value?: number) {
+  return typeof value === "number" && Number.isFinite(value) ? Math.round(value) : value;
+}
+
 export function resolveOrderPhone(order: Pick<BaserowOrder, "_id" | "phone">) {
   const phone = typeof order.phone === "string" ? order.phone.trim() : "";
   const digits = phone.replace(/\D/g, "");
@@ -121,8 +125,8 @@ export async function createBaserowOrder(order: BaserowOrder) {
     "Costo de envío": order.shippingFee,
     Descuento: order.discount,
     Total: order.grossTotal,
-    "Comisión de ElMenu": order.platformCommission,
-    "Pago al restaurante": order.storeNetTotal,
+    "Comisión de ElMenu": roundForIntegerColumn(order.platformCommission),
+    "Pago al restaurante": roundForIntegerColumn(order.storeNetTotal),
     "Pago al repartidor": order.driverPayout,
     "ID de Stripe": order.stripeCheckoutSessionId,
     ...(restaurantRowId ? { Restaurante: [restaurantRowId] } : {}),

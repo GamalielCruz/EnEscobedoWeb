@@ -348,20 +348,12 @@ export async function sendPickupReadyForCustomer(
   name: string,
   orderNumber: string,
   storeName: string,
-  storeMapsUrl: string
+  _storeMapsUrl: string
 ) {
   return sendSpanishTemplate(
     phone,
     CLIENTE_PICKUP_READY_TEMPLATE_NAME,
-    [orderNumber.substring(0, 30), storeName.substring(0, 60)],
-    [
-      {
-        type: "button",
-        sub_type: "url",
-        index: "0",
-        parameters: [{ type: "text", text: toWhatsAppUrlButtonParam(storeMapsUrl) }],
-      },
-    ]
+    [orderNumber.substring(0, 30), storeName.substring(0, 60)]
   );
 }
 export async function sendNuevoPedidoRestaurante(
