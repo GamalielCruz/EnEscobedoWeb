@@ -1,5 +1,6 @@
 ﻿import "server-only";
 import { backendClient } from "@/sanity/lib/backendClient";
+import { buildUrl } from "@/lib/urls";
 
 const BASEROW_API_BASE_URL = process.env.BASEROW_API_URL || "https://api.baserow.io";
 const BASEROW_RESTAURANTS_TABLE_ID = "1076849";
@@ -24,7 +25,30 @@ type BaserowOrder = {
   stripeCheckoutSessionId?: string;
   baserowRowId?: number;
   restaurantName?: string;
+  orderUrl?: string;
 };
+
+const BASEROW_ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
+  _id,
+  orderNumber,
+  orderDate,
+  customerName,
+  phone,
+  orderType,
+  paymentMethod,
+  paymentStatus,
+  orderStatus,
+  productsSubtotal,
+  shippingFee,
+  discount,
+  grossTotal,
+  platformCommission,
+  storeNetTotal,
+  driverPayout,
+  stripeCheckoutSessionId,
+  baserowRowId,
+  "restaurantName": coalesce(pickupStore->name, affiliateStore->name)
+}`;
 
 export class BaserowError extends Error {
   constructor(message: string, public readonly status: number, public readonly responseBody: string) {
@@ -89,7 +113,9 @@ async function findRestaurantRowId(name?: string) {
     `/api/database/rows/table/${BASEROW_RESTAURANTS_TABLE_ID}/?user_field_names=true&search=${encodeURIComponent(name)}`,
     { method: "GET" }
   ) as { results?: Array<{ id?: number; Nombre?: string }> };
-  return result.results?.find((row) => row.Nombre === name)?.id;
+  const normalizedName = name.trim().toLowerCase();
+  return result.results?.find((row) => String(row.Nombre || "").trim().toLowerCase() === normalizedName)?.id
+    ?? result.results?.[0]?.id;
 }
 
 export async function createBaserowRow(fields: Record<string, unknown>) {
@@ -129,6 +155,7 @@ export async function createBaserowOrder(order: BaserowOrder) {
     "Pago al restaurante": roundForIntegerColumn(order.storeNetTotal),
     "Pago al repartidor": order.driverPayout,
     "ID de Stripe": order.stripeCheckoutSessionId,
+    "URL del pedido": order.orderUrl,
     ...(restaurantRowId ? { Restaurante: [restaurantRowId] } : {}),
   };
   const path = rowId
@@ -157,4 +184,13 @@ export async function syncBaserowOrder(order: BaserowOrder) {
       console.error("[baserow] No se pudo guardar el error de sincronización", { orderId: order._id, sanityError });
     });
   }
+}
+
+export async function syncBaserowOrderById(orderId: string) {
+  const order = await backendClient.fetch<BaserowOrder | null>(BASEROW_ORDER_QUERY, { orderId });
+  if (!order) return;
+  await syncBaserowOrder({
+    ...order,
+    orderUrl: buildUrl(`/orders?order=${encodeURIComponent(order.orderNumber || order._id)}`),
+  });
 }

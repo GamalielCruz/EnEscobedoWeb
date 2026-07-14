@@ -5,7 +5,7 @@ import { getPaymentMethodLabel } from "@/lib/payment";
 import { getStripe } from "@/lib/stripe";
 import { extractSpeiDetails } from "@/lib/spei-reference-extractor";
 import { sendOrderConfirmation, sendPickupOrderReceived } from "@/lib/whatsapp";
-import { syncBaserowOrder } from "@/lib/baserow";
+import { syncBaserowOrder, syncBaserowOrderById } from "@/lib/baserow";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { after } from "next/server";
 import Stripe from "stripe";
@@ -320,6 +320,7 @@ export async function markOrderPaidBySession(sessionId: string) {
     .commit();
 
   await appendOrderEvent(existingOrder._id, { type: "paid", source: "stripe-webhook", actor: "stripe", at: now });
+  after(() => syncBaserowOrderById(existingOrder._id));
   return updated;
 }
 

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { client, readClient, writeClient } from "@/sanity/lib/client";
 import { isAdminUser } from "@/lib/admin";
+import { syncBaserowOrderById } from "@/lib/baserow";
 import { sendOrderCancelled, sendPickupReadyForCustomer } from "@/lib/whatsapp";
 import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
 import { appendOrderEvent, OrderEventType } from "@/lib/order-events";
@@ -295,6 +296,10 @@ export async function PATCH(request: NextRequest) {
         payload: event.payload,
       });
     }
+
+    void syncBaserowOrderById(order._id).catch((error) => {
+      console.error("[admin/orders PATCH] Baserow sync error:", error);
+    });
 
     if (dispatchStatus === "waiting_for_driver" && orderType === "delivery") {
       void dispatchDeliveryOffer(order._id).catch((e) => console.error("[admin/orders PATCH] dispatchDeliveryOffer error:", e));

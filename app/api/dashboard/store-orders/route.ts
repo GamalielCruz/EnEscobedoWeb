@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createClient } from "next-sanity";
+import { syncBaserowOrderById } from "@/lib/baserow";
 import { appendOrderEvent, OrderEventType } from "@/lib/order-events";
 import { sendOrderCancelled, sendOrderDelivered, sendPickupReadyForCustomer } from "@/lib/whatsapp";
 import { buildStoreMapsUrl } from "@/lib/order-pricing";
@@ -339,6 +340,10 @@ export async function PATCH(request: NextRequest) {
         payload: event.payload,
       });
     }
+
+    void syncBaserowOrderById(order._id).catch((error) => {
+      console.error("[dashboard/store-orders PATCH] Baserow sync error:", error);
+    });
 
     return NextResponse.json({
       success: true,
