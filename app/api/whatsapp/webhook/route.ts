@@ -437,6 +437,20 @@ function getAmbiguousOrderPrompt(command: string, orders: Array<Record<string, u
   return 'Tienes varias ordenes activas (' + orderList + '). Responde ' + command + ' <FOLIO> para indicar la orden exacta.'
 }
 
+function buildOfferStatusMessage(offerOrders: Array<Record<string, unknown>>) {
+  if (offerOrders.length === 0) {
+    return 'No tienes ofertas vigentes en este momento.'
+  }
+
+  if (offerOrders.length === 1) {
+    const order = offerOrders[0]
+    return `Tienes 1 oferta vigente.\nFolio: #${order.orderNumber}\nRestaurante: ${order.storeName ?? 'La Tienda'}\nResponde ACEPTO para tomarla o RECHAZAR para liberarla.`
+  }
+
+  const offersLabel = offerOrders.map((order) => `#${order.orderNumber} (${order.storeName ?? 'La Tienda'})`).join(', ')
+  return `Tienes ${offerOrders.length} ofertas vigentes.\n${offersLabel}\nResponde ACEPTO <FOLIO> para elegir una.`
+}
+
 async function clearPendingOfferForDriver(repartidorId: string, now: string, nextState: 'available' | 'busy' | 'offline') {
   await backendClient
     .patch(repartidorId)
@@ -971,6 +985,30 @@ Te avisaremos 10 minutos antes de finalizar.`
       return NextResponse.json({ status: 'ok' })
     }
 
+    // --- OFERTAS / ORDENES ---
+    if (textBody === 'OFERTAS' || textBody === 'ORDENES') {
+      const offerOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, nowDate)
+
+      void backendClient.patch(repartidor._id).set({ ultimaActividad: now }).commit().catch(() => null)
+
+      if (offerOrders.length === 0) {
+        const shippedOrders = await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>
+        if (shippedOrders.length > 0) {
+          const activeOrders = shippedOrders.map((order) => `#${order.orderNumber}`).join(', ')
+          await sendBotMessage(fromPhone, `No tienes ofertas nuevas. Pedidos activos: ${activeOrders}.`).catch(() => null)
+        } else if (getDriverNextState(repartidor, nowDate) === 'offline') {
+          await sendBotMessage(fromPhone, 'No tienes ofertas vigentes. Envia INICIO para ponerte disponible.').catch(() => null)
+        } else {
+          await sendBotMessage(fromPhone, 'No tienes ofertas vigentes en este momento.').catch(() => null)
+        }
+
+        return NextResponse.json({ status: 'ok' })
+      }
+
+      await sendBotMessage(fromPhone, buildOfferStatusMessage(offerOrders)).catch(() => null)
+      return NextResponse.json({ status: 'ok' })
+    }
+
     // --- ACEPTO ---
     if (textBody === 'ACEPTO' || textBody === 'ACEPTAR' || textBody.startsWith('ACEPTO ') || textBody.startsWith('ACEPTAR ')) {
       const orderToken = extractOrderToken(textBody, textBody.startsWith('ACEPTAR') ? 'ACEPTAR' : 'ACEPTO')
@@ -1339,7 +1377,7 @@ Te avisaremos 10 minutos antes de finalizar.`
 // --- Cualquier otro mensaje de un repartidor registrado ---
       void sendBotMessage(
         fromPhone,
-        `Comandos disponibles: INICIO, FIN, ACEPTO, RECHAZAR, PEDIDO EN DIRECCION AL DOMICILIO, EN PUERTA, ENTREGADO.`
+        `Comandos disponibles: INICIO, FIN, OFERTAS, ORDENES, ACEPTO, RECHAZAR, PEDIDO EN DIRECCION AL DOMICILIO, EN PUERTA, ENTREGADO.`
       ).catch(() => null)
 
   } catch (error) {
