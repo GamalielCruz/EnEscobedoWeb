@@ -9,6 +9,10 @@ export const orderType = defineType({
   fields: [
     defineField({ name: "orderNumber", title: "Order Number", type: "string", validation: (Rule) => Rule.required() }),
     defineField({ name: "stripeCheckoutSessionId", title: "Stripe Checkout Session ID", type: "string" }),
+    defineField({ name: "baserowRowId", title: "Baserow Row ID", type: "number", readOnly: true }),
+    defineField({ name: "baserowSyncStatus", title: "Baserow Sync Status", type: "string", readOnly: true }),
+    defineField({ name: "baserowSyncedAt", title: "Baserow Synced At", type: "datetime", readOnly: true }),
+    defineField({ name: "baserowSyncError", title: "Baserow Sync Error", type: "text", readOnly: true }),
     defineField({ name: "stripeCustomerId", title: "Stripe Customer ID", type: "string", description: "Required for Stripe payments, optional for COD orders" }),
     defineField({ name: "clerkUserId", title: "Store User ID", type: "string", validation: (Rule) => Rule.required() }),
     defineField({ name: "customerName", title: "Customer Name", type: "string", validation: (Rule) => Rule.required() }),

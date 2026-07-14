@@ -214,6 +214,10 @@ export type Order = {
   _rev: string;
   orderNumber?: string;
   stripeCheckoutSessionId?: string;
+  baserowRowId?: number;
+  baserowSyncStatus?: string;
+  baserowSyncedAt?: string;
+  baserowSyncError?: string;
   stripeCustomerId?: string;
   clerkUserId?: string;
   customerName?: string;
@@ -879,6 +883,10 @@ export type MY_ORDERS_QUERY_RESULT = Array<{
   _rev: string;
   orderNumber?: string;
   stripeCheckoutSessionId?: string;
+  baserowRowId?: number;
+  baserowSyncStatus?: string;
+  baserowSyncedAt?: string;
+  baserowSyncError?: string;
   stripeCustomerId?: string;
   clerkUserId?: string;
   customerName?: string;

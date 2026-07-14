@@ -7,6 +7,7 @@ import { notifyRestaurantNewOrder } from "@/lib/restaurant-notifications";
 import { appendOrderEvent } from "@/lib/order-events";
 import { buildOrderDocument, buildStoreMapsUrl, OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
 import { getPaymentMethodLabel } from "@/lib/payment";
+import { syncBaserowOrder } from "@/lib/baserow";
 
 function normalizeItems(items: Array<any>): OrderItemInput[] {
   return (items || []).map((item) => ({
@@ -61,6 +62,7 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await writeClient.create(orderData);
+    after(() => syncBaserowOrder({ ...orderData, _id: result._id, restaurantName: quote.store.name }));
 
     await appendOrderEvent(result._id, { type: "created", source: "api/create-cod-order", actor: userId });
     await appendOrderEvent(result._id, { type: "sent_to_restaurant", source: "api/create-cod-order" });

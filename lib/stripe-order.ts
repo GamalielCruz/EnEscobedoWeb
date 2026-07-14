@@ -5,7 +5,9 @@ import { getPaymentMethodLabel } from "@/lib/payment";
 import { getStripe } from "@/lib/stripe";
 import { extractSpeiDetails } from "@/lib/spei-reference-extractor";
 import { sendOrderConfirmation, sendPickupOrderReceived } from "@/lib/whatsapp";
+import { syncBaserowOrder } from "@/lib/baserow";
 import { backendClient } from "@/sanity/lib/backendClient";
+import { after } from "next/server";
 import Stripe from "stripe";
 
 type ExistingOrder = {
@@ -16,6 +18,8 @@ type ExistingOrder = {
   orderType?: "delivery" | "pickup";
   paymentStatus?: string;
   paidAt?: string;
+  baserowRowId?: number;
+  [key: string]: unknown;
 };
 
 type StripeSessionMetadata = {
@@ -54,8 +58,7 @@ function getMetadata(session: Stripe.Checkout.Session) {
 }
 
 async function findExistingOrder(sessionId: string, orderNumber?: string) {
-  return backendClient.fetch<ExistingOrder | null>(
-    `*[_type == "order" && (stripeCheckoutSessionId == $sessionId || orderNumber == $orderNumber)][0]`,
+  return backendClient.fetch<ExistingOrder | null>(`*[_type == "order" && (stripeCheckoutSessionId == $sessionId || orderNumber == $orderNumber)][0]{ ..., "restaurantName": affiliateStore->name }`,
     { sessionId, orderNumber }
   );
 }
@@ -220,13 +223,16 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
   orderData._id = `stripe-order-${session.id}`;
   orderData.pickupStoreMapsUrl = buildStoreMapsUrl(quote.store);
   const offlineData = await resolveOfflinePaymentData(stripe, session, paymentMethod);
-  return { ...orderData, ...offlineData } as OrderDocumentRecord;
+  return { ...orderData, ...offlineData, restaurantName: quote.store.name } as OrderDocumentRecord;
 }
 
 export async function createOrderInSanity(session: Stripe.Checkout.Session, stripe: Stripe) {
   const orderNumber = getMetadata(session).orderNumber;
   const existingOrder = await findExistingOrder(session.id, orderNumber);
-  if (existingOrder) return existingOrder;
+  if (existingOrder) {
+    if (!existingOrder.baserowRowId) after(() => syncBaserowOrder(existingOrder as any));
+    return existingOrder;
+  }
 
   const orderData = await buildOrderData(session, stripe);
   let order: any;
@@ -245,6 +251,7 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
   }
 
   if (isNewOrder) {
+    after(() => syncBaserowOrder(orderData as any));
     await appendOrderEvent(order._id, { type: "created", source: "stripe-webhook", actor: "stripe" });
     await appendOrderEvent(order._id, {
       type: orderData.paymentStatus === "paid" ? "paid" : "payment_pending",
