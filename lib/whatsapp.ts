@@ -2,6 +2,8 @@ const WHATSAPP_API_URL = "https://graph.facebook.com/v25.0";
 const WHATSAPP_FETCH_TIMEOUT_MS = 8000;
 const RESTAURANTE_PICKUP_TEMPLATE_NAME =
   process.env.WHATSAPP_TEMPLATE_RESTAURANTE_PICKUP?.trim() || "restaurante_pickup_pedido";
+const CLIENTE_PICKUP_READY_TEMPLATE_NAME =
+  process.env.WHATSAPP_TEMPLATE_CLIENTE_PICKUP_READY?.trim() || "cliente_pickup_orden_lista";
 const NUEVO_PEDIDO_RESTAURANTE_BODY_LIMIT = 1024;
 const NUEVO_PEDIDO_RESTAURANTE_SAFETY_MARGIN = 48;
 const NUEVO_PEDIDO_RESTAURANTE_FIXED_BODY =
@@ -345,11 +347,21 @@ export async function sendPickupReadyForCustomer(
   phone: string,
   name: string,
   orderNumber: string,
-  storeName: string
+  storeName: string,
+  storeMapsUrl: string
 ) {
-  return sendWhatsAppMessage(
+  return sendSpanishTemplate(
     phone,
-    `Hola ${name.substring(0, 30)}, tu pedido ${orderNumber.substring(0, 30)} ya esta listo para recoger en ${storeName.substring(0, 60)}.`
+    CLIENTE_PICKUP_READY_TEMPLATE_NAME,
+    [orderNumber.substring(0, 30), storeName.substring(0, 60)],
+    [
+      {
+        type: "button",
+        sub_type: "url",
+        index: "0",
+        parameters: [{ type: "text", text: toWhatsAppUrlButtonParam(storeMapsUrl) }],
+      },
+    ]
   );
 }
 export async function sendNuevoPedidoRestaurante(

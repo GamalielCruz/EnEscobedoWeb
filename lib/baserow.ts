@@ -9,6 +9,7 @@ type BaserowOrder = {
   orderNumber?: string;
   orderDate?: string;
   customerName?: string;
+  phone?: string;
   orderType?: string;
   paymentMethod?: string;
   paymentStatus?: string;
@@ -62,6 +63,22 @@ function getOrderStatus(orderStatus?: string) {
   }[orderStatus || ""];
 }
 
+export function resolveOrderPhone(order: Pick<BaserowOrder, "_id" | "phone">) {
+  const phone = typeof order.phone === "string" ? order.phone.trim() : "";
+  const digits = phone.replace(/\D/g, "");
+  const normalized = digits ? (phone.startsWith("+") ? `+${digits}` : digits) : "";
+
+  // ponytail: temporary safe diagnostic; remove after production verification.
+  console.info("[baserow] teléfono resuelto", {
+    orderId: order._id,
+    property: phone ? "phone" : null,
+    exists: Boolean(normalized),
+    last4: normalized ? normalized.slice(-4) : null,
+  });
+
+  return normalized;
+}
+
 async function findRestaurantRowId(name?: string) {
   if (!name) return undefined;
   const result = await baserowRequest(
@@ -89,11 +106,13 @@ export async function createBaserowOrder(order: BaserowOrder) {
   const { ordersTableId } = getBaserowConfig();
   const restaurantRowId = await findRestaurantRowId(order.restaurantName);
   const rowId = order.baserowRowId ?? await findOrderRowId(order._id, ordersTableId);
+  const phone = resolveOrderPhone(order);
   const fields = {
     "Número de pedido": order.orderNumber,
     "ID de orden": order._id,
     "Fecha y hora": order.orderDate?.slice(0, 10),
     Cliente: order.customerName,
+    "Teléfono": phone || undefined,
     "Modalidad de entrega": order.orderType === "pickup" ? "Recogida" : "Entrega",
     "Método de pago": getPaymentMethod(order.paymentMethod),
     "Estado del pago": order.paymentStatus === "paid" ? "Pagado" : "Pendiente",

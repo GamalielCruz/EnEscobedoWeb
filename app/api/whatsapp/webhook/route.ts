@@ -16,6 +16,7 @@ import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDrive
 import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
 import { appendOrderEvent } from '@/lib/order-events'
 import { resolveSettlementStatusOnDelivery } from '@/lib/order-state'
+import { buildStoreMapsUrl } from '@/lib/order-pricing'
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'garoga_verify_token'
 const MEXICO_TIME_ZONE = 'America/Mexico_City'
@@ -153,7 +154,9 @@ const PICKUP_ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   dispatchStatus,
   settlementStatus,
   "storePhone": coalesce(pickupStore->contact.phone, affiliateStore->contact.phone),
-  "storeName": coalesce(pickupStore->name, affiliateStore->name)
+  "storeName": coalesce(pickupStore->name, affiliateStore->name),
+  "storeAddress": coalesce(pickupStore->address.street, affiliateStore->address.street),
+  "storeCoordinates": coalesce(pickupStore->coordinates, affiliateStore->coordinates)
 }`
 const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._ref == $repartidorId && status == "shipped"] | order(orderDate asc){
   _id,
@@ -509,6 +512,11 @@ async function handlePickupRestaurantAction(action: string, orderId: string | nu
   const customerName = String(order.customerName ?? 'Cliente')
   const orderNumber = String(order.orderNumber ?? '')
   const storeName = String(order.storeName ?? 'Restaurante')
+  const storeMapsUrl = buildStoreMapsUrl({
+    name: storeName,
+    address: { street: String(order.storeAddress ?? "") },
+    coordinates: order.storeCoordinates as { latitude?: string | number; longitude?: string | number } | undefined,
+  })
 
   if (action === 'ORDEN LISTA PICKUP') {
     await backendClient
@@ -526,7 +534,7 @@ async function handlePickupRestaurantAction(action: string, orderId: string | nu
 
     await appendOrderEvent(String(order._id), { type: 'ready_for_pickup', source: 'whatsapp/webhook', actor: 'store' })
     if (customerPhone) {
-      await sendPickupReadyForCustomer(customerPhone, customerName, orderNumber, storeName).catch(() => null)
+      await sendPickupReadyForCustomer(customerPhone, customerName, orderNumber, storeName, storeMapsUrl).catch(() => null)
     }
     return true
   }

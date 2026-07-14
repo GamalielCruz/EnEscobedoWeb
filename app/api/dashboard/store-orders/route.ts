@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { createClient } from "next-sanity";
 import { appendOrderEvent, OrderEventType } from "@/lib/order-events";
-import { sendOrderCancelled, sendPickupReadyForCustomer } from "@/lib/whatsapp";
+import { sendOrderCancelled, sendOrderDelivered, sendPickupReadyForCustomer } from "@/lib/whatsapp";
+import { buildStoreMapsUrl } from "@/lib/order-pricing";
 import {
   buildStateFields,
   DispatchStatusValue,
@@ -94,7 +95,9 @@ const ORDER_BY_NUMBER = `*[_type == "order" && orderNumber == $orderNumber][0]{
   pickupStatus,
   pickupStore,
   affiliateStore,
-  "storeName": coalesce(pickupStore->name, affiliateStore->name)
+  "storeName": coalesce(pickupStore->name, affiliateStore->name),
+  "storeAddress": coalesce(pickupStore->address.street, affiliateStore->address.street),
+  "storeCoordinates": coalesce(pickupStore->coordinates, affiliateStore->coordinates)
 }`;
 
 function isValidIsoDate(value: string | null) {
@@ -284,7 +287,13 @@ export async function PATCH(request: NextRequest) {
     if (orderType === "pickup" && orderStatus === "ready_for_pickup" && order.orderStatus !== "ready_for_pickup") {
       events.push({ type: "ready_for_pickup", reason: "store_marked_ready" });
     }
-    if (orderType === "pickup" && (orderStatus === "picked_up" || orderStatus === "completed") && order.orderStatus !== "picked_up" && order.orderStatus !== "completed") {
+    const pickupDeliveredNow =
+      orderType === "pickup" &&
+      (orderStatus === "picked_up" || orderStatus === "completed") &&
+      order.orderStatus !== "picked_up" &&
+      order.orderStatus !== "completed";
+
+    if (pickupDeliveredNow) {
       events.push({ type: "picked_up", reason: "store_marked_picked_up" });
     }
     if (needsRefund && order.paymentStatus !== "requires_refund" && order.paymentStatus !== "refunded") {
@@ -296,8 +305,23 @@ export async function PATCH(request: NextRequest) {
     });
 
     if (orderType === "pickup" && orderStatus === "ready_for_pickup" && order.phone) {
-      void sendPickupReadyForCustomer(order.phone, order.customerName || "Cliente", order.orderNumber, order.storeName || "Restaurante").catch((whatsappError) => {
+      void sendPickupReadyForCustomer(
+        order.phone,
+        order.customerName || "Cliente",
+        order.orderNumber,
+        order.storeName || "Restaurante",
+        buildStoreMapsUrl({
+          name: order.storeName || "Restaurante",
+          address: { street: order.storeAddress || "" },
+          coordinates: order.storeCoordinates,
+        })
+      ).catch((whatsappError) => {
         console.error("[dashboard/store-orders PATCH] WhatsApp ready pickup error:", whatsappError);
+      });
+    }
+    if (pickupDeliveredNow && order.phone) {
+      void sendOrderDelivered(order.phone, order.customerName || "Cliente", order.orderNumber).catch((whatsappError) => {
+        console.error("[dashboard/store-orders PATCH] WhatsApp pickup delivered error:", whatsappError);
       });
     }
     if (orderType === "pickup" && isCancelled && order.phone) {

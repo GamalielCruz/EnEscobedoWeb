@@ -5,6 +5,7 @@ import { isAdminUser } from "@/lib/admin";
 import { sendOrderCancelled, sendPickupReadyForCustomer } from "@/lib/whatsapp";
 import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
 import { appendOrderEvent, OrderEventType } from "@/lib/order-events";
+import { buildStoreMapsUrl } from "@/lib/order-pricing";
 import {
   buildStateFields,
   OrderStatusValue,
@@ -85,7 +86,9 @@ const ORDER_BY_NUMBER_QUERY = `*[_type == "order" && orderNumber == $orderNumber
   readyAt,
   pickedUpAt,
   deliveredAt,
-  "storeName": coalesce(pickupStore->name, affiliateStore->name)
+  "storeName": coalesce(pickupStore->name, affiliateStore->name),
+  "storeAddress": coalesce(pickupStore->address.street, affiliateStore->address.street),
+  "storeCoordinates": coalesce(pickupStore->coordinates, affiliateStore->coordinates)
 }`;
 
 function getReader() {
@@ -298,7 +301,17 @@ export async function PATCH(request: NextRequest) {
     }
 
     if (orderType === "pickup" && orderStatus === "ready_for_pickup" && order.phone) {
-      void sendPickupReadyForCustomer(order.phone, order.customerName || "Cliente", order.orderNumber, order.storeName || "Restaurante").catch((whatsappError) => {
+      void sendPickupReadyForCustomer(
+        order.phone,
+        order.customerName || "Cliente",
+        order.orderNumber,
+        order.storeName || "Restaurante",
+        buildStoreMapsUrl({
+          name: order.storeName || "Restaurante",
+          address: { street: order.storeAddress || "" },
+          coordinates: order.storeCoordinates,
+        })
+      ).catch((whatsappError) => {
         console.error("[admin/orders PATCH] WhatsApp ready pickup error:", whatsappError);
       });
     }
