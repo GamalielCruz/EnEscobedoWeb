@@ -995,8 +995,13 @@ Te avisaremos 10 minutos antes de finalizar.`
     }
 
     // --- OFERTAS / ORDENES ---
-    if (textBody === 'OFERTAS' || textBody === 'ORDENES') {
-      const offerOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, nowDate)
+    if (textBody === 'OFERTAS' || textBody === 'OFERTES' || textBody === 'ORDENES') {
+      let offerOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, nowDate)
+
+      if (offerOrders.length === 0) {
+        await dispatchWaitingOrdersForDriver(repartidor._id)
+        offerOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, nowDate)
+      }
 
       void backendClient.patch(repartidor._id).set({ ultimaActividad: now }).commit().catch(() => null)
 
