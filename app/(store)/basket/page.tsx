@@ -90,6 +90,7 @@ function BasketPage() {
   const [cardWhatsappConsent, setCardWhatsappConsent] = useState(false);
   const [cardPhoneError, setCardPhoneError] = useState("");
   const [editingPhone, setEditingPhone] = useState(false);
+  const [deliveryNotes, setDeliveryNotes] = useState("");
   const checkoutRef = useRef<any>(null);
   const stripeContainerRef = useRef<HTMLDivElement>(null);
 
@@ -440,6 +441,7 @@ function BasketPage() {
         clerkUserId: user!.id,
         phone: `52${digitsOnly.slice(-10)}`,
         whatsappConsent: "true",
+        deliveryNotes: deliveryNotes.trim() || undefined,
       };
 
       // Add delivery/pickup info if available
@@ -583,6 +585,8 @@ function BasketPage() {
         state: customerAddress.state || "",
         postal_code: customerAddress.postalCode || customerAddress.postal_code || "",
         country: customerAddress.country || "MX",
+        latitude: customerAddress.latitude,
+        longitude: customerAddress.longitude,
       };
 
       const response = await fetch("/api/create-cod-order", {
@@ -597,6 +601,7 @@ function BasketPage() {
             clerkUserId: user.id,
             phone: resolvedCodPhone,
             shippingAddress: normalizedAddress,
+            deliveryNotes: deliveryNotes.trim() || undefined,
             storeInfo: {
               storeId: selectedStoreId,
               storeName: selectedStoreName,
@@ -1071,6 +1076,21 @@ function BasketPage() {
                           </div>
                         </div>
                       )}
+
+                      {serviceType === 'delivery' && !clientSecret && (
+                        <label className="block rounded-xl border border-gray-200 bg-white p-4">
+                          <span className="block text-sm font-semibold text-gray-900">Instrucciones para la entrega (opcional)</span>
+                          <span className="mt-1 block text-xs text-gray-500">Privada, condominio, edificio, acceso, referencias o indicaciones para encontrarte.</span>
+                          <textarea
+                            value={deliveryNotes}
+                            onChange={(event) => setDeliveryNotes(event.target.value.slice(0, 500))}
+                            maxLength={500}
+                            rows={3}
+                            placeholder="Ej. Privada Los Olivos, casa 12. Marcar al llegar; caseta por la entrada norte."
+                            className="mt-3 w-full resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none focus:border-[#eb1902] focus:ring-2 focus:ring-[#eb1902]/20"
+                          />
+                        </label>
+                      )}
                        
                       {isSelectedStoreClosed ? (
                         <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
@@ -1477,7 +1497,6 @@ function BasketPage() {
 }
 
 export default BasketPage;
-
 
 
 

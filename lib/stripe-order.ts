@@ -39,6 +39,7 @@ type StripeSessionMetadata = {
   shippingCountry?: string;
   shippingLatitude?: string;
   shippingLongitude?: string;
+  deliveryNotes?: string;
   orderItems?: string;
 };
 
@@ -197,7 +198,9 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
 
   const stripeFee = await resolveStripeFee(stripe, session);
   const paymentStatus = getPaymentStatus(session);
-  const deliveryNotes = orderType === "pickup" && metadata.pickupStoreName ? `Recoger en: ${metadata.pickupStoreName}` : undefined;
+  const deliveryNotes = orderType === "delivery"
+    ? String(metadata.deliveryNotes || "").trim().slice(0, 500) || undefined
+    : metadata.pickupStoreName ? `Recoger en: ${metadata.pickupStoreName}` : undefined;
 
   const orderData = buildOrderDocument({
     orderNumber,

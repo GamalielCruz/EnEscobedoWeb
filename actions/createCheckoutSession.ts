@@ -20,6 +20,7 @@ export type Metadata = {
   customerAddress?: string;
   shippingCost?: number;
   shippingAddress?: OrderAddressInput;
+  deliveryNotes?: string;
 };
 
 export type GroupedBasketItem = {
@@ -170,6 +171,8 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
   if (shippingAddress?.country) stripeMetadata.shippingCountry = shippingAddress.country;
   if (typeof shippingAddress?.latitude === "number") stripeMetadata.shippingLatitude = String(shippingAddress.latitude);
   if (typeof shippingAddress?.longitude === "number") stripeMetadata.shippingLongitude = String(shippingAddress.longitude);
+  const deliveryNotes = String(metadata.deliveryNotes || "").trim().slice(0, 500);
+  if (deliveryNotes) stripeMetadata.deliveryNotes = deliveryNotes;
 
   const compactOrderItems = JSON.stringify(buildOrderItems(items));
   if (compactOrderItems.length > 500) {

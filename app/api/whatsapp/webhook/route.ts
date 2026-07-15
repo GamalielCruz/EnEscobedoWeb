@@ -16,6 +16,7 @@ import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDrive
 import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
 import { appendOrderEvent } from '@/lib/order-events'
 import { resolveSettlementStatusOnDelivery } from '@/lib/order-state'
+import { buildAddressMapsUrl } from '@/lib/order-maps'
 import { buildStoreMapsUrl } from '@/lib/order-pricing'
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'garoga_verify_token'
@@ -146,7 +147,8 @@ const ACTIVE_OFFER_ORDERS_BY_DRIVER_QUERY = `*[
   "storeAddress": affiliateStore->address.street,
   "storeCoordinates": affiliateStore->coordinates,
   "storeName": affiliateStore->name,
-  "shippingAddress": shippingAddress
+  "shippingAddress": shippingAddress,
+  deliveryNotes
 }`
 
 const PICKUP_ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
@@ -183,7 +185,8 @@ const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._r
   cashCollectedBy,
   "storeName": affiliateStore->name,
   "storeAddress": affiliateStore->address.street,
-  "shippingAddress": shippingAddress
+  "shippingAddress": shippingAddress,
+  deliveryNotes
 }`
 
 // Busca repartidor probando telefono normalizado y luego raw
@@ -336,7 +339,7 @@ function getPendingOfferOrderIds(repartidor: {
 }
 
 function buildClientAddress(order: {
-  shippingAddress?: { line1?: string; street?: string; city?: string }
+  shippingAddress?: { line1?: string; street?: string; city?: string; latitude?: number; longitude?: number }
 }) {
   return order.shippingAddress
     ? [order.shippingAddress.line1, order.shippingAddress.street, order.shippingAddress.city]
@@ -1145,10 +1148,10 @@ Te avisaremos 10 minutos antes de finalizar.`
           })
         }
 
+        const shippingAddress = order.shippingAddress as { line1?: string; latitude?: number; longitude?: number } | undefined
         const clientAddressStr = buildClientAddress(order as { shippingAddress?: { line1?: string; street?: string; city?: string } })
-        const clientMapsUrl = (order.shippingAddress as Record<string, string> | undefined)?.line1
-          ? `https://maps.google.com/maps?q=${encodeURIComponent(String((order.shippingAddress as Record<string, string>).line1))}`
-          : `https://maps.google.com/maps?q=${encodeURIComponent(clientAddressStr)}`
+        const clientMapsUrl = buildAddressMapsUrl(shippingAddress, clientAddressStr)
+        const deliveryNotes = String(order.deliveryNotes ?? '').trim()
 
         const confirmationResults = await Promise.allSettled([
           sendConfirmacionRepartidor(
@@ -1160,6 +1163,9 @@ Te avisaremos 10 minutos antes de finalizar.`
             restaurantMapsUrl,
             clientMapsUrl
           ),
+          deliveryNotes
+            ? sendBotMessage(fromPhone, `Instrucciones de entrega para #${String(order.orderNumber)}:\n${deliveryNotes}`)
+            : Promise.resolve(),
         ])
 
         if (confirmationResults[0]?.status === 'rejected') {

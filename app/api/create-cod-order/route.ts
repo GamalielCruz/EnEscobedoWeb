@@ -32,6 +32,7 @@ export async function POST(request: NextRequest) {
     const paymentMethod = orderType === "pickup" ? "cash_at_store" : "cash_on_delivery";
     const orderItems = normalizeItems(body?.items || []);
     const shippingAddress = (metadata?.shippingAddress || null) as OrderAddressInput | null;
+    const deliveryNotes = String(metadata?.deliveryNotes || "").trim().slice(0, 500) || undefined;
 
     const quote = await validateAndQuoteOrder({
       storeId,
@@ -52,6 +53,8 @@ export async function POST(request: NextRequest) {
       paymentMethod,
       quote,
       shippingAddress,
+      deliveryNotes,
+      codInstructions: deliveryNotes,
       paymentStatus: "unpaid",
       dispatchStatus: orderType === "delivery" ? "waiting_for_driver" : "not_required",
     }) as { _type: string; [key: string]: unknown };

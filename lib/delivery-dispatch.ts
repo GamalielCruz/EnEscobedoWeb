@@ -1,4 +1,5 @@
 import { appendOrderEvent } from "@/lib/order-events";
+import { buildAddressMapsUrl } from "@/lib/order-maps";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { sendBundleDeliveryOffer, sendDeliveryOffer, sendWhatsAppMessage } from "./whatsapp";
 
@@ -23,6 +24,8 @@ type DispatchOrder = {
     line1?: string;
     street?: string;
     city?: string;
+    latitude?: number;
+    longitude?: number;
   };
   storeId?: string;
   storeHasOwnDelivery?: boolean;
@@ -155,11 +158,6 @@ function buildTotalLabel(total?: number) {
 
 function buildPaymentMethodLabel(paymentMethod?: string) {
   return paymentMethod === "cash_on_delivery" || paymentMethod === "cash_on_pickup" ? "COBRAR EN EFECTIVO" : "YA PAGADO";
-}
-
-function buildMapsUrl(order: DispatchOrder, address: string) {
-  const mapsTarget = order.shippingAddress?.line1 || address;
-  return `https://maps.google.com/?q=${encodeURIComponent(mapsTarget)}`;
 }
 
 async function fetchOrders(orderIds: string[]): Promise<DispatchOrder[]> {
@@ -306,7 +304,7 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
   const address = buildAddress(order);
   const totalLabel = buildTotalLabel(order.totalPrice);
   const paymentMethodLabel = buildPaymentMethodLabel(order.paymentMethod);
-  const mapsUrl = buildMapsUrl(order, address);
+  const mapsUrl = buildAddressMapsUrl(order.shippingAddress, address);
   const { nowIso, expiresAtIso } = buildOfferWindow();
 
   await markOrdersAsOffered([order._id], selectedDriver._id, expiresAtIso);

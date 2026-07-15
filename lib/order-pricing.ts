@@ -459,6 +459,7 @@ export function buildOrderDocument(input: {
   amountDiscount?: number;
   stripeFee?: number;
   deliveryNotes?: string;
+  codInstructions?: string;
 }) {
   const now = new Date().toISOString();
   const shippingAddress = normalizeAddress(input.shippingAddress);
@@ -531,6 +532,7 @@ export function buildOrderDocument(input: {
     amountDiscount: appliedDiscount,
     shippingAddress: shippingAddress ?? undefined,
     deliveryNotes: input.deliveryNotes,
+    codInstructions: input.codInstructions,
     pickupStore: input.orderType === "pickup" ? { _type: "reference", _ref: input.storeId } : undefined,
     affiliateStore: { _type: "reference", _ref: input.storeId },
     stripeCheckoutSessionId: input.stripeCheckoutSessionId,
