@@ -6,6 +6,7 @@ import { esMX } from '@clerk/localizations';
 import "./globals.css";
 import { ClerkRedirectInterceptor } from "@/components/ClerkRedirectInterceptor";
 import { SanityLive } from "@/sanity/lib/live";
+import { ChatwootWidget } from "@/components/support/ChatwootWidget";
 
 export const metadata: Metadata = {
   title: "ElMenu",
@@ -38,6 +39,7 @@ export default function RootLayout({
           signUpFallbackRedirectUrl="/"
         >
           <ClerkRedirectInterceptor>{children}</ClerkRedirectInterceptor>
+          <ChatwootWidget />
           <Analytics />
           <SpeedInsights />
         </ClerkProvider>

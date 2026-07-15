@@ -130,3 +130,9 @@
 .scrollbar-hide::-webkit-scrollbar {
   display: none;  /* Safari and Chrome */
 }
+/* Keep the external Chatwoot launcher above El Menú's fixed mobile actions. */
+@media (max-width: 666px) {
+  body .woot-widget-bubble {
+    bottom: calc(6rem + env(safe-area-inset-bottom)) !important;
+  }
+}
