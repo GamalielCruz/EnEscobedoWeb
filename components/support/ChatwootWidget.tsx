@@ -150,7 +150,7 @@ export function ChatwootWidget() {
     window.addEventListener("chatwoot:error", onError);
 
     if (window.$chatwoot) setIsReady(true);
-    if (!isHidden) {
+    if (isLoaded && user && !isHidden) {
       loadChatwoot(config.baseUrl, config.websiteToken).catch((error: unknown) => {
         if (process.env.NODE_ENV === "development") {
           console.warn("[Chatwoot] No se pudo iniciar el widget", error);
@@ -162,18 +162,18 @@ export function ChatwootWidget() {
       window.removeEventListener("chatwoot:ready", onReady);
       window.removeEventListener("chatwoot:error", onError);
     };
-  }, [isHidden]);
+  }, [isHidden, isLoaded, user]);
 
   useEffect(() => {
     if (!isReady || !window.$chatwoot) return;
 
-    if (isHidden) {
+    if (isHidden || !isLoaded || !user) {
       window.$chatwoot.toggle("close");
       window.$chatwoot.toggleBubbleVisibility("hide");
     } else {
       window.$chatwoot.toggleBubbleVisibility("show");
     }
-  }, [isHidden, isReady]);
+  }, [isHidden, isLoaded, isReady, user]);
 
   useEffect(() => {
     if (!isReady || !isLoaded || !window.$chatwoot) return;

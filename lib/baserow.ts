@@ -114,8 +114,15 @@ async function findRestaurantRowId(name?: string) {
     { method: "GET" }
   ) as { results?: Array<{ id?: number; Nombre?: string }> };
   const normalizedName = name.trim().toLowerCase();
-  return result.results?.find((row) => String(row.Nombre || "").trim().toLowerCase() === normalizedName)?.id
-    ?? result.results?.[0]?.id;
+  const existingRowId = result.results?.find((row) => String(row.Nombre || "").trim().toLowerCase() === normalizedName)?.id;
+  if (existingRowId) return existingRowId;
+
+  const row = await baserowRequest(
+    `/api/database/rows/table/${BASEROW_RESTAURANTS_TABLE_ID}/?user_field_names=true`,
+    { method: "POST", body: JSON.stringify({ Nombre: name.trim() }) }
+  ) as { id: number };
+  console.info("[baserow] restaurante vinculado", { restaurantRowId: row.id, restaurantName: name });
+  return row.id;
 }
 
 export async function createBaserowRow(fields: Record<string, unknown>) {

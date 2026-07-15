@@ -1,10 +1,11 @@
 import { appendOrderEvent } from "@/lib/order-events";
 import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
 import { createOrderInSanity, markOrderPaidBySession } from "@/lib/stripe-order";
+import { syncBaserowOrderById } from "@/lib/baserow";
 import { getStripe } from "@/lib/stripe";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { headers } from "next/headers";
-import { NextRequest, NextResponse } from "next/server";
+import { after, NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 
 async function patchOrderBySession(
@@ -19,6 +20,7 @@ async function patchOrderBySession(
 
   if (!existingOrder) return null;
   const updated = await backendClient.patch(existingOrder._id).set(values).commit();
+  after(() => syncBaserowOrderById(existingOrder._id));
   if (eventType) {
     await appendOrderEvent(existingOrder._id, { type: eventType, source: "stripe-webhook", actor: "stripe" });
   }
@@ -101,6 +103,7 @@ export async function POST(req: NextRequest) {
       if (!patched) {
         const order = await createOrderInSanity(session, stripe);
         await backendClient.patch(order._id).set({ status: "expired", paymentStatus: "expired", expiredAt: now, updatedAt: now }).commit();
+        after(() => syncBaserowOrderById(order._id));
       }
     }
 

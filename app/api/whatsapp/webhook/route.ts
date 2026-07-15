@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { after, NextRequest, NextResponse } from 'next/server'
 import { backendClient } from '@/sanity/lib/backendClient'
 import {
   sendBotMessage,
@@ -18,6 +18,7 @@ import { appendOrderEvent } from '@/lib/order-events'
 import { resolveSettlementStatusOnDelivery } from '@/lib/order-state'
 import { buildAddressMapsUrl } from '@/lib/order-maps'
 import { buildStoreMapsUrl } from '@/lib/order-pricing'
+import { syncBaserowOrderById } from '@/lib/baserow'
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'garoga_verify_token'
 const MEXICO_TIME_ZONE = 'America/Mexico_City'
@@ -542,6 +543,7 @@ async function handlePickupRestaurantAction(action: string, orderId: string | nu
       })
       .commit()
 
+    after(() => syncBaserowOrderById(String(order._id)))
     await appendOrderEvent(String(order._id), { type: 'ready_for_pickup', source: 'whatsapp/webhook', actor: 'store' })
     if (customerPhone) {
       await sendPickupReadyForCustomer(customerPhone, customerName, orderNumber, storeName, storeMapsUrl).catch(() => null)
@@ -566,6 +568,7 @@ async function handlePickupRestaurantAction(action: string, orderId: string | nu
     })
     .commit()
 
+  after(() => syncBaserowOrderById(String(order._id)))
   await appendOrderEvent(String(order._id), { type: 'cancelled', source: 'whatsapp/webhook', actor: 'store', reason: 'store_cancelled_pickup' })
   if (isStripeOrder) {
     await appendOrderEvent(String(order._id), { type: 'refund_required', source: 'whatsapp/webhook', actor: 'store', reason: 'stripe_pickup_cancelled' })
@@ -1072,6 +1075,7 @@ Te avisaremos 10 minutos antes de finalizar.`
             .unset(['deliveryOfertaExpiresAt', 'offeredTo'])
             .commit()
 
+          after(() => syncBaserowOrderById(String(order._id)))
           await appendOrderEvent(String(order._id), { type: 'offer_accepted', source: 'whatsapp/webhook', actor: repartidor._id })
           await appendOrderEvent(String(order._id), { type: 'driver_assigned', source: 'whatsapp/webhook', actor: repartidor._id, payload: { driverId: repartidor._id } })
 
@@ -1287,6 +1291,7 @@ Te avisaremos 10 minutos antes de finalizar.`
           .set({ dispatchStatus: 'at_door', updatedAt: now })
           .commit()
 
+        after(() => syncBaserowOrderById(String((resolvedTargetOrder as Record<string, unknown>)._id)))
         await appendOrderEvent(String((resolvedTargetOrder as Record<string, unknown>)._id), { type: 'at_door', source: 'whatsapp/webhook', actor: repartidor._id })
 
         const notifications: Promise<unknown>[] = [
@@ -1344,6 +1349,7 @@ Te avisaremos 10 minutos antes de finalizar.`
 .set({ status: 'delivered', orderStatus: 'delivered', dispatchStatus: 'completed', deliveredAt: now, settlementStatus: resolveDeliveredSettlement(resolvedTargetOrder as Record<string, unknown>), updatedAt: now })
             .commit()
 
+          after(() => syncBaserowOrderById(String((resolvedTargetOrder as Record<string, unknown>)._id)))
           const remainingOrders = (await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>)
             .filter((order) => String(order._id) !== String((resolvedTargetOrder as Record<string, unknown>)._id))
           const nextState = remainingOrders.length > 0 ? 'busy' : getDriverNextState(repartidor, nowDate)
