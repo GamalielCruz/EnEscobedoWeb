@@ -34,6 +34,25 @@ export type SettlementStatusValue =
   | "cancelled"
   | "refunded";
 
+export function isOrderDispatchable(input: {
+  status?: string;
+  orderStatus?: string;
+  paymentStatus?: string;
+  repartidorAsignado?: unknown;
+}) {
+  if (input.repartidorAsignado) return false;
+
+  const terminalLegacyStatuses = new Set(["shipped", "delivered", "cancelled", "refunded"]);
+  const terminalOrderStatuses = new Set(["shipped", "delivered", "cancelled", "completed", "picked_up"]);
+  const invalidPaymentStatuses = new Set(["failed", "expired", "refunded", "requires_refund"]);
+
+  return (
+    !terminalLegacyStatuses.has(input.status ?? "") &&
+    !terminalOrderStatuses.has(input.orderStatus ?? "") &&
+    !invalidPaymentStatuses.has(input.paymentStatus ?? "")
+  );
+}
+
 export function buildLegacyStatus(input: {
   orderType: OrderTypeValue;
   orderStatus: OrderStatusValue;

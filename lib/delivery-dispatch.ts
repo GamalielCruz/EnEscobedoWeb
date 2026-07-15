@@ -1,5 +1,6 @@
 import { appendOrderEvent } from "@/lib/order-events";
 import { buildAddressMapsUrl } from "@/lib/order-maps";
+import { isOrderDispatchable } from "@/lib/order-state";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { sendBundleDeliveryOffer, sendDeliveryOffer, sendWhatsAppMessage } from "./whatsapp";
 
@@ -15,6 +16,8 @@ type DispatchOrder = {
   totalPrice?: number;
   paymentMethod?: string;
   status?: string;
+  orderStatus?: string;
+  paymentStatus?: string;
   dispatchStatus?: "waiting_for_driver" | "offered" | "accepted" | "at_door" | "completed";
   deliveryOfertaEnviada?: boolean;
   deliveryOfertaExpiresAt?: string;
@@ -56,6 +59,8 @@ const ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   totalPrice,
   paymentMethod,
   status,
+  orderStatus,
+  paymentStatus,
   dispatchStatus,
   deliveryOfertaEnviada,
   deliveryOfertaExpiresAt,
@@ -77,6 +82,8 @@ const ORDERS_QUERY = `*[_type == "order" && _id in $orderIds]{
   totalPrice,
   paymentMethod,
   status,
+  orderStatus,
+  paymentStatus,
   dispatchStatus,
   deliveryOfertaEnviada,
   deliveryOfertaExpiresAt,
@@ -122,6 +129,19 @@ const STORE_WAITING_ORDERS_QUERY = `*[
   dispatchStatus == "waiting_for_driver" &&
   !defined(repartidorAsignado) &&
   !defined(offeredTo) &&
+  status != "shipped" &&
+  status != "delivered" &&
+  status != "cancelled" &&
+  status != "refunded" &&
+  orderStatus != "shipped" &&
+  orderStatus != "delivered" &&
+  orderStatus != "cancelled" &&
+  orderStatus != "completed" &&
+  orderStatus != "picked_up" &&
+  paymentStatus != "failed" &&
+  paymentStatus != "expired" &&
+  paymentStatus != "refunded" &&
+  paymentStatus != "requires_refund" &&
   affiliateStore._ref == $storeId
 ] | order(orderDate asc)[0...2]{ _id }`;
 
@@ -130,6 +150,19 @@ const COMMUNITY_WAITING_ORDERS_QUERY = `*[
   dispatchStatus == "waiting_for_driver" &&
   !defined(repartidorAsignado) &&
   !defined(offeredTo) &&
+  status != "shipped" &&
+  status != "delivered" &&
+  status != "cancelled" &&
+  status != "refunded" &&
+  orderStatus != "shipped" &&
+  orderStatus != "delivered" &&
+  orderStatus != "cancelled" &&
+  orderStatus != "completed" &&
+  orderStatus != "picked_up" &&
+  paymentStatus != "failed" &&
+  paymentStatus != "expired" &&
+  paymentStatus != "refunded" &&
+  paymentStatus != "requires_refund" &&
   affiliateStore->hasOwnDelivery != true
 ] | order(orderDate asc)[0...2]{ _id }`;
 
@@ -353,8 +386,8 @@ export async function dispatchDeliveryBundle(orderIds: string[], options: Dispat
     console.log("[delivery-dispatch] bundle omitido por tiendas distintas", { orderIds: uniqueOrderIds, stores: orders.map((order) => order.storeId) });
     return false;
   }
-  if (orders.some((order) => order.repartidorAsignado)) {
-    console.log("[delivery-dispatch] bundle omitido porque ya hay pedido asignado", { orderIds: uniqueOrderIds });
+  if (orders.some((order) => !isOrderDispatchable(order))) {
+    console.log("[delivery-dispatch] bundle omitido por pedido no despachable", { orderIds: uniqueOrderIds });
     return false;
   }
 
@@ -408,7 +441,7 @@ export async function releaseOrdersForDriver(orderIds: string[], driverId: strin
 
 export async function redispatchOrders(orderIds: string[], excludedDriverIds: string[] = []): Promise<boolean> {
   const openOrders = await fetchOrders(orderIds);
-  const redispatchableIds = openOrders.filter((order) => !order.repartidorAsignado).map((order) => order._id);
+  const redispatchableIds = openOrders.filter(isOrderDispatchable).map((order) => order._id);
   if (redispatchableIds.length === 0) return false;
 
   await setOrdersWaiting(redispatchableIds, "redispatch");
@@ -447,16 +480,20 @@ export async function dispatchDeliveryOffer(orderId: string, options: DispatchOp
       console.error(`[delivery-dispatch] orden no encontrada ${orderId}`);
       return false;
     }
-    if (order.repartidorAsignado) {
-      console.log("[delivery-dispatch] pedido ya asignado", { orderId: order._id, orderNumber: order.orderNumber });
+    if (!isOrderDispatchable(order)) {
+      console.log("[delivery-dispatch] pedido no despachable", {
+        orderId: order._id,
+        orderNumber: order.orderNumber,
+        status: order.status,
+        orderStatus: order.orderStatus,
+        paymentStatus: order.paymentStatus,
+      });
       return false;
     }
     if (order.deliveryOfertaEnviada && order.offeredToRef) {
       console.log("[delivery-dispatch] orden ya ofrecida", { orderId: order._id, orderNumber: order.orderNumber, offeredTo: order.offeredToRef });
       return false;
     }
-    if (order.status === "delivered" || order.status === "cancelled") return false;
-
     return dispatchSingleOffer(order, options.excludedDriverIds ?? []);
   } catch (error) {
     console.error("[delivery-dispatch] error general", error);

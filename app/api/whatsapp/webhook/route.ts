@@ -767,7 +767,7 @@ export async function POST(req: NextRequest) {
 
       const releasedOrderIds = await releaseOrdersForDriver(pendingOrderIds, repartidor._id, 'driver_fin')
       if (releasedOrderIds.length > 0) {
-        void redispatchOrders(releasedOrderIds, [repartidor._id]).catch((error) =>
+        await redispatchOrders(releasedOrderIds, [repartidor._id]).catch((error) =>
           console.error('[webhook FIN] Error redispatch:', error)
         )
       }
@@ -817,7 +817,7 @@ export async function POST(req: NextRequest) {
 
       const releasedOrderIds = await releaseOrdersForDriver(pendingOrderIds, repartidor._id, 'driver_restart')
       if (releasedOrderIds.length > 0) {
-        void redispatchOrders(releasedOrderIds, [repartidor._id]).catch((error) =>
+        await redispatchOrders(releasedOrderIds, [repartidor._id]).catch((error) =>
           console.error('[webhook INICIO] Error redispatch:', error)
         )
       }
@@ -885,7 +885,7 @@ export async function POST(req: NextRequest) {
         ])
         .commit()
 
-      void dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => {
+      await dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => {
         console.error('[webhook disponibilidad] Error reintentando ordenes en espera:', error)
       })
 
@@ -1354,7 +1354,7 @@ Te avisaremos 10 minutos antes de finalizar.`
             .commit()
 
           if (nextState === 'available') {
-            void dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => {
+            await dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => {
               console.error('[webhook ENTREGADO] Error redisparando pedidos en espera:', error)
             })
           }
