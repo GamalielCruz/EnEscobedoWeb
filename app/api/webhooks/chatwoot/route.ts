@@ -21,6 +21,7 @@ import {
 } from "@/lib/chatwoot/webhook";
 import { classifySupportMessageWithAi } from "@/lib/support/classify-support-message";
 import { getFixedResponse } from "@/lib/support/fixed-responses";
+import { getLatestOrderStatusResponse } from "@/lib/support/order-status";
 import type { SupportClassification } from "@/lib/support/support-categories";
 
 export const runtime = "nodejs";
@@ -85,6 +86,8 @@ export async function POST(request: Request) {
       classify: classifySupportMessageWithAi,
       complete: completeChatwootMessage,
       getConversation: getChatwootConversation,
+      getOperationalResponse: (conversation) =>
+        getLatestOrderStatusResponse(conversation.contactIdentifier),
       getResponse: (classification) =>
         getFixedResponse(classification as SupportClassification),
       markHuman: markConversationForHuman,

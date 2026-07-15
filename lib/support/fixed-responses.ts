@@ -21,13 +21,15 @@ export const FIXED_RESPONSES: Partial<Record<SupportCategory, string>> = {
   how_to_order:
     "Elige un restaurante, agrega productos al carrito, abre el checkout, selecciona entrega o recogida, proporciona los datos solicitados y confirma tu método de pago.",
   human_support:
-    "Claro. Voy a dejar esta conversación disponible para que una persona del equipo pueda ayudarte.",
+    "Claro. Voy a dirigirte con el equipo de Atención al Cliente. Ahora transfiero tu conversación para que una persona pueda ayudarte.",
+  operational_query:
+    "No pude resolver la consulta con la información disponible. Voy a dirigirte con el equipo de Operaciones. Ahora transfiero tu conversación para que una persona revise el pedido contigo.",
   sensitive_case:
-    "Lamento lo ocurrido. Este caso necesita revisión de una persona del equipo. He dejado la conversación marcada para atención prioritaria.",
+    "Lamento lo ocurrido. Voy a dirigirte con el equipo de Pagos y Reembolsos. Ahora transfiero tu conversación para que una persona revise el caso con prioridad.",
 };
 
 const HEALTH_AND_SAFETY_RESPONSE =
-  "Lamento lo ocurrido. Tu mensaje requiere atención prioritaria de una persona del equipo. Evita consumir el producto y conserva el pedido, empaque y comprobante mientras revisamos el caso.";
+  "Lamento lo ocurrido. Voy a dirigirte con el equipo de Atención Prioritaria. Evita consumir el producto y conserva el pedido, empaque y comprobante. Ahora transfiero tu conversación para que una persona revise el caso.";
 
 export function getFixedResponse(classification: SupportClassification) {
   if (

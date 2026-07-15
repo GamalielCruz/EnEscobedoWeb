@@ -74,6 +74,10 @@ export async function getChatwootConversation(conversationId: number) {
   );
 
   return {
+    contactIdentifier:
+      typeof conversation.meta?.sender?.identifier === "string"
+        ? conversation.meta.sender.identifier
+        : undefined,
     labels: Array.isArray(conversation.labels) ? conversation.labels : [],
     messages: Array.isArray(conversation.messages) ? conversation.messages : [],
     status: conversation.status,

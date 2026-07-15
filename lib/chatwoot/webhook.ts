@@ -20,7 +20,13 @@ export type ChatwootMessageCreated = {
 };
 
 export type ChatwootConversationContext = {
+  contactIdentifier?: string;
   labels: string[];
+  meta?: {
+    sender?: {
+      identifier?: string;
+    };
+  };
   messages: Array<{
     content_attributes?: Record<string, unknown>;
     message_type?: string | number;
@@ -58,6 +64,9 @@ type ChatwootProcessingDependencies = {
     result: { autoReplied: boolean; category: string; outcome: string },
   ) => Promise<void>;
   getConversation: (conversationId: number) => Promise<ChatwootConversationContext>;
+  getOperationalResponse: (
+    conversation: ChatwootConversationContext,
+  ) => Promise<string | undefined>;
   getResponse: (classification: SupportClassification) => string | undefined;
   markHuman: (
     conversationId: number,
@@ -215,11 +224,7 @@ export function shouldAutoReply({
   );
 }
 
-const ESCALATION_CATEGORIES = new Set([
-  "human_support",
-  "operational_query",
-  "sensitive_case",
-]);
+const ESCALATION_CATEGORIES = new Set(["human_support", "sensitive_case"]);
 
 export async function processChatwootMessage(
   event: ChatwootMessageCreated,
@@ -265,8 +270,15 @@ export async function processChatwootMessage(
       event.conversationId,
       category,
     );
-    const response = dependencies.getResponse(classification);
-    const escalation = ESCALATION_CATEGORIES.has(category);
+    const operationalResponse =
+      category === "operational_query" && !recentlyReplied
+        ? await dependencies.getOperationalResponse(conversation)
+        : undefined;
+    const response =
+      operationalResponse ?? dependencies.getResponse(classification);
+    const escalation =
+      ESCALATION_CATEGORIES.has(category) ||
+      (category === "operational_query" && !operationalResponse);
 
     if (escalation) {
       await dependencies.markHuman(
@@ -278,8 +290,9 @@ export async function processChatwootMessage(
 
     const autoReply = shouldAutoReply({
       agentIntervened,
-      hasResponse: Boolean(response) && category !== "operational_query",
-      recentlyReplied,
+      hasResponse: Boolean(response),
+      recentlyReplied:
+        category === "operational_query" && escalation ? false : recentlyReplied,
       status,
     });
 
@@ -291,7 +304,9 @@ export async function processChatwootMessage(
     if (!escalation && autoReply) {
       await dependencies.addLabels(
         event.conversationId,
-        ["faq_respondida", "respuesta_automatica"],
+        category === "operational_query"
+          ? ["consulta_operativa", "respuesta_automatica"]
+          : ["faq_respondida", "respuesta_automatica"],
         conversation.labels,
       );
     }
