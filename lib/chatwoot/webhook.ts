@@ -50,7 +50,9 @@ type ChatwootProcessingDependencies = {
     currentLabels: string[],
   ) => Promise<void>;
   claim: (messageId: string, conversationId: number) => Promise<boolean>;
-  classify: (message: string) => SupportClassification;
+  classify: (
+    message: string,
+  ) => SupportClassification | Promise<SupportClassification>;
   complete: (
     messageId: string,
     result: { autoReplied: boolean; category: string; outcome: string },
@@ -234,7 +236,7 @@ export async function processChatwootMessage(
     claimed = await dependencies.claim(event.messageId, event.conversationId);
     if (!claimed) return { outcome: "duplicate" };
 
-    const classification = dependencies.classify(event.content);
+    const classification = await dependencies.classify(event.content);
     category = classification.category;
     const conversation = await dependencies.getConversation(event.conversationId);
     const status = conversation.status ?? event.conversationStatus;

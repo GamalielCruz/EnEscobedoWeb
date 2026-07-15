@@ -19,7 +19,7 @@ import {
   processChatwootMessage,
   verifyChatwootSignature,
 } from "@/lib/chatwoot/webhook";
-import { classifySupportMessage } from "@/lib/support/classify-support-message";
+import { classifySupportMessageWithAi } from "@/lib/support/classify-support-message";
 import { getFixedResponse } from "@/lib/support/fixed-responses";
 import type { SupportClassification } from "@/lib/support/support-categories";
 
@@ -82,7 +82,7 @@ export async function POST(request: Request) {
     const result = await processChatwootMessage(parsed.event, {
       addLabels: addConversationLabels,
       claim: claimChatwootMessage,
-      classify: classifySupportMessage,
+      classify: classifySupportMessageWithAi,
       complete: completeChatwootMessage,
       getConversation: getChatwootConversation,
       getResponse: (classification) =>
