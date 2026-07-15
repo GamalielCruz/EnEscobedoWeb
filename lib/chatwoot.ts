@@ -12,35 +12,6 @@ const HIDDEN_ROUTES = [
   "/api",
 ] as const;
 
-type ChatwootName = {
-  firstName?: string | null;
-  lastName?: string | null;
-  fullName?: string | null;
-};
-
-const nameWords = (value?: string | null) =>
-  value
-    ?.trim()
-    .split(/\s+/)
-    .filter((word) => !/^(undefined|null)$/i.test(word)) ?? [];
-
-export function formatChatwootDisplayName({
-  firstName,
-  lastName,
-  fullName,
-}: ChatwootName) {
-  const firstWords = nameWords(firstName);
-  const fullWords = nameWords(fullName);
-  const first = (firstWords[0] ?? fullWords[0])?.replace(/\.+$/, "");
-
-  if (!first) return "Cliente";
-
-  const last = nameWords(lastName)[0] ?? fullWords[firstWords.length || 1];
-  const initial = Array.from(last ?? "").find((character) => /\p{L}/u.test(character));
-
-  return initial ? `${first} ${initial.toLocaleUpperCase("es-MX")}.` : first;
-}
-
 export function isChatwootHiddenRoute(pathname: string) {
   return HIDDEN_ROUTES.some(
     (route) => pathname === route || pathname.startsWith(`${route}/`),

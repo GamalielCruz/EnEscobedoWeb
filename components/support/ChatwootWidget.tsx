@@ -3,11 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useUser } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
-import {
-  formatChatwootDisplayName,
-  getChatwootConfig,
-  isChatwootHiddenRoute,
-} from "@/lib/chatwoot";
+import { getChatwootConfig, isChatwootHiddenRoute } from "@/lib/chatwoot";
 
 type ChatwootUser = {
   name?: string;
@@ -197,7 +193,7 @@ export function ChatwootWidget() {
     }
 
     window.$chatwoot.setUser(user.id, {
-      name: formatChatwootDisplayName(user),
+      name: user.fullName ?? undefined,
       email: user.primaryEmailAddress?.emailAddress,
       phone_number: user.primaryPhoneNumber?.phoneNumber,
       avatar_url: user.imageUrl,
