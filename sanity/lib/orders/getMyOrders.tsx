@@ -1,5 +1,5 @@
 import { defineQuery } from "next-sanity";
-import { sanityFetch } from "../live";
+import { client } from "../client";
 
 export async function getMyOrders(userId: string) {
   if (!userId) {
@@ -27,12 +27,7 @@ export async function getMyOrders(userId: string) {
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
-      const orders = await sanityFetch({
-        query: MY_ORDERS_QUERY,
-        params: { userId },
-      });
-
-      return orders.data || [];
+      return await client.fetch(MY_ORDERS_QUERY, { userId }, { useCdn: false, cache: "no-store" });
     } catch (error) {
       console.error("Error fetching orders: ", error);
       if (attempt === 2) return [];
