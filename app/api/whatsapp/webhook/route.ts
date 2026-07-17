@@ -1037,11 +1037,24 @@ Te avisaremos 10 minutos antes de finalizar.`
       void backendClient.patch(repartidor._id).set({ ultimaActividad: now }).commit().catch(() => null)
 
       if (offerOrders.length === 0) {
-        await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
-        await sendBotMessage(fromPhone, 'No tienes ninguna oferta vigente para aceptar.').catch(() => null)
+        const nextState = getDriverNextState(repartidor, nowDate)
+        const pendingOrderIds = getPendingOfferOrderIds(repartidor)
+        await clearPendingOfferForDriver(repartidor._id, now, nextState).catch(() => null)
+        const releasedOrderIds = await releaseOrdersForDriver(pendingOrderIds, repartidor._id, 'offer_expired_on_accept')
+        const resent = nextState === 'available' && releasedOrderIds.length > 0
+          ? await dispatchWaitingOrdersForDriver(repartidor._id)
+          : false
+        await sendBotMessage(
+          fromPhone,
+          resent
+            ? 'La oferta anterior venció. Te enviamos una nueva; acéptala dentro de los próximos 10 minutos.'
+            : 'No tienes ninguna oferta vigente para aceptar.'
+        ).catch(() => null)
         console.warn('[whatsapp webhook] intento de aceptar sin oferta valida', {
           repartidorId: repartidor._id,
           orderToken,
+          releasedOrderIds,
+          resent,
         })
         return NextResponse.json({ status: 'ok' })
       }
