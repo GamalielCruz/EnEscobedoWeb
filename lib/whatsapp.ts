@@ -549,11 +549,16 @@ export async function sendRepartidorEnPuerta(phone: string, orderNumber: string,
 export async function sendClienteRepartidorEnPuerta(
   phone: string,
   customerName: string,
-  orderNumber: string
+  orderNumber: string,
+  deliveryPin?: string
 ) {
+  const orderReference = deliveryPin
+    ? `${orderNumber}. NIP: ${deliveryPin}`
+    : orderNumber;
+
   return sendSpanishTemplate(phone, "cliente_repartidor_en_puerta", [
     customerName.substring(0, 30),
-    orderNumber.substring(0, 30),
+    orderReference,
   ]);
 }
 
