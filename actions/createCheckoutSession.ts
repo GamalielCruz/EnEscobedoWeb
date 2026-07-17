@@ -6,6 +6,7 @@ import { buildUrl } from "@/lib/urls";
 import { BasketItem } from "@/store/store";
 import { OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
 import { backendClient } from "@/sanity/lib/backendClient";
+import { assertCurrentLegalAcceptance } from "@/lib/legal-config";
 
 export type Metadata = {
   orderNumber: string;
@@ -21,6 +22,7 @@ export type Metadata = {
   shippingCost?: number;
   shippingAddress?: OrderAddressInput;
   deliveryNotes?: string;
+  legalAccepted?: boolean;
 };
 
 export type GroupedBasketItem = {
@@ -104,6 +106,7 @@ async function getEligibleAutoPromotion(orderType: "delivery" | "pickup", paymen
 }
 
 export async function createCheckoutSession(items: GroupedBasketItem[], metadata: Metadata) {
+  assertCurrentLegalAcceptance(metadata.legalAccepted);
   const stripe = getStripe();
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error("No hay productos para procesar el pago");

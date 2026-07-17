@@ -1,8 +1,10 @@
 "use client";
 
+import * as React from "react";
 import { Copy, ExternalLink, MapPinned, Phone, ShoppingBag } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 import { statusConfig } from "./dashboard.constants";
 import {
@@ -24,6 +26,7 @@ type OrderCardProps = {
   compact?: boolean;
   updating?: boolean;
   onUpdateStatus?: (orderId: string, orderNumber: string, status: string) => void;
+  onRefresh?: () => void;
 };
 
 function isTechnicalItemNote(note?: string) {
@@ -38,7 +41,10 @@ async function copyToClipboard(text: string) {
   }
 }
 
-export function OrderCard({ order, compact = false, updating = false, onUpdateStatus }: OrderCardProps) {
+export function OrderCard({ order, compact = false, updating = false, onUpdateStatus, onRefresh }: OrderCardProps) {
+  const [pin, setPin] = React.useState("");
+  const [pinError, setPinError] = React.useState("");
+  const [verifyingPin, setVerifyingPin] = React.useState(false);
   const status = statusConfig[order.status] ?? {
     label: order.status,
     color: "border border-gray-200 bg-gray-50 text-gray-700",
@@ -49,6 +55,29 @@ export function OrderCard({ order, compact = false, updating = false, onUpdateSt
   const orderCode = order.pickupCode || order.orderNumber.slice(-8);
   const channelLabel =
     order.deliveryMethod === "home_delivery" ? "Entrega a domicilio" : "Recoger en tienda";
+  const requiresDeliveryPin = order.fulfillmentProvider === "restaurant_delivery" && order.status === "shipped" && order.deliveryVerificationStatus !== "verified";
+
+  async function verifyDeliveryPin(event: React.FormEvent) {
+    event.preventDefault();
+    if (!/^\d{6}$/.test(pin)) return setPinError("Ingresa los 6 dígitos.");
+    setVerifyingPin(true);
+    setPinError("");
+    try {
+      const response = await fetch(`/api/orders/${order._id}/verify-delivery-pin`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pin }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "No se pudo verificar el PIN.");
+      setPin("");
+      onRefresh?.();
+    } catch (error) {
+      setPinError(error instanceof Error ? error.message : "No se pudo verificar el PIN.");
+    } finally {
+      setVerifyingPin(false);
+    }
+  }
 
   if (compact) {
     return (
@@ -149,6 +178,31 @@ export function OrderCard({ order, compact = false, updating = false, onUpdateSt
                 ))
               )}
             </div>
+            {requiresDeliveryPin ? (
+              <form onSubmit={verifyDeliveryPin} className="w-full rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <label htmlFor={`delivery-pin-${order._id}`} className="text-xs font-semibold text-amber-950">PIN de entrega</label>
+                <div className="mt-2 flex gap-2">
+                  <Input
+                    id={`delivery-pin-${order._id}`}
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    pattern="[0-9]{6}"
+                    maxLength={6}
+                    value={pin}
+                    onChange={(event) => setPin(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                    placeholder="000000"
+                    aria-describedby={pinError ? `delivery-pin-error-${order._id}` : undefined}
+                    className="min-w-0 flex-1 rounded-md border border-amber-300 bg-white px-3 py-2 font-mono text-lg tracking-[0.25em] outline-none focus:border-[#EB1902]"
+                  />
+                  <Button type="submit" disabled={verifyingPin || pin.length !== 6} className="bg-[#EB1902] text-white hover:bg-[#850C22]">
+                    {verifyingPin ? "Validando…" : "Confirmar entrega"}
+                  </Button>
+                </div>
+                {pinError ? <p id={`delivery-pin-error-${order._id}`} role="alert" className="mt-2 text-xs font-medium text-red-700">{pinError}</p> : null}
+                <p className="mt-2 text-xs text-amber-900">Solicítalo después de entregar físicamente el pedido.</p>
+              </form>
+            ) : null}
           </div>
         </div>
       </div>

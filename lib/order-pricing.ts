@@ -17,6 +17,9 @@ import {
   SettlementStatusValue,
   buildStateFields,
 } from "./order-state";
+import { createDeliveryPin } from "./delivery-pin";
+import { resolveFulfillmentProvider } from "./fulfillment";
+import { legalVersions } from "./legal-config";
 
 const DELIVERY_CONFIG_ID = "deliveryPricingConfig.main";
 const DEFAULT_DELIVERY_DRIVER_PAYOUT_RATE = 1;
@@ -309,6 +312,7 @@ export async function validateAndQuoteOrder(input: {
 
   if (input.orderType === "delivery") {
     assert(store.serviceTypes?.delivery === true, "La tienda no permite entregas.");
+    resolveFulfillmentProvider("delivery", store.hasOwnDelivery);
   } else {
     assert(store.serviceTypes?.pickup === true, "La tienda no permite pickup.");
   }
@@ -464,7 +468,8 @@ export function buildOrderDocument(input: {
   const now = new Date().toISOString();
   const shippingAddress = normalizeAddress(input.shippingAddress);
   const normalizedPaymentMethod = normalizePaymentMethod(input.paymentMethod, input.orderType === "pickup" ? "cash_at_store" : "cash_on_delivery");
-  const driverType = input.orderType === "pickup" ? "none" : input.quote.store.hasOwnDelivery ? "store" : "community";
+  const fulfillmentProvider = resolveFulfillmentProvider(input.orderType, input.quote.store.hasOwnDelivery);
+  const driverType = fulfillmentProvider === "restaurant_delivery" ? "store" : fulfillmentProvider === "elmenu_delivery" ? "community" : "none";
   const paymentProvider = resolvePaymentProvider(normalizedPaymentMethod);
   const paidOnline = resolvePaidOnline(paymentProvider);
   const appliedDiscount = roundMoney(input.amountDiscount ?? input.quote.discount);
@@ -495,7 +500,7 @@ export function buildOrderDocument(input: {
     orderType: input.orderType,
     orderStatus: input.orderStatus ?? "pending",
     paymentStatus: input.paymentStatus,
-    dispatchStatus: input.dispatchStatus,
+    dispatchStatus: fulfillmentProvider === "elmenu_delivery" ? input.dispatchStatus : "not_required",
     settlementStatus: resolveSettlementStatus({
       paymentStatus: input.paymentStatus,
       paymentProvider,
@@ -506,6 +511,10 @@ export function buildOrderDocument(input: {
     paymentMethod: normalizedPaymentMethod,
   });
 
+  const deliveryVerification = input.orderType === "delivery"
+    ? createDeliveryPin(input.orderNumber, new Date(now))
+    : { deliveryVerificationMethod: "not_required", deliveryVerificationStatus: "not_required" } as const;
+
   return {
     _type: "order",
     orderNumber: input.orderNumber,
@@ -514,6 +523,18 @@ export function buildOrderDocument(input: {
     email: input.customerEmail,
     phone: normalizePhone(input.phone),
     orderType: input.orderType,
+    fulfillmentProvider,
+    sellerType: "restaurant",
+    sellerId: input.storeId,
+    sellerSnapshot: {
+      id: input.storeId,
+      name: input.quote.store.name || "Restaurante",
+      address: [input.quote.store.address?.street, input.quote.store.address?.city, input.quote.store.address?.state].filter(Boolean).join(", "),
+    },
+    fulfillmentProviderSnapshot: { provider: fulfillmentProvider, restaurantName: input.quote.store.name || "Restaurante" },
+    legalTermsVersion: legalVersions.customerTerms,
+    privacyVersion: legalVersions.privacy,
+    cancellationPolicyVersion: legalVersions.cancellations,
     paymentMethod: normalizedPaymentMethod,
     paymentProvider,
     paidOnline,
@@ -552,6 +573,8 @@ export function buildOrderDocument(input: {
     platformNetTotal: finalFinancials.platformNetTotal,
     cashCollectedBy,
     driverType,
+    refundStatus: "not_requested",
+    ...deliveryVerification,
     cancelledAt: undefined,
     refundedAt: undefined,
     orderDate: now,

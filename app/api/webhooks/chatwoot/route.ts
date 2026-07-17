@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import { NextResponse } from "next/server";
 
+import { createBaserowSupportTicket } from "@/lib/baserow";
 import {
   addConversationLabels,
   getChatwootConversation,
@@ -85,6 +86,20 @@ export async function POST(request: Request) {
       claim: claimChatwootMessage,
       classify: classifySupportMessageWithAi,
       complete: completeChatwootMessage,
+      createTicket: async (ticket) => {
+        try {
+          const { accountId, baseUrl } = getChatwootServerConfig();
+          await createBaserowSupportTicket({
+            ...ticket,
+            conversationUrl: `${baseUrl}/app/accounts/${accountId}/conversations/${ticket.conversationId}`,
+          });
+        } catch (error) {
+          console.error("[chatwoot tickets] No se pudo registrar el ticket", {
+            conversationId: ticket.conversationId,
+            errorType: error instanceof Error ? error.name : "UnknownError",
+          });
+        }
+      },
       getConversation: getChatwootConversation,
       getOperationalResponse: (conversation) =>
         getLatestOrderStatusResponse(conversation.contactIdentifier),

@@ -19,6 +19,8 @@ import { RefreshOrdersButton } from "@/components/RefreshOrdersButton";
 import { OrdersStatusNotifications } from "@/components/OrdersStatusNotifications";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { DeliveryPinCard } from "@/components/DeliveryPinCard";
+import { revealDeliveryPin } from "@/lib/delivery-pin";
 
 const BRAND_COLOR = "#eb1902";
 
@@ -48,6 +50,9 @@ interface ExtendedOrder {
     storePhone?: string;
   };
   amountDiscount?: number;
+  orderType?: string;
+  deliveryPinCiphertext?: string;
+  deliveryVerificationStatus?: string;
 }
 
 const getOrderStep = (status: string | undefined) => {
@@ -150,6 +155,9 @@ const OrderStepper = ({
 
 const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
   const createdAt = order.orderDate ?? order.createdAt;
+  const deliveryPin = order.orderType === "delivery" && order.deliveryPinCiphertext && order.deliveryVerificationStatus === "pending"
+    ? revealDeliveryPin(order.deliveryPinCiphertext)
+    : null;
 
   return (
     <Card className="overflow-hidden border border-gray-200 shadow-sm">
@@ -182,6 +190,7 @@ const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
       </CardHeader>
 
       <CardContent className="pt-5">
+        {deliveryPin && <DeliveryPinCard pin={deliveryPin} />}
         <OrderStepper status={order.status} isClickCollect={order.isClickCollect} />
 
         <div className="mt-4 rounded-lg border border-gray-100 bg-gray-50 p-4">

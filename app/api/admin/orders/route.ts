@@ -53,6 +53,7 @@ const ORDER_PROJECTION = `{
   readyAt,
   pickedUpAt,
   deliveredAt,
+  deliveryVerificationStatus,
   cancelledAt,
   refundedAt,
   grossTotal,
@@ -87,6 +88,7 @@ const ORDER_BY_NUMBER_QUERY = `*[_type == "order" && orderNumber == $orderNumber
   readyAt,
   pickedUpAt,
   deliveredAt,
+  deliveryVerificationStatus,
   "storeName": coalesce(pickupStore->name, affiliateStore->name),
   "storeAddress": coalesce(pickupStore->address.street, affiliateStore->address.street),
   "storeCoordinates": coalesce(pickupStore->coordinates, affiliateStore->coordinates)
@@ -203,6 +205,10 @@ export async function PATCH(request: NextRequest) {
     const orderType = order.orderType === "pickup" ? "pickup" : "delivery";
     const legacyMapped: Partial<{ orderStatus: OrderStatusValue; paymentStatus: PaymentStatusValue; dispatchStatus: DispatchStatusValue }> = status ? mapLegacyStatus(orderType, status) : {};
     const orderStatus = (body.orderStatus || legacyMapped.orderStatus || order.orderStatus || "pending") as OrderStatusValue;
+    const deliveryOverrideReason = String(body.deliveryOverrideReason || "").trim();
+    if (orderType === "delivery" && orderStatus === "delivered" && order.deliveryVerificationStatus !== "verified" && !deliveryOverrideReason) {
+      return NextResponse.json({ error: "Se requiere motivo para la anulación administrativa del PIN" }, { status: 400 });
+    }
     let paymentStatus = (body.paymentStatus || legacyMapped.paymentStatus || order.paymentStatus || "pending") as PaymentStatusValue;
     const dispatchStatus = (body.dispatchStatus || legacyMapped.dispatchStatus || order.dispatchStatus || (orderType === "pickup" ? "not_required" : "waiting_for_driver")) as DispatchStatusValue;
     let settlementStatus = (body.settlementStatus || order.settlementStatus || "pending") as SettlementStatusValue;
@@ -251,6 +257,11 @@ export async function PATCH(request: NextRequest) {
 
     if (orderStatus === "delivered" && !order.deliveredAt) {
       updateData.deliveredAt = now;
+      if (orderType === "delivery" && order.deliveryVerificationStatus !== "verified") {
+        updateData.deliveryVerificationMethod = "support_override";
+        updateData.deliveryVerificationStatus = "overridden";
+        updateData.deliveryVerificationEvidence = deliveryOverrideReason;
+      }
     }
     if (isCancelled) {
       updateData.cancelledAt = now;
@@ -286,6 +297,9 @@ export async function PATCH(request: NextRequest) {
       type: "manual_admin_action",
       payload: { orderStatus, paymentStatus, dispatchStatus, settlementStatus: updateData.settlementStatus },
     });
+    if (orderType === "delivery" && orderStatus === "delivered" && order.deliveryVerificationStatus !== "verified") {
+      events.push({ type: "delivery_override", reason: deliveryOverrideReason });
+    }
 
     for (const event of events) {
       await appendOrderEvent(order._id, {

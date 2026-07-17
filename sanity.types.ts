@@ -107,6 +107,22 @@ export type Slug = {
   source?: string;
 };
 
+export type LegalAcceptance = {
+  _id: string;
+  _type: "legalAcceptance";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  documentType?: string;
+  documentVersion?: string;
+  acceptedAt?: string;
+  userId?: string;
+  role?: string;
+  acceptanceSource?: string;
+  ipHashOrLimitedIp?: string;
+  userAgentSummary?: string;
+};
+
 export type AffiliateStoreReference = {
   _ref: string;
   _type: "reference";
@@ -197,6 +213,13 @@ export type Sale = {
     } & AffiliateStoreReference
   >;
   isActive?: boolean;
+};
+
+export type SanityFileAssetReference = {
+  _ref: string;
+  _type: "reference";
+  _weak?: boolean;
+  [internalGroqTypeReferenceTo]?: "sanity.fileAsset";
 };
 
 export type RepartidorReference = {
@@ -293,6 +316,65 @@ export type Order = {
   bankTransferClabe?: string;
   oxxoReference?: string;
   orderDate?: string;
+  fulfillmentProvider?:
+    | "pickup"
+    | "restaurant_delivery"
+    | "elmenu_delivery"
+    | "third_party_logistics";
+  sellerType?: string;
+  sellerId?: string;
+  sellerSnapshot?: {
+    id?: string;
+    name?: string;
+    address?: string;
+  };
+  fulfillmentProviderSnapshot?: {
+    provider?: string;
+    restaurantName?: string;
+  };
+  legalTermsVersion?: string;
+  privacyVersion?: string;
+  cancellationPolicyVersion?: string;
+  deliveryPinHash?: string;
+  deliveryPinCiphertext?: string;
+  deliveryPinCreatedAt?: string;
+  deliveryPinExpiresAt?: string;
+  deliveryPinVerifiedAt?: string;
+  deliveryPinVerifiedBy?: string;
+  deliveryPinAttemptCount?: number;
+  deliveryPinLockedUntil?: string;
+  deliveryVerificationMethod?:
+    "pin" | "customer_confirmation" | "support_override" | "not_required";
+  deliveryVerificationStatus?:
+    "pending" | "verified" | "locked" | "overridden" | "not_required";
+  deliveryVerificationEvidence?: string;
+  authorizedRecipientName?: string;
+  authorizedRecipientRelation?: string;
+  authorizedThirdPartyDelivery?: boolean;
+  refundStatus?:
+    | "not_requested"
+    | "requested"
+    | "under_review"
+    | "approved"
+    | "partially_approved"
+    | "rejected"
+    | "processing"
+    | "refunded"
+    | "failed";
+  refundRequestedAt?: string;
+  refundRequestedBy?: string;
+  refundReason?: string;
+  refundAmount?: number;
+  refundResolution?: string;
+  refundResolvedAt?: string;
+  refundResolvedBy?: string;
+  stripeRefundId?: string;
+  refundEvidence?: Array<{
+    asset?: SanityFileAssetReference;
+    media?: unknown;
+    _type: "file";
+    _key: string;
+  }>;
   subtotal?: number;
   shippingCost?: number;
   productsSubtotal?: number;
@@ -844,11 +926,13 @@ export type AllSanitySchemaTypes =
   | SanityImageCrop
   | SanityImageHotspot
   | Slug
+  | LegalAcceptance
   | AffiliateStoreReference
   | ProductReference
   | SaleReference
   | PromoBanner
   | Sale
+  | SanityFileAssetReference
   | RepartidorReference
   | Order
   | OrderReference
@@ -1045,6 +1129,65 @@ export type MY_ORDERS_QUERY_RESULT = Array<{
   bankTransferClabe?: string;
   oxxoReference?: string;
   orderDate?: string;
+  fulfillmentProvider?:
+    | "elmenu_delivery"
+    | "pickup"
+    | "restaurant_delivery"
+    | "third_party_logistics";
+  sellerType?: string;
+  sellerId?: string;
+  sellerSnapshot?: {
+    id?: string;
+    name?: string;
+    address?: string;
+  };
+  fulfillmentProviderSnapshot?: {
+    provider?: string;
+    restaurantName?: string;
+  };
+  legalTermsVersion?: string;
+  privacyVersion?: string;
+  cancellationPolicyVersion?: string;
+  deliveryPinHash?: string;
+  deliveryPinCiphertext?: string;
+  deliveryPinCreatedAt?: string;
+  deliveryPinExpiresAt?: string;
+  deliveryPinVerifiedAt?: string;
+  deliveryPinVerifiedBy?: string;
+  deliveryPinAttemptCount?: number;
+  deliveryPinLockedUntil?: string;
+  deliveryVerificationMethod?:
+    "customer_confirmation" | "not_required" | "pin" | "support_override";
+  deliveryVerificationStatus?:
+    "locked" | "not_required" | "overridden" | "pending" | "verified";
+  deliveryVerificationEvidence?: string;
+  authorizedRecipientName?: string;
+  authorizedRecipientRelation?: string;
+  authorizedThirdPartyDelivery?: boolean;
+  refundStatus?:
+    | "approved"
+    | "failed"
+    | "not_requested"
+    | "partially_approved"
+    | "processing"
+    | "refunded"
+    | "rejected"
+    | "requested"
+    | "under_review";
+  refundRequestedAt?: string;
+  refundRequestedBy?: string;
+  refundReason?: string;
+  refundAmount?: number;
+  refundResolution?: string;
+  refundResolvedAt?: string;
+  refundResolvedBy?: string;
+  stripeRefundId?: string;
+  refundEvidence?: Array<{
+    asset?: SanityFileAssetReference;
+    media?: unknown;
+    _type: "file";
+    _key: string;
+  }>;
   subtotal?: number;
   shippingCost?: number;
   productsSubtotal?: number;

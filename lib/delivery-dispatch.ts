@@ -1,6 +1,7 @@
 import { appendOrderEvent } from "@/lib/order-events";
 import { buildAddressMapsUrl } from "@/lib/order-maps";
 import { isOrderDispatchable } from "@/lib/order-state";
+import { isElmenuDriverDeliveryEnabled } from "@/lib/fulfillment";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { sendBundleDeliveryOffer, sendDeliveryOffer, sendWhatsAppMessage } from "./whatsapp";
 
@@ -372,6 +373,7 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
 }
 
 export async function dispatchDeliveryBundle(orderIds: string[], options: DispatchOptions = {}): Promise<boolean> {
+  if (!isElmenuDriverDeliveryEnabled()) return false;
   const uniqueOrderIds = [...new Set(orderIds.filter(Boolean))].slice(0, 2);
   if (uniqueOrderIds.length <= 1) return uniqueOrderIds[0] ? dispatchDeliveryOffer(uniqueOrderIds[0], options) : false;
 
@@ -440,6 +442,7 @@ export async function releaseOrdersForDriver(orderIds: string[], driverId: strin
 }
 
 export async function redispatchOrders(orderIds: string[], excludedDriverIds: string[] = []): Promise<boolean> {
+  if (!isElmenuDriverDeliveryEnabled()) return false;
   const openOrders = await fetchOrders(orderIds);
   const redispatchableIds = openOrders.filter(isOrderDispatchable).map((order) => order._id);
   if (redispatchableIds.length === 0) return false;
@@ -459,6 +462,7 @@ export async function redispatchOrders(orderIds: string[], excludedDriverIds: st
 }
 
 export async function dispatchWaitingOrdersForDriver(driverId: string): Promise<boolean> {
+  if (!isElmenuDriverDeliveryEnabled()) return false;
   const driver = (await backendClient.fetch(DRIVER_BY_ID_QUERY, { driverId })) as DispatchDriver | null;
   if (!driver || !driver.disponible || driver.estadoDisponibilidad !== "available") return false;
 
@@ -472,6 +476,7 @@ export async function dispatchWaitingOrdersForDriver(driverId: string): Promise<
 }
 
 export async function dispatchDeliveryOffer(orderId: string, options: DispatchOptions = {}): Promise<boolean> {
+  if (!isElmenuDriverDeliveryEnabled()) return false;
   console.log(`[delivery-dispatch] iniciando dispatch ${orderId}`);
 
   try {

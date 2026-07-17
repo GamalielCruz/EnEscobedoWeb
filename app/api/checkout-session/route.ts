@@ -5,6 +5,8 @@ import {
   GroupedBasketItem,
   Metadata,
 } from "@/actions/createCheckoutSession";
+import { assertCurrentLegalAcceptance } from "@/lib/legal-config";
+import { recordCurrentLegalAcceptance } from "@/lib/legal-acceptance";
 
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
@@ -23,6 +25,8 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+    assertCurrentLegalAcceptance(metadata.legalAccepted);
+    await recordCurrentLegalAcceptance(request, userId, "checkout_card");
 
     const clientSecret = await createCheckoutSession(items as GroupedBasketItem[], {
       ...(metadata as Metadata),
