@@ -1474,7 +1474,11 @@ Te avisaremos 10 minutos antes de finalizar.`
         const remainingOrders = (await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>)
           .filter((order) => String(order._id) !== String(targetOrder._id))
         const nextState = remainingOrders.length > 0 ? 'busy' : getDriverNextState(repartidor, nowDate)
-        await backendClient.patch(repartidor._id).set({ estadoDisponibilidad: nextState, ultimaActividad: now }).commit()
+        await backendClient.patch(repartidor._id).set({
+          disponible: nextState !== 'offline',
+          estadoDisponibilidad: nextState,
+          ultimaActividad: now,
+        }).commit()
         if (nextState === 'available') {
           await dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => console.error('[webhook NIP] Error redisparando pedidos:', error))
         }
@@ -1483,7 +1487,12 @@ Te avisaremos 10 minutos antes de finalizar.`
         if (customerPhone && targetOrder.customerName) {
           await sendOrderDelivered(customerPhone, String(targetOrder.customerName), String(targetOrder.orderNumber)).catch(() => null)
         }
-        await sendBotMessage(fromPhone, 'NIP correcto. Pedido entregado correctamente. Gracias!').catch(() => null)
+        await sendBotMessage(
+          fromPhone,
+          nextState === 'offline'
+            ? 'NIP correcto. Pedido entregado correctamente. Tu sesion de disponibilidad ya termino; responde INICIO para volver a conectarte.'
+            : 'NIP correcto. Pedido entregado correctamente. Gracias!'
+        ).catch(() => null)
         return NextResponse.json({ status: 'ok' })
       }
 // --- Cualquier otro mensaje de un repartidor registrado ---

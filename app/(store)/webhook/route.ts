@@ -74,14 +74,12 @@ export async function POST(req: NextRequest) {
       if (sessions.data.length > 0) {
         const session = sessions.data[0];
         const updatedOrder = await markOrderPaidBySession(session.id);
-        if (!updatedOrder) {
-          const createdOrder = await createOrderInSanity(session, stripe);
-          const deliveryMethod = session.metadata?.deliveryMethod;
-          if (deliveryMethod !== "click_collect" && deliveryMethod !== "pickup") {
-            await dispatchDeliveryOffer(createdOrder._id).catch((error) => {
-              console.error("[webhook] dispatchDeliveryOffer error:", error);
-            });
-          }
+        const paidOrder = updatedOrder ?? await createOrderInSanity(session, stripe);
+        const deliveryMethod = session.metadata?.deliveryMethod;
+        if (deliveryMethod !== "click_collect" && deliveryMethod !== "pickup") {
+          await dispatchDeliveryOffer(paidOrder._id).catch((error) => {
+            console.error("[webhook] dispatchDeliveryOffer error:", error);
+          });
         }
       }
     }

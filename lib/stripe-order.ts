@@ -6,6 +6,7 @@ import { getStripe } from "@/lib/stripe";
 import { extractSpeiDetails } from "@/lib/spei-reference-extractor";
 import { sendOrderConfirmation, sendPickupOrderReceived } from "@/lib/whatsapp";
 import { syncBaserowOrder, syncBaserowOrderById } from "@/lib/baserow";
+import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { after } from "next/server";
 import Stripe from "stripe";
@@ -304,7 +305,15 @@ export async function ensureOrderFromCheckoutSession(sessionId: string, expected
     throw new Error("Checkout session is not ready to create an order");
   }
 
-  return createOrderInSanity(session, stripe);
+  const order = await createOrderInSanity(session, stripe);
+
+  if (session.payment_status === "paid" && getOrderType(getMetadata(session)) === "delivery") {
+    await dispatchDeliveryOffer(order._id).catch((error) => {
+      console.error("[checkout/confirm] dispatchDeliveryOffer error:", error);
+    });
+  }
+
+  return order;
 }
 
 export async function markOrderPaidBySession(sessionId: string) {
