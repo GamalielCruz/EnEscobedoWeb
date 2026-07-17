@@ -500,7 +500,10 @@ export function buildOrderDocument(input: {
     orderType: input.orderType,
     orderStatus: input.orderStatus ?? "pending",
     paymentStatus: input.paymentStatus,
-    dispatchStatus: fulfillmentProvider === "elmenu_delivery" ? input.dispatchStatus : "not_required",
+    dispatchStatus:
+      fulfillmentProvider === "restaurant_delivery" || fulfillmentProvider === "elmenu_delivery"
+        ? input.dispatchStatus
+        : "not_required",
     settlementStatus: resolveSettlementStatus({
       paymentStatus: input.paymentStatus,
       paymentProvider,

@@ -1,7 +1,7 @@
 import { appendOrderEvent } from "@/lib/order-events";
 import { buildAddressMapsUrl } from "@/lib/order-maps";
 import { isOrderDispatchable } from "@/lib/order-state";
-import { isElmenuDriverDeliveryEnabled } from "@/lib/fulfillment";
+import { isDriverDispatchEnabled } from "@/lib/fulfillment";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { sendBundleDeliveryOffer, sendDeliveryOffer, sendWhatsAppMessage } from "./whatsapp";
 
@@ -373,11 +373,11 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
 }
 
 export async function dispatchDeliveryBundle(orderIds: string[], options: DispatchOptions = {}): Promise<boolean> {
-  if (!isElmenuDriverDeliveryEnabled()) return false;
   const uniqueOrderIds = [...new Set(orderIds.filter(Boolean))].slice(0, 2);
   if (uniqueOrderIds.length <= 1) return uniqueOrderIds[0] ? dispatchDeliveryOffer(uniqueOrderIds[0], options) : false;
 
   const orders = await fetchOrders(uniqueOrderIds);
+  if (orders.some((order) => !isDriverDispatchEnabled(order.storeHasOwnDelivery))) return false;
   if (orders.length !== uniqueOrderIds.length) {
     console.error("[delivery-dispatch] faltan pedidos para bundle", { orderIds: uniqueOrderIds });
     return false;
@@ -442,9 +442,10 @@ export async function releaseOrdersForDriver(orderIds: string[], driverId: strin
 }
 
 export async function redispatchOrders(orderIds: string[], excludedDriverIds: string[] = []): Promise<boolean> {
-  if (!isElmenuDriverDeliveryEnabled()) return false;
   const openOrders = await fetchOrders(orderIds);
-  const redispatchableIds = openOrders.filter(isOrderDispatchable).map((order) => order._id);
+  const redispatchableIds = openOrders
+    .filter((order) => isDriverDispatchEnabled(order.storeHasOwnDelivery) && isOrderDispatchable(order))
+    .map((order) => order._id);
   if (redispatchableIds.length === 0) return false;
 
   await setOrdersWaiting(redispatchableIds, "redispatch");
@@ -462,9 +463,9 @@ export async function redispatchOrders(orderIds: string[], excludedDriverIds: st
 }
 
 export async function dispatchWaitingOrdersForDriver(driverId: string): Promise<boolean> {
-  if (!isElmenuDriverDeliveryEnabled()) return false;
   const driver = (await backendClient.fetch(DRIVER_BY_ID_QUERY, { driverId })) as DispatchDriver | null;
   if (!driver || !driver.disponible || driver.estadoDisponibilidad !== "available") return false;
+  if (!isDriverDispatchEnabled(Boolean(driver.storeId))) return false;
 
   const waitingOrders = driver.storeId
     ? ((await backendClient.fetch(STORE_WAITING_ORDERS_QUERY, { storeId: driver.storeId })) as Array<{ _id: string }>)
@@ -476,7 +477,6 @@ export async function dispatchWaitingOrdersForDriver(driverId: string): Promise<
 }
 
 export async function dispatchDeliveryOffer(orderId: string, options: DispatchOptions = {}): Promise<boolean> {
-  if (!isElmenuDriverDeliveryEnabled()) return false;
   console.log(`[delivery-dispatch] iniciando dispatch ${orderId}`);
 
   try {
@@ -485,6 +485,7 @@ export async function dispatchDeliveryOffer(orderId: string, options: DispatchOp
       console.error(`[delivery-dispatch] orden no encontrada ${orderId}`);
       return false;
     }
+    if (!isDriverDispatchEnabled(order.storeHasOwnDelivery)) return false;
     if (!isOrderDispatchable(order)) {
       console.log("[delivery-dispatch] pedido no despachable", {
         orderId: order._id,
