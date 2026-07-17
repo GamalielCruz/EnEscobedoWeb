@@ -57,11 +57,20 @@ const DAYS = [
   ["sunday", "Dom"],
 ] as const;
 
+const DEFAULT_MESSAGES = [
+  "¡Pásele! Estamos preparando todo rico y calientito.",
+  "Recién hecho, con ese sabor que se antoja.",
+  "Su próximo antojo puede estar listo en minutos.",
+];
+
 export default function StoreGrid({ stores }: StoreGridProps) {
   const [mounted, setMounted] = useState(false);
+  const [messageIndex, setMessageIndex] = useState(0);
 
   useEffect(() => {
     setMounted(true);
+    const interval = setInterval(() => setMessageIndex((index) => index + 1), 5000);
+    return () => clearInterval(interval);
   }, []);
 
   if (!stores || stores.length === 0) {
@@ -77,6 +86,8 @@ export default function StoreGrid({ stores }: StoreGridProps) {
       {stores.map((store) => {
         const storeState = getStoreOperationalState(store);
         const isOpen = mounted ? storeState.effectiveIsOpen : false;
+        const configuredMessages = store.promotionalMessages?.filter(Boolean) || [];
+        const messages = configuredMessages.length ? configuredMessages : DEFAULT_MESSAGES;
 
         const timing = getStoreServiceTiming(store);
 
@@ -149,9 +160,11 @@ export default function StoreGrid({ stores }: StoreGridProps) {
                 )}
               </div>
               {isOpen && (
-                <p className="line-clamp-2 text-xs italic text-gray-600">
-                  {store.promotionalMessages?.[0] || "¡Pásele! Estamos preparando todo rico y calientito."}
-                </p>
+                <div className="min-h-8 overflow-hidden">
+                  <p key={messageIndex} className="restaurant-message line-clamp-2 text-xs italic">
+                    {messages[messageIndex % messages.length]}
+                  </p>
+                </div>
               )}
               {timing.highDemandMode ? (
                 <p className="text-xs font-medium text-amber-700">Alta demanda · Los pedidos pueden tardar mas</p>
@@ -160,6 +173,35 @@ export default function StoreGrid({ stores }: StoreGridProps) {
           </article>
         );
       })}
+      <style jsx>{`
+        @keyframes message-cycle {
+          0% { opacity: 0; transform: translateY(4px); filter: blur(2px); }
+          10%, 82% { opacity: 1; transform: translateY(0); filter: blur(0); }
+          100% { opacity: 0; transform: translateY(-4px); filter: blur(2px); }
+        }
+
+        @keyframes message-shimmer {
+          from { background-position: 150% center; }
+          to { background-position: -150% center; }
+        }
+
+        .restaurant-message {
+          color: transparent;
+          background: linear-gradient(90deg, #6b7280 30%, #111827 50%, #6b7280 70%);
+          background-size: 300% 100%;
+          background-clip: text;
+          -webkit-background-clip: text;
+          animation: message-cycle 5s ease-in-out, message-shimmer 2s linear infinite;
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .restaurant-message {
+            color: #4b5563;
+            background: none;
+            animation: none;
+          }
+        }
+      `}</style>
     </div>
   );
 }

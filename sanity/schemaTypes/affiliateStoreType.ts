@@ -258,7 +258,7 @@ export const affiliateStoreType = defineType({
       title: "Frases para clientes",
       type: "array",
       of: [{ type: "string" }],
-      description: "Mensajes breves para la tarjeta del restaurante. El primero aparece en la portada.",
+      description: "Mensajes breves que rotan cada 5 segundos en la tarjeta del restaurante.",
       validation: (Rule) => Rule.max(5).unique(),
     }),
     defineField({
