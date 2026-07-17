@@ -254,6 +254,14 @@ export const affiliateStoreType = defineType({
       description: "Activalo cuando haya muchos pedidos y puedan presentarse demoras.",
     }),
     defineField({
+      name: "promotionalMessages",
+      title: "Frases para clientes",
+      type: "array",
+      of: [{ type: "string" }],
+      description: "Mensajes breves para la tarjeta del restaurante. El primero aparece en la portada.",
+      validation: (Rule) => Rule.max(5).unique(),
+    }),
+    defineField({
       name: "hasOwnDelivery",
       title: "Tiene repartidores propios",
       type: "boolean",
