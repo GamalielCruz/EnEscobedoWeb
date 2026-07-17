@@ -5,7 +5,7 @@ import { isDriverDispatchEnabled } from "@/lib/fulfillment";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { sendBundleDeliveryOffer, sendDeliveryOffer, sendWhatsAppMessage } from "./whatsapp";
 
-const OFFER_TTL_SECONDS = 90;
+const OFFER_TTL_SECONDS = 10 * 60;
 const ADMIN_PHONE = process.env.ADMIN_WHATSAPP_PHONE;
 
 type DispatchOrder = {
