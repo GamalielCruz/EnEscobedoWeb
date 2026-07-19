@@ -19,7 +19,6 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
 
   if (isMobile) {
     response.headers.set("X-Mobile-Device", "true");
-    response.headers.set("Cache-Control", "public, max-age=300, stale-while-revalidate=60");
   }
 
   response.headers.set("X-Content-Type-Options", "nosniff");
