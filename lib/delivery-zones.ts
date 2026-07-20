@@ -114,6 +114,18 @@ export const DEFAULT_DELIVERY_CONFIG: DeliveryPricingConfig = {
   debug: true,
 };
 
+export const EMPTY_STORE_DELIVERY_CONFIG: DeliveryPricingConfig = {
+  zones: [],
+  demand: { level: "low", multiplier: 1 },
+  scheduleRules: [],
+  outsideZone: { mode: "reject", specialFee: 0 },
+  debug: false,
+};
+
+export function getDeliveryPricingConfigId(storeId?: string | null) {
+  return storeId ? `deliveryPricingConfig.${storeId}` : "deliveryPricingConfig.main";
+}
+
 export function normalizeDeliveryConfig(config?: Partial<DeliveryPricingConfig> | null): DeliveryPricingConfig {
   return {
     zones: Array.isArray(config?.zones) ? config.zones : DEFAULT_DELIVERY_CONFIG.zones,

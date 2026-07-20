@@ -46,7 +46,15 @@ const demandPresets = {
 
 const colors = ["#f97316", "#0ea5e9", "#22c55e", "#a855f7", "#ef4444", "#14b8a6"];
 
-export default function DeliveryZonesAdmin() {
+type DeliveryZonesAdminProps = {
+  storeId?: string;
+  center?: LatLng;
+};
+
+export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: DeliveryZonesAdminProps) {
+  const endpoint = storeId
+    ? `/api/dashboard/delivery-pricing?storeId=${encodeURIComponent(storeId)}`
+    : "/api/dashboard/delivery-pricing";
   const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
   const { isLoaded } = useJsApiLoader({
     id: "delivery-zones-map",
@@ -58,13 +66,13 @@ export default function DeliveryZonesAdmin() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
-  const [previewPoint, setPreviewPoint] = useState<LatLng>(defaultCenter);
+  const [previewPoint, setPreviewPoint] = useState<LatLng>(center);
   const [previewTime, setPreviewTime] = useState(defaultPreviewTime);
   const [jsonDraft, setJsonDraft] = useState("");
   const [jsonError, setJsonError] = useState("");
 
   useEffect(() => {
-    fetch("/api/dashboard/delivery-pricing", { cache: "no-store" })
+    fetch(endpoint, { cache: "no-store" })
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
@@ -77,7 +85,7 @@ export default function DeliveryZonesAdmin() {
       })
       .catch(() => setMessage("No se pudo cargar la configuracion."))
       .finally(() => setLoading(false));
-  }, []);
+  }, [endpoint]);
 
   const selectedZone = useMemo(
     () => config.zones.find((zone) => zone.id === selectedZoneId) ?? config.zones[0],
@@ -118,10 +126,10 @@ export default function DeliveryZonesAdmin() {
       color: colors[config.zones.length % colors.length],
       active: true,
       coordinates: [
-        { lat: defaultCenter.lat + offset, lng: defaultCenter.lng - 0.01 + offset },
-        { lat: defaultCenter.lat + offset, lng: defaultCenter.lng + 0.01 + offset },
-        { lat: defaultCenter.lat - 0.01 + offset, lng: defaultCenter.lng + 0.01 + offset },
-        { lat: defaultCenter.lat - 0.01 + offset, lng: defaultCenter.lng - 0.01 + offset },
+        { lat: center.lat + offset, lng: center.lng - 0.01 + offset },
+        { lat: center.lat + offset, lng: center.lng + 0.01 + offset },
+        { lat: center.lat - 0.01 + offset, lng: center.lng + 0.01 + offset },
+        { lat: center.lat - 0.01 + offset, lng: center.lng - 0.01 + offset },
       ],
     };
 
@@ -188,10 +196,10 @@ export default function DeliveryZonesAdmin() {
     setMessage("");
 
     try {
-      const res = await fetch("/api/dashboard/delivery-pricing", {
+      const res = await fetch(endpoint, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ config }),
+        body: JSON.stringify({ config, storeId }),
       });
       const data = await res.json();
 
@@ -224,8 +232,8 @@ export default function DeliveryZonesAdmin() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Envios por zonas</h2>
-          <p className="text-sm text-gray-600">Poligonos, demanda, horarios y preview de precio.</p>
+          <h2 className="text-2xl font-bold text-gray-900">{storeId ? "Mis zonas de entrega" : "Envios por zonas"}</h2>
+          <p className="text-sm text-gray-600">Poligonos, costos, horarios y vista previa del precio.</p>
         </div>
         <Button onClick={saveConfig} disabled={saving} className="bg-[#ff8800] hover:bg-[#ff8800]/90 text-gray-900">
           {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
@@ -274,7 +282,7 @@ export default function DeliveryZonesAdmin() {
               <div className="overflow-hidden rounded-md border">
                 <GoogleMap
                   mapContainerStyle={mapContainerStyle}
-                  center={selectedZone?.coordinates?.[0] ?? defaultCenter}
+                  center={selectedZone?.coordinates?.[0] ?? center}
                   zoom={13}
                   onClick={(event) => {
                     if (!event.latLng) return;
@@ -591,7 +599,7 @@ export default function DeliveryZonesAdmin() {
           {jsonError && <p className="mt-2 text-sm text-red-600">{jsonError}</p>}
           <div className="mt-3 flex items-center gap-2 text-sm text-gray-600">
             <MapPin className="h-4 w-4" />
-            <span>Este JSON se persiste en Sanity como deliveryPricingConfig.main.</span>
+            <span>{storeId ? "Esta configuracion solo aplica a tu restaurante." : "Configuracion global de entregas de El Menu."}</span>
           </div>
         </CardContent>
       </Card>

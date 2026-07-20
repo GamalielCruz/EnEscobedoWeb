@@ -4,6 +4,18 @@ import { auth } from "@clerk/nextjs/server";
 import { writeClient } from "@/sanity/lib/client";
 import { isAdminUser } from "@/lib/admin";
 
+const ALLOWED_CHANGE_FIELDS = new Set([
+  "name",
+  "isOpen",
+  "manualOperationalStatus",
+  "highDemandMode",
+  "contact",
+  "address",
+  "operatingHours",
+  "serviceTypes",
+  "hasOwnDelivery",
+]);
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -43,7 +55,9 @@ export async function POST(
 
     // Apply changes to store
     // The changes object contains fields that map directly to the store schema
-    const changes = reqDoc.changes || {};
+    const changes = Object.fromEntries(
+      Object.entries(reqDoc.changes || {}).filter(([key]) => ALLOWED_CHANGE_FIELDS.has(key))
+    );
     
     // Filter out undefined/nulls if necessary, but sanity patch handles objects fine.
     // We want to update only fields present in changes.

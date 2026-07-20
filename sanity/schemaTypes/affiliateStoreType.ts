@@ -269,6 +269,13 @@ export const affiliateStoreType = defineType({
       description: "Indica si la tienda tiene repartidores propios",
     }),
     defineField({
+      name: "platformCommissionPercent",
+      title: "Comision de El Menu (%)",
+      type: "number",
+      description: "Porcentaje aplicado al subtotal de productos. Solo lo administra El Menu.",
+      validation: (Rule) => Rule.min(0).max(100),
+    }),
+    defineField({
       name: "capacity",
       title: "Capacidad de Almacenamiento",
       type: "number",

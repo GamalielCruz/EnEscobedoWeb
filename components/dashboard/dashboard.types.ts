@@ -102,6 +102,9 @@ export type StoreConfig = {
   isOpen?: boolean;
   manualOperationalStatus?: "open" | "closed" | "auto";
   highDemandMode?: boolean;
+  hasOwnDelivery?: boolean;
+  platformCommissionPercent?: number;
+  coordinates?: { latitude?: number; longitude?: number };
   serviceTypes?: StoreServiceTypes;
   contact?: StoreContact;
   address?: StoreAddress;

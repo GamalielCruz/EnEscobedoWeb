@@ -373,6 +373,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
         body: JSON.stringify({
           latitude: address.latitude,
           longitude: address.longitude,
+          storeId: filterStoreId,
           orderDate: new Date().toISOString(),
         }),
       });
@@ -387,7 +388,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
       console.error('Error calculando envio por zona:', error);
       return null;
     }
-  }, []);
+  }, [filterStoreId]);
 
   // Manejar detección de ubicación
   const handleDetectLocation = useCallback(async () => {

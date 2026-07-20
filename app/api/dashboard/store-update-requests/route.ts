@@ -4,6 +4,17 @@ import { auth } from "@clerk/nextjs/server";
 import { writeClient } from "@/sanity/lib/client";
 
 const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
+const ALLOWED_CHANGE_FIELDS = new Set([
+  "name",
+  "isOpen",
+  "manualOperationalStatus",
+  "highDemandMode",
+  "contact",
+  "address",
+  "operatingHours",
+  "serviceTypes",
+  "hasOwnDelivery",
+]);
 
 export async function GET(request: NextRequest) {
   const requestId = crypto.randomUUID();
@@ -86,6 +97,12 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { storeId, changes } = body;
     if (!storeId || !changes) return NextResponse.json({ error: "storeId y changes son requeridos" }, { status: 400 });
+    const safeChanges = Object.fromEntries(
+      Object.entries(changes).filter(([key]) => ALLOWED_CHANGE_FIELDS.has(key))
+    );
+    if (Object.keys(safeChanges).length === 0) {
+      return NextResponse.json({ error: "No hay cambios permitidos" }, { status: 400 });
+    }
 
     const ownedStores = await writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
       userId,
@@ -98,7 +115,7 @@ export async function POST(request: NextRequest) {
     const doc: any = {
       _type: "storeUpdateRequest",
       store: { _type: "reference", _ref: storeId },
-      changes,
+      changes: safeChanges,
       status: "pending",
       submittedBy: userId,
       submittedAt: new Date().toISOString(),

@@ -24,6 +24,7 @@ export const storeUpdateRequest = defineType({
         defineField({ name: "coverImage", title: "Imagen de Portada", type: "image", options: { hotspot: true } }),
         defineField({ name: "isOpen", title: "Tienda Abierta", type: "boolean" }),
         defineField({ name: "highDemandMode", title: "Modo Alta Demanda", type: "boolean" }),
+        defineField({ name: "hasOwnDelivery", title: "Repartidores propios", type: "boolean" }),
         
         defineField({
           name: "contact",
