@@ -35,6 +35,7 @@ type DashboardProductsSectionProps = {
   refreshing: boolean;
   availableCategories: CategoryOption[];
   loadCategories: () => Promise<void>;
+  onCreateCategory: (title: string) => Promise<CategoryOption | null>;
   onRefresh: () => void;
   onSubmitProduct: (payload: { editingProductId: string | null; formState: ProductFormState }) => Promise<boolean>;
   onUpdateAvailability: (productId: string, isVisible: boolean, stock?: number) => Promise<boolean>;
@@ -48,6 +49,7 @@ export function DashboardProductsSection({
   refreshing,
   availableCategories,
   loadCategories,
+  onCreateCategory,
   onRefresh,
   onSubmitProduct,
   onUpdateAvailability,
@@ -223,6 +225,7 @@ export function DashboardProductsSection({
         formState={formState}
         setFormState={setFormState}
         availableCategories={availableCategories}
+        onCreateCategory={onCreateCategory}
         editingProductId={editingProductId}
         submitting={submitting}
         uploadingImage={uploadingImage}

@@ -8,6 +8,13 @@ export const categoryType = defineType({
   icon: TagIcon,
   fields: [
     defineField({
+      name: 'affiliateStore',
+      title: 'Tienda / Restaurante',
+      type: 'reference',
+      to: [{type: 'affiliateStore'}],
+      description: 'Tienda propietaria de esta categoría.',
+    }),
+    defineField({
       name: 'title',
       type: 'string',
     }),

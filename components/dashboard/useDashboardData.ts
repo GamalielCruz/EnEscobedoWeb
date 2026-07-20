@@ -203,6 +203,26 @@ export function useDashboardData() {
     setAvailableCategories(data.categories || []);
   }, [selectedStoreId]);
 
+  const createCategory = React.useCallback(async (title: string) => {
+    if (!selectedStoreId) return null;
+    const response = await fetch("/api/dashboard/categories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storeId: selectedStoreId, title }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.category) {
+      alert(data.error || "No se pudo crear la categoría");
+      return null;
+    }
+    setAvailableCategories((current) =>
+      current.some((category) => category._id === data.category._id)
+        ? current
+        : [...current, data.category].sort((a, b) => a.title.localeCompare(b.title, "es"))
+    );
+    return data.category as CategoryOption;
+  }, [selectedStoreId]);
+
   const refreshStoreConfig = React.useCallback(async () => {
     if (!selectedStoreId) {
       setStoreConfig(null);
@@ -476,6 +496,7 @@ export function useDashboardData() {
     claimStore,
     refreshProducts: () => refreshProducts(true),
     loadCategories,
+    createCategory,
     saveStoreConfig,
     updateOrderStatus,
     uploadProductImage,

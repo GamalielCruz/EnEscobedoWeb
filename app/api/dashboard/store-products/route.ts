@@ -4,6 +4,10 @@ import { revalidatePath } from "next/cache";
 import { client, writeClient } from "@/sanity/lib/client";
 
 const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
+const STORE_CATEGORY_IDS_QUERY = `*[_type == "category" && _id in $categoryIds &&
+  (affiliateStore._ref == $storeId ||
+    _id in *[_type == "product" && affiliateStore._ref == $storeId].categories[]._ref)
+]._id`;
 const PRODUCTS_QUERY = `*[_type == "product" && affiliateStore._ref == $storeId] | order(name asc) {
   _id,
   name,
@@ -20,6 +24,16 @@ const PRODUCTS_QUERY = `*[_type == "product" && affiliateStore._ref == $storeId]
   rejectionReason,
   affiliateStore->{ _id, name }
 }`;
+
+async function hasOnlyStoreCategories(storeId: string, categoryIds: string[]) {
+  const uniqueIds = [...new Set(categoryIds)];
+  if (uniqueIds.length === 0) return true;
+  const allowedIds = await writeClient.fetch<string[]>(STORE_CATEGORY_IDS_QUERY, {
+    storeId,
+    categoryIds: uniqueIds,
+  });
+  return allowedIds.length === uniqueIds.length;
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -81,6 +95,10 @@ export async function POST(request: NextRequest) {
     const ownsStore = ownedStores?.some((s) => s._id === storeId);
     if (!ownsStore) {
       return NextResponse.json({ error: "No tienes permiso para esta tienda" }, { status: 403 });
+    }
+
+    if (Array.isArray(categories) && !(await hasOnlyStoreCategories(storeId, categories))) {
+      return NextResponse.json({ error: "Una categoría no pertenece a esta tienda" }, { status: 400 });
     }
 
     const slugBase = name
@@ -191,6 +209,10 @@ export async function PATCH(request: NextRequest) {
     }
     if (existing.storeRef !== storeId) {
       return NextResponse.json({ error: "El producto no pertenece a esa tienda" }, { status: 403 });
+    }
+
+    if (Array.isArray(categories) && !(await hasOnlyStoreCategories(storeId, categories))) {
+      return NextResponse.json({ error: "Una categoría no pertenece a esta tienda" }, { status: 400 });
     }
 
     if (visibilityOnly) {

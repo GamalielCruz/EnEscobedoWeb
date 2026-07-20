@@ -51,6 +51,7 @@ export default function DashboardPage() {
     claimStore,
     refreshProducts,
     loadCategories,
+    createCategory,
     saveStoreConfig,
     updateOrderStatus,
     uploadProductImage,
@@ -172,6 +173,7 @@ export default function DashboardPage() {
           refreshing={refreshingProducts}
           availableCategories={availableCategories}
           loadCategories={loadCategories}
+          onCreateCategory={createCategory}
           onRefresh={refreshProducts}
           onSubmitProduct={submitProduct}
           onUpdateAvailability={updateProductAvailability}

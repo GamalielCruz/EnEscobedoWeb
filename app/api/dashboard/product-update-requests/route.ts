@@ -8,6 +8,10 @@ const PRODUCT_STORE_QUERY = `*[_type == "product" && _id == $productId][0]{
   _id,
   "storeId": affiliateStore._ref
 }`;
+const STORE_CATEGORY_IDS_QUERY = `*[_type == "category" && _id in $categoryIds &&
+  (affiliateStore._ref == $storeId ||
+    _id in *[_type == "product" && affiliateStore._ref == $storeId].categories[]._ref)
+]._id`;
 
 export async function GET(request: NextRequest) {
   const requestId = crypto.randomUUID();
@@ -97,6 +101,17 @@ export async function POST(request: NextRequest) {
     const ownsStore = ownedStores?.some((store) => store._id === product.storeId);
     if (!ownsStore) {
       return NextResponse.json({ error: "No tienes permiso para este producto", requestId }, { status: 403 });
+    }
+
+    if (Array.isArray(changes.categories)) {
+      const categoryIds = [...new Set(changes.categories.map((category: { _ref?: string }) => category?._ref).filter(Boolean))];
+      const allowedIds = await writeClient.fetch<string[]>(STORE_CATEGORY_IDS_QUERY, {
+        storeId: product.storeId,
+        categoryIds,
+      });
+      if (categoryIds.length !== changes.categories.length || allowedIds.length !== categoryIds.length) {
+        return NextResponse.json({ error: "Una categoría no pertenece a esta tienda", requestId }, { status: 400 });
+      }
     }
 
     console.log("[product-update-requests POST] Creating request for product:", productId);
