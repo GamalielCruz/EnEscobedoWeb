@@ -25,6 +25,7 @@ import DeliveryZonesAdmin from "@/components/DeliveryZonesAdmin";
 
 type PendingProduct = {
   _id: string;
+  source?: "request" | "product";
   product?: { _id: string; name?: string; affiliateStore?: { _id: string; name: string } } | null;
   submittedBy?: string;
   submittedAt?: string;
@@ -83,20 +84,34 @@ export default function PendingProductsPage() {
         "Expires": "0",
       };
 
-      const [productsRes, storesRes] = await Promise.all([
+      const [updatesRes, productsRes, storesRes] = await Promise.all([
         fetch(`/api/dashboard/product-update-requests?t=${timestamp}`, { cache: "no-store", headers }),
+        fetch(`/api/dashboard/pending-products?t=${timestamp}`, { cache: "no-store", headers }),
         fetch(`/api/dashboard/store-update-requests?t=${timestamp}`, { cache: "no-store", headers })
       ]);
 
-      if (productsRes.status === 401 || storesRes.status === 401) {
+      if (updatesRes.status === 401 || productsRes.status === 401 || storesRes.status === 401) {
         throw new Error("Sesion expirada");
       }
 
+      const updatesData = await updatesRes.json();
       const productsData = await productsRes.json();
       const storesData = await storesRes.json();
 
-      if (productsData.success) {
-        setProductItems(productsData.items ?? []);
+      if (updatesData.success && productsData.success) {
+        const newProducts = (productsData.items ?? []).map((product: any) => ({
+          _id: product._id,
+          source: "product" as const,
+          product: { _id: product._id, name: product.name, affiliateStore: product.affiliateStore },
+          submittedBy: product.submittedBy,
+          submittedAt: product.submittedAt,
+          status: "pending" as const,
+          changes: product.pendingChanges ?? product,
+        }));
+        setProductItems([
+          ...(updatesData.items ?? []).map((item: PendingProduct) => ({ ...item, source: "request" as const })),
+          ...newProducts,
+        ].sort((a, b) => String(b.submittedAt ?? "").localeCompare(String(a.submittedAt ?? ""))));
       }
       if (storesData.success) {
         setStoreItems(storesData.items ?? []);
@@ -110,8 +125,9 @@ export default function PendingProductsPage() {
 
   const handleApprove = async (id: string, type: "product" | "store") => {
     setApprovingId(id);
+    const product = productItems.find((item) => item._id === id);
     const endpoint = type === "product" 
-      ? `/api/dashboard/product-update-requests/${id}/approve`
+      ? `/api/dashboard/${product?.source === "product" ? "pending-products" : "product-update-requests"}/${id}/approve`
       : `/api/dashboard/store-update-requests/${id}/approve`;
 
     try {
@@ -157,8 +173,9 @@ export default function PendingProductsPage() {
     setRejectingId(selectedRejectId);
     try {
       const isProduct = productItems.some(i => i._id === selectedRejectId);
+      const product = productItems.find((item) => item._id === selectedRejectId);
       const endpoint = isProduct 
-        ? `/api/dashboard/product-update-requests/${selectedRejectId}/reject`
+        ? `/api/dashboard/${product?.source === "product" ? "pending-products" : "product-update-requests"}/${selectedRejectId}/reject`
         : `/api/dashboard/store-update-requests/${selectedRejectId}/reject`;
 
       const res = await fetch(endpoint, {

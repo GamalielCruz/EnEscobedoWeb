@@ -2,6 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { writeClient } from "@/sanity/lib/client";
+import { isAdminUser } from "@/lib/admin";
 
 const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
 const ALLOWED_CHANGE_FIELDS = new Set([
@@ -35,11 +36,12 @@ export async function GET(request: NextRequest) {
             allowedStatuses.includes(status as (typeof allowedStatuses)[number])
           )
       : ["pending"];
+    const isAdmin = isAdminUser(userId);
     const ownedStores = await writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
       userId,
     });
     const ownedStoreIds = ownedStores?.map((store) => store._id) ?? [];
-    if (storeId && !ownedStoreIds.includes(storeId)) {
+    if (storeId && !isAdmin && !ownedStoreIds.includes(storeId)) {
       return NextResponse.json({ error: "No tienes permiso para esta tienda", requestId }, { status: 403 });
     }
     const statusFilter =
@@ -62,7 +64,7 @@ export async function GET(request: NextRequest) {
       } | order(submittedAt desc)`;
       params = { storeId };
     } else {
-      query = `*[_type == "storeUpdateRequest" && store._ref in $ownedStoreIds && ${statusFilter}]{ 
+      query = `*[_type == "storeUpdateRequest" && ${isAdmin ? "" : "store._ref in $ownedStoreIds && "}${statusFilter}]{
         _id, 
         store->{_id, name}, 
         changes, 
@@ -71,7 +73,7 @@ export async function GET(request: NextRequest) {
         status,
         rejectionReason
       } | order(submittedAt desc)`;
-      params = { ownedStoreIds };
+      params = isAdmin ? {} : { ownedStoreIds };
     }
     
     const items = await writeClient.fetch(query, params);

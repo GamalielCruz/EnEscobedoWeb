@@ -197,11 +197,11 @@ export function useDashboardData() {
   );
 
   const loadCategories = React.useCallback(async () => {
-    if (availableCategories.length > 0) return;
-    const response = await fetch("/api/dashboard/categories", { cache: "no-store" });
+    if (!selectedStoreId) return;
+    const response = await fetch(`/api/dashboard/categories?storeId=${selectedStoreId}`, { cache: "no-store" });
     const data = await response.json();
     setAvailableCategories(data.categories || []);
-  }, [availableCategories.length]);
+  }, [selectedStoreId]);
 
   const refreshStoreConfig = React.useCallback(async () => {
     if (!selectedStoreId) {

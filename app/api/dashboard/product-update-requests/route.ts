@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { client, writeClient } from "@/sanity/lib/client";
+import { writeClient } from "@/sanity/lib/client";
+import { isAdminUser } from "@/lib/admin";
 
 const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
 const PRODUCT_STORE_QUERY = `*[_type == "product" && _id == $productId][0]{
@@ -31,11 +32,12 @@ export async function GET(request: NextRequest) {
         ? ["pending", "rejected"]
         : ["pending"];
 
+    const isAdmin = isAdminUser(userId);
     const ownedStores = await writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
       userId,
     });
     const ownedStoreIds = ownedStores?.map((store) => store._id) ?? [];
-    if (storeId && !ownedStoreIds.includes(storeId)) {
+    if (storeId && !isAdmin && !ownedStoreIds.includes(storeId)) {
       return NextResponse.json({ error: "No tienes permiso para esta tienda", requestId }, { status: 403 });
     }
 
@@ -45,7 +47,7 @@ export async function GET(request: NextRequest) {
         : `status in [${requestedStatuses.map((status) => `'${status}'`).join(", ")}]`;
     const storeFilter = storeId
       ? ` && product->affiliateStore._ref == $storeId`
-      : ` && product->affiliateStore._ref in $ownedStoreIds`;
+      : isAdmin ? "" : ` && product->affiliateStore._ref in $ownedStoreIds`;
     const query = `*[_type == "productUpdateRequest" && ${statusFilter}${storeFilter}]{
       _id,
       product->{_id, name, affiliateStore->{_id, name}},
@@ -56,7 +58,7 @@ export async function GET(request: NextRequest) {
       rejectionReason
     } | order(submittedAt desc)`;
     console.log("[product-update-requests GET] Fetching with query:", query);
-    const items = await writeClient.fetch(query, storeId ? { storeId } : { ownedStoreIds });
+    const items = await writeClient.fetch(query, storeId ? { storeId } : isAdmin ? {} : { ownedStoreIds });
     console.log("[product-update-requests GET] Found items:", items.length);
     return NextResponse.json({ success: true, items: items ?? [], requestId }, {
       headers: {

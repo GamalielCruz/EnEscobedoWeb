@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { client, writeClient } from "@/sanity/lib/client";
+import { writeClient } from "@/sanity/lib/client";
 import { isAdminUser } from "@/lib/admin";
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -13,7 +13,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const productId = id;
 
     // Fetch product and pendingChanges
-    const prod = await client.fetch(`*[_type == "product" && _id == $id][0]`, { id: productId });
+    const prod = await writeClient.fetch(`*[_type == "product" && _id == $id][0]`, { id: productId });
     if (!prod) return NextResponse.json({ error: "Producto no encontrado" }, { status: 404 });
 
     // Apply pendingChanges if present, else just mark approved
