@@ -205,6 +205,12 @@ export function getDeliveryPricingConfigId(storeId?: string | null) {
   return storeId ? `deliveryPricingConfig.${storeId}` : "deliveryPricingConfig.main";
 }
 
+export function parseOptionalPrice(value: string) {
+  if (value.trim() === "") return null;
+  const price = Number(value);
+  return Number.isFinite(price) && price >= 0 ? price : null;
+}
+
 export function normalizeDeliveryConfig(config?: Partial<DeliveryPricingConfig> | null): DeliveryPricingConfig {
   return {
     zones: Array.isArray(config?.zones) ? config.zones : DEFAULT_DELIVERY_CONFIG.zones,

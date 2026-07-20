@@ -21,6 +21,7 @@ import {
   DeliveryPricingConfig,
   DeliveryZone,
   LatLng,
+  parseOptionalPrice,
   PEDRO_ESCOBEDO_DELIVERY_TEMPLATE,
   ScheduleRule,
   validateZoneOverlaps,
@@ -72,6 +73,7 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter, si
   const [previewTime, setPreviewTime] = useState(defaultPreviewTime);
   const [jsonDraft, setJsonDraft] = useState("");
   const [jsonError, setJsonError] = useState("");
+  const [basePriceDraft, setBasePriceDraft] = useState("");
 
   useEffect(() => {
     fetch(endpoint, { cache: "no-store" })
@@ -96,6 +98,10 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter, si
     () => config.zones.find((zone) => zone.id === selectedZoneId) ?? config.zones[0],
     [config.zones, selectedZoneId]
   );
+
+  useEffect(() => {
+    setBasePriceDraft(selectedZone ? String(selectedZone.basePrice) : "");
+  }, [selectedZone]);
 
   const quote = useMemo(
     () =>
@@ -453,8 +459,16 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter, si
                     <Label>{simple ? "Costo de envío" : "Precio base"}</Label>
                     <Input
                       type="number"
-                      value={selectedZone.basePrice}
-                      onChange={(event) => updateZone(selectedZone.id, { basePrice: Number(event.target.value) })}
+                      min="0"
+                      value={basePriceDraft}
+                      onChange={(event) => {
+                        setBasePriceDraft(event.target.value);
+                        const price = parseOptionalPrice(event.target.value);
+                        if (price !== null) updateZone(selectedZone.id, { basePrice: price });
+                      }}
+                      onBlur={() => {
+                        if (basePriceDraft === "") setBasePriceDraft(String(selectedZone.basePrice));
+                      }}
                     />
                   </div>
                   {!simple && <div>
