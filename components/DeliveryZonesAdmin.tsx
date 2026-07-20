@@ -21,6 +21,7 @@ import {
   DeliveryPricingConfig,
   DeliveryZone,
   LatLng,
+  PEDRO_ESCOBEDO_DELIVERY_TEMPLATE,
   ScheduleRule,
   validateZoneOverlaps,
 } from "@/lib/delivery-zones";
@@ -49,9 +50,10 @@ const colors = ["#f97316", "#0ea5e9", "#22c55e", "#a855f7", "#ef4444", "#14b8a6"
 type DeliveryZonesAdminProps = {
   storeId?: string;
   center?: LatLng;
+  simple?: boolean;
 };
 
-export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: DeliveryZonesAdminProps) {
+export default function DeliveryZonesAdmin({ storeId, center = defaultCenter, simple = false }: DeliveryZonesAdminProps) {
   const endpoint = storeId
     ? `/api/dashboard/delivery-pricing?storeId=${encodeURIComponent(storeId)}`
     : "/api/dashboard/delivery-pricing";
@@ -79,13 +81,16 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
           setConfig(data.config);
           setJsonDraft(JSON.stringify(data.config, null, 2));
           setSelectedZoneId(data.config.zones?.[0]?.id ?? "");
+          if (simple && data.config.zones?.[0]?.coordinates?.[0]) {
+            setPreviewPoint(data.config.zones[0].coordinates[0]);
+          }
         } else {
           setMessage(data.error ?? "No se pudo cargar la configuracion.");
         }
       })
       .catch(() => setMessage("No se pudo cargar la configuracion."))
       .finally(() => setLoading(false));
-  }, [endpoint]);
+  }, [endpoint, simple]);
 
   const selectedZone = useMemo(
     () => config.zones.find((zone) => zone.id === selectedZoneId) ?? config.zones[0],
@@ -191,6 +196,14 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
     }
   };
 
+  const applyPedroEscobedoTemplate = () => {
+    const template = structuredClone(PEDRO_ESCOBEDO_DELIVERY_TEMPLATE);
+    updateConfig(template);
+    setSelectedZoneId(template.zones[0].id);
+    setPreviewPoint(template.zones[1].coordinates[0]);
+    setMessage("Plantilla aplicada. Revisa los costos y presiona Guardar cambios.");
+  };
+
   const saveConfig = async () => {
     setSaving(true);
     setMessage("");
@@ -233,11 +246,13 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-2xl font-bold text-gray-900">{storeId ? "Mis zonas de entrega" : "Envios por zonas"}</h2>
-          <p className="text-sm text-gray-600">Poligonos, costos, horarios y vista previa del precio.</p>
+          <p className="text-sm text-gray-600">
+            {simple ? "Elige una plantilla, ajusta tus costos y guarda." : "Poligonos, costos, horarios y vista previa del precio."}
+          </p>
         </div>
         <Button onClick={saveConfig} disabled={saving} className="bg-[#ff8800] hover:bg-[#ff8800]/90 text-gray-900">
           {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-          Guardar
+          {simple ? "Guardar cambios" : "Guardar"}
         </Button>
       </div>
 
@@ -247,7 +262,25 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
         </div>
       )}
 
-      {overlapWarnings.length > 0 && (
+      {simple && (
+        <Card className="border-[#ff8800]/30 bg-orange-50/50">
+          <CardContent className="flex flex-col gap-4 py-5 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-orange-700">Plantilla recomendada</p>
+              <h3 className="mt-1 text-lg font-bold text-gray-900">Pedro Escobedo</h3>
+              <p className="mt-1 text-sm text-gray-600">
+                Centro $30 · Chamizal $45 · El Sauz $70 · Lira $80
+              </p>
+              <p className="mt-1 text-xs text-gray-500">Fuera de estas zonas no se aceptarán entregas.</p>
+            </div>
+            <Button type="button" onClick={applyPedroEscobedoTemplate} className="bg-[#ff8800] text-gray-900 hover:bg-[#ff8800]/90">
+              Usar esta plantilla
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {!simple && overlapWarnings.length > 0 && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           <div className="flex items-start gap-2">
             <AlertTriangle className="mt-0.5 h-4 w-4" />
@@ -267,7 +300,9 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
         <Card>
           <CardHeader>
             <CardTitle>Mapa de zonas</CardTitle>
-            <CardDescription>Arrastra los puntos del poligono o haz clic para probar una ubicacion.</CardDescription>
+            <CardDescription>
+              {simple ? "Selecciona una zona para verla. Puedes ajustar su forma arrastrando los puntos." : "Arrastra los puntos del poligono o haz clic para probar una ubicacion."}
+            </CardDescription>
           </CardHeader>
           <CardContent>
             {!apiKey ? (
@@ -330,11 +365,11 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
 
         <Card>
           <CardHeader>
-            <CardTitle>Preview</CardTitle>
-            <CardDescription>Formula: precio zona x demanda x horario.</CardDescription>
+            <CardTitle>{simple ? "Probar una ubicación" : "Preview"}</CardTitle>
+            <CardDescription>{simple ? "Haz clic en el mapa para confirmar cuánto pagaría el cliente." : "Formula: precio zona x demanda x horario."}</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
+            {!simple && <div className="grid grid-cols-2 gap-3">
               <div>
                 <Label>Latitud</Label>
                 <Input
@@ -351,11 +386,11 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
                   onChange={(event) => setPreviewPoint({ ...previewPoint, lng: Number(event.target.value) })}
                 />
               </div>
-            </div>
-            <div>
+            </div>}
+            {!simple && <div>
               <Label>Fecha y hora</Label>
               <Input type="datetime-local" value={previewTime} onChange={(event) => setPreviewTime(event.target.value)} />
-            </div>
+            </div>}
             <div className="rounded-md border bg-gray-50 p-4">
               <div className="flex items-center justify-between">
                 <span className="text-sm text-gray-600">Costo calculado</span>
@@ -367,11 +402,11 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
               </div>
               <div className="mt-3 space-y-1 text-sm text-gray-700">
                 <p>Zona: {quote.zone?.name ?? "Fuera de zona"}</p>
-                <p>Demanda: x{quote.demandMultiplier}</p>
-                <p>Horario: {quote.scheduleRule?.name ?? "Sin regla"} x{quote.scheduleMultiplier}</p>
+                {!simple && <p>Demanda: x{quote.demandMultiplier}</p>}
+                {!simple && <p>Horario: {quote.scheduleRule?.name ?? "Sin regla"} x{quote.scheduleMultiplier}</p>}
                 {quote.reason && <p className="text-amber-700">{quote.reason}</p>}
               </div>
-              {config.debug && (
+              {!simple && config.debug && (
                 <pre className="mt-3 max-h-32 overflow-auto rounded bg-gray-900 p-3 text-xs text-gray-100">
                   {quote.debug.join("\n")}
                 </pre>
@@ -381,16 +416,16 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
         </Card>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[1fr_1fr]">
+      <div className={simple ? "grid gap-6" : "grid gap-6 xl:grid-cols-[1fr_1fr]"}>
         <Card>
           <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <CardTitle>Zonas</CardTitle>
-              <CardDescription>Precio base y coordenadas por poligono.</CardDescription>
+              <CardTitle>{simple ? "Tus zonas y costos" : "Zonas"}</CardTitle>
+              <CardDescription>{simple ? "Selecciona una zona y cambia únicamente lo que necesites." : "Precio base y coordenadas por poligono."}</CardDescription>
             </div>
             <Button variant="outline" size="sm" onClick={addZone}>
               <Plus className="mr-2 h-4 w-4" />
-              Zona
+              {simple ? "Agregar zona" : "Zona"}
             </Button>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -415,19 +450,19 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
                     <Input value={selectedZone.name} onChange={(event) => updateZone(selectedZone.id, { name: event.target.value })} />
                   </div>
                   <div>
-                    <Label>Precio base</Label>
+                    <Label>{simple ? "Costo de envío" : "Precio base"}</Label>
                     <Input
                       type="number"
                       value={selectedZone.basePrice}
                       onChange={(event) => updateZone(selectedZone.id, { basePrice: Number(event.target.value) })}
                     />
                   </div>
-                  <div>
+                  {!simple && <div>
                     <Label>Color</Label>
                     <Input value={selectedZone.color ?? ""} onChange={(event) => updateZone(selectedZone.id, { color: event.target.value })} />
-                  </div>
+                  </div>}
                   <div>
-                    <Label>Activa</Label>
+                    <Label>{simple ? "Aceptar pedidos aquí" : "Activa"}</Label>
                     <Select
                       value={selectedZone.active === false ? "false" : "true"}
                       onValueChange={(value) => updateZone(selectedZone.id, { active: value === "true" })}
@@ -442,7 +477,7 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
                     </Select>
                   </div>
                 </div>
-                <div>
+                {!simple && <div>
                   <Label>Coordenadas</Label>
                   <Textarea
                     className="min-h-40 font-mono text-xs"
@@ -456,7 +491,7 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
                       }
                     }}
                   />
-                </div>
+                </div>}
                 <Button variant="outline" size="sm" onClick={() => deleteZone(selectedZone.id)}>
                   <Trash2 className="mr-2 h-4 w-4" />
                   Eliminar zona
@@ -466,7 +501,7 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
           </CardContent>
         </Card>
 
-        <Card>
+        {!simple && <Card>
           <CardHeader>
             <CardTitle>Variables globales</CardTitle>
             <CardDescription>Demanda, horarios y reglas fuera de zona.</CardDescription>
@@ -576,10 +611,10 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
               ))}
             </div>
           </CardContent>
-        </Card>
+        </Card>}
       </div>
 
-      <Card>
+      {!simple && <Card>
         <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <CardTitle>JSON de configuracion</CardTitle>
@@ -602,7 +637,7 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter }: 
             <span>{storeId ? "Esta configuracion solo aplica a tu restaurante." : "Configuracion global de entregas de El Menu."}</span>
           </div>
         </CardContent>
-      </Card>
+      </Card>}
     </div>
   );
 }

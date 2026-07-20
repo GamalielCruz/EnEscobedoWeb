@@ -427,6 +427,7 @@ export function DashboardStoreSection({
           <DashboardPanelBody className="py-5">
             <DeliveryZonesAdmin
               storeId={storeConfig._id}
+              simple
               center={
                 typeof storeConfig.coordinates?.latitude === "number" &&
                 typeof storeConfig.coordinates?.longitude === "number"
