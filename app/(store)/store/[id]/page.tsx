@@ -80,7 +80,7 @@ export default async function StorePage({
   if (!store) return notFound();
 
   // Obtener productos de esta tienda
-  const products = await getProductsByStore(id);
+  const { products, categoryProductOrders } = await getProductsByStore(id);
   const highlightedProductSlug = resolvedSearchParams.product?.trim() || "";
 
 
@@ -188,6 +188,7 @@ export default async function StorePage({
         <StoreProductsClient
           products={products as any}
           categories={categories}
+          categoryProductOrders={categoryProductOrders}
           highlightedProductSlug={highlightedProductSlug}
         />
       </div>

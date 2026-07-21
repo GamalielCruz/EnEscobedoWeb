@@ -86,6 +86,37 @@ export const affiliateStoreType = defineType({
       description: "Categorías para organizar los productos (ej: Populares, Clásicos, Bebidas)",
     }),
     defineField({
+      name: "productOrder",
+      title: "Orden de productos",
+      type: "array",
+      hidden: true,
+      of: [{ type: "reference", to: [{ type: "product" }] }],
+    }),
+    defineField({
+      name: "categoryProductOrders",
+      title: "Orden de productos por categor?a",
+      type: "array",
+      hidden: true,
+      of: [
+        defineField({
+          name: "categoryProductOrder",
+          type: "object",
+          fields: [
+            defineField({
+              name: "category",
+              type: "reference",
+              to: [{ type: "category" }],
+            }),
+            defineField({
+              name: "products",
+              type: "array",
+              of: [{ type: "reference", to: [{ type: "product" }] }],
+            }),
+          ],
+        }),
+      ],
+    }),
+    defineField({
       name: "address",
       title: "Dirección",
       type: "object",

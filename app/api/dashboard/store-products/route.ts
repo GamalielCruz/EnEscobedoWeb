@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
-import { client, writeClient } from "@/sanity/lib/client";
+import { writeClient } from "@/sanity/lib/client";
 
 const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
 const STORE_CATEGORY_IDS_QUERY = `*[_type == "category" && _id in $categoryIds &&
@@ -24,6 +24,17 @@ const PRODUCTS_QUERY = `*[_type == "product" && affiliateStore._ref == $storeId]
   rejectionReason,
   affiliateStore->{ _id, name }
 }`;
+
+type CategoryProductOrder = {
+  categoryId?: string;
+  productIds?: string[];
+};
+
+type StoredCategoryProductOrder = {
+  category?: { _ref?: string };
+  products?: Array<{ _ref?: string }>;
+  [key: string]: unknown;
+};
 
 async function hasOnlyStoreCategories(storeId: string, categoryIds: string[]) {
   const uniqueIds = [...new Set(categoryIds)];
@@ -57,9 +68,32 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "No tienes permiso para esta tienda" }, { status: 403 });
     }
 
-    const products = await writeClient.fetch(PRODUCTS_QUERY, { storeId });
+    const [products, storedOrdering] = await Promise.all([
+      writeClient.fetch(PRODUCTS_QUERY, { storeId }),
+      writeClient.fetch<{
+        all?: string[];
+        categories?: Array<{ categoryId?: string; productIds?: string[] }>;
+      }>(
+        `*[_type == "affiliateStore" && _id == $storeId][0]{
+          "all": productOrder[]._ref,
+          "categories": categoryProductOrders[]{
+            "categoryId": category._ref,
+            "productIds": products[]._ref
+          }
+        }`,
+        { storeId }
+      ),
+    ]);
+    const ordering = {
+      all: storedOrdering?.all ?? [],
+      categories: Object.fromEntries(
+        (storedOrdering?.categories ?? [])
+          .filter((entry) => entry.categoryId)
+          .map((entry) => [entry.categoryId as string, entry.productIds ?? []])
+      ),
+    };
     console.log(`[store-products GET] Fetched ${products?.length ?? 0} products for store ${storeId}`);
-    return NextResponse.json({ success: true, products: products ?? [] }, {
+    return NextResponse.json({ success: true, products: products ?? [], ordering }, {
       headers: {
         "Cache-Control": "no-cache, no-store, must-revalidate",
         "Pragma": "no-cache",
@@ -185,13 +219,13 @@ export async function PATCH(request: NextRequest) {
 
     const body = await request.json();
     console.log('[dashboard/store-products PATCH] incoming body:', JSON.stringify(body));
-    const { productId, name, price, description, storeId, stock, categories, optionGroups, image, visibilityOnly, isVisible } = body;
+    const { productId, name, price, description, storeId, stock, categories, optionGroups, image, visibilityOnly, isVisible, productOrder } = body;
 
-    if (!productId || !storeId) {
-      return NextResponse.json({ error: "productId y storeId son requeridos" }, { status: 400 });
+    if (!storeId) {
+      return NextResponse.json({ error: "storeId es requerido" }, { status: 400 });
     }
 
-    const ownedStores = await client.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
+    const ownedStores = await writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
       userId,
     });
     const ownsStore = ownedStores?.some((s) => s._id === storeId);
@@ -199,8 +233,75 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "No tienes permiso para esta tienda" }, { status: 403 });
     }
 
+    if (productOrder) {
+      const order = productOrder as CategoryProductOrder;
+      const categoryId = order.categoryId == null ? null : String(order.categoryId).trim();
+      const productIds = order.productIds;
+
+      if (!Array.isArray(productIds) || productIds.some((id) => typeof id !== "string" || !id)) {
+        return NextResponse.json({ error: "Orden de productos invalido" }, { status: 400 });
+      }
+      if (new Set(productIds).size !== productIds.length) {
+        return NextResponse.json({ error: "El orden contiene productos repetidos" }, { status: 400 });
+      }
+      if (order.categoryId != null && !categoryId) {
+        return NextResponse.json({ error: "Categoria invalida" }, { status: 400 });
+      }
+      if (categoryId && !(await hasOnlyStoreCategories(storeId, [categoryId]))) {
+        return NextResponse.json({ error: "La categoria no pertenece a esta tienda" }, { status: 400 });
+      }
+
+      const validProductIds = await writeClient.fetch<string[]>(
+        `*[_type == "product" && affiliateStore._ref == $storeId && _id in $productIds &&
+          ($categoryId == null || $categoryId in categories[]._ref)]._id`,
+        { storeId, productIds, categoryId }
+      );
+      if (validProductIds.length !== productIds.length) {
+        return NextResponse.json({ error: "Un producto no pertenece a esta tienda o categoria" }, { status: 400 });
+      }
+
+      const references = productIds.map((id, index) => ({
+        _type: "reference",
+        _ref: id,
+        _key: "product-" + index,
+      }));
+
+      if (!categoryId) {
+        await writeClient.patch(storeId).set({ productOrder: references }).commit();
+      } else {
+        const current =
+          (await writeClient.fetch<StoredCategoryProductOrder[] | null>(
+            `*[_type == "affiliateStore" && _id == $storeId][0].categoryProductOrders`,
+            { storeId }
+          )) ?? [];
+        await writeClient
+          .patch(storeId)
+          .set({
+            categoryProductOrders: [
+              ...current.filter((entry) => entry?.category?._ref !== categoryId),
+              {
+                _type: "categoryProductOrder",
+                _key: "order-" + Date.now(),
+                category: { _type: "reference", _ref: categoryId },
+                products: references,
+              },
+            ],
+          })
+          .commit();
+      }
+
+      revalidatePath("/");
+      revalidatePath("/dashboard");
+      revalidatePath(`/store/${storeId}`);
+      return NextResponse.json({ success: true, ordering: { categoryId, productIds } });
+    }
+
+    if (!productId) {
+      return NextResponse.json({ error: "productId es requerido" }, { status: 400 });
+    }
+
     // Verificar que el producto pertenece a la tienda
-    const existing = await client.fetch(
+    const existing = await writeClient.fetch(
       `*[_type == "product" && _id == $productId]{ _id, approvalStatus, stock, "storeRef": affiliateStore._ref }[0]`,
       { productId }
     );

@@ -62,6 +62,11 @@ export type Product = {
   rejectionReason?: string;
 };
 
+export type ProductOrdering = {
+  all: string[];
+  categories: Record<string, string[]>;
+};
+
 export type ProductFormState = {
   name: string;
   price: string;

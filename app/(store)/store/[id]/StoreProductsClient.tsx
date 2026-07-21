@@ -8,6 +8,7 @@ import { CategoryFilter } from "@/components/ui/category-filter";
 import ProductSidebar from "@/components/ProductSidebar";
 import ProductCounter from "@/components/ProductCounter";
 import MiniBasket from "@/components/MiniBasket";
+import { orderProducts } from "@/lib/product-order";
 
 interface Category {
   _id: string;
@@ -57,12 +58,14 @@ interface Product {
 interface StoreProductsClientProps {
   products: Product[];
   categories: Category[];
+  categoryProductOrders: Record<string, string[]>;
   highlightedProductSlug?: string;
 }
 
 export function StoreProductsClient({
   products,
   categories,
+  categoryProductOrders,
   highlightedProductSlug,
 }: StoreProductsClientProps) {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -80,8 +83,11 @@ export function StoreProductsClient({
 
   // Filtrar productos según la categoría seleccionada
   const filteredProducts = selectedCategory
-    ? products.filter((product) =>
-        product.categories?.some((cat) => cat._id === selectedCategory)
+    ? orderProducts(
+        products.filter((product) =>
+          product.categories?.some((cat) => cat._id === selectedCategory)
+        ),
+        categoryProductOrders[selectedCategory] ?? []
       )
     : products;
 
