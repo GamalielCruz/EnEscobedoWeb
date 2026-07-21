@@ -2,6 +2,7 @@
 
 import * as React from "react";
 
+import DeliveryZonesAdmin from "@/components/DeliveryZonesAdmin";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
@@ -38,6 +39,9 @@ export function DashboardStoreSection({
     buildStoreSettingsDraft(storeConfig)
   );
   const [message, setMessage] = React.useState<string | null>(null);
+  const pendingOwnDeliveryRequest = storeRequests.some(
+    (request) => request.status === "pending" && typeof request.changes?.hasOwnDelivery === "boolean"
+  );
 
   React.useEffect(() => {
     setDraft(buildStoreSettingsDraft(storeConfig));
@@ -62,6 +66,11 @@ export function DashboardStoreSection({
 
     const success = await onSubmitChanges(changes);
     setMessage(success ? "Solicitud enviada correctamente." : "No se pudo enviar la solicitud.");
+  };
+
+  const requestOwnDelivery = async (enabled: boolean) => {
+    const success = await onSubmitChanges({ hasOwnDelivery: enabled });
+    setMessage(success ? "Solicitud de reparto enviada correctamente." : "No se pudo enviar la solicitud.");
   };
 
   return (
@@ -367,6 +376,38 @@ export function DashboardStoreSection({
               </div>
             </div>
 
+            <div className="rounded-xl border border-black/6 bg-[#fafafb] px-4 py-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="font-medium text-gray-900">
+                    {storeConfig?.hasOwnDelivery ? "Repartidores propios habilitados" : "¿Cuentas con repartidores propios?"}
+                  </p>
+                  <p className="mt-1 text-[13px] text-gray-600">
+                    {storeConfig?.hasOwnDelivery
+                      ? "El costo de envio corresponde a tu restaurante y se calcula con tus zonas."
+                      : "Solicita administrar tus propias zonas y costos de entrega."}
+                  </p>
+                  <p className="mt-1 text-[13px] text-gray-600">
+                    Comision de El Menu sobre productos: {storeConfig?.platformCommissionPercent != null
+                      ? `${storeConfig.platformCommissionPercent}%`
+                      : "segun convenio"}.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={submitting || pendingOwnDeliveryRequest}
+                  onClick={() => requestOwnDelivery(!storeConfig?.hasOwnDelivery)}
+                >
+                  {pendingOwnDeliveryRequest
+                    ? "Solicitud pendiente"
+                    : storeConfig?.hasOwnDelivery
+                      ? "Solicitar reparto de El Menu"
+                      : "Solicitar entregas propias"}
+                </Button>
+              </div>
+            </div>
+
             <div className="flex justify-end">
               <Button
                 type="button"
@@ -380,6 +421,23 @@ export function DashboardStoreSection({
           </DashboardPanelBody>
         </DashboardPanel>
       </div>
+
+      {storeConfig?.hasOwnDelivery ? (
+        <DashboardPanel>
+          <DashboardPanelBody className="py-5">
+            <DeliveryZonesAdmin
+              storeId={storeConfig._id}
+              simple
+              center={
+                typeof storeConfig.coordinates?.latitude === "number" &&
+                typeof storeConfig.coordinates?.longitude === "number"
+                  ? { lat: storeConfig.coordinates.latitude, lng: storeConfig.coordinates.longitude }
+                  : undefined
+              }
+            />
+          </DashboardPanelBody>
+        </DashboardPanel>
+      ) : null}
 
       <DashboardPanel>
         <DashboardPanelHeader>

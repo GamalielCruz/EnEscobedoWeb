@@ -13,7 +13,9 @@
     "sanity:build": "npx sanity@latest build",
     "sanity:deploy": "npx sanity@latest deploy",
     "migrate:products": "npx sanity exec scripts/migrate-products.js --with-user-token",
-    "orders:mark-delivered": "node scripts/mark-all-orders-delivered.mjs"
+    "orders:mark-delivered": "node scripts/mark-all-orders-delivered.mjs",
+    "legal:check": "node scripts/check-legal-config.mjs",
+    "migrate:v1-orders": "node scripts/migrate-v1-orders.mjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.97",

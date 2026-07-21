@@ -86,6 +86,37 @@ export const affiliateStoreType = defineType({
       description: "Categorías para organizar los productos (ej: Populares, Clásicos, Bebidas)",
     }),
     defineField({
+      name: "productOrder",
+      title: "Orden de productos",
+      type: "array",
+      hidden: true,
+      of: [{ type: "reference", to: [{ type: "product" }] }],
+    }),
+    defineField({
+      name: "categoryProductOrders",
+      title: "Orden de productos por categor?a",
+      type: "array",
+      hidden: true,
+      of: [
+        defineField({
+          name: "categoryProductOrder",
+          type: "object",
+          fields: [
+            defineField({
+              name: "category",
+              type: "reference",
+              to: [{ type: "category" }],
+            }),
+            defineField({
+              name: "products",
+              type: "array",
+              of: [{ type: "reference", to: [{ type: "product" }] }],
+            }),
+          ],
+        }),
+      ],
+    }),
+    defineField({
       name: "address",
       title: "Dirección",
       type: "object",
@@ -254,11 +285,26 @@ export const affiliateStoreType = defineType({
       description: "Activalo cuando haya muchos pedidos y puedan presentarse demoras.",
     }),
     defineField({
+      name: "promotionalMessages",
+      title: "Frases para clientes",
+      type: "array",
+      of: [{ type: "string" }],
+      description: "Mensajes breves que rotan cada 5 segundos en la tarjeta del restaurante.",
+      validation: (Rule) => Rule.max(5).unique(),
+    }),
+    defineField({
       name: "hasOwnDelivery",
       title: "Tiene repartidores propios",
       type: "boolean",
       initialValue: false,
       description: "Indica si la tienda tiene repartidores propios",
+    }),
+    defineField({
+      name: "platformCommissionPercent",
+      title: "Comision de El Menu (%)",
+      type: "number",
+      description: "Porcentaje aplicado al subtotal de productos. Solo lo administra El Menu.",
+      validation: (Rule) => Rule.min(0).max(100),
     }),
     defineField({
       name: "capacity",

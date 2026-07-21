@@ -1,20 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { calculateDeliveryQuote, DEFAULT_DELIVERY_CONFIG, normalizeDeliveryConfig } from "@/lib/delivery-zones";
+import {
+  calculateDeliveryQuote,
+  DEFAULT_DELIVERY_CONFIG,
+  EMPTY_STORE_DELIVERY_CONFIG,
+  getDeliveryPricingConfigId,
+  normalizeDeliveryConfig,
+} from "@/lib/delivery-zones";
 import { writeClient } from "@/sanity/lib/client";
-
-const CONFIG_ID = "deliveryPricingConfig.main";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const lat = Number(body.lat ?? body.latitude);
     const lng = Number(body.lng ?? body.longitude);
+    const storeId = typeof body.storeId === "string" ? body.storeId : null;
 
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
       return NextResponse.json({ error: "Latitud y longitud son requeridas" }, { status: 400 });
     }
 
-    const config = await getConfig();
+    const config = await getConfig(storeId);
     const quote = calculateDeliveryQuote(config, {
       lat,
       lng,
@@ -28,7 +33,19 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function getConfig() {
-  const doc = await writeClient.fetch(`*[_type == "deliveryPricingConfig" && _id == $id][0]`, { id: CONFIG_ID });
-  return normalizeDeliveryConfig(doc ?? DEFAULT_DELIVERY_CONFIG);
+async function getConfig(storeId: string | null) {
+  const store = storeId
+    ? await writeClient.fetch<{ hasOwnDelivery?: boolean } | null>(
+        `*[_type == "affiliateStore" && _id == $storeId][0]{ hasOwnDelivery }`,
+        { storeId }
+      )
+    : null;
+  const usesOwnDelivery = store?.hasOwnDelivery === true;
+  const doc = await writeClient.fetch(
+    `*[_type == "deliveryPricingConfig" && _id == $id][0]`,
+    { id: getDeliveryPricingConfigId(usesOwnDelivery ? storeId : null) }
+  );
+  return normalizeDeliveryConfig(
+    doc ?? (usesOwnDelivery ? EMPTY_STORE_DELIVERY_CONFIG : DEFAULT_DELIVERY_CONFIG)
+  );
 }

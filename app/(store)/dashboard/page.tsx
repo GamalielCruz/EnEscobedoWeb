@@ -33,6 +33,7 @@ export default function DashboardPage() {
     savingStoreConfig,
     submittingStoreRequest,
     products,
+    productOrdering,
     productsLoading,
     refreshingProducts,
     availableCategories,
@@ -51,11 +52,13 @@ export default function DashboardPage() {
     claimStore,
     refreshProducts,
     loadCategories,
+    createCategory,
     saveStoreConfig,
     updateOrderStatus,
     uploadProductImage,
     submitProduct,
     updateProductAvailability,
+    saveProductOrder,
     submitStoreChanges,
     refreshActiveOrders,
     refreshTodayOrders,
@@ -166,15 +169,19 @@ export default function DashboardPage() {
 
       {section === "productos" ? (
         <DashboardProductsSection
+          key={selectedStoreId}
           products={products}
+          productOrdering={productOrdering}
           pendingChanges={pendingChanges}
           loading={productsLoading}
           refreshing={refreshingProducts}
           availableCategories={availableCategories}
           loadCategories={loadCategories}
+          onCreateCategory={createCategory}
           onRefresh={refreshProducts}
           onSubmitProduct={submitProduct}
           onUpdateAvailability={updateProductAvailability}
+          onSaveProductOrder={saveProductOrder}
           onImageUpload={uploadProductImage}
         />
       ) : null}

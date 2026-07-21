@@ -7,6 +7,7 @@ import { getStoreOperationalState } from "@/lib/storeOperationalState";
 import type {
   DashboardOrder,
   OrderQuickAction,
+  Product,
   ProductFormState,
   StoreConfig,
   StoreSettingsDraft,
@@ -56,10 +57,10 @@ export function buildAddressLabel(order: DashboardOrder) {
     .join(", ");
 }
 
-export function extractPlainTextFromBlocks(value: any) {
+export function extractPlainTextFromBlocks(value: unknown) {
   if (!Array.isArray(value)) return "";
   return value
-    .flatMap((block) => block?.children ?? [])
+    .flatMap((block: { children?: Array<{ text?: string }> }) => block.children ?? [])
     .map((child: { text?: string }) => child?.text ?? "")
     .join(" ")
     .trim();
@@ -77,13 +78,13 @@ export function createEmptyProductForm(): ProductFormState {
   };
 }
 
-export function productToFormState(product: any): ProductFormState {
+export function productToFormState(product: Product): ProductFormState {
   return {
     name: product?.name || "",
     price: String(product?.price ?? ""),
     description: extractPlainTextFromBlocks(product?.description),
     stock: product?.stock != null ? String(product.stock) : "",
-    image: product?.image ?? null,
+    image: product.image && "asset" in product.image ? product.image as ProductFormState["image"] : null,
     categories: Array.isArray(product?.categories)
       ? product.categories.map((category: { _id: string }) => category._id)
       : [],
@@ -122,10 +123,6 @@ export function getOrderQuickActions(order: DashboardOrder): OrderQuickAction[] 
     if (order.status === "processing") {
       actions.push({ label: "En camino", status: "shipped", variant: "primary" });
     }
-  }
-
-  if (order.status === "shipped") {
-    actions.push({ label: "Entregado", status: "delivered", variant: "primary" });
   }
 
   if (order.status === "ready_for_pickup") {

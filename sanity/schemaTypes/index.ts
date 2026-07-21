@@ -14,6 +14,7 @@ import { storeCategoryType } from './storeCategoryType';
 import { storeUpdateRequest } from './storeUpdateRequest';
 import { deliveryPricingConfigType } from './deliveryPricingConfigType';
 import { repartidorType } from './repartidorType';
+import { legalAcceptanceType } from './legalAcceptanceType';
 
 export const schema: { types: SchemaTypeDefinition[] } = {
   types: [
@@ -29,6 +30,7 @@ export const schema: { types: SchemaTypeDefinition[] } = {
     promoBannerType,
     affiliateStoreType, 
     repartidorType,
+    legalAcceptanceType,
     storeCategoryType,
     deliveryPricingConfigType
   ],

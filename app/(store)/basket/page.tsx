@@ -4,6 +4,7 @@ import type { Metadata } from "@/actions/createCheckoutSession";
 import Loader from "@/components/Loader";
 import { imageUrl } from "@/lib/imageUrl";
 import Image from "next/image";
+import Link from "next/link";
 import useBasketStore from "@/store/store";
 import { SignInButton, useAuth, useUser } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
@@ -91,6 +92,7 @@ function BasketPage() {
   const [cardPhoneError, setCardPhoneError] = useState("");
   const [editingPhone, setEditingPhone] = useState(false);
   const [deliveryNotes, setDeliveryNotes] = useState("");
+  const [legalAccepted, setLegalAccepted] = useState(false);
   const checkoutRef = useRef<any>(null);
   const stripeContainerRef = useRef<HTMLDivElement>(null);
 
@@ -401,6 +403,10 @@ function BasketPage() {
 
   const handleCheckout = async (overridePhone?: string) => {
     if (!isSignedIn) return;
+    if (!legalAccepted) {
+      setCardError("Acepta los documentos legales vigentes para continuar.");
+      return;
+    }
     if (selectedStore && !getStoreOperationalStateLegacy(selectedStore).effectiveIsOpen) {
       setCardPhoneError("La tienda seleccionada esta cerrada temporalmente.");
       return;
@@ -442,6 +448,7 @@ function BasketPage() {
         phone: `52${digitsOnly.slice(-10)}`,
         whatsappConsent: "true",
         deliveryNotes: deliveryNotes.trim() || undefined,
+        legalAccepted,
       };
 
       // Add delivery/pickup info if available
@@ -517,6 +524,10 @@ function BasketPage() {
 
     if (groupedItems.length === 0) {
       setCodError("Tu carrito está vacío");
+      return;
+    }
+    if (!legalAccepted) {
+      setCodError("Acepta los documentos legales vigentes para continuar.");
       return;
     }
 
@@ -602,6 +613,7 @@ function BasketPage() {
             phone: resolvedCodPhone,
             shippingAddress: normalizedAddress,
             deliveryNotes: deliveryNotes.trim() || undefined,
+            legalAccepted,
             storeInfo: {
               storeId: selectedStoreId,
               storeName: selectedStoreName,
@@ -647,6 +659,10 @@ function BasketPage() {
 
     if (groupedItems.length === 0) {
       setPickupError("Tu carrito está vacío");
+      return;
+    }
+    if (!legalAccepted) {
+      setPickupError("Acepta los documentos legales vigentes para continuar.");
       return;
     }
 
@@ -714,6 +730,7 @@ function BasketPage() {
           items: payloadItems,
           total: useBasketStore.getState().getTotalPrice(),
           paymentMethod: "cash_on_pickup",
+          legalAccepted,
         }),
       });
 
@@ -1089,6 +1106,20 @@ function BasketPage() {
                             placeholder="Ej. Privada Los Olivos, casa 12. Marcar al llegar; caseta por la entrada norte."
                             className="mt-3 w-full resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none focus:border-[#eb1902] focus:ring-2 focus:ring-[#eb1902]/20"
                           />
+                        </label>
+                      )}
+
+                      {!clientSecret && (
+                        <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-700">
+                          <input
+                            type="checkbox"
+                            checked={legalAccepted}
+                            onChange={(event) => setLegalAccepted(event.target.checked)}
+                            className="mt-0.5 h-4 w-4 accent-[#eb1902]"
+                          />
+                          <span>
+                            Confirmo que revisé y acepto los <Link className="underline" href="/legal/terminos-clientes" target="_blank">Términos</Link>, el <Link className="underline" href="/legal/privacidad" target="_blank">Aviso de Privacidad</Link> y la <Link className="underline" href="/legal/cancelaciones-reembolsos" target="_blank">Política de Cancelaciones</Link>.
+                          </span>
                         </label>
                       )}
                        
@@ -1497,7 +1528,6 @@ function BasketPage() {
 }
 
 export default BasketPage;
-
 
 
 

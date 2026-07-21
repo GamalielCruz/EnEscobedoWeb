@@ -24,6 +24,8 @@ const ORDER_PROJECTION = `{
   paymentStatus,
   dispatchStatus,
   settlementStatus,
+  fulfillmentProvider,
+  deliveryVerificationStatus,
   pickupCode,
   "customerInfo": { "name": customerName, "email": email, "clerkUserId": clerkUserId, "phone": phone },
   "deliveryAddress": shippingAddress,
@@ -226,6 +228,9 @@ export async function PATCH(request: NextRequest) {
     const orderType = order.orderType === "pickup" ? "pickup" : "delivery";
     const mapped: Partial<{ orderStatus: OrderStatusValue; dispatchStatus: DispatchStatusValue }> = status ? mapStoreStatus(orderType, status) : {};
     const orderStatus = (body.orderStatus || mapped.orderStatus || order.orderStatus || "pending") as OrderStatusValue;
+    if (orderType === "delivery" && orderStatus === "delivered") {
+      return NextResponse.json({ error: "La entrega debe completarse verificando el PIN" }, { status: 409 });
+    }
     let paymentStatus = (body.paymentStatus || order.paymentStatus || "pending") as PaymentStatusValue;
     const dispatchStatus = (body.dispatchStatus || mapped.dispatchStatus || order.dispatchStatus || (orderType === "pickup" ? "not_required" : "waiting_for_driver")) as DispatchStatusValue;
     let settlementStatus = (body.settlementStatus || order.settlementStatus || "pending") as SettlementStatusValue;

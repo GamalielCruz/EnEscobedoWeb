@@ -1,12 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { client, writeClient } from "@/sanity/lib/client";
+import { writeClient } from "@/sanity/lib/client";
+import { isAdminUser } from "@/lib/admin";
 
 const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
 const PRODUCT_STORE_QUERY = `*[_type == "product" && _id == $productId][0]{
   _id,
   "storeId": affiliateStore._ref
 }`;
+const STORE_CATEGORY_IDS_QUERY = `*[_type == "category" && _id in $categoryIds &&
+  (affiliateStore._ref == $storeId ||
+    _id in *[_type == "product" && affiliateStore._ref == $storeId].categories[]._ref)
+]._id`;
 
 export async function GET(request: NextRequest) {
   const requestId = crypto.randomUUID();
@@ -31,11 +36,12 @@ export async function GET(request: NextRequest) {
         ? ["pending", "rejected"]
         : ["pending"];
 
+    const isAdmin = isAdminUser(userId);
     const ownedStores = await writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {
       userId,
     });
     const ownedStoreIds = ownedStores?.map((store) => store._id) ?? [];
-    if (storeId && !ownedStoreIds.includes(storeId)) {
+    if (storeId && !isAdmin && !ownedStoreIds.includes(storeId)) {
       return NextResponse.json({ error: "No tienes permiso para esta tienda", requestId }, { status: 403 });
     }
 
@@ -45,7 +51,7 @@ export async function GET(request: NextRequest) {
         : `status in [${requestedStatuses.map((status) => `'${status}'`).join(", ")}]`;
     const storeFilter = storeId
       ? ` && product->affiliateStore._ref == $storeId`
-      : ` && product->affiliateStore._ref in $ownedStoreIds`;
+      : isAdmin ? "" : ` && product->affiliateStore._ref in $ownedStoreIds`;
     const query = `*[_type == "productUpdateRequest" && ${statusFilter}${storeFilter}]{
       _id,
       product->{_id, name, affiliateStore->{_id, name}},
@@ -56,7 +62,7 @@ export async function GET(request: NextRequest) {
       rejectionReason
     } | order(submittedAt desc)`;
     console.log("[product-update-requests GET] Fetching with query:", query);
-    const items = await writeClient.fetch(query, storeId ? { storeId } : { ownedStoreIds });
+    const items = await writeClient.fetch(query, storeId ? { storeId } : isAdmin ? {} : { ownedStoreIds });
     console.log("[product-update-requests GET] Found items:", items.length);
     return NextResponse.json({ success: true, items: items ?? [], requestId }, {
       headers: {
@@ -95,6 +101,17 @@ export async function POST(request: NextRequest) {
     const ownsStore = ownedStores?.some((store) => store._id === product.storeId);
     if (!ownsStore) {
       return NextResponse.json({ error: "No tienes permiso para este producto", requestId }, { status: 403 });
+    }
+
+    if (Array.isArray(changes.categories)) {
+      const categoryIds = [...new Set(changes.categories.map((category: { _ref?: string }) => category?._ref).filter(Boolean))];
+      const allowedIds = await writeClient.fetch<string[]>(STORE_CATEGORY_IDS_QUERY, {
+        storeId: product.storeId,
+        categoryIds,
+      });
+      if (categoryIds.length !== changes.categories.length || allowedIds.length !== categoryIds.length) {
+        return NextResponse.json({ error: "Una categoría no pertenece a esta tienda", requestId }, { status: 400 });
+      }
     }
 
     console.log("[product-update-requests POST] Creating request for product:", productId);

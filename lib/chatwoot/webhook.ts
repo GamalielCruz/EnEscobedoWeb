@@ -63,6 +63,13 @@ type ChatwootProcessingDependencies = {
     messageId: string,
     result: { autoReplied: boolean; category: string; outcome: string },
   ) => Promise<void>;
+  createTicket: (input: {
+    category: string;
+    contactIdentifier?: string;
+    conversationId: number;
+    matchedRule?: string;
+    message: string;
+  }) => Promise<void>;
   getConversation: (conversationId: number) => Promise<ChatwootConversationContext>;
   getOperationalResponse: (
     conversation: ChatwootConversationContext,
@@ -281,6 +288,13 @@ export async function processChatwootMessage(
       (category === "operational_query" && !operationalResponse);
 
     if (escalation) {
+      await dependencies.createTicket({
+        category,
+        contactIdentifier: conversation.contactIdentifier,
+        conversationId: event.conversationId,
+        matchedRule: classification.matchedRule,
+        message: event.content,
+      });
       await dependencies.markHuman(
         event.conversationId,
         category,

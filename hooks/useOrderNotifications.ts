@@ -40,6 +40,8 @@ export type Order = {
   createdAt: string;
   updatedAt: string;
   deliveryMethod?: "click_collect" | "home_delivery";
+  fulfillmentProvider?: "pickup" | "restaurant_delivery" | "elmenu_delivery" | "third_party_logistics";
+  deliveryVerificationStatus?: "pending" | "verified" | "locked" | "overridden" | "not_required";
 };
 
 interface UseOrderNotificationsOptions {

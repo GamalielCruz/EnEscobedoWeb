@@ -6,6 +6,8 @@ import { buildUrl } from "@/lib/urls";
 import { BasketItem } from "@/store/store";
 import { OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
 import { backendClient } from "@/sanity/lib/backendClient";
+import { assertCurrentLegalAcceptance } from "@/lib/legal-config";
+import { resolvePromotionCode, type AutoPromotion } from "@/lib/stripe-promotion";
 
 export type Metadata = {
   orderNumber: string;
@@ -21,6 +23,7 @@ export type Metadata = {
   shippingCost?: number;
   shippingAddress?: OrderAddressInput;
   deliveryNotes?: string;
+  legalAccepted?: boolean;
 };
 
 export type GroupedBasketItem = {
@@ -60,13 +63,6 @@ function buildShippingAddress(metadata: Metadata): OrderAddressInput | undefined
   };
 }
 
-type AutoPromotion = {
-  stripePromotionCodeId?: string;
-  couponCode?: string;
-  allowedOrderTypes?: string[];
-  allowedPaymentMethods?: string[];
-  allowedStores?: string[];
-};
 
 async function getEligibleAutoPromotion(orderType: "delivery" | "pickup", paymentMethod: "stripe", storeId: string) {
   const promotions = await backendClient.fetch<AutoPromotion[]>(`*[
@@ -90,20 +86,11 @@ async function getEligibleAutoPromotion(orderType: "delivery" | "pickup", paymen
     && candidate.allowedStores?.includes(storeId)
   );
   if (!promotion) return null;
-  if (promotion.stripePromotionCodeId) {
-    const promotionCode = await getStripe().promotionCodes.retrieve(promotion.stripePromotionCodeId);
-    return promotionCode.active ? promotionCode.id : null;
-  }
-
-  const promotionCodes = await getStripe().promotionCodes.list({
-    code: promotion.couponCode,
-    active: true,
-    limit: 1,
-  });
-  return promotionCodes.data[0]?.id ?? null;
+  return resolvePromotionCode(getStripe(), promotion);
 }
 
 export async function createCheckoutSession(items: GroupedBasketItem[], metadata: Metadata) {
+  assertCurrentLegalAcceptance(metadata.legalAccepted);
   const stripe = getStripe();
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error("No hay productos para procesar el pago");

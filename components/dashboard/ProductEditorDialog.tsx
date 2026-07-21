@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import { ImageIcon, Loader2, Plus, Settings, Tag, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -34,6 +35,7 @@ type ProductEditorDialogProps = {
   formState: ProductFormState;
   setFormState: React.Dispatch<React.SetStateAction<ProductFormState>>;
   availableCategories: CategoryOption[];
+  onCreateCategory: (title: string) => Promise<CategoryOption | null>;
   editingProductId: string | null;
   submitting: boolean;
   uploadingImage: boolean;
@@ -47,12 +49,31 @@ export function ProductEditorDialog({
   formState,
   setFormState,
   availableCategories,
+  onCreateCategory,
   editingProductId,
   submitting,
   uploadingImage,
   onSubmit,
   onImageUpload,
 }: ProductEditorDialogProps) {
+  const [newCategory, setNewCategory] = React.useState("");
+  const [creatingCategory, setCreatingCategory] = React.useState(false);
+
+  const handleCreateCategory = async () => {
+    if (!newCategory.trim()) return;
+    setCreatingCategory(true);
+    const category = await onCreateCategory(newCategory);
+    setCreatingCategory(false);
+    if (!category) return;
+    setFormState((current) => ({
+      ...current,
+      categories: current.categories.includes(category._id)
+        ? current.categories
+        : [...current.categories, category._id],
+    }));
+    setNewCategory("");
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[90vh] max-w-5xl overflow-y-auto rounded-2xl border-black/8 p-0 shadow-[0_18px_60px_rgba(15,23,42,0.16)]">
@@ -199,6 +220,31 @@ export function ProductEditorDialog({
                   <Tag className="h-4 w-4" />
                   Categorias
                 </Label>
+
+                <div className="mb-3 flex gap-2">
+                  <Input
+                    value={newCategory}
+                    onChange={(event) => setNewCategory(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        handleCreateCategory();
+                      }
+                    }}
+                    maxLength={60}
+                    placeholder="Nueva categoría"
+                    aria-label="Nombre de la nueva categoría"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleCreateCategory}
+                    disabled={creatingCategory || !newCategory.trim()}
+                  >
+                    {creatingCategory ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                    Crear
+                  </Button>
+                </div>
 
                 {availableCategories.length > 0 ? (
                   <div className="max-h-56 space-y-2 overflow-y-auto rounded-xl border border-black/6 p-3">

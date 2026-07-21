@@ -10,6 +10,7 @@ import type {
   CategoryOption,
   OwnedStore,
   Product,
+  ProductOrdering,
   ProductFormState,
   ProductRequest,
   StoreConfig,
@@ -34,6 +35,7 @@ export function useDashboardData() {
   const [claimingStoreId, setClaimingStoreId] = React.useState<string | null>(null);
 
   const [products, setProducts] = React.useState<Product[]>([]);
+  const [productOrdering, setProductOrdering] = React.useState<ProductOrdering>({ all: [], categories: {} });
   const [productsLoading, setProductsLoading] = React.useState(false);
   const [refreshingProducts, setRefreshingProducts] = React.useState(false);
   const [availableCategories, setAvailableCategories] = React.useState<CategoryOption[]>([]);
@@ -173,6 +175,7 @@ export function useDashboardData() {
     async (background = false) => {
       if (!selectedStoreId) {
         setProducts([]);
+        setProductOrdering({ all: [], categories: {} });
         return;
       }
 
@@ -188,6 +191,7 @@ export function useDashboardData() {
         });
         const data = await response.json();
         setProducts(data.products || []);
+        setProductOrdering(data.ordering || { all: [], categories: {} });
       } finally {
         setProductsLoading(false);
         setRefreshingProducts(false);
@@ -197,11 +201,31 @@ export function useDashboardData() {
   );
 
   const loadCategories = React.useCallback(async () => {
-    if (availableCategories.length > 0) return;
-    const response = await fetch("/api/dashboard/categories", { cache: "no-store" });
+    if (!selectedStoreId) return;
+    const response = await fetch(`/api/dashboard/categories?storeId=${selectedStoreId}`, { cache: "no-store" });
     const data = await response.json();
     setAvailableCategories(data.categories || []);
-  }, [availableCategories.length]);
+  }, [selectedStoreId]);
+
+  const createCategory = React.useCallback(async (title: string) => {
+    if (!selectedStoreId) return null;
+    const response = await fetch("/api/dashboard/categories", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storeId: selectedStoreId, title }),
+    });
+    const data = await response.json();
+    if (!response.ok || !data.category) {
+      alert(data.error || "No se pudo crear la categoría");
+      return null;
+    }
+    setAvailableCategories((current) =>
+      current.some((category) => category._id === data.category._id)
+        ? current
+        : [...current, data.category].sort((a, b) => a.title.localeCompare(b.title, "es"))
+    );
+    return data.category as CategoryOption;
+  }, [selectedStoreId]);
 
   const refreshStoreConfig = React.useCallback(async () => {
     if (!selectedStoreId) {
@@ -401,6 +425,37 @@ export function useDashboardData() {
     [selectedStoreId]
   );
 
+  const saveProductOrder = React.useCallback(
+    async (categoryId: string | null, productIds: string[]) => {
+      if (!selectedStoreId) return false;
+
+      const response = await fetch("/api/dashboard/store-products", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storeId: selectedStoreId,
+          productOrder: { categoryId, productIds },
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        alert(data.error || "No se pudo guardar el orden");
+        return false;
+      }
+
+      setProductOrdering((current) =>
+        categoryId
+          ? {
+              ...current,
+              categories: { ...current.categories, [categoryId]: productIds },
+            }
+          : { ...current, all: productIds }
+      );
+      return true;
+    },
+    [selectedStoreId]
+  );
+
   const submitStoreChanges = React.useCallback(
     async (changes: Record<string, unknown>) => {
       if (!selectedStoreId || Object.keys(changes).length === 0) return false;
@@ -437,9 +492,10 @@ export function useDashboardData() {
   React.useEffect(() => {
     if (!selectedStoreId) return;
     refreshProducts();
+    loadCategories();
     refreshStoreConfig();
     refreshRequests();
-  }, [selectedStoreId, refreshProducts, refreshStoreConfig, refreshRequests]);
+  }, [selectedStoreId, refreshProducts, loadCategories, refreshStoreConfig, refreshRequests]);
 
   return {
     isLoaded,
@@ -457,6 +513,7 @@ export function useDashboardData() {
     savingStoreConfig,
     submittingStoreRequest,
     products,
+    productOrdering,
     productsLoading,
     refreshingProducts,
     availableCategories,
@@ -476,11 +533,13 @@ export function useDashboardData() {
     claimStore,
     refreshProducts: () => refreshProducts(true),
     loadCategories,
+    createCategory,
     saveStoreConfig,
     updateOrderStatus,
     uploadProductImage,
     submitProduct,
     updateProductAvailability,
+    saveProductOrder,
     submitStoreChanges,
     refreshRequests,
     refreshActiveOrders: todayOrdersHook.refresh,

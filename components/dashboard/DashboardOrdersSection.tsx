@@ -4,7 +4,6 @@ import * as React from "react";
 import { Filter, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
   SelectContent,
@@ -188,6 +187,7 @@ export function DashboardOrdersSection({
               order={order}
               updating={updatingOrderNumber === order.orderNumber}
               onUpdateStatus={onUpdateOrderStatus}
+              onRefresh={refreshCurrent}
             />
           ))
         )}

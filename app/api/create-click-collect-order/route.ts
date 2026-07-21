@@ -7,6 +7,8 @@ import { appendOrderEvent } from "@/lib/order-events";
 import { buildOrderDocument, buildStoreMapsUrl, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
 import { getPaymentMethodLabel } from "@/lib/payment";
 import { syncBaserowOrder } from "@/lib/baserow";
+import { assertCurrentLegalAcceptance } from "@/lib/legal-config";
+import { recordCurrentLegalAcceptance } from "@/lib/legal-acceptance";
 
 function normalizeItems(items: Array<any>): OrderItemInput[] {
   return (items || []).map((item) => ({
@@ -29,6 +31,8 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
+    assertCurrentLegalAcceptance(body?.legalAccepted);
+    await recordCurrentLegalAcceptance(request, userId, "checkout_pickup");
     const orderItems = normalizeItems(body?.items || []);
     const storeId = String(body?.storeId || body?.metadata?.storeId || "");
     const paymentMethod = String(body?.paymentMethod || "cash_at_store");

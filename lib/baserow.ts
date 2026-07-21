@@ -132,6 +132,60 @@ export async function createBaserowRow(fields: Record<string, unknown>) {
     body: JSON.stringify(fields),
   });
 }
+
+export async function createBaserowSupportTicket({
+  category,
+  contactIdentifier,
+  conversationId,
+  conversationUrl,
+  matchedRule,
+  message,
+}: {
+  category: string;
+  contactIdentifier?: string;
+  conversationId: number;
+  conversationUrl: string;
+  matchedRule?: string;
+  message: string;
+}) {
+  const tableId = process.env.BASEROW_SUPPORT_TICKETS_TABLE_ID;
+  if (!tableId) throw new Error("Falta BASEROW_SUPPORT_TICKETS_TABLE_ID");
+
+  const ticketId = `CW-${conversationId}`;
+  const existing = await baserowRequest(
+    `/api/database/rows/table/${tableId}/?user_field_names=true&search=${encodeURIComponent(ticketId)}`,
+    { method: "GET" },
+  ) as { results?: Array<{ "ID de ticket"?: string }> };
+  if (existing.results?.some((row) => row["ID de ticket"] === ticketId)) return;
+
+  const department = {
+    human_support: "Atención al Cliente",
+    operational_query: "Operaciones",
+    sensitive_case: "Pagos y Reembolsos",
+  }[category] ?? "Atención al Cliente";
+
+  await baserowRequest(
+    `/api/database/rows/table/${tableId}/?user_field_names=true`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        "ID de ticket": ticketId,
+        "ID de conversación": conversationId,
+        "ID de cliente": contactIdentifier,
+        Categoría: category,
+        Departamento:
+          matchedRule === "health_or_safety"
+            ? "Atención Prioritaria"
+            : department,
+        Estado: "Abierto",
+        Prioridad: category === "sensitive_case" ? "Alta" : "Normal",
+        Mensaje: message.trim().slice(0, 2000),
+        "Fecha de creación": new Date().toISOString(),
+        "URL de conversación": conversationUrl,
+      }),
+    },
+  );
+}
 async function findOrderRowId(orderId: string, ordersTableId: string) {
   const result = await baserowRequest(
     `/api/database/rows/table/${ordersTableId}/?user_field_names=true&search=${encodeURIComponent(orderId)}`,

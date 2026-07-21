@@ -1,4 +1,10 @@
-import { calculateDeliveryQuote, DEFAULT_DELIVERY_CONFIG, normalizeDeliveryConfig } from "@/lib/delivery-zones";
+import {
+  calculateDeliveryQuote,
+  DEFAULT_DELIVERY_CONFIG,
+  EMPTY_STORE_DELIVERY_CONFIG,
+  getDeliveryPricingConfigId,
+  normalizeDeliveryConfig,
+} from "@/lib/delivery-zones";
 import { getStoreOperationalState } from "@/lib/storeOperationalState";
 import { backendClient } from "@/sanity/lib/backendClient";
 import {
@@ -17,8 +23,10 @@ import {
   SettlementStatusValue,
   buildStateFields,
 } from "./order-state";
+import { createDeliveryPin } from "./delivery-pin";
+import { resolveFulfillmentProvider } from "./fulfillment";
+import { legalVersions } from "./legal-config";
 
-const DELIVERY_CONFIG_ID = "deliveryPricingConfig.main";
 const DEFAULT_DELIVERY_DRIVER_PAYOUT_RATE = 1;
 const DEFAULT_PLATFORM_COMMISSION_RATE = 0;
 
@@ -49,6 +57,7 @@ type StoreRecord = {
   highDemandMode?: boolean | null;
   hasOwnDelivery?: boolean;
   deliveryFee?: number;
+  platformCommissionPercent?: number;
   operatingHours?: Record<string, string>;
   serviceTypes?: {
     delivery?: boolean;
@@ -144,6 +153,7 @@ const STORE_QUERY = `*[_type == "affiliateStore" && _id == $storeId][0]{
   highDemandMode,
   hasOwnDelivery,
   deliveryFee,
+  platformCommissionPercent,
   operatingHours,
   serviceTypes
 }`;
@@ -159,9 +169,12 @@ const PRODUCTS_QUERY = `*[_type == "product" && _id in $productIds]{
   optionGroups
 }`;
 
-async function getDeliveryConfig() {
-  const doc = await backendClient.fetch(`*[_type == "deliveryPricingConfig" && _id == $id][0]`, { id: DELIVERY_CONFIG_ID });
-  return normalizeDeliveryConfig(doc ?? DEFAULT_DELIVERY_CONFIG);
+async function getDeliveryConfig(storeId?: string) {
+  const doc = await backendClient.fetch(
+    `*[_type == "deliveryPricingConfig" && _id == $id][0]`,
+    { id: getDeliveryPricingConfigId(storeId) }
+  );
+  return normalizeDeliveryConfig(doc ?? (storeId ? EMPTY_STORE_DELIVERY_CONFIG : DEFAULT_DELIVERY_CONFIG));
 }
 
 function roundMoney(value: number) {
@@ -252,11 +265,17 @@ function computeFinancials(input: {
   tax: number;
   paymentMethod: string;
   stripeFee?: number;
+  platformCommissionPercent?: number;
 }) {
   const paymentMethod = normalizePaymentMethod(input.paymentMethod, input.orderType === "pickup" ? "cash_at_store" : "cash_on_delivery");
   const paymentProvider = resolvePaymentProvider(paymentMethod);
   const grossTotal = roundMoney(input.productsSubtotal + input.shippingFee - input.discount + input.tax);
-  const commissionRate = getNumberEnv("PLATFORM_COMMISSION_RATE", DEFAULT_PLATFORM_COMMISSION_RATE);
+  const commissionRate = typeof input.platformCommissionPercent === "number" &&
+    Number.isFinite(input.platformCommissionPercent) &&
+    input.platformCommissionPercent >= 0 &&
+    input.platformCommissionPercent <= 100
+    ? input.platformCommissionPercent / 100
+    : getNumberEnv("PLATFORM_COMMISSION_RATE", DEFAULT_PLATFORM_COMMISSION_RATE);
   const deliveryDriverRate = getNumberEnv(
     input.storeHasOwnDelivery ? "STORE_DRIVER_PAYOUT_RATE" : "COMMUNITY_DRIVER_PAYOUT_RATE",
     DEFAULT_DELIVERY_DRIVER_PAYOUT_RATE
@@ -309,6 +328,7 @@ export async function validateAndQuoteOrder(input: {
 
   if (input.orderType === "delivery") {
     assert(store.serviceTypes?.delivery === true, "La tienda no permite entregas.");
+    resolveFulfillmentProvider("delivery", store.hasOwnDelivery);
   } else {
     assert(store.serviceTypes?.pickup === true, "La tienda no permite pickup.");
   }
@@ -372,6 +392,7 @@ export async function validateAndQuoteOrder(input: {
     discount,
     tax,
     paymentMethod: input.paymentMethod,
+    platformCommissionPercent: store.platformCommissionPercent,
   });
 
   return {
@@ -390,7 +411,7 @@ export async function validateAndQuoteOrder(input: {
 async function computeShippingFee(store: StoreRecord, address: ReturnType<typeof normalizeAddress>) {
   if (!address) return 0;
   if (typeof address.latitude === "number" && typeof address.longitude === "number") {
-    const quote = calculateDeliveryQuote(await getDeliveryConfig(), {
+    const quote = calculateDeliveryQuote(await getDeliveryConfig(store.hasOwnDelivery ? store._id : undefined), {
       lat: address.latitude,
       lng: address.longitude,
       orderDate: new Date(),
@@ -398,6 +419,7 @@ async function computeShippingFee(store: StoreRecord, address: ReturnType<typeof
     assert(quote.allowed, quote.reason || "La direccion esta fuera de cobertura.");
     return roundMoney(quote.finalPrice ?? 0);
   }
+  assert(!store.hasOwnDelivery, "Confirma la ubicacion en el mapa para calcular el envio.");
   return roundMoney(Number(store.deliveryFee ?? 0));
 }
 
@@ -464,7 +486,8 @@ export function buildOrderDocument(input: {
   const now = new Date().toISOString();
   const shippingAddress = normalizeAddress(input.shippingAddress);
   const normalizedPaymentMethod = normalizePaymentMethod(input.paymentMethod, input.orderType === "pickup" ? "cash_at_store" : "cash_on_delivery");
-  const driverType = input.orderType === "pickup" ? "none" : input.quote.store.hasOwnDelivery ? "store" : "community";
+  const fulfillmentProvider = resolveFulfillmentProvider(input.orderType, input.quote.store.hasOwnDelivery);
+  const driverType = fulfillmentProvider === "restaurant_delivery" ? "store" : fulfillmentProvider === "elmenu_delivery" ? "community" : "none";
   const paymentProvider = resolvePaymentProvider(normalizedPaymentMethod);
   const paidOnline = resolvePaidOnline(paymentProvider);
   const appliedDiscount = roundMoney(input.amountDiscount ?? input.quote.discount);
@@ -479,6 +502,7 @@ export function buildOrderDocument(input: {
           tax: input.quote.tax,
           paymentMethod: normalizedPaymentMethod,
           stripeFee: input.stripeFee,
+          platformCommissionPercent: input.quote.store.platformCommissionPercent,
         })
       : computeFinancials({
           orderType: input.orderType,
@@ -488,6 +512,7 @@ export function buildOrderDocument(input: {
           discount: appliedDiscount,
           tax: input.quote.tax,
           paymentMethod: normalizedPaymentMethod,
+          platformCommissionPercent: input.quote.store.platformCommissionPercent,
         });
 
   const cashCollectedBy = resolveCashCollectedBy({ paymentMethod: normalizedPaymentMethod, orderType: input.orderType, driverType });
@@ -495,7 +520,10 @@ export function buildOrderDocument(input: {
     orderType: input.orderType,
     orderStatus: input.orderStatus ?? "pending",
     paymentStatus: input.paymentStatus,
-    dispatchStatus: input.dispatchStatus,
+    dispatchStatus:
+      fulfillmentProvider === "restaurant_delivery" || fulfillmentProvider === "elmenu_delivery"
+        ? input.dispatchStatus
+        : "not_required",
     settlementStatus: resolveSettlementStatus({
       paymentStatus: input.paymentStatus,
       paymentProvider,
@@ -506,6 +534,10 @@ export function buildOrderDocument(input: {
     paymentMethod: normalizedPaymentMethod,
   });
 
+  const deliveryVerification = input.orderType === "delivery"
+    ? createDeliveryPin(input.orderNumber, new Date(now))
+    : { deliveryVerificationMethod: "not_required", deliveryVerificationStatus: "not_required" } as const;
+
   return {
     _type: "order",
     orderNumber: input.orderNumber,
@@ -514,6 +546,18 @@ export function buildOrderDocument(input: {
     email: input.customerEmail,
     phone: normalizePhone(input.phone),
     orderType: input.orderType,
+    fulfillmentProvider,
+    sellerType: "restaurant",
+    sellerId: input.storeId,
+    sellerSnapshot: {
+      id: input.storeId,
+      name: input.quote.store.name || "Restaurante",
+      address: [input.quote.store.address?.street, input.quote.store.address?.city, input.quote.store.address?.state].filter(Boolean).join(", "),
+    },
+    fulfillmentProviderSnapshot: { provider: fulfillmentProvider, restaurantName: input.quote.store.name || "Restaurante" },
+    legalTermsVersion: legalVersions.customerTerms,
+    privacyVersion: legalVersions.privacy,
+    cancellationPolicyVersion: legalVersions.cancellations,
     paymentMethod: normalizedPaymentMethod,
     paymentProvider,
     paidOnline,
@@ -552,6 +596,8 @@ export function buildOrderDocument(input: {
     platformNetTotal: finalFinancials.platformNetTotal,
     cashCollectedBy,
     driverType,
+    refundStatus: "not_requested",
+    ...deliveryVerification,
     cancelledAt: undefined,
     refundedAt: undefined,
     orderDate: now,

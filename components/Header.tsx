@@ -32,6 +32,8 @@ export function Header() {
       return;
     }
 
+    setOwnedStores([]);
+
     console.log("🔥 [Header] useEffect triggered");
     console.log("🔥 [Header] User ID:", user?.id);
 
@@ -43,6 +45,8 @@ export function Header() {
 
     console.log("🔥 [Header] Fetching stores for user:", user.id);
 
+    let cancelled = false;
+
     fetch("/api/my-stores")
       .then((res) => {
         console.log("🔥 [Header] API response status:", res.status);
@@ -53,12 +57,16 @@ export function Header() {
         console.log("🔥 [Header] Stores data received:", data);
         const stores = data.stores ?? [];
         console.log("🔥 [Header] Setting ownedStores to:", stores);
-        setOwnedStores(stores);
+        if (!cancelled) setOwnedStores(stores);
       })
       .catch((error) => {
         console.error("🔥 [Header] Error fetching stores:", error);
-        setOwnedStores([]);
+        if (!cancelled) setOwnedStores([]);
       });
+
+    return () => {
+      cancelled = true;
+    };
   }, [isLoaded, user?.id]);
 
   useEffect(() => {
@@ -84,16 +92,8 @@ export function Header() {
   const shouldShowManagerIcon =
     isHydrated &&
     isLoaded &&
-    user &&
-    ownedStores.length > 0 &&
-    ownedStores.every(
-      (store) =>
-        store.name &&
-        store.name.trim().length > 0 &&
-        !store.name.includes("\u200B") &&
-        !store.name.includes("\u200D") &&
-        !store.name.includes("\uFEFF")
-    );
+    Boolean(user) &&
+    ownedStores.length > 0;
 
   return (
     <header

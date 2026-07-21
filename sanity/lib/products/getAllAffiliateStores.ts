@@ -44,6 +44,7 @@ export const getAllAffiliateStores = async () => {
             isOpen,
             manualOperationalStatus,
             highDemandMode,
+            promotionalMessages,
             capacity,
             averageDeliveryTime,
             deliveryFee,

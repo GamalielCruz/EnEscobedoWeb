@@ -62,6 +62,11 @@ export type Product = {
   rejectionReason?: string;
 };
 
+export type ProductOrdering = {
+  all: string[];
+  categories: Record<string, string[]>;
+};
+
 export type ProductFormState = {
   name: string;
   price: string;
@@ -102,6 +107,9 @@ export type StoreConfig = {
   isOpen?: boolean;
   manualOperationalStatus?: "open" | "closed" | "auto";
   highDemandMode?: boolean;
+  hasOwnDelivery?: boolean;
+  platformCommissionPercent?: number;
+  coordinates?: { latitude?: number; longitude?: number };
   serviceTypes?: StoreServiceTypes;
   contact?: StoreContact;
   address?: StoreAddress;

@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import StoreGrid from "./StoreGrid";
 import { StoreCategoryFilter } from "./StoreCategoryFilter";
@@ -50,6 +49,7 @@ interface Store {
   deliveryTimeMax?: number;
   averageDeliveryTime?: number;
   isActive?: boolean;
+  promotionalMessages?: string[];
 }
 
 interface StoreCategory {
