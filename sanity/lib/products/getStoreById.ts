@@ -1,12 +1,6 @@
 import { defineQuery } from "next-sanity";
 import { sanityFetch } from "../live";
-
-function cleanStoreText(value?: string | null) {
-  return value
-    ?.replace(/[\u200B-\u200D\uFEFF\u2060\uFE00-\uFE0F\uE000-\uF8FF\uFFF0-\uFFFF]/g, "")
-    .replace(/[\u0000-\u001F\u007F-\u009F]/g, "")
-    .trim();
-}
+import { sanitizeText } from "@/lib/utils";
 
 export const getStoreById = async (storeId: string) => {
   const STORE_BY_ID_QUERY = defineQuery(`
@@ -44,15 +38,15 @@ export const getStoreById = async (storeId: string) => {
 
     return {
       ...store.data,
-      name: cleanStoreText(store.data.name),
+      name: sanitizeText(store.data.name),
       address: store.data.address
         ? {
             ...store.data.address,
-            street: cleanStoreText(store.data.address.street),
-            city: cleanStoreText(store.data.address.city),
-            state: cleanStoreText(store.data.address.state),
-            postalCode: cleanStoreText(store.data.address.postalCode),
-            country: cleanStoreText(store.data.address.country),
+            street: sanitizeText(store.data.address.street),
+            city: sanitizeText(store.data.address.city),
+            state: sanitizeText(store.data.address.state),
+            postalCode: sanitizeText(store.data.address.postalCode),
+            country: sanitizeText(store.data.address.country),
           }
         : store.data.address,
     };

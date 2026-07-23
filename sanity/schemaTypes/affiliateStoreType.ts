@@ -256,6 +256,13 @@ export const affiliateStoreType = defineType({
       description: "Si la tienda está activa para recibir pedidos",
     }),
     defineField({
+      name: "homepageOrder",
+      title: "Orden en portada",
+      type: "number",
+      hidden: true,
+      validation: (Rule) => Rule.integer().min(0),
+    }),
+    defineField({
       name: "isOpen",
       title: "Tienda Abierta",
       type: "boolean",

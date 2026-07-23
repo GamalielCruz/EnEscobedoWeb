@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { urlFor } from "@/sanity/lib/image";
@@ -9,6 +9,7 @@ import ProductSidebar from "@/components/ProductSidebar";
 import ProductCounter from "@/components/ProductCounter";
 import MiniBasket from "@/components/MiniBasket";
 import { orderProducts } from "@/lib/product-order";
+import type { Product as SanityProduct } from "@/sanity.types";
 
 interface Category {
   _id: string;
@@ -32,7 +33,7 @@ interface Product {
   } | null;
   price?: number;
   stock?: number;
-  description?: string;
+  description?: unknown;
   categories?: Array<{
     _id: string;
     name?: string;
@@ -56,6 +57,7 @@ interface Product {
 }
 
 interface StoreProductsClientProps {
+  storeId: string;
   products: Product[];
   categories: Category[];
   categoryProductOrders: Record<string, string[]>;
@@ -63,6 +65,7 @@ interface StoreProductsClientProps {
 }
 
 export function StoreProductsClient({
+  storeId,
   products,
   categories,
   categoryProductOrders,
@@ -75,11 +78,6 @@ export function StoreProductsClient({
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
-
-  // Verificar si un producto requiere personalización obligatoria
-  const hasRequiredOptions = (product: Product) => {
-    return product.optionGroups?.some(group => group.required === true) || false;
-  };
 
   // Filtrar productos según la categoría seleccionada
   const filteredProducts = selectedCategory
@@ -98,35 +96,12 @@ export function StoreProductsClient({
        "Sin categoría")
     : "Todo";
 
-  const handleProductClick = (product: Product, event: React.MouseEvent) => {
-    // Check if the click originated from the + button or its container
-    const target = event.target as HTMLElement;
-    
-    // Check if click is from + button area (including SVG inside)
-    if (target.closest('button') || 
-        target.closest('.absolute.top-2.right-2') ||
-        target.closest('svg') ||
-        target.tagName === 'svg' ||
-        target.tagName === 'path') {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-    
-    // Si el producto requiere opciones obligatorias, abrir sidebar
-    if (hasRequiredOptions(product)) {
-      setSelectedProduct(product);
-      setIsSidebarOpen(true);
-      return;
-    }
-    
-    event.preventDefault();
-    event.stopPropagation();
+  const openProduct = (product: Product) => {
     setSelectedProduct(product);
     setIsSidebarOpen(true);
   };
 
-  const handleCloseSidebar = () => {
+  const handleCloseSidebar = useCallback(() => {
     setIsSidebarOpen(false);
     if (highlightedProductSlug) {
       setDismissedHighlightedSlug(highlightedProductSlug);
@@ -136,7 +111,7 @@ export function StoreProductsClient({
       router.replace(query ? `${pathname}?${query}` : pathname ?? "/", { scroll: false });
     }
     setTimeout(() => setSelectedProduct(null), 300);
-  };
+  }, [highlightedProductSlug, pathname, router, searchParams]);
 
   const highlightedProduct = highlightedProductSlug
     && highlightedProductSlug !== dismissedHighlightedSlug
@@ -176,7 +151,7 @@ export function StoreProductsClient({
       </div>
 
       {/* Título de sección */}
-      <div className="px-4 mb-6">
+      <div className="mb-6 px-4">
         <h2 className="text-2xl font-bold text-gray-900">
           {selectedCategoryName}
         </h2>
@@ -193,26 +168,35 @@ export function StoreProductsClient({
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
             {filteredProducts.map((product) => {
               const isOutOfStock = product.stock != null && product.stock <= 0;
 
               return (
                 <div
                   key={product._id}
-                  className="group cursor-pointer"
-                  onClick={(e) => handleProductClick(product, e)}
+                  className="group relative cursor-pointer"
                   data-product-slug={product.slug?.current || ""}
                 >
-                  <div className="relative aspect-square rounded-2xl shadow-lg overflow-hidden bg-white mb-2">
-                    {product.image && (
+                  <button
+                    type="button"
+                    className="absolute inset-0 z-[1] rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#5bb800]"
+                    onClick={() => openProduct(product)}
+                    aria-label={`Ver ${product.name || "producto"}`}
+                  />
+                  <div className="relative mb-2 aspect-square overflow-hidden rounded-2xl bg-white shadow-lg">
+                    {product.image ? (
                       <Image
                         src={urlFor(product.image).width(400).height(400).url()}
                         alt={product.name || "Producto"}
                         fill
-                        className="object-cover group-hover:scale-105 transition-transform duration-200"
+                        className="object-cover transition-transform duration-200 group-hover:scale-105"
                         sizes="(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 25vw"
                       />
+                    ) : (
+                      <div className="flex h-full items-center justify-center text-sm text-gray-400">
+                        Sin imagen
+                      </div>
                     )}
                     {isOutOfStock && (
                       <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
@@ -222,8 +206,8 @@ export function StoreProductsClient({
                       </div>
                     )}
                     {!isOutOfStock && (
-                      <ProductCounter 
-                        product={product as any} 
+                      <ProductCounter
+                        product={product}
                         onOpenSidebar={() => {
                           setSelectedProduct(product);
                           setIsSidebarOpen(true);
@@ -232,10 +216,10 @@ export function StoreProductsClient({
                     )}
                   </div>
                   <div>
-                    <p className="text-sm font-medium text-gray-900 line-clamp-2">
+                    <p className="line-clamp-2 text-sm font-medium text-gray-900">
                       {product.name}
                     </p>
-                    <p className="text-sm font-semibold text-gray-900 mt-1">
+                    <p className="mt-1 text-sm font-semibold text-gray-900">
                       $
                       {typeof product.price === "number"
                         ? product.price.toFixed(2)
@@ -252,7 +236,8 @@ export function StoreProductsClient({
       {/* ProductSidebar */}
       {selectedProduct && (
         <ProductSidebar
-          product={selectedProduct as any}
+          product={selectedProduct as unknown as SanityProduct}
+          storeId={storeId}
           isOpen={isSidebarOpen}
           onClose={handleCloseSidebar}
         />

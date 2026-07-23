@@ -1,7 +1,7 @@
 "use client";
 import { Product } from "@/sanity.types";
 import useBasketStore from "@/store/store";
-import { Loader } from "lucide-react";
+import { Check } from "lucide-react";
 import { useEffect, useState } from "react";
 import StoreConflictAlert from "./StoreConflictAlert";
 
@@ -13,12 +13,18 @@ interface AddBasketButtonProps {
 function AddToBasketButton({ product, disabled }: AddBasketButtonProps ) {
     const store = useBasketStore();
     const [isClient, setIsClient] = useState(false);
-    const [isLoading, setIsLoading] = useState(false);
+    const [isAdded, setIsAdded] = useState(false);
     const [showConflictAlert, setShowConflictAlert] = useState(false);
 
     useEffect(() => {
         setIsClient(true);
     }, []);
+
+    useEffect(() => {
+        if (!isAdded) return;
+        const timer = window.setTimeout(() => setIsAdded(false), 1200);
+        return () => window.clearTimeout(timer);
+    }, [isAdded]);
 
     if (!isClient) {
         return null;
@@ -46,37 +52,23 @@ function AddToBasketButton({ product, disabled }: AddBasketButtonProps ) {
     
     const newStoreName = (product?.affiliateStore as { name?: string })?.name || "Nueva tienda";
 
-    const handleAddToBasket = async () => {
+    const handleAddToBasket = () => {
         // Verificar si se puede agregar el producto
         if (!store.canAddProduct(product)) {
             setShowConflictAlert(true);
             return;
         }
 
-        setIsLoading(true);
-        try {
-            await new Promise((resolve) => {
-                store.addItem({ product, quantity: 1 });
-                setTimeout(resolve, 500); // medio segundo de loader
-            });
-        } finally {
-            setIsLoading(false);
-        }
+        store.addItem({ product, quantity: 1 });
+        setIsAdded(true);
     };
 
-    const handleClearCartAndAdd = async () => {
+    const handleClearCartAndAdd = () => {
         if (typeof store.clearBasket === 'function') {
             store.clearBasket();
         }
-        setIsLoading(true);
-        try {
-            await new Promise((resolve) => {
-                store.addItem({ product, quantity: 1 });
-                setTimeout(resolve, 500);
-            });
-        } finally {
-            setIsLoading(false);
-        }
+        store.addItem({ product, quantity: 1 });
+        setIsAdded(true);
     };
   
 
@@ -89,16 +81,16 @@ function AddToBasketButton({ product, disabled }: AddBasketButtonProps ) {
                         w-full bg-[#70e000] text-black px-4 py-2 rounded hover:bg-[#afdc82]
                         disabled:bg-lime-100
                         flex items-center justify-center
-                        transition-all duration-200
+                        transition-all duration-200 motion-safe:active:scale-[0.98]
                         font-bold
                     `}
-                    disabled={disabled || isLoading}
+                    disabled={disabled}
                     aria-label="Agregar al carrito"
                 >
-                    {isLoading ? (
-                        <span className="flex items-center gap-2">
-                            <Loader className="w-4 h-4 animate-spin" />
-                            Agregando al carrito
+                    {isAdded ? (
+                        <span className="ui-enter flex items-center gap-2" aria-live="polite">
+                            <Check className="h-4 w-4" />
+                            Agregado
                         </span>
                     ) : (
                         <span className="flex text-white items-center gap-2">

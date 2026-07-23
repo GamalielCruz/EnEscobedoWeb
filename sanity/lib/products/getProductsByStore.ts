@@ -1,6 +1,7 @@
 import { defineQuery } from "next-sanity";
 
 import { orderProducts } from "@/lib/product-order";
+import { sanitizeText } from "@/lib/utils";
 
 import { sanityFetch } from "../live";
 
@@ -54,6 +55,16 @@ type StoreProductOrdering = {
   categories?: Array<{ categoryId?: string; productIds?: string[] }>;
 };
 
+type StoreProductRecord = {
+  _id: string;
+  name?: string;
+  affiliateStore?: {
+    name?: string;
+    [key: string]: unknown;
+  } | null;
+  [key: string]: unknown;
+};
+
 export const getProductsByStore = async (storeId: string) => {
   try {
     const [productsResult, orderingResult] = await Promise.all([
@@ -74,7 +85,19 @@ export const getProductsByStore = async (storeId: string) => {
     );
 
     return {
-      products: orderProducts(productsResult.data || [], ordering?.all ?? []),
+      products: orderProducts(
+        ((productsResult.data || []) as StoreProductRecord[]).map((product) => ({
+          ...product,
+          name: sanitizeText(product.name),
+          affiliateStore: product.affiliateStore
+            ? {
+                ...product.affiliateStore,
+                name: sanitizeText(product.affiliateStore.name),
+              }
+            : product.affiliateStore,
+        })),
+        ordering?.all ?? []
+      ),
       categoryProductOrders,
     };
   } catch (error) {

@@ -1,8 +1,8 @@
 "use client";
 import { Product } from "@/sanity.types";
 import useBasketStore from "@/store/store";
-import { Loader } from "lucide-react";
-import { useState } from "react";
+import { Check } from "lucide-react";
+import { useEffect, useState } from "react";
 import StoreConflictAlert from "./StoreConflictAlert";
 
 interface AddBasketButtonProps {
@@ -12,10 +12,16 @@ interface AddBasketButtonProps {
 
 function AddToBasketButtonNew({ product, disabled }: AddBasketButtonProps ) {
     const store = useBasketStore();
-    const [isLoading, setIsLoading] = useState(false);
+    const [isAdded, setIsAdded] = useState(false);
     const [showConflictAlert, setShowConflictAlert] = useState(false);
 
-    const handleAddToBasket = async () => {
+    useEffect(() => {
+        if (!isAdded) return;
+        const timer = window.setTimeout(() => setIsAdded(false), 1200);
+        return () => window.clearTimeout(timer);
+    }, [isAdded]);
+
+    const handleAddToBasket = () => {
         // Verificación básica del store
         if (!store || typeof store.addItem !== 'function') {
             console.warn('Store no disponible');
@@ -28,28 +34,18 @@ function AddToBasketButtonNew({ product, disabled }: AddBasketButtonProps ) {
             return;
         }
 
-        setIsLoading(true);
-        try {
-            store.addItem({ product, quantity: 1 });
-            await new Promise((resolve) => setTimeout(resolve, 500));
-        } finally {
-            setIsLoading(false);
-        }
+        store.addItem({ product, quantity: 1 });
+        setIsAdded(true);
     };
 
-    const handleClearCartAndAdd = async () => {
+    const handleClearCartAndAdd = () => {
         if (store && typeof store.clearBasket === 'function') {
             store.clearBasket();
         }
-        setIsLoading(true);
-        try {
-            if (store && typeof store.addItem === 'function') {
-                store.addItem({ product, quantity: 1 });
-            }
-            await new Promise((resolve) => setTimeout(resolve, 500));
-        } finally {
-            setIsLoading(false);
+        if (store && typeof store.addItem === 'function') {
+            store.addItem({ product, quantity: 1 });
         }
+        setIsAdded(true);
     };
 
     // Obtener nombres de tienda para el modal de conflicto
@@ -69,18 +65,18 @@ function AddToBasketButtonNew({ product, disabled }: AddBasketButtonProps ) {
                         w-full bg-[#70e000] text-white px-4 py-3 rounded-lg hover:bg-[#5cb800]
                         disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed
                         flex items-center justify-center
-                        transition-all duration-200
+                        transition-all duration-200 motion-safe:active:scale-[0.98]
                         font-bold text-lg
                         min-h-[56px]
                         shadow-sm hover:shadow-md
                     `}
-                    disabled={disabled || isLoading}
+                    disabled={disabled}
                     aria-label="Agregar al carrito"
                 >
-                    {isLoading ? (
-                        <span className="flex items-center gap-2">
-                            <Loader className="w-5 h-5 animate-spin" />
-                            Agregando...
+                    {isAdded ? (
+                        <span className="ui-enter flex items-center gap-2" aria-live="polite">
+                            <Check className="h-5 w-5" />
+                            Agregado
                         </span>
                     ) : (
                         <span className="flex items-center gap-2">

@@ -1,5 +1,6 @@
 import "server-only";
 
+import { assertProductionIntegration } from "@/lib/deployment-environment";
 import type { ChatwootConversationContext } from "./webhook";
 
 type ChatwootServerConfig = {
@@ -23,6 +24,7 @@ const optionalPositiveInteger = (value?: string) => {
 };
 
 export function getChatwootServerConfig(): ChatwootServerConfig {
+  assertProductionIntegration("Chatwoot");
   const baseUrl = process.env.CHATWOOT_BASE_URL?.replace(/\/$/, "");
   const accountId = optionalPositiveInteger(process.env.CHATWOOT_ACCOUNT_ID);
   const apiAccessToken = process.env.CHATWOOT_API_ACCESS_TOKEN;

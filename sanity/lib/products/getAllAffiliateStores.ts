@@ -10,7 +10,7 @@ function cleanStoreText(value?: string | null) {
 
 export const getAllAffiliateStores = async () => {
     const ALL_STORES_QUERY = defineQuery(`
-        *[_type == "affiliateStore" && isActive == true] | order(name asc) {
+        *[_type == "affiliateStore" && isActive == true] | order(coalesce(homepageOrder, 2147483647) asc, name asc) {
             _id,
             _type,
             _createdAt,

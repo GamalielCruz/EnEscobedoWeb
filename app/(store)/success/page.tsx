@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
+import { LoadingOrbs } from "@/components/Loader";
 import useBasketStore from "@/store/store";
 
 export default function SuccessPage() {
@@ -123,13 +124,13 @@ const sessionId = searchParams?.get("session_id") ?? "";
             </p>
 
             {sessionId && isConfirming && (
-              <p className="text-sm text-amber-700">
-                Confirmando tu pedido y sincronizando con la tienda...
-              </p>
+              <div className="rounded-lg bg-amber-50 py-3 text-amber-800">
+                <LoadingOrbs label="Confirmando tu pedido con la tienda..." />
+              </div>
             )}
 
             {sessionId && !isConfirming && !confirmationError && (
-              <p className="text-sm text-green-700">
+              <p className="ui-enter text-sm text-green-700">
                 Pedido confirmado y sincronizado con la tienda.
               </p>
             )}

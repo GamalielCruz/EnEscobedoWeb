@@ -4,7 +4,7 @@ dotenv.config({ path: ".env.local" });
 
 const client = createClient({
   projectId: "t93gr28n",
-  dataset: "production",
+  dataset: process.env.VERCEL_ENV === "production" ? "production" : "test",
   useCdn: false,
   apiVersion: "2024-07-25",
   token: process.env.SANITY_API_TOKEN,

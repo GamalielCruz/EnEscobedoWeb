@@ -3,7 +3,7 @@ import { Product } from "@/sanity.types";
 import ProductGrid from "./ProductGrid";
 import { CategorySelectorComponent } from "./ui/category-selector";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState, useEffect } from "react";
+import { useTransition } from "react";
 
 // Type for AffiliateStore
 interface AffiliateStore {
@@ -59,16 +59,9 @@ const ProductGridSkeleton = ({ count = 8 }: { count?: number }) => (
 const ProductsView = ({ products, stores, selectedStore, isLoading = false }: ProductsViewProps) => {
     const router = useRouter();
     const searchParams = useSearchParams();
-    const [isTransitioning, setIsTransitioning] = useState(false);
-    const [previousStore, setPreviousStore] = useState(selectedStore);
+    const [isPending, startTransition] = useTransition();
 
     const handleStoreChange = (storeId: string | null) => {
-        // Only show transition if store is actually changing
-        if (storeId !== selectedStore) {
-            setIsTransitioning(true);
-            setPreviousStore(selectedStore);
-        }
-        
         const params = new URLSearchParams(searchParams?.toString() ?? "");
         
         if (storeId) {
@@ -83,23 +76,13 @@ const ProductsView = ({ products, stores, selectedStore, isLoading = false }: Pr
         const queryString = params.toString();
         const newUrl = queryString ? `/?${queryString}` : '/';
         
-        router.push(newUrl);
+        startTransition(() => {
+            router.push(newUrl);
+        });
     };
 
-    // Reset transition state when products change or store changes
-    useEffect(() => {
-        if (!isLoading && selectedStore !== previousStore) {
-            const timer = setTimeout(() => {
-                setIsTransitioning(false);
-                setPreviousStore(selectedStore);
-            }, 100); // Small delay to ensure smooth transition
-            
-            return () => clearTimeout(timer);
-        }
-    }, [isLoading, products, selectedStore, previousStore]);
-
     // Show loading state
-    const shouldShowSkeleton = isLoading || isTransitioning;
+    const shouldShowSkeleton = isLoading || isPending;
 
     return (
     <div className="flex flex-col w-full">

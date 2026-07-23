@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { RefreshCw, Truck, Phone, Store } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 
 type Repartidor = {
   _id: string;
@@ -112,7 +113,11 @@ export default function AdminRepartidoresPage() {
         ].map((stat) => (
           <Card key={stat.label}>
             <CardContent className="pt-4">
-              <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+              {loading && repartidores.length === 0 ? (
+                <Skeleton className="h-8 w-12" />
+              ) : (
+                <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+              )}
               <p className="text-sm text-gray-500">{stat.label}</p>
             </CardContent>
           </Card>
@@ -127,7 +132,11 @@ export default function AdminRepartidoresPage() {
             Lista de repartidores
           </CardTitle>
           <CardDescription>
-            {loading ? "Cargando..." : `${repartidores.length} repartidores registrados`}
+            {loading
+              ? repartidores.length > 0
+                ? "Actualizando..."
+                : "Cargando..."
+              : `${repartidores.length} repartidores registrados`}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -135,8 +144,19 @@ export default function AdminRepartidoresPage() {
             <div className="rounded-md bg-red-50 p-3 text-sm text-red-700">{error}</div>
           )}
 
-          {loading && !error && (
-            <div className="py-12 text-center text-gray-400">Cargando repartidores...</div>
+          {loading && !error && repartidores.length === 0 && (
+            <div role="status" aria-label="Cargando repartidores" className="space-y-4 py-2">
+              {Array.from({ length: 4 }).map((_, index) => (
+                <div key={index} className="flex items-center justify-between gap-4 py-3">
+                  <div className="flex-1 space-y-2">
+                    <Skeleton className="h-5 w-40" />
+                    <Skeleton className="h-4 w-64 max-w-full" />
+                  </div>
+                  <Skeleton className="h-9 w-24" />
+                </div>
+              ))}
+              <span className="sr-only">Cargando repartidores...</span>
+            </div>
           )}
 
           {!loading && !error && repartidores.length === 0 && (
@@ -145,7 +165,7 @@ export default function AdminRepartidoresPage() {
             </div>
           )}
 
-          {!loading && repartidores.length > 0 && (
+          {repartidores.length > 0 && (
             <div className="divide-y divide-gray-100">
               {repartidores.map((rep) => (
                 <div

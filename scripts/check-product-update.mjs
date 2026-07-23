@@ -5,7 +5,7 @@ dotenv.config();
 
 const client = createClient({
   projectId: process.env.NEXT_PUBLIC_SANITY_PROJECT_ID,
-  dataset: process.env.NEXT_PUBLIC_SANITY_DATASET,
+  dataset: process.env.VERCEL_ENV === "production" ? "production" : "test",
   apiVersion: "2024-07-25",
   token: process.env.SANITY_API_TOKEN,
   useCdn: false,

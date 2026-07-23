@@ -1,6 +1,7 @@
 /**
  * Utility functions for handling URLs consistently across the application
  */
+import { getDeploymentEnvironment } from "./deployment-environment";
 
 /**
  * Get the public base URL for the application
@@ -13,17 +14,28 @@ export function getPublicUrl(): string {
   // 3. Environment-specific defaults
   
   const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_BASE_URL;
+  const environment = getDeploymentEnvironment();
 
-  if (configuredUrl && !(process.env.NODE_ENV === "production" && configuredUrl.includes("en-escobedo-web.vercel.app"))) {
+  const invalidProductionUrl =
+    environment === "production" &&
+    Boolean(
+      configuredUrl?.includes("en-escobedo-web.vercel.app") ||
+      configuredUrl?.includes("localhost")
+    );
+
+  if (environment === "production" && configuredUrl && !invalidProductionUrl) {
     return configuredUrl.replace(/\/$/, "");
   }
-  
-  // Fallback based on environment
-  if (process.env.NODE_ENV === "production") {
-    console.warn("NEXT_PUBLIC_SITE_URL missing or deprecated in production, using canonical domain");
+
+  if (environment === "production") {
     return "https://elmenu.site";
   }
-  
+
+  if (environment === "preview") {
+    const vercelUrl = process.env.NEXT_PUBLIC_VERCEL_URL || process.env.VERCEL_URL;
+    if (vercelUrl) return `https://${vercelUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
+  }
+
   return "http://localhost:3000";
 }
 
@@ -32,7 +44,7 @@ export function getPublicUrl(): string {
  * This can use VERCEL_URL for internal Vercel operations
  */
 export function getInternalUrl(): string {
-  if (process.env.NODE_ENV === "production" && process.env.VERCEL_URL) {
+  if (process.env.VERCEL_URL) {
     return `https://${process.env.VERCEL_URL}`;
   }
   

@@ -1,263 +1,231 @@
 "use client";
 
-import { useState, useEffect } from 'react';
-import { createPortal } from 'react-dom';
-import { X, ArrowLeft } from 'lucide-react';
-import Image from 'next/image';
-import { urlFor } from '@/sanity/lib/image';
-import AddToBasketButtonNew from './AddToBasketButtonNew';
-import AddToBasketWithCustomization from './AddToBasketWithCustomization';
-import useBasketStore from '@/store/store';
-import { Product } from '@/sanity.types';
+import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
+import Image from "next/image";
+import { PortableText } from "next-sanity";
+import { ArrowLeft, X } from "lucide-react";
+import type { BlockContent, Product } from "@/sanity.types";
+import { urlFor } from "@/sanity/lib/image";
+import { buildStoreProductUrl, portableTextToPlainText, sanitizeText } from "@/lib/utils";
+import useBasketStore from "@/store/store";
+import AddToBasketButtonNew from "./AddToBasketButtonNew";
+import AddToBasketWithCustomization from "./AddToBasketWithCustomization";
+import ShareButton from "@/app/(store)/product/ShareButton";
 
 interface ProductSidebarProps {
   product: Product | null;
+  storeId: string;
   isOpen: boolean;
   onClose: () => void;
 }
 
-export default function ProductSidebar({ product, isOpen, onClose }: ProductSidebarProps) {
+export default function ProductSidebar({
+  product,
+  storeId,
+  isOpen,
+  onClose,
+}: ProductSidebarProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [mounted, setMounted] = useState(false);
   const { getItemCount } = useBasketStore();
 
-  // Asegurar que el componente esté montado en el cliente
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  useEffect(() => setMounted(true), []);
 
   useEffect(() => {
-    if (isOpen) {
-      setIsVisible(true);
-      
-      // Guardar la posición actual del scroll
-      const scrollY = window.scrollY;
-      
-      // Aplicar estilos para bloquear scroll sin mover el contenido
-      document.body.style.overflow = 'hidden';
-      document.body.style.position = 'fixed';
-      document.body.style.top = `-${scrollY}px`;
-      document.body.style.left = '0';
-      document.body.style.right = '0';
-      document.body.style.width = '100%';
-      
-      // Guardar la posición para restaurarla después
-      document.body.setAttribute('data-scroll-y', scrollY.toString());
-    } else {
-      // Restaurar scroll del body
-      const scrollY = document.body.getAttribute('data-scroll-y');
-      
-      document.body.style.overflow = '';
-      document.body.style.position = '';
-      document.body.style.top = '';
-      document.body.style.left = '';
-      document.body.style.right = '';
-      document.body.style.width = '';
-      
-      // Restaurar la posición de scroll
-      if (scrollY) {
-        window.scrollTo(0, parseInt(scrollY));
-        document.body.removeAttribute('data-scroll-y');
-      }
-    }
+    if (!isOpen) return;
 
-    return () => {
-      // Cleanup completo en caso de desmontaje
-      document.body.style.overflow = '';
-      document.body.style.position = '';
-      document.body.style.top = '';
-      document.body.style.left = '';
-      document.body.style.right = '';
-      document.body.style.width = '';
-      
-      const scrollY = document.body.getAttribute('data-scroll-y');
-      if (scrollY) {
-        window.scrollTo(0, parseInt(scrollY));
-        document.body.removeAttribute('data-scroll-y');
+    setIsVisible(true);
+    const scrollY = window.scrollY;
+    document.body.style.overflow = "hidden";
+    document.body.style.position = "fixed";
+    document.body.style.top = `-${scrollY}px`;
+    document.body.style.left = "0";
+    document.body.style.right = "0";
+    document.body.style.width = "100%";
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsVisible(false);
+        setTimeout(onClose, 250);
       }
     };
-  }, [isOpen]);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = "";
+      document.body.style.position = "";
+      document.body.style.top = "";
+      document.body.style.left = "";
+      document.body.style.right = "";
+      document.body.style.width = "";
+      window.scrollTo(0, scrollY);
+    };
+  }, [isOpen, onClose]);
 
   const handleClose = () => {
     setIsVisible(false);
-    setTimeout(onClose, 300);
+    setTimeout(onClose, 250);
   };
 
   if (!isOpen || !product || !mounted) return null;
 
+  const productName = sanitizeText(product.name) || "Producto";
+  const description = portableTextToPlainText(product.description);
+  const productSlug = product.slug?.current || "";
+  const shareUrl = buildStoreProductUrl(storeId, productSlug);
   const isOutOfStock = product.stock != null && product.stock <= 0;
   const itemCount = getItemCount(product._id);
-  const description =
-    typeof product.description === "string"
-      ? product.description
-      : Array.isArray(product.description)
-        ? product.description
-            .flatMap((block) => ("children" in block ? block.children ?? [] : []))
-            .map((child) => ("text" in child ? child.text ?? "" : ""))
-            .join(" ")
-            .trim()
-        : "";
 
-  const sidebarContent = (
-    <div className="fixed inset-0 z-[9999]" style={{ zIndex: 9999 }}>
-      {/* Overlay */}
-      <div 
-        className={`fixed inset-0 bg-black transition-opacity duration-300 ${
-          isVisible ? 'opacity-50' : 'opacity-0'
+  return createPortal(
+    <div className="fixed inset-0 z-[9999]" role="dialog" aria-modal="true" aria-label={productName}>
+      <button
+        type="button"
+        className={`fixed inset-0 bg-black/55 transition-opacity duration-300 ${
+          isVisible ? "opacity-100" : "opacity-0"
         }`}
         onClick={handleClose}
-        style={{ zIndex: 9999 }}
+        aria-label="Cerrar detalle del producto"
       />
-      
-      {/* Sidebar */}
-      <div 
-        className={`fixed right-0 top-0 w-full max-w-md h-screen bg-white transform transition-transform duration-300 ease-in-out flex flex-col ${
-          isVisible ? 'translate-x-0' : 'translate-x-full'
+
+      <aside
+        className={`fixed right-0 top-0 z-[10000] flex h-dvh w-full max-w-lg transform flex-col bg-white shadow-2xl transition-transform duration-300 ease-out xl:max-w-xl ${
+          isVisible ? "translate-x-0" : "translate-x-full"
         }`}
-        style={{ 
-          height: '100vh', 
-          zIndex: 10000,
-          position: 'fixed',
-          top: 0,
-          right: 0
-        }}
       >
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-white flex-shrink-0">
+        <div className="flex h-16 flex-shrink-0 items-center justify-between border-b border-gray-200 bg-white px-4">
           <button
+            type="button"
             onClick={handleClose}
-            className="flex items-center gap-2 text-gray-600 hover:text-gray-800 transition-colors"
+            className="flex items-center gap-2 rounded-lg px-2 py-2 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5bb800]"
           >
-            <ArrowLeft className="w-5 h-5" />
-            <span className="text-sm font-medium">Volver al menú</span>
+            <ArrowLeft className="h-5 w-5" aria-hidden="true" />
+            Volver al menú
           </button>
           <button
+            type="button"
             onClick={handleClose}
-            className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+            className="rounded-full p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#5bb800]"
+            aria-label="Cerrar"
           >
-            <X className="w-5 h-5 text-gray-400" />
+            <X className="h-5 w-5" aria-hidden="true" />
           </button>
         </div>
 
-        {/* Scrollable Content */}
         <div className="flex-1 overflow-y-auto">
-          {/* Product Image */}
-          <div className="relative aspect-square bg-gray-100">
+          <div className="relative aspect-[4/3] bg-gray-100">
             {product.image ? (
               <Image
-                src={urlFor(product.image).width(600).height(600).url()}
-                alt={product.name || "Producto"}
+                src={urlFor(product.image).width(900).height(675).url()}
+                alt={productName}
                 fill
                 className="object-cover"
                 priority
+                sizes="(max-width: 640px) 100vw, 576px"
               />
             ) : (
-              <div className="flex items-center justify-center h-full">
-                <span className="text-gray-400 text-lg">Sin imagen</span>
+              <div className="flex h-full items-center justify-center text-gray-400">
+                Sin imagen
               </div>
             )}
-            {isOutOfStock && (
-              <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                <span className="text-white text-lg font-semibold">Agotado</span>
+            {isOutOfStock ? (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/45">
+                <span className="rounded-full bg-white/95 px-4 py-2 text-sm font-bold text-gray-900">
+                  Producto agotado
+                </span>
               </div>
-            )}
+            ) : null}
           </div>
 
-          {/* Product Info */}
-          <div className="p-4 space-y-4">
-            {/* Title and Price */}
-            <div>
-              <h1 className="text-xl font-bold text-gray-900 mb-2">
-                {product.name}
-              </h1>
-              <p className="text-xl font-bold text-[#70E000]">
-                ${typeof product.price === "number" ? product.price.toFixed(2) : "0.00"}
-              </p>
-            </div>
-
-            {/* Description */}
-            {description && (
-              <div>
-                <h3 className="text-base font-semibold text-gray-900 mb-1">Descripción</h3>
-                <p className="text-gray-600 text-sm leading-relaxed">
-                  {description}
+          <div className="space-y-6 p-5 sm:p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h2 className="text-2xl font-bold tracking-tight text-gray-950">
+                  {productName}
+                </h2>
+                <p className="mt-1 text-2xl font-bold text-[#4d9f00]">
+                  ${typeof product.price === "number" ? product.price.toFixed(2) : "0.00"}
                 </p>
               </div>
-            )}
+              <ShareButton
+                url={shareUrl}
+                title={productName}
+                text={description}
+                variant="icon"
+                align="right"
+              />
+            </div>
 
-            {/* Categories */}
-            {product.categories && Array.isArray(product.categories) && product.categories.length > 0 && (
-              <div>
-                <h3 className="text-sm font-semibold text-gray-900 mb-1">Categorías</h3>
-                <div className="flex flex-wrap gap-1">
+            {product.description ? (
+              <section className="rounded-2xl bg-gray-50 p-4">
+                <h3 className="mb-2 text-sm font-bold uppercase tracking-wide text-gray-500">
+                  Descripción
+                </h3>
+                {Array.isArray(product.description) ? (
+                  <div className="prose prose-sm max-w-none text-gray-700 prose-p:my-1.5">
+                    <PortableText value={product.description as BlockContent} />
+                  </div>
+                ) : (
+                  <p className="whitespace-pre-line text-sm leading-6 text-gray-700">
+                    {description}
+                  </p>
+                )}
+              </section>
+            ) : null}
+
+            {product.categories?.length ? (
+              <section>
+                <h3 className="mb-2 text-sm font-semibold text-gray-900">Categorías</h3>
+                <div className="flex flex-wrap gap-2">
                   {product.categories.map((category, index) => {
-                    let categoryName = 'Sin categoría';
-                    let categoryKey = `category-${index}`;
-                    
-                    if (typeof category === 'object' && category !== null) {
-                      if ('_id' in category && typeof category._id === 'string') {
-                        categoryKey = category._id;
-                        const catObj = category as { _id: string; title?: string; name?: string };
-                        categoryName = String(catObj.title || catObj.name || 'Sin categoría');
-                      } else if ('_ref' in category) {
-                        const refCategory = category as { _ref: string };
-                        categoryKey = refCategory._ref;
-                        categoryName = 'Categoría';
-                      }
-                    }
-                    
+                    const resolvedCategory = category as unknown as {
+                      _id?: string;
+                      _ref?: string;
+                      title?: string;
+                      name?: string;
+                    };
+                    const categoryName =
+                      sanitizeText(resolvedCategory.title || resolvedCategory.name) ||
+                      "Categoría";
+
                     return (
                       <span
-                        key={categoryKey}
-                        className="px-2 py-1 bg-gray-100 text-gray-700 text-xs rounded-full"
+                        key={resolvedCategory._id || resolvedCategory._ref || index}
+                        className="rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-medium text-gray-600"
                       >
                         {categoryName}
                       </span>
                     );
                   })}
                 </div>
+              </section>
+            ) : null}
+
+            {itemCount > 0 ? (
+              <div className="flex items-center justify-between rounded-2xl border border-green-200 bg-green-50 p-4">
+                <span className="text-sm font-semibold text-green-900">En tu carrito</span>
+                <span className="text-sm font-bold text-green-700">
+                  {itemCount} {itemCount === 1 ? "unidad" : "unidades"}
+                </span>
               </div>
-            )}
-
-            
-            {/* Botón Agregar - Posición prominente */}
-            <div className="pt-2 pb-2">
-              {product.optionGroups && product.optionGroups.length > 0 ? (
-                <AddToBasketWithCustomization 
-                  product={product} 
-                  disabled={isOutOfStock}
-                  onClose={handleClose}
-                />
-              ) : (
-                <AddToBasketButtonNew 
-                  product={product} 
-                  disabled={isOutOfStock}
-                />
-              )}
-            </div>
-
-            {/* Cart Counter */}
-            {itemCount > 0 && (
-              <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-green-800">
-                    En tu carrito
-                  </span>
-                  <span className="text-base font-bold text-[#70E000]">
-                    {itemCount} {itemCount === 1 ? 'unidad' : 'unidades'}
-                  </span>
-                </div>
-              </div>
-            )}
-
-            {/* Espaciado extra */}
-            <div className="h-4"></div>
+            ) : null}
           </div>
         </div>
-      </div>
-    </div>
-  );
 
-  // Renderizar usando portal directamente en el body
-  return createPortal(sidebarContent, document.body);
+        <div className="flex-shrink-0 border-t border-gray-200 bg-white p-4 shadow-[0_-8px_24px_rgba(0,0,0,0.05)]">
+          {product.optionGroups?.length ? (
+            <AddToBasketWithCustomization
+              product={product}
+              disabled={isOutOfStock}
+              onClose={handleClose}
+            />
+          ) : (
+            <AddToBasketButtonNew product={product} disabled={isOutOfStock} />
+          )}
+        </div>
+      </aside>
+    </div>,
+    document.body
+  );
 }

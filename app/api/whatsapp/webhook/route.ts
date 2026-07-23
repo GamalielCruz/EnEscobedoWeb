@@ -21,8 +21,9 @@ import { buildStoreMapsUrl } from '@/lib/order-pricing'
 import { syncBaserowOrderById } from '@/lib/baserow'
 import { isDeliveryPinValid, revealDeliveryPin } from '@/lib/delivery-pin'
 import { parseDeliveryPinCommand } from '@/lib/delivery-pin-command'
+import { verifyWhatsAppSignature } from '@/lib/whatsapp-webhook'
 
-const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN || 'garoga_verify_token'
+const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN
 const MEXICO_TIME_ZONE = 'America/Mexico_City'
 const SESSION_OPTIONS = {
   '1': { minutes: 60, label: '1 hora' },
@@ -603,7 +604,7 @@ export async function GET(req: NextRequest) {
   const token = searchParams.get('hub.verify_token')
   const challenge = searchParams.get('hub.challenge')
 
-  if (mode === 'subscribe' && token === VERIFY_TOKEN) {
+  if (VERIFY_TOKEN && mode === 'subscribe' && token === VERIFY_TOKEN) {
     console.log('[whatsapp webhook] Verificado correctamente')
     return new NextResponse(challenge, { status: 200 })
   }
@@ -612,9 +613,19 @@ export async function GET(req: NextRequest) {
 
 // Meta envia los mensajes entrantes aqui
 export async function POST(req: NextRequest) {
+  const appSecret = process.env.WHATSAPP_APP_SECRET
+  if (!appSecret) {
+    return NextResponse.json({ status: 'unavailable' }, { status: 503 })
+  }
+
+  const rawBody = await req.text()
+  if (!verifyWhatsAppSignature(rawBody, req.headers.get('x-hub-signature-256'), appSecret)) {
+    return NextResponse.json({ status: 'unauthorized' }, { status: 401 })
+  }
+
   let body: Record<string, unknown>
   try {
-    body = await req.json()
+    body = JSON.parse(rawBody)
   } catch {
     return NextResponse.json({ status: 'ok' })
   }

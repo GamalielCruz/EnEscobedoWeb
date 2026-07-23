@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import Link from "next/link";
 import { getAllAffiliateStores } from "@/sanity/lib/products/getAllAffiliateStores";
 import { getAllStoreCategories } from "@/sanity/lib/products/getAllStoreCategories";
 import { redirect } from "next/navigation";
@@ -113,13 +114,13 @@ export default async function Home(props: NextPageProps) {
         {totalPages > 1 && (
           <div className="flex gap-2 mt-6 justify-center w-full max-w-7xl mx-auto">
             <Button asChild variant="outline" disabled={currentPage <= 1}>
-              <a
+              <Link
                 href={`/?page=${currentPage - 1}${selectedCategory ? `&category=${selectedCategory}` : ""}`}
                 aria-disabled={currentPage <= 1}
                 tabIndex={currentPage <= 1 ? -1 : 0}
               >
                 Atrás
-              </a>
+              </Link>
             </Button>
             <span className="px-2 py-1 text-gray-700">
               Página {currentPage} de {totalPages}
@@ -129,13 +130,13 @@ export default async function Home(props: NextPageProps) {
               variant="outline"
               disabled={currentPage >= totalPages}
             >
-              <a
+              <Link
                 href={`/?page=${currentPage + 1}${selectedCategory ? `&category=${selectedCategory}` : ""}`}
                 aria-disabled={currentPage >= totalPages}
                 tabIndex={currentPage >= totalPages ? -1 : 0}
               >
                 Siguiente
-              </a>
+              </Link>
             </Button>
           </div>
         )}

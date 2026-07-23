@@ -1,8 +1,10 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
+import { useState, useTransition } from "react";
 import StoreGrid from "./StoreGrid";
 import { StoreCategoryFilter } from "./StoreCategoryFilter";
+import { Skeleton } from "./ui/skeleton";
 
 interface StoreCategoryIcon {
   type?: string;
@@ -67,6 +69,23 @@ interface StoresViewProps {
   selectedCategory?: string;
 }
 
+function StoreGridSkeleton() {
+  return (
+    <div className="mt-4 grid w-full grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <div key={index} className="overflow-hidden rounded-lg border border-gray-100 bg-white">
+          <Skeleton className="h-48 w-full rounded-none" />
+          <div className="space-y-3 p-4">
+            <Skeleton className="h-6 w-1/2" />
+            <Skeleton className="h-4 w-2/3" />
+            <Skeleton className="h-4 w-3/4" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function StoresView({
   stores,
   storeCategories,
@@ -74,8 +93,12 @@ export default function StoresView({
 }: StoresViewProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const [isPending, startTransition] = useTransition();
+  const [pendingCategory, setPendingCategory] = useState("");
+  const selectedCategory = isPending ? pendingCategory : initialCategory || "";
 
   const handleCategoryChange = (categoryId: string | null) => {
+    setPendingCategory(categoryId || "");
     const params = new URLSearchParams(searchParams?.toString() ?? "");
     
     // Remove page when changing category
@@ -88,7 +111,9 @@ export default function StoresView({
     }
 
     const queryString = params.toString();
-    router.push(queryString ? `/?${queryString}` : "/");
+    startTransition(() => {
+      router.push(queryString ? `/?${queryString}` : "/");
+    });
   };
 
   return (
@@ -98,14 +123,16 @@ export default function StoresView({
         <div className="mb-6">
           <StoreCategoryFilter
             categories={storeCategories}
-            selectedCategory={initialCategory || ""}
+            selectedCategory={selectedCategory}
             onCategoryChange={handleCategoryChange}
           />
         </div>
       )}
 
       {/* Grid de tiendas */}
-      <StoreGrid stores={stores} />
+      <div aria-busy={isPending}>
+        {isPending ? <StoreGridSkeleton /> : <StoreGrid stores={stores} />}
+      </div>
     </>
   );
 }

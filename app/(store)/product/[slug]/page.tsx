@@ -8,7 +8,11 @@ import Image from "next/image";
 import type { Metadata } from "next";
 import { urlFor, getShareableImageUrl } from "@/sanity/lib/image";
 import ShareButton from "../ShareButton";
-import { buildStoreProductUrl } from "@/lib/utils";
+import {
+  buildStoreProductUrl,
+  portableTextToPlainText,
+  sanitizeText,
+} from "@/lib/utils";
 import LazyRelatedProducts from "@/components/LazyRelatedProducts";
 
 export async function generateMetadata({
@@ -20,24 +24,11 @@ export async function generateMetadata({
   const product = await getProductBySlug(slug);
   if (!product) return notFound();
 
-  // Convert description into plain text
-  let descriptionText = "";
-  if (Array.isArray(product.description)) {
-    const firstBlock = product.description.find(
-      (block: any) =>
-        block._type === "block" &&
-        "children" in block &&
-        Array.isArray(block.children)
-    );
-    if (firstBlock && "children" in firstBlock && firstBlock.children) {
-      descriptionText = firstBlock.children
-        .map((child: any) => child.text || "")
-        .join(" ");
-    }
-  } else if (typeof product.description === "string") {
-    descriptionText = product.description;
-  }
-
+  const productName = sanitizeText(product.name) || "Producto";
+  const storeName = sanitizeText(product.affiliateStore?.name);
+  const descriptionText =
+    portableTextToPlainText(product.description) ||
+    `Consulta ${productName}${storeName ? ` de ${storeName}` : ""} en ElMenu.`;
   const imageUrl = product.image
     ? getShareableImageUrl(product.image)
     : undefined;
@@ -46,23 +37,25 @@ export async function generateMetadata({
     product.slug?.current || slug,
     true
   );
+  const title = `${productName}${storeName ? ` | ${storeName}` : ""}`;
 
   return {
-    title: product.name
-      ? `${product.name} | Pixel A Plástico`
-      : "Pixel A Plástico | Querétaro",
-    description: descriptionText || "El Menu.",
+    title,
+    description: descriptionText,
+    alternates: { canonical: shareUrl },
     openGraph: {
-      title: product.name
-        ? `${product.name} | Pixel A Plástico`
-        : "Pixel A Plástico | Querétaro",
-      description: descriptionText || "El Menu.",
-      images: imageUrl
-        ? [imageUrl]
-        : [
-            "https://store-with-stripe.vercel.app/_next/image?url=https%3A%2F%2Fcdn.sanity.io%2Fimages%2Fkgklfrat%2Fproduction%2Fc765b695508ea8327a6ec91548d22cddb4064a9d-2048x2048.png&w=1920&q=75",
-          ],
+      title,
+      description: descriptionText,
+      siteName: "ElMenu",
+      type: "website",
+      images: imageUrl ? [imageUrl] : [],
       url: shareUrl,
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description: descriptionText,
+      images: imageUrl ? [imageUrl] : [],
     },
   };
 }
@@ -92,14 +85,15 @@ export default async function ProductPage({
   const allImages = [...mainImage, ...extraImages];
 
   // Get product categories for lazy loading related products
-  const productCategories = product.categories?.map((cat: any) => cat._ref) || [];
+  const productCategories =
+    product.categories?.map((category) => category._ref).filter(Boolean) || [];
   const shareUrl = buildStoreProductUrl(
     product.affiliateStore?._id || "",
     product.slug?.current || slug,
     true
   );
 
-  const typedProduct = product as any as Product & {
+  const typedProduct = product as unknown as Product & {
     affiliateStore?: {
       _id: string;
       name?: string;
@@ -132,6 +126,8 @@ export default async function ProductPage({
 
   const affiliateStore = typedProduct.affiliateStore;
   const optionGroups = typedProduct.optionGroups || [];
+  const productName = sanitizeText(product.name) || "Producto";
+  const descriptionText = portableTextToPlainText(product.description);
 
   const deliveryFeeText =
     affiliateStore?.deliveryFee != null
@@ -146,19 +142,15 @@ export default async function ProductPage({
       ? `${affiliateStore.averageDeliveryTime} días`
       : "";
 
-  const infoLine = [deliveryFeeText, deliveryTimeText]
-    .filter(Boolean)
-    .join(" • ");
-
   return (
-    <div className="min-h-screen bg-white">
-      <div className="max-w-xl mx-auto bg-white flex flex-col">
+    <div className="min-h-screen bg-[#f7f7f8] px-0 py-0 sm:px-4 sm:py-6">
+      <div className="mx-auto flex max-w-2xl flex-col overflow-hidden bg-white shadow-sm sm:rounded-3xl sm:border sm:border-gray-200">
         {/* Imagen principal estilo tarjeta de delivery */}
         {allImages.length > 0 && (
-          <div className="relative w-full h-64 md:h-80 overflow-hidden">
+          <div className="relative aspect-[4/3] w-full overflow-hidden sm:aspect-[16/10]">
             <Image
               src={urlFor(allImages[0]).width(1200).height(800).url()}
-              alt={product.name ?? "Imagen de producto"}
+              alt={productName}
               fill
               className="object-cover"
               sizes="(max-width: 768px) 100vw, 600px"
@@ -174,23 +166,38 @@ export default async function ProductPage({
         )}
 
         {/* Contenido principal */}
-        <div className="px-4 pt-4 pb-6 space-y-4">
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900">
-              {product.name}
-            </h1>
-            <div className="mt-1 text-xl font-semibold text-gray-900">
-              $
-              {typeof product.price === "number"
-                ? product.price.toFixed(2)
-                : "0.00"}
+        <div className="space-y-5 px-5 pb-6 pt-5 sm:px-6">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+              <h1 className="text-2xl font-bold tracking-tight text-gray-950 sm:text-3xl">
+                {productName}
+              </h1>
+              <div className="mt-1 text-2xl font-bold text-[#4d9f00]">
+                $
+                {typeof product.price === "number"
+                  ? product.price.toFixed(2)
+                  : "0.00"}
+              </div>
             </div>
-            {Array.isArray(product.description) && (
-              <div className="mt-2 text-sm text-gray-700 leading-relaxed">
+            <ShareButton
+              url={shareUrl}
+              title={productName}
+              text={descriptionText}
+              variant="icon"
+              align="right"
+            />
+          </div>
+
+          {Array.isArray(product.description) && (
+              <section className="rounded-2xl bg-gray-50 p-4">
+                <h2 className="mb-2 text-sm font-bold uppercase tracking-wide text-gray-500">
+                  Descripción
+                </h2>
+                <div className="prose prose-sm max-w-none text-gray-700 prose-p:my-1.5">
                 <PortableText value={product.description as BlockContent} />
               </div>
-            )}
-          </div>
+              </section>
+          )}
 
           {/* Info de tienda / restaurante */}
           {affiliateStore && (
@@ -305,21 +312,17 @@ export default async function ProductPage({
             </div>
           )}
 
-          <div>
-            <ShareButton
-              url={shareUrl}
-              title={product.name || ""}
-              text="El Menu."
-            />
-          </div>
         </div>
 
         {/* Botón fijo al fondo, estilo “Add 1 to cart • $18.00” */}
-        <div className="sticky bottom-0 border-t border-gray-200 bg-white px-4 py-3">
-          <AddToBasketButtonNew product={product as any} disabled={isOutOfStock} />
+        <div className="sticky bottom-0 z-10 border-t border-gray-200 bg-white/95 px-5 py-4 shadow-[0_-8px_24px_rgba(0,0,0,0.05)] backdrop-blur">
+          <AddToBasketButtonNew
+            product={product as unknown as Product}
+            disabled={isOutOfStock}
+          />
         </div>
 
-        <div className="px-4 py-6">
+        <div className="border-t border-gray-100 px-5 py-8 sm:px-6">
           <LazyRelatedProducts
             productSlug={product.slug?.current || slug}
             productCategories={productCategories}

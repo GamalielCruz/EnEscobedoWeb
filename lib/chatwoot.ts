@@ -1,24 +1,11 @@
-const HIDDEN_ROUTES = [
-  "/dashboard",
-  "/sign-in",
-  "/sign-up",
-  "/admin",
-  "/click-collect-orders",
-  "/pending-products",
-  "/test",
-  "/studio",
-  "/access-denied",
-  "/draft-mode",
-  "/api",
-] as const;
+import { isProductionDeployment } from "./deployment-environment";
 
 export function isChatwootHiddenRoute(pathname: string) {
-  return HIDDEN_ROUTES.some(
-    (route) => pathname === route || pathname.startsWith(`${route}/`),
-  );
+  return pathname !== "/";
 }
 
 export function getChatwootConfig() {
+  if (!isProductionDeployment()) return null;
   const baseUrl = process.env.NEXT_PUBLIC_CHATWOOT_BASE_URL?.replace(/\/$/, "");
   const websiteToken = process.env.NEXT_PUBLIC_CHATWOOT_WEBSITE_TOKEN;
 

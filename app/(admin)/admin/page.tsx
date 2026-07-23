@@ -1,8 +1,15 @@
 import Link from "next/link";
+import { AdminStoreOrder, type HomepageStore } from "@/components/admin/AdminStoreOrder";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ClipboardList, DollarSign, Package, Truck } from "lucide-react";
+import { writeClient } from "@/sanity/lib/client";
 
+const HOMEPAGE_STORES_QUERY = `*[
+  _type == "affiliateStore" && isActive == true
+] | order(coalesce(homepageOrder, 2147483647) asc, name asc) {
+  _id, name, image, address
+}`;
 const sections = [
   {
     href: "/admin/orders",
@@ -30,7 +37,12 @@ const sections = [
   },
 ];
 
-export default function AdminDashboardPage() {
+export default async function AdminDashboardPage() {
+  const stores = await writeClient.fetch<HomepageStore[]>(
+    HOMEPAGE_STORES_QUERY,
+    {},
+    { cache: "no-store" }
+  );
   return (
     <div className="space-y-6 px-4 sm:px-0">
       <div>
@@ -62,6 +74,8 @@ export default function AdminDashboardPage() {
           );
         })}
       </div>
+
+      <AdminStoreOrder stores={stores ?? []} />
     </div>
   );
 }

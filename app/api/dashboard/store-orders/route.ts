@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { createClient } from "next-sanity";
+import { client, readClient, writeClient } from "@/sanity/lib/client";
 import { syncBaserowOrderById } from "@/lib/baserow";
 import { appendOrderEvent, OrderEventType } from "@/lib/order-events";
 import { sendOrderCancelled, sendOrderDelivered, sendPickupReadyForCustomer } from "@/lib/whatsapp";
@@ -108,23 +108,6 @@ function isValidIsoDate(value: string | null) {
   return !Number.isNaN(Date.parse(value));
 }
 
-function getSanityClients() {
-  const projectId = process.env.NEXT_PUBLIC_SANITY_PROJECT_ID;
-  const dataset = process.env.NEXT_PUBLIC_SANITY_DATASET;
-  const apiVersion = process.env.NEXT_PUBLIC_SANITY_API_VERSION || "2024-07-25";
-
-  if (!projectId || !dataset) {
-    return { error: { message: "Missing Sanity environment variables", projectId: !!projectId, dataset: !!dataset } };
-  }
-
-  const base = { projectId, dataset, apiVersion, perspective: "published" as const };
-  return {
-    client: createClient({ ...base, useCdn: false }),
-    readClient: createClient({ ...base, useCdn: true, token: process.env.SANITY_API_READ_TOKEN }),
-    writeClient: createClient({ ...base, useCdn: false, token: process.env.SANITY_API_TOKEN }),
-  };
-}
-
 function mapStoreStatus(orderType: "pickup" | "delivery", status: string): Partial<{ orderStatus: OrderStatusValue; dispatchStatus: DispatchStatusValue }> {
   switch (status) {
     case "processing":
@@ -166,10 +149,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "beforeAt valido es requerido para scope=history" }, { status: 400 });
     }
 
-    const sanity = getSanityClients();
-    if ("error" in sanity) return NextResponse.json({ error: "Error al cargar pedidos", requestId }, { status: 500 });
-
-    const readSanity = process.env.SANITY_API_READ_TOKEN ? sanity.readClient : process.env.SANITY_API_TOKEN ? sanity.writeClient : sanity.client;
+    const readSanity = process.env.SANITY_API_READ_TOKEN ? readClient : process.env.SANITY_API_TOKEN ? writeClient : client;
     const ownedStores = await readSanity.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, { userId });
     const ownsStore = ownedStores?.some((s) => s._id === storeId);
     if (!ownsStore) return NextResponse.json({ error: "No tienes permiso para esta tienda" }, { status: 403 });
@@ -210,14 +190,12 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: "orderNumber es requerido" }, { status: 400 });
     }
 
-    const sanity = getSanityClients();
-    if ("error" in sanity) return NextResponse.json({ error: "Error al actualizar pedido", requestId }, { status: 500 });
     if (!process.env.SANITY_API_TOKEN) return NextResponse.json({ error: "Error al actualizar pedido", requestId }, { status: 500 });
 
-    const order = await sanity.client.fetch(ORDER_BY_NUMBER, { orderNumber });
+    const order = await client.fetch(ORDER_BY_NUMBER, { orderNumber });
     if (!order) return NextResponse.json({ error: "Orden no encontrada" }, { status: 404 });
 
-    const ownedStores = await sanity.writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, { userId });
+    const ownedStores = await writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, { userId });
     const storeId = order.pickupStore?._ref || order.affiliateStore?._ref;
     const ownsStore = ownedStores?.some((s) => s._id === storeId);
     if (!ownsStore) {
@@ -278,7 +256,7 @@ export async function PATCH(request: NextRequest) {
       updateData.settlementStatus = "refunded";
     }
 
-    const updated = await sanity.writeClient.patch(order._id).set(updateData).commit();
+    const updated = await writeClient.patch(order._id).set(updateData).commit();
 
     const events: Array<{ type: OrderEventType; reason?: string; payload?: Record<string, unknown> }> = [];
     if (shouldEmitRestaurantAccepted(order.orderStatus, orderStatus)) {
