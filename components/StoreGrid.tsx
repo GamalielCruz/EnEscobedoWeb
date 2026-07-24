@@ -140,7 +140,7 @@ export default function StoreGrid({ stores }: StoreGridProps) {
                 <details className="group/status">
                   <summary className={`flex cursor-pointer list-none items-center gap-1 font-medium ${isOpen ? "text-green-600" : "text-red-500"}`}>
                     <span className="relative flex h-2 w-2">
-                      {isOpen && <span className="absolute h-full w-full animate-ping rounded-full bg-green-500 opacity-60" />}
+                      {isOpen && <span className="absolute h-full w-full animate-ping rounded-full bg-green-500 opacity-60 motion-reduce:animate-none" />}
                       <span className={`relative h-2 w-2 rounded-full ${isOpen ? "bg-green-500" : "bg-red-500"}`} />
                     </span>
                     {isOpen ? "Abierto" : "Cerrado"}
@@ -175,23 +175,14 @@ export default function StoreGrid({ stores }: StoreGridProps) {
       })}
       <style jsx>{`
         @keyframes message-cycle {
-          0% { opacity: 0; transform: translateY(4px); filter: blur(2px); }
-          10%, 82% { opacity: 1; transform: translateY(0); filter: blur(0); }
-          100% { opacity: 0; transform: translateY(-4px); filter: blur(2px); }
-        }
-
-        @keyframes message-shimmer {
-          from { background-position: 150% center; }
-          to { background-position: -150% center; }
+          0% { opacity: 0; transform: translateY(4px); }
+          10%, 82% { opacity: 1; transform: translateY(0); }
+          100% { opacity: 0; transform: translateY(-4px); }
         }
 
         .restaurant-message {
-          color: transparent;
-          background: linear-gradient(90deg, #6b7280 30%, #111827 50%, #6b7280 70%);
-          background-size: 300% 100%;
-          background-clip: text;
-          -webkit-background-clip: text;
-          animation: message-cycle 5s ease-in-out, message-shimmer 2s linear infinite;
+          color: #4b5563;
+          animation: message-cycle 5s ease-in-out;
         }
 
         @media (prefers-reduced-motion: reduce) {

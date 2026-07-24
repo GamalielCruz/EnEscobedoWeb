@@ -18,6 +18,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Store, Package } from "lucide-react";
 import Image from "next/image";
 import { urlFor } from "@/sanity/lib/image";
@@ -221,9 +222,26 @@ export default function PendingProductsPage() {
 
   if (loading) {
     return (
-      <div className="container mx-auto px-4 py-20 max-w-lg text-center">
-        <Loader2 className="w-8 h-8 animate-spin mx-auto text-[#ff8800]" />
-        <p className="text-gray-600 mt-4">Cargando...</p>
+      <div role="status" aria-label="Cargando solicitudes" className="container mx-auto max-w-6xl space-y-8 px-4 py-8">
+        <div className="space-y-3">
+          <Skeleton className="h-4 w-52" />
+          <Skeleton className="h-9 w-80 max-w-full" />
+          <Skeleton className="h-4 w-96 max-w-full" />
+        </div>
+        <Skeleton className="h-10 w-full max-w-md rounded-lg" />
+        <div className="space-y-4">
+          {Array.from({ length: 3 }).map((_, index) => (
+            <div key={index} className="space-y-3 rounded-lg border bg-white p-4">
+              <div className="flex items-center justify-between">
+                <Skeleton className="h-6 w-48" />
+                <Skeleton className="h-6 w-24 rounded-full" />
+              </div>
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-9 w-40" />
+            </div>
+          ))}
+        </div>
+        <span className="sr-only">Cargando solicitudes...</span>
       </div>
     );
   }

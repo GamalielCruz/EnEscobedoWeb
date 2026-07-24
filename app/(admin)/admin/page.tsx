@@ -1,8 +1,15 @@
 import Link from "next/link";
+import { AdminStoreOrder, type HomepageStore } from "@/components/admin/AdminStoreOrder";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ClipboardList, DollarSign, Package, Truck } from "lucide-react";
+import { writeClient } from "@/sanity/lib/client";
 
+const HOMEPAGE_STORES_QUERY = `*[
+  _type == "affiliateStore" && isActive == true
+] | order(coalesce(homepageOrder, 2147483647) asc, name asc) {
+  _id, name, image, address
+}`;
 const sections = [
   {
     href: "/admin/orders",
@@ -30,13 +37,22 @@ const sections = [
   },
 ];
 
-export default function AdminDashboardPage() {
+export default async function AdminDashboardPage() {
+  const stores = await writeClient.fetch<HomepageStore[]>(
+    HOMEPAGE_STORES_QUERY,
+    {},
+    { cache: "no-store" }
+  );
   return (
     <div className="space-y-6 px-4 sm:px-0">
       <div>
-        <p className="text-sm font-medium uppercase tracking-wide text-[#ff8800]">Panel Admin</p>
-        <h1 className="text-3xl font-bold text-gray-900">Dashboard principal</h1>
-        <p className="mt-2 max-w-2xl text-gray-600">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+          Resumen operativo
+        </p>
+        <h1 className="mt-1 text-[18px] font-semibold tracking-[-0.01em] text-gray-950">
+          Administración general
+        </h1>
+        <p className="mt-1 max-w-2xl text-sm leading-5 text-gray-600">
           Centraliza la operacion administrativa bajo `/admin` sin afectar el panel de duenos en `/dashboard`.
         </p>
       </div>
@@ -45,16 +61,23 @@ export default function AdminDashboardPage() {
         {sections.map((section) => {
           const Icon = section.icon;
           return (
-            <Card key={section.href}>
-              <CardHeader>
-                <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-orange-100">
-                  <Icon className="h-6 w-6 text-[#ff8800]" />
+            <Card
+              key={section.href}
+              className="rounded-2xl border-black/6 shadow-[0_1px_2px_rgba(16,24,40,0.04)]"
+            >
+              <CardHeader className="p-5">
+                <div className="mb-2 flex h-9 w-9 items-center justify-center rounded-lg bg-[#fff3f4]">
+                  <Icon className="h-4 w-4 text-[#850C22]" />
                 </div>
-                <CardTitle>{section.title}</CardTitle>
+                <CardTitle className="text-[17px]">{section.title}</CardTitle>
                 <CardDescription>{section.description}</CardDescription>
               </CardHeader>
-              <CardContent>
-                <Button asChild className="w-full bg-[#ff8800] text-gray-900 hover:bg-[#ff8800]/90">
+              <CardContent className="px-5 pb-5">
+                <Button
+                  asChild
+                  variant="outline"
+                  className="w-full rounded-lg border-black/8 bg-white text-[#850C22] shadow-none hover:bg-[#fff3f4] hover:text-[#850C22]"
+                >
                   <Link href={section.href}>Abrir seccion</Link>
                 </Button>
               </CardContent>
@@ -62,6 +85,8 @@ export default function AdminDashboardPage() {
           );
         })}
       </div>
+
+      <AdminStoreOrder stores={stores ?? []} />
     </div>
   );
 }

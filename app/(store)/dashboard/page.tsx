@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { Loader2 } from "lucide-react";
 
 import { DashboardClaimStoreView } from "@/components/dashboard/DashboardClaimStoreView";
 import { DashboardHomeSection } from "@/components/dashboard/DashboardHomeSection";
@@ -13,6 +12,40 @@ import { DashboardStoreSection } from "@/components/dashboard/DashboardStoreSect
 import type { SectionKey } from "@/components/dashboard/dashboard.types";
 import { getStoreOperationalState } from "@/lib/storeOperationalState";
 import { useDashboardData } from "@/components/dashboard/useDashboardData";
+import { Skeleton } from "@/components/ui/skeleton";
+
+function DashboardLoading() {
+  return (
+    <div role="status" aria-label="Cargando dashboard" className="min-h-screen bg-[#f6f7f9] p-4 sm:p-6">
+      <div className="mx-auto grid max-w-7xl gap-5 lg:grid-cols-[240px_1fr]">
+        <Skeleton className="hidden min-h-[720px] rounded-2xl lg:block" />
+        <div className="space-y-5">
+          <div className="flex items-center justify-between rounded-2xl bg-white p-5">
+            <div className="space-y-2">
+              <Skeleton className="h-4 w-28" />
+              <Skeleton className="h-8 w-52" />
+            </div>
+            <Skeleton className="h-10 w-32 rounded-lg" />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-3">
+            {Array.from({ length: 3 }).map((_, index) => (
+              <div key={index} className="space-y-3 rounded-2xl bg-white p-5">
+                <Skeleton className="h-4 w-24" />
+                <Skeleton className="h-9 w-20" />
+              </div>
+            ))}
+          </div>
+          <div className="space-y-4 rounded-2xl bg-white p-5">
+            <Skeleton className="h-6 w-40" />
+            <Skeleton className="h-20 w-full" />
+            <Skeleton className="h-20 w-full" />
+          </div>
+        </div>
+      </div>
+      <span className="sr-only">Cargando dashboard...</span>
+    </div>
+  );
+}
 
 export default function DashboardPage() {
   const [section, setSection] = React.useState<SectionKey>("inicio");
@@ -79,14 +112,7 @@ export default function DashboardPage() {
   };
 
   if (!isLoaded || loadingStores) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="flex items-center gap-3 rounded-2xl border border-gray-200 bg-white px-5 py-4 text-gray-700 shadow-sm">
-          <Loader2 className="h-5 w-5 animate-spin text-[#ff8800]" />
-          <span>Cargando dashboard...</span>
-        </div>
-      </div>
-    );
+    return <DashboardLoading />;
   }
 
   if (!user) {

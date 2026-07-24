@@ -1,5 +1,6 @@
 import { defineQuery } from "next-sanity";
 import { sanityFetch } from "../live";
+import { sanitizeText } from "@/lib/utils";
 
 export const getProductBySlug = async (slug: string) => {
     // Soft delete publico: solo productos aprobados y no ocultos; docs viejos sin isVisible siguen visibles.
@@ -32,7 +33,18 @@ export const getProductBySlug = async (slug: string) => {
                 },
             });
 
-            return product.data || null;
+            return product.data
+              ? {
+                  ...product.data,
+                  name: sanitizeText(product.data.name),
+                  affiliateStore: product.data.affiliateStore
+                    ? {
+                        ...product.data.affiliateStore,
+                        name: sanitizeText(product.data.affiliateStore.name),
+                      }
+                    : product.data.affiliateStore,
+                }
+              : null;
         } catch (error) {
             console.log("Error fetching product by ID:", error);
             return null;

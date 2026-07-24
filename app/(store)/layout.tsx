@@ -6,16 +6,17 @@ import { DisableDraftMode } from "@/components/DisableDraftMode";
 import Footer from "./Footer";
 import CookieConsent from "@/components/cookie-consent";
 import HydrationErrorSuppressor from "@/components/HydrationErrorSuppressor";
+import { getPublicUrl } from "@/lib/urls";
 
 export const metadata: Metadata = {
   title: "ElMenu",
   description: "Tu Menu en línea.",
-  metadataBase: new URL(process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'),
+  metadataBase: new URL(getPublicUrl()),
   openGraph: {
     title: "En Escobedo | Plaza en linea",
     description: "Tu Menu en línea.",
     images: ["/open.png"],
-    url: "https://elmenu.site",
+    url: getPublicUrl(),
   },
 };
 

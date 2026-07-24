@@ -1,13 +1,8 @@
 "use client";
 
 import * as React from "react";
-import Image from "next/image";
-import { Reorder, useDragControls } from "framer-motion";
 import {
-  ArrowDown,
-  ArrowUp,
   Check,
-  GripVertical,
   ListOrdered,
   Plus,
   RefreshCw,
@@ -16,6 +11,7 @@ import {
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import { SortableOrderList } from "@/components/SortableOrderList";
 import {
   Select,
   SelectContent,
@@ -61,87 +57,6 @@ type DashboardProductsSectionProps = {
   onSaveProductOrder: (categoryId: string | null, productIds: string[]) => Promise<boolean>;
   onImageUpload: (file: File) => Promise<{ _type: string; asset: { _type: string; _ref: string } } | null>;
 };
-
-type SortableProductProps = {
-  product: Product;
-  index: number;
-  total: number;
-  onMove: (direction: -1 | 1) => void;
-};
-
-function SortableProduct({ product, index, total, onMove }: SortableProductProps) {
-  const dragControls = useDragControls();
-
-  return (
-    <Reorder.Item
-      value={product._id}
-      dragListener={false}
-      dragControls={dragControls}
-      whileDrag={{
-        scale: 1.015,
-        boxShadow: "0 18px 45px rgba(15, 23, 42, 0.16)",
-      }}
-      className="flex items-center gap-3 rounded-xl border border-black/8 bg-white p-3 shadow-sm"
-    >
-      <button
-        type="button"
-        aria-label={"Arrastrar " + product.name}
-        onPointerDown={(event) => dragControls.start(event)}
-        className="touch-none cursor-grab rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700 active:cursor-grabbing"
-      >
-        <GripVertical className="h-5 w-5" />
-      </button>
-
-      <span className="w-7 text-center text-sm font-semibold tabular-nums text-gray-500">
-        {index + 1}
-      </span>
-
-      <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg bg-gray-100">
-        {product.image ? (
-          <Image
-            src={imageUrl(product.image).width(96).height(96).url()}
-            alt=""
-            fill
-            className="object-cover"
-            sizes="48px"
-          />
-        ) : null}
-      </div>
-
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold text-gray-950">{product.name}</p>
-        <p className="text-xs text-gray-500">
-          Posicion {index + 1} de {total}
-        </p>
-      </div>
-
-      <div className="flex gap-1">
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label={"Mover " + product.name + " hacia arriba"}
-          disabled={index === 0}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => onMove(-1)}
-        >
-          <ArrowUp className="h-4 w-4" />
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label={"Mover " + product.name + " hacia abajo"}
-          disabled={index === total - 1}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => onMove(1)}
-        >
-          <ArrowDown className="h-4 w-4" />
-        </Button>
-      </div>
-    </Reorder.Item>
-  );
-}
 
 export function DashboardProductsSection({
   products,
@@ -202,16 +117,6 @@ export function DashboardProductsSection({
   const handleOpenOrdering = () => {
     setDraftIds(savedIds);
     setIsOrdering(true);
-  };
-
-  const handleMove = (index: number, direction: -1 | 1) => {
-    setDraftIds((current) => {
-      const nextIndex = index + direction;
-      if (nextIndex < 0 || nextIndex >= current.length) return current;
-      const next = [...current];
-      [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
-      return next;
-    });
   };
 
   const handleSaveOrder = async () => {
@@ -415,22 +320,17 @@ export function DashboardProductsSection({
                 </div>
               </div>
 
-              <Reorder.Group
-                axis="y"
-                values={draftIds}
+              <SortableOrderList
+                items={draftProducts.map((product) => ({
+                  id: product._id,
+                  label: product.name,
+                  imageUrl: product.image
+                    ? imageUrl(product.image).width(96).height(96).url()
+                    : undefined,
+                }))}
+                order={draftIds}
                 onReorder={setDraftIds}
-                className="space-y-2"
-              >
-                {draftProducts.map((product, index) => (
-                  <SortableProduct
-                    key={product._id}
-                    product={product}
-                    index={index}
-                    total={draftProducts.length}
-                    onMove={(direction) => handleMove(index, direction)}
-                  />
-                ))}
-              </Reorder.Group>
+              />
             </div>
           ) : loading ? (
             <DashboardEmptyState

@@ -97,7 +97,7 @@ export function Header() {
 
   return (
     <header
-      className={`sticky top-0 z-50 w-full bg-white border-b border-gray-100 flex flex-wrap justify-between items-center px-2 py-2 transition-transform duration-300 ease-in-out ${
+      className={`sticky top-0 z-50 w-full bg-white border-b border-gray-100 flex flex-wrap justify-between items-center px-2 py-2 transition-transform duration-300 ease-in-out motion-reduce:transition-none ${
         isVisible ? "translate-y-0" : "-translate-y-full"
       }`}
     >
@@ -155,7 +155,10 @@ export function Header() {
             >
               <TrolleyIcon className="w-6 h-6" />
               {isHydrated && itemCount !== 0 && (
-                <span className="absolute -top-1 -right-1 text-xs bg-[#eb1901] text-white rounded-full w-5 h-5 flex items-center justify-center font-bold animate-pulse">
+                <span
+                  key={itemCount}
+                  className="cart-count-pop absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-[#eb1901] text-xs font-bold text-white"
+                >
                   {itemCount}
                 </span>
               )}

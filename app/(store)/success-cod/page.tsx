@@ -7,6 +7,7 @@ import {
   CreditCard,
   Package,
 } from "lucide-react";
+import Loader from "@/components/Loader";
 
 const BRAND_COLOR = "#eb1902";
 
@@ -29,14 +30,7 @@ export default function SuccessCODPage() {
   }, [searchParams, router]);
 
   if (!isMounted || !orderNumber) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div
-          className="h-14 w-14 animate-spin rounded-full border-4 border-gray-200 border-b-transparent"
-          style={{ borderBottomColor: BRAND_COLOR }}
-        />
-      </div>
-    );
+    return <Loader />;
   }
 
   return (
@@ -44,7 +38,7 @@ export default function SuccessCODPage() {
       <div className="mx-auto w-full max-w-3xl">
         <div className="mb-6 text-center">
           <div
-            className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full text-white shadow-sm"
+            className="ui-enter mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full text-white shadow-sm"
             style={{ backgroundColor: BRAND_COLOR }}
           >
             <CheckCircle className="h-8 w-8" />

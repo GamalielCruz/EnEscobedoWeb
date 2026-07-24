@@ -1,3 +1,5 @@
+import { assertProductionIntegration } from "./deployment-environment";
+
 const WHATSAPP_API_URL = "https://graph.facebook.com/v25.0";
 const WHATSAPP_FETCH_TIMEOUT_MS = 8000;
 const RESTAURANTE_PICKUP_TEMPLATE_NAME =
@@ -68,6 +70,7 @@ async function fetchWhatsAppApi(
 }
 
 function getWhatsAppEndpoint() {
+  assertProductionIntegration("WhatsApp");
   const phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
   const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
 

@@ -2,7 +2,7 @@ import { createClient } from "@sanity/client";
 
 const commit = process.argv.includes("--commit");
 const projectId = process.env.NEXT_PUBLIC_SANITY_PROJECT_ID;
-const dataset = process.env.NEXT_PUBLIC_SANITY_DATASET;
+const dataset = process.env.VERCEL_ENV === "production" ? "production" : "test";
 const token = process.env.SANITY_API_WRITE_TOKEN || process.env.SANITY_API_TOKEN;
 if (!projectId || !dataset || (commit && !token)) throw new Error("Faltan credenciales de Sanity.");
 

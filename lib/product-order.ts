@@ -19,3 +19,12 @@ export function orderProducts<T extends { _id: string }>(
     })
     .map(({ product }) => product);
 }
+
+export function isCompleteOrder(
+  availableIds: readonly string[],
+  orderedIds: readonly string[]
+) {
+  if (availableIds.length !== orderedIds.length) return false;
+  const ordered = new Set(orderedIds);
+  return ordered.size === orderedIds.length && availableIds.every((id) => ordered.has(id));
+}

@@ -12,7 +12,7 @@ import { createClient } from '@sanity/client';
 // Configuración directa del cliente
 const client = createClient({
   projectId: 'kgklfrat',
-  dataset: 'production',
+  dataset: process.env.VERCEL_ENV === "production" ? "production" : "test",
   apiVersion: '2025-07-25',
   token: 'skTKqpKJegWPIvjfxNKsTViWyZf3kWj45UhoAlj1nHiAEYI5FyD0tXKEjNPpH7t9HeI7LE0DL77ZDmKdBNmbY3cPpU02Nsx4Hx9KMwqCLIwRSjMpwMwg76oT6AGHK7tXvYMrOjPFldQ8H9aKQvfLC6E5svNz3yLkfZwbiT2iF3FGoPGuMIIC',
   useCdn: false,

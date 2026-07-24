@@ -1,14 +1,20 @@
-import { notFound } from "next/navigation";
 import Image from "next/image";
 import type { Metadata } from "next";
-import { getStoreById } from "@/sanity/lib/products/getStoreById";
-import { getProductsByStore } from "@/sanity/lib/products/getProductsByStore";
-import { getProductBySlug } from "@/sanity/lib/products/getProductBySlug";
-import { urlFor } from "@/sanity/lib/image";
-import { StoreProductsClient } from "./StoreProductsClient";
+import { notFound } from "next/navigation";
 import { StoreStatus } from "@/components/StoreStatus";
-import { getShareableImageUrl } from "@/sanity/lib/image";
 import { getStoreServiceTiming } from "@/lib/storeOperationalState";
+import { buildUrl } from "@/lib/urls";
+import {
+  buildStoreProductUrl,
+  portableTextToPlainText,
+  sanitizeText,
+} from "@/lib/utils";
+import { getShareableImageUrl, urlFor } from "@/sanity/lib/image";
+import { getProductBySlug } from "@/sanity/lib/products/getProductBySlug";
+import { getProductsByStore } from "@/sanity/lib/products/getProductsByStore";
+import { getStoreById } from "@/sanity/lib/products/getStoreById";
+import ShareButton from "../../product/ShareButton";
+import { StoreProductsClient } from "./StoreProductsClient";
 
 export async function generateMetadata({
   params,
@@ -18,48 +24,70 @@ export async function generateMetadata({
   searchParams?: Promise<{ product?: string }>;
 }): Promise<Metadata> {
   const { id } = await params;
-  const resolvedSearchParams = (await (searchParams ?? Promise.resolve({}))) as {
-    product?: string;
-  };
+  const { product: requestedProduct } = await (
+    searchParams ?? Promise.resolve({} as { product?: string })
+  );
   const store = await getStoreById(id);
 
   if (!store) return notFound();
 
-  const productSlug = resolvedSearchParams.product?.trim();
+  const storeName = sanitizeText(store.name) || "Tienda";
+  const productSlug = requestedProduct?.trim();
   const product = productSlug ? await getProductBySlug(productSlug) : null;
 
   if (product && product.affiliateStore?._id === id) {
-    const descriptionText =
-      typeof product.description === "string"
-        ? product.description
-        : Array.isArray(product.description)
-          ? product.description
-              .filter((block: any) => block?._type === "block")
-              .flatMap((block: any) => block?.children ?? [])
-              .map((child: any) => child?.text || "")
-              .join(" ")
-          : "";
+    const productName = sanitizeText(product.name) || "Producto";
+    const description =
+      portableTextToPlainText(product.description) ||
+      `Compra ${productName} en ${storeName} desde ElMenu.`;
     const imageUrl = product.image ? getShareableImageUrl(product.image) : undefined;
+    const shareUrl = buildStoreProductUrl(id, productSlug || "");
+    const title = `${productName} | ${storeName}`;
 
     return {
-      title: product.name ? `${product.name} | ${store.name}` : `${store.name} | EnEscobedo`,
-      description: descriptionText || `Compra ${product.name || "este producto"} en ${store.name}.`,
+      title,
+      description,
+      alternates: { canonical: shareUrl },
       openGraph: {
-        title: product.name ? `${product.name} | ${store.name}` : `${store.name} | EnEscobedo`,
-        description: descriptionText || `Compra ${product.name || "este producto"} en ${store.name}.`,
-        url: `https://enescobedo.com/store/${id}?product=${encodeURIComponent(productSlug || "")}`,
+        title,
+        description,
+        url: shareUrl,
+        siteName: "ElMenu",
+        type: "website",
+        images: imageUrl ? [imageUrl] : [],
+      },
+      twitter: {
+        card: "summary_large_image",
+        title,
+        description,
         images: imageUrl ? [imageUrl] : [],
       },
     };
   }
 
+  const storeUrl = buildUrl(`/store/${id}`);
+  const title = `${storeName} | ElMenu`;
+  const description = `Consulta el menú y pide en ${storeName}.`;
+  const storeImage = store.coverImage || store.image;
+  const imageUrl = storeImage ? getShareableImageUrl(storeImage) : undefined;
+
   return {
-    title: `${store.name} | EnEscobedo`,
-    description: `Explora los productos disponibles en ${store.name}`,
+    title,
+    description,
+    alternates: { canonical: storeUrl },
     openGraph: {
-      title: `${store.name} | EnEscobedo`,
-      description: `Explora los productos disponibles en ${store.name}`,
-      url: `https://enescobedo.com/store/${id}`,
+      title,
+      description,
+      url: storeUrl,
+      siteName: "ElMenu",
+      type: "website",
+      images: imageUrl ? [imageUrl] : [],
+    },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: imageUrl ? [imageUrl] : [],
     },
   };
 }
@@ -72,92 +100,86 @@ export default async function StorePage({
   searchParams?: Promise<{ product?: string }>;
 }) {
   const { id } = await params;
-  const resolvedSearchParams = (await (searchParams ?? Promise.resolve({}))) as {
-    product?: string;
-  };
+  const { product: requestedProduct } = await (
+    searchParams ?? Promise.resolve({} as { product?: string })
+  );
   const store = await getStoreById(id);
 
   if (!store) return notFound();
 
-  // Obtener productos de esta tienda
   const { products, categoryProductOrders } = await getProductsByStore(id);
-  const highlightedProductSlug = resolvedSearchParams.product?.trim() || "";
-
-
-
   const timing = getStoreServiceTiming(store);
+  const highlightedProductSlug = requestedProduct?.trim() || "";
+  const storeName = sanitizeText(store.name) || "Tienda";
+  const storeUrl = buildUrl(`/store/${id}`);
+  const categoriesMap = new Map<
+    string,
+    { _id: string; title?: string; slug?: { current?: string } }
+  >();
 
-  const deliveryFeeText =
-    store.deliveryFee != null ? `$${store.deliveryFee.toFixed(2)}` : "Gratis";
+  products.forEach((product) => {
+    const productCategories = (
+      product as unknown as {
+        categories?: Array<{
+          _id: string;
+          title?: string;
+          slug?: { current?: string };
+        }>;
+      }
+    ).categories;
 
-  // Debug: ver qué categorías tienen los productos
-  console.log('Products count:', products.length);
-
-  // Extraer solo las categorías únicas de los productos de ESTA tienda
-  const categoriesMap = new Map<string, { _id: string; title?: string; slug?: { current?: string } }>();
-  
-  products.forEach((product: any) => {
-    product.categories?.forEach((cat: any) => {
-      if (cat._id && cat.title && !categoriesMap.has(cat._id)) {
-        categoriesMap.set(cat._id, {
-          _id: cat._id,
-          title: cat.title,
-          slug: cat.slug,
+    productCategories?.forEach((category) => {
+      if (category._id && category.title && !categoriesMap.has(category._id)) {
+        categoriesMap.set(category._id, {
+          _id: category._id,
+          title: category.title,
+          slug: category.slug,
         });
       }
     });
   });
 
-  const categories = Array.from(categoriesMap.values());
-  
-  // Debug: ver qué categorías se están pasando
-  console.log('Categories to pass to component:', JSON.stringify(categories, null, 2));
-  console.log('Extracted categories:', categories);
-
   return (
     <div className="min-h-screen bg-white">
-      <div className="max-w-7xl mx-auto">
-        {/* Header de la tienda - estilo Uber Eats */}
-        <div className="relative w-full h-48 md:h-64 bg-gradient-to-br from-gray-100 to-gray-200 overflow-hidden">
-          {store.coverImage && (
+      <div className="mx-auto max-w-7xl">
+        <section className="relative h-48 w-full overflow-hidden bg-gradient-to-br from-gray-100 to-gray-200 md:h-64">
+          {store.coverImage ? (
             <Image
               src={urlFor(store.coverImage).width(1200).height(400).url()}
-              alt={`${store.name} cover`}
+              alt={`Portada de ${storeName}`}
               fill
               className="object-cover"
               priority
             />
-          )}
+          ) : null}
           <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-black/20 to-transparent" />
           <div className="absolute inset-0 flex items-center justify-center">
             <div className="text-center">
-              <div className="h-20 w-20 md:h-24 md:w-24 rounded-full bg-white shadow-lg mx-auto mb-4 flex items-center justify-center overflow-hidden">
+              <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-white shadow-lg md:h-24 md:w-24">
                 {store.image ? (
                   <Image
                     src={urlFor(store.image).width(200).height(200).url()}
-                    alt={store.name || "Tienda"}
+                    alt={storeName}
                     width={96}
                     height={96}
                     className="h-full w-full object-cover"
                   />
                 ) : (
-                  <span className="text-3xl md:text-4xl font-bold text-white">
-                    {store.name?.charAt(0) || "T"}
+                  <span className="text-3xl font-bold text-gray-700 md:text-4xl">
+                    {storeName.charAt(0)}
                   </span>
                 )}
               </div>
-              <h1 className="text-2xl md:text-3xl font-bold text-white drop-shadow-lg">
-                {store.name}
+              <h1 className="text-2xl font-bold text-white drop-shadow-lg md:text-3xl">
+                {storeName}
               </h1>
             </div>
           </div>
-        </div>
+        </section>
 
-        {/* Info de entrega */}
-        <div className="border-b border-gray-200 bg-white">
-          <div className="px-4 py-4">
+        <section className="relative border-b border-gray-200 bg-white">
+          <div className="py-4 pl-4 pr-16">
             <div className="flex items-center gap-4 text-sm">
-              {/* Estado de la tienda (Abierto/Cerrado) */}
               <StoreStatus
                 operatingHours={store.operatingHours || undefined}
                 isOpen={store.isOpen}
@@ -165,29 +187,36 @@ export default async function StorePage({
                 highDemandMode={store.highDemandMode}
                 serviceTypes={store.serviceTypes || undefined}
               />
-              
-              {/* Tiempo de entrega */}
               <div className="flex items-center gap-1 text-gray-600">
                 {timing.label ? <span>Entrega estimada: {timing.label}</span> : null}
               </div>
             </div>
             {timing.highDemandMode ? (
               <p className="mt-2 text-xs font-medium text-amber-700">
-                Alta demanda · Los pedidos pueden tardar mas
+                Alta demanda · Los pedidos pueden tardar más.
               </p>
             ) : null}
-            {store.address && (
-              <p className="mt-2 text-xs text-black font-medium">
-                 {store.address.city}
+            {store.address?.city ? (
+              <p className="mt-2 text-xs font-medium text-black">
+                {sanitizeText(store.address.city)}
               </p>
-            )}
+            ) : null}
           </div>
-        </div>
+          <div className="absolute right-4 top-3">
+            <ShareButton
+              url={storeUrl}
+              title={storeName}
+              text={`Consulta el menú y pide en ${storeName}.`}
+              variant="icon"
+              align="right"
+            />
+          </div>
+        </section>
 
-        {/* Productos con filtro de categorías */}
         <StoreProductsClient
-          products={products as any}
-          categories={categories}
+          storeId={id}
+          products={products}
+          categories={Array.from(categoriesMap.values())}
           categoryProductOrders={categoryProductOrders}
           highlightedProductSlug={highlightedProductSlug}
         />
@@ -195,4 +224,3 @@ export default async function StorePage({
     </div>
   );
 }
-

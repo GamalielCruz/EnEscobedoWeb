@@ -1,8 +1,36 @@
 import { clsx, type ClassValue } from "clsx"
 import { twMerge } from "tailwind-merge"
+import { buildUrl } from "@/lib/urls"
+
+const INVISIBLE_UNICODE =
+  /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180B-\u180F\u200B-\u200F\u202A-\u202E\u2060-\u206F\u3164\uFE00-\uFE0F\uFEFF\uFFA0\u{E0000}-\u{E007F}]/gu
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
+}
+
+export function sanitizeText(value: unknown): string {
+  return typeof value === "string"
+    ? value.normalize("NFC").replace(INVISIBLE_UNICODE, "").replace(/\s+/g, " ").trim()
+    : ""
+}
+
+export function portableTextToPlainText(value: unknown): string {
+  if (typeof value === "string") return sanitizeText(value)
+  if (!Array.isArray(value)) return ""
+
+  return sanitizeText(
+    value
+      .filter((block) => block && typeof block === "object" && "_type" in block && block._type === "block")
+      .flatMap((block) => {
+        const children: unknown[] =
+          "children" in block && Array.isArray(block.children) ? block.children : []
+        return children.map((child: unknown) =>
+          child && typeof child === "object" && "text" in child ? child.text : ""
+        )
+      })
+      .join(" ")
+  )
 }
 
 export function buildProductUrl(slug: string): string {
@@ -14,18 +42,16 @@ export function buildStoreProductUrl(
   productSlug: string,
   fallbackToProductRoute = false
 ): string {
-  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://www.pixelaplastico.com/";
-  const cleanBaseUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
   const cleanStoreId = storeId.replace(/^\/+|\/+$/g, "");
   const cleanProductSlug = productSlug.replace(/^\/+|\/+$/g, "");
 
   if (cleanStoreId) {
-    return `${cleanBaseUrl}/store/${cleanStoreId}?product=${encodeURIComponent(cleanProductSlug)}`;
+    return buildUrl(`/store/${cleanStoreId}?product=${encodeURIComponent(cleanProductSlug)}`);
   }
 
   if (fallbackToProductRoute) {
-    return `${cleanBaseUrl}/product/${cleanProductSlug}`;
+    return buildUrl(`/product/${cleanProductSlug}`);
   }
 
-  return `${cleanBaseUrl}/store?product=${encodeURIComponent(cleanProductSlug)}`;
+  return buildUrl(`/store?product=${encodeURIComponent(cleanProductSlug)}`);
 }

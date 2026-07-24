@@ -2,7 +2,7 @@ import { createClient } from "next-sanity";
 
 const client = createClient({
   projectId: "t93gr28n",
-  dataset: "production",
+  dataset: process.env.VERCEL_ENV === "production" ? "production" : "test",
   apiVersion: "2024-07-25",
   useCdn: false,
   token: process.env.SANITY_API_TOKEN,

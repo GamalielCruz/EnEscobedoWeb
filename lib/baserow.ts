@@ -1,9 +1,9 @@
 ﻿import "server-only";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { buildUrl } from "@/lib/urls";
+import { assertProductionIntegration, isProductionDeployment } from "@/lib/deployment-environment";
 
 const BASEROW_API_BASE_URL = process.env.BASEROW_API_URL || "https://api.baserow.io";
-const BASEROW_RESTAURANTS_TABLE_ID = "1076849";
 
 type BaserowOrder = {
   _id: string;
@@ -57,6 +57,7 @@ export class BaserowError extends Error {
 }
 
 function getBaserowConfig() {
+  assertProductionIntegration("Baserow");
   const token = process.env.BASEROW_API_TOKEN;
   const ordersTableId = process.env.BASEROW_ORDERS_TABLE_ID;
   if (!token || !ordersTableId) throw new Error("Faltan BASEROW_API_TOKEN o BASEROW_ORDERS_TABLE_ID");
@@ -109,8 +110,10 @@ export function resolveOrderPhone(order: Pick<BaserowOrder, "_id" | "phone">) {
 
 async function findRestaurantRowId(name?: string) {
   if (!name) return undefined;
+  const restaurantsTableId = process.env.BASEROW_RESTAURANTS_TABLE_ID;
+  if (!restaurantsTableId) throw new Error("Falta BASEROW_RESTAURANTS_TABLE_ID");
   const result = await baserowRequest(
-    `/api/database/rows/table/${BASEROW_RESTAURANTS_TABLE_ID}/?user_field_names=true&search=${encodeURIComponent(name)}`,
+    `/api/database/rows/table/${restaurantsTableId}/?user_field_names=true&search=${encodeURIComponent(name)}`,
     { method: "GET" }
   ) as { results?: Array<{ id?: number; Nombre?: string }> };
   const normalizedName = name.trim().toLowerCase();
@@ -118,7 +121,7 @@ async function findRestaurantRowId(name?: string) {
   if (existingRowId) return existingRowId;
 
   const row = await baserowRequest(
-    `/api/database/rows/table/${BASEROW_RESTAURANTS_TABLE_ID}/?user_field_names=true`,
+    `/api/database/rows/table/${restaurantsTableId}/?user_field_names=true`,
     { method: "POST", body: JSON.stringify({ Nombre: name.trim() }) }
   ) as { id: number };
   console.info("[baserow] restaurante vinculado", { restaurantRowId: row.id, restaurantName: name });
@@ -229,6 +232,7 @@ export async function createBaserowOrder(order: BaserowOrder) {
 }
 
 export async function syncBaserowOrder(order: BaserowOrder) {
+  if (!isProductionDeployment()) return;
   try {
     const row = await createBaserowOrder(order);
     await backendClient.patch(order._id).set({
@@ -248,6 +252,7 @@ export async function syncBaserowOrder(order: BaserowOrder) {
 }
 
 export async function syncBaserowOrderById(orderId: string) {
+  if (!isProductionDeployment()) return;
   const order = await backendClient.fetch<BaserowOrder | null>(BASEROW_ORDER_QUERY, { orderId });
   if (!order) return;
   await syncBaserowOrder({
