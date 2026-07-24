@@ -6,17 +6,17 @@ import { DisableDraftMode } from "@/components/DisableDraftMode";
 import Footer from "./Footer";
 import CookieConsent from "@/components/cookie-consent";
 import HydrationErrorSuppressor from "@/components/HydrationErrorSuppressor";
-import { getPublicUrl } from "@/lib/urls";
+import { getPublicBaseUrl } from "@/lib/urls";
 
 export const metadata: Metadata = {
   title: "ElMenu",
   description: "Tu Menu en línea.",
-  metadataBase: new URL(getPublicUrl()),
+  metadataBase: new URL(getPublicBaseUrl()),
   openGraph: {
     title: "En Escobedo | Plaza en linea",
     description: "Tu Menu en línea.",
     images: ["/open.png"],
-    url: getPublicUrl(),
+    url: getPublicBaseUrl(),
   },
 };
 

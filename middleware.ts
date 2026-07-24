@@ -2,6 +2,7 @@ import { clerkMiddleware } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { assertSafeDeploymentConfiguration } from "@/lib/deployment-environment";
+import { buildUrl } from "@/lib/urls";
 
 assertSafeDeploymentConfiguration();
 
@@ -10,8 +11,7 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
 
   if (req.nextUrl.pathname.startsWith("/dashboard") && !req.nextUrl.pathname.startsWith("/api/")) {
     if (!userId) {
-      const loginUrl = new URL("/", req.url);
-      return NextResponse.redirect(loginUrl);
+      return NextResponse.redirect(buildUrl("/"));
     }
   }
 
