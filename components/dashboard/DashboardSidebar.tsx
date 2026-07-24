@@ -39,7 +39,7 @@ export function DashboardSidebar({
         <div className="mb-4 flex items-center justify-between px-2 py-1">
           <div className="space-y-1">
             <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-[#850C22]">
-              EnEscobedo
+              ElMenu.site
             </p>
             <h2 className="text-[15px] font-semibold tracking-[-0.01em] text-gray-950">
               Operacion de tienda
