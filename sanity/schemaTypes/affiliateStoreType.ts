@@ -93,6 +93,13 @@ export const affiliateStoreType = defineType({
       of: [{ type: "reference", to: [{ type: "product" }] }],
     }),
     defineField({
+      name: "categoryOrder",
+      title: "Orden de categorías",
+      type: "array",
+      hidden: true,
+      of: [{ type: "reference", to: [{ type: "category" }] }],
+    }),
+    defineField({
       name: "categoryProductOrders",
       title: "Orden de productos por categor?a",
       type: "array",

@@ -13,6 +13,7 @@ import { getShareableImageUrl, urlFor } from "@/sanity/lib/image";
 import { getProductBySlug } from "@/sanity/lib/products/getProductBySlug";
 import { getProductsByStore } from "@/sanity/lib/products/getProductsByStore";
 import { getStoreById } from "@/sanity/lib/products/getStoreById";
+import { orderProducts } from "@/lib/product-order";
 import ShareButton from "../../product/ShareButton";
 import { StoreProductsClient } from "./StoreProductsClient";
 
@@ -107,7 +108,7 @@ export default async function StorePage({
 
   if (!store) return notFound();
 
-  const { products, categoryProductOrders } = await getProductsByStore(id);
+  const { products, categoryProductOrders, categoryOrder } = await getProductsByStore(id);
   const timing = getStoreServiceTiming(store);
   const highlightedProductSlug = requestedProduct?.trim() || "";
   const storeName = sanitizeText(store.name) || "Tienda";
@@ -216,7 +217,7 @@ export default async function StorePage({
         <StoreProductsClient
           storeId={id}
           products={products}
-          categories={Array.from(categoriesMap.values())}
+           categories={orderProducts(Array.from(categoriesMap.values()), categoryOrder)}
           categoryProductOrders={categoryProductOrders}
           highlightedProductSlug={highlightedProductSlug}
         />

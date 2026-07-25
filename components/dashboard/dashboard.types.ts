@@ -29,6 +29,8 @@ export type CategoryOption = {
   title: string;
 };
 
+export type CategoryOrdering = string[];
+
 export type ProductOption = {
   _key: string;
   label: string;
