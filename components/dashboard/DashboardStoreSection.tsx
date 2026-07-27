@@ -70,7 +70,11 @@ export function DashboardStoreSection({
 
   const requestOwnDelivery = async (enabled: boolean) => {
     const success = await onSubmitChanges({ hasOwnDelivery: enabled });
-    setMessage(success ? "Solicitud de reparto enviada correctamente." : "No se pudo enviar la solicitud.");
+    setMessage(
+      success
+        ? `Solicitud para ${enabled ? "activar" : "desactivar"} repartidores propios enviada al administrador.`
+        : "No se pudo enviar la solicitud."
+    );
   };
 
   return (
@@ -379,13 +383,14 @@ export function DashboardStoreSection({
             <div className="rounded-xl border border-black/6 bg-[#fafafb] px-4 py-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="font-medium text-gray-900">
-                    {storeConfig?.hasOwnDelivery ? "Repartidores propios habilitados" : "¿Cuentas con repartidores propios?"}
-                  </p>
+                  <p className="font-medium text-gray-900">Repartidores propios</p>
                   <p className="mt-1 text-[13px] text-gray-600">
                     {storeConfig?.hasOwnDelivery
-                      ? "El costo de envio corresponde a tu restaurante y se calcula con tus zonas."
-                      : "Solicita administrar tus propias zonas y costos de entrega."}
+                      ? "Activo. Puedes administrar tus zonas y precios de entrega abajo."
+                      : "Inactivo. El mapa y los precios propios permanecen ocultos."}
+                  </p>
+                  <p className="mt-1 text-[13px] text-gray-600">
+                    Esta configuracion aplica solo a tu tienda y cualquier cambio requiere aprobacion del administrador.
                   </p>
                   <p className="mt-1 text-[13px] text-gray-600">
                     Comision de El Menu sobre productos: {storeConfig?.platformCommissionPercent != null
@@ -393,18 +398,32 @@ export function DashboardStoreSection({
                       : "segun convenio"}.
                   </p>
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={submitting || pendingOwnDeliveryRequest}
-                  onClick={() => requestOwnDelivery(!storeConfig?.hasOwnDelivery)}
-                >
-                  {pendingOwnDeliveryRequest
-                    ? "Solicitud pendiente"
-                    : storeConfig?.hasOwnDelivery
-                      ? "Solicitar reparto de El Menu"
-                      : "Solicitar entregas propias"}
-                </Button>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium text-gray-700">
+                    {pendingOwnDeliveryRequest
+                      ? "Solicitud pendiente"
+                      : storeConfig?.hasOwnDelivery
+                        ? "Habilitado"
+                        : "Deshabilitado"}
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label="Repartidores propios"
+                    aria-checked={Boolean(storeConfig?.hasOwnDelivery)}
+                    disabled={submitting || pendingOwnDeliveryRequest}
+                    onClick={() => requestOwnDelivery(!storeConfig?.hasOwnDelivery)}
+                    className={`relative h-7 w-12 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                      storeConfig?.hasOwnDelivery ? "bg-[#20096F]" : "bg-gray-300"
+                    }`}
+                  >
+                    <span
+                      className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                        storeConfig?.hasOwnDelivery ? "translate-x-5" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
             </div>
 
