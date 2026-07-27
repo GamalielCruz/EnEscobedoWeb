@@ -14,11 +14,14 @@ import useBasketStore from "@/store/store";
 import Image from "next/image";
 import { useHydration } from "@/hooks/useHydration";
 import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
+import { AddressPicker } from "@/components/AddressPicker";
 
 type OwnedStore = { _id: string; name: string; storeId?: string };
 
 export function Header() {
   const { user, isLoaded } = useUser();
+  const pathname = usePathname();
   const isHydrated = useHydration();
   const [ownedStores, setOwnedStores] = useState<OwnedStore[]>([]);
   const [isVisible, setIsVisible] = useState(true);
@@ -103,16 +106,19 @@ export function Header() {
     >
       <div className="w-full ">
         <div className="flex items-center justify-between w-full py-2 sm:py-0 gap-2">
-          <Link href="/" className="flex items-center gap-2 group" aria-label="En Escobedo">
-            <span className="relative flex items-center justify-center w-10 h-10">
-              <Image src="/logomenu.svg" alt="ElMenu Logo" width={40} height={40} className="w-8" />
-            </span>
-            <span
-              className={`relative hidden lg:flex items-center justify-center w-auto h-8 sm:h-10`}
-            >
-              <Image src="/logo.svg" alt="ElMenu Logo" width={150} height={60} />
-            </span>
-          </Link>
+          <div className="flex shrink-0 flex-col items-start">
+            <Link href="/" className="flex items-center gap-2 group" aria-label="En Escobedo">
+              <span className="relative flex items-center justify-center w-10 h-10">
+                <Image src="/logomenu.svg" alt="ElMenu Logo" width={40} height={40} className="w-8" />
+              </span>
+              <span
+                className={`relative hidden lg:flex items-center justify-center w-auto h-8 sm:h-10`}
+              >
+                <Image src="/logo.svg" alt="ElMenu Logo" width={150} height={60} />
+              </span>
+            </Link>
+            {pathname === "/" && <AddressPicker isSignedIn={Boolean(user)} />}
+          </div>
 
           <div className="flex-1 flex justify-center sm:justify-end mx-2 lg:max-w-2xl lg:mx-auto">
             <Form action="/search" className="w-full sm:w-80 lg:w-full max-w-lg lg:max-w-full">

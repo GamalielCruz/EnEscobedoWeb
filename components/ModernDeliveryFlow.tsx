@@ -4,6 +4,13 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { MapPin, Navigation, Loader2, CheckCircle, Store, AlertCircle, ChevronRight, Clock } from "lucide-react";
 import { CustomerAddressWithCoords } from "@/lib/clickCollect";
 import { calculateDistance } from "@/lib/clickCollect";
+import {
+  ACTIVE_ADDRESS_KEY,
+  CustomerAddress as StoredAddress,
+  DEFAULT_CUSTOMER_ADDRESS,
+  normalizeCustomerAddress,
+  parseCustomerAddress,
+} from "@/lib/customer-address";
 
 interface ModernDeliveryFlowProps {
   onComplete: (data: {
@@ -39,6 +46,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
   const [isGoogleMapsLoaded, setIsGoogleMapsLoaded] = useState(false);
   const [loadError, setLoadError] = useState<boolean>(false);
   const [deliveryQuote, setDeliveryQuote] = useState<DeliveryQuote | null>(null);
+  const [savedAddresses, setSavedAddresses] = useState<StoredAddress[]>([DEFAULT_CUSTOMER_ADDRESS]);
 
   // Map refs
   const mapRef = useRef<HTMLDivElement>(null);
@@ -83,7 +91,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
         setTimeout(() => delete (window as any)[callbackName], 1000);
       };
 
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&callback=${callbackName}`;
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&loading=async&callback=${callbackName}`;
       script.async = true;
       script.defer = true;
       script.onerror = () => reject(new Error('Error cargando Google Maps'));
@@ -96,6 +104,34 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
   useEffect(() => {
     loadGoogleMaps().catch(() => setLoadError(true));
   }, [loadGoogleMaps]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const local = parseCustomerAddress(localStorage.getItem(ACTIVE_ADDRESS_KEY));
+
+    fetch("/api/user/addresses")
+      .then(async (response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (cancelled) return;
+        const addresses = Array.isArray(data?.addresses)
+          ? data.addresses.map(normalizeCustomerAddress).filter(Boolean) as StoredAddress[]
+          : [];
+        const active = addresses.find((address) => address.id === data?.activeAddressId);
+        const unique = [active, local, DEFAULT_CUSTOMER_ADDRESS, ...addresses]
+          .filter(Boolean)
+          .filter((address, index, all) =>
+            all.findIndex((item) => item?.id === address?.id) === index
+          ) as StoredAddress[];
+        setSavedAddresses(unique);
+      })
+      .catch(() => {
+        if (local && !cancelled) setSavedAddresses([local]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Inicializar mapa cuando estamos en el paso map-confirm
   useEffect(() => {
@@ -513,6 +549,43 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
     }
   }, [addressInput, geocodeAddress]);
 
+  const handleSavedAddress = useCallback(async (saved: StoredAddress) => {
+    setError(null);
+    setAddressInput(saved.formattedAddress);
+    setCurrentStep('validating');
+
+    const hasCoordinates =
+      typeof saved.latitude === 'number' &&
+      typeof saved.longitude === 'number';
+    const address = hasCoordinates
+      ? {
+          street: saved.street,
+          city: saved.city,
+          state: saved.state,
+          country: saved.country,
+          postalCode: saved.postalCode,
+          latitude: saved.latitude,
+          longitude: saved.longitude,
+        }
+      : await geocodeAddress(saved.formattedAddress);
+
+    if (!address) {
+      setError("No pudimos ubicar esta dirección guardada. Puedes escribirla nuevamente.");
+      setCurrentStep('address');
+      return;
+    }
+
+    setCustomerAddress(address);
+    localStorage.setItem(ACTIVE_ADDRESS_KEY, JSON.stringify(saved));
+    window.dispatchEvent(new CustomEvent("customerAddressChanged", { detail: saved }));
+    void fetch("/api/user/addresses", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address: saved }),
+    }).catch(() => {});
+    setCurrentStep('map-confirm');
+  }, [geocodeAddress]);
+
   // Confirmar ubicación en mapa y buscar tiendas
   const handleConfirmLocation = useCallback(async () => {
     if (!customerAddress) return;
@@ -582,6 +655,29 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
         <div className="text-center space-y-2">
           <h3 className="text-lg font-semibold text-gray-900">¿Dónde entregaremos tu pedido?</h3>
         </div>
+
+        <label className="block space-y-2">
+          <span className="text-sm font-semibold text-gray-800">Usar una dirección guardada</span>
+          <div className="relative">
+            <MapPin className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-[#eb1901]" />
+            <select
+              defaultValue=""
+              onChange={(event) => {
+                const address = savedAddresses.find((item) => item.id === event.target.value);
+                if (address) void handleSavedAddress(address);
+              }}
+              className="w-full appearance-none rounded-xl border-2 border-gray-300 bg-white py-3.5 pl-11 pr-10 text-sm font-medium text-gray-800 outline-none focus:border-[#eb1901] focus:ring-2 focus:ring-[#eb1901]/20"
+            >
+              <option value="" disabled>Elige Casa, Oficina u otra dirección</option>
+              {savedAddresses.map((address) => (
+                <option key={address.id} value={address.id}>
+                  {address.label} — {address.formattedAddress}
+                </option>
+              ))}
+            </select>
+            <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 rotate-90 text-gray-400" />
+          </div>
+        </label>
 
         {/* Botón de ubicación */}
         <button

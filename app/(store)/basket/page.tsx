@@ -14,6 +14,13 @@ import { calculateDistance } from '@/lib/clickCollect';
 import { Truck, Store, CreditCard, Banknote, MapPin, X, CheckCircle, Loader2 } from "lucide-react";
 import ModernDeliveryFlow from '@/components/ModernDeliveryFlow';
 import { getStoreOperationalState, getStoreServiceTiming } from "@/lib/storeOperationalState";
+import { FulfillmentMap } from "@/components/FulfillmentMap";
+import {
+  ACTIVE_ADDRESS_KEY,
+  DEFAULT_CUSTOMER_ADDRESS,
+  normalizeCustomerAddress,
+  parseCustomerAddress,
+} from "@/lib/customer-address";
 
 interface SavedStoreInfo {
   storeId: string;
@@ -95,6 +102,10 @@ function BasketPage() {
   const [legalAccepted, setLegalAccepted] = useState(false);
   const checkoutRef = useRef<any>(null);
   const stripeContainerRef = useRef<HTMLDivElement>(null);
+  const normalizedCustomerAddress = useMemo(
+    () => normalizeCustomerAddress(customerAddress),
+    [customerAddress]
+  );
 
   // Derive persisted phone & consent from Clerk publicMetadata (cross-device)
   const clerkPhone = (user?.publicMetadata?.phone as string) ?? "";
@@ -198,9 +209,13 @@ function BasketPage() {
     const checkStoreSaved = () => {
       const savedStore = localStorage.getItem('clickCollectStore');
       if (savedStore) {
-        const storeData = JSON.parse(savedStore);
-        setHasStoreSaved(true);
-        setSavedStoreInfo(storeData);
+        try {
+          const storeData = JSON.parse(savedStore);
+          setHasStoreSaved(true);
+          setSavedStoreInfo(storeData);
+        } catch {
+          localStorage.removeItem('clickCollectStore');
+        }
       } else {
         setHasStoreSaved(false);
         setSavedStoreInfo(null);
@@ -218,15 +233,25 @@ function BasketPage() {
       setPickupPhone(initialPhone);
     }
 
+    setCustomerAddress((current: any) =>
+      current || parseCustomerAddress(localStorage.getItem(ACTIVE_ADDRESS_KEY)) || DEFAULT_CUSTOMER_ADDRESS
+    );
+
     // Escuchar cuando se seleccione una tienda
     const handleStoreSelected = () => {
       checkStoreSaved();
     };
+    const handleAddressChanged = (event: Event) => {
+      const address = normalizeCustomerAddress((event as CustomEvent).detail);
+      if (address) setCustomerAddress(address);
+    };
     
     window.addEventListener('storeSelected', handleStoreSelected);
+    window.addEventListener('customerAddressChanged', handleAddressChanged);
     
     return () => {
       window.removeEventListener('storeSelected', handleStoreSelected);
+      window.removeEventListener('customerAddressChanged', handleAddressChanged);
     };
   }, []);
 
@@ -240,7 +265,11 @@ function BasketPage() {
       try {
         const parsed = JSON.parse(saved);
         setSelectedStore(parsed);
-        setCustomerAddress(parsed.customerAddress || null);
+        setCustomerAddress(
+          normalizeCustomerAddress(parsed.customerAddress) ||
+          parseCustomerAddress(localStorage.getItem(ACTIVE_ADDRESS_KEY)) ||
+          DEFAULT_CUSTOMER_ADDRESS
+        );
         setShippingCost(parsed.shippingCost ?? null);
         setHasStoreSaved(true);
         setSavedStoreInfo(parsed);
@@ -860,7 +889,7 @@ function BasketPage() {
                       <span className="w-6 h-6 bg-[#eb1901] text-white rounded-full flex items-center justify-center text-sm">1</span>
                       Servicio
                     </h4>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 rounded-full bg-gray-100 p-1">
                       <button
                         onClick={() => {
                           setServiceType('delivery');
@@ -870,13 +899,13 @@ function BasketPage() {
                           setClientSecret(null);
                           setShowCardPhoneForm(false);
                         }}
-                        className={`p-3 rounded-lg border-2 transition-all ${
+                        className={`flex items-center justify-center gap-2 rounded-full border py-2.5 transition-all ${
                           serviceType === 'delivery'
-                            ? 'border-rose-600 bg-rose-50'
-                            : 'border-gray-200 hover:border-gray-300'
+                            ? 'border-gray-200 bg-white shadow-sm'
+                            : 'border-transparent text-gray-500 hover:text-gray-800'
                         }`}
                       >
-                        <Truck className={`w-6 h-6 mx-auto mb-1 ${serviceType === 'delivery' ? 'text-rose-600' : 'text-gray-400'}`} />
+                        <Truck className={`w-5 h-5 ${serviceType === 'delivery' ? 'text-[#eb1901]' : 'text-gray-400'}`} />
                         <span className={`text-sm font-medium ${serviceType === 'delivery' ? 'text-rose-600' : 'text-gray-600'}`}>
                           A Domicilio
                         </span>
@@ -886,17 +915,20 @@ function BasketPage() {
                           setServiceType('pickup');
                           setShippingCost(0);
                           setSelectedStore(null);
-                          setCustomerAddress(null);
+                          setCustomerAddress(
+                            parseCustomerAddress(localStorage.getItem(ACTIVE_ADDRESS_KEY)) ||
+                            DEFAULT_CUSTOMER_ADDRESS
+                          );
                           setClientSecret(null);
                           setShowCardPhoneForm(false);
                         }}
-                        className={`p-3 rounded-lg border-2 transition-all ${
+                        className={`flex items-center justify-center gap-2 rounded-full border py-2.5 transition-all ${
                           serviceType === 'pickup'
-                            ? 'border-rose-600 bg-rose-50'
-                            : 'border-gray-200 hover:border-gray-300'
+                            ? 'border-gray-200 bg-white shadow-sm'
+                            : 'border-transparent text-gray-500 hover:text-gray-800'
                         }`}
                       >
-                        <Store className={`w-6 h-6 mx-auto mb-1 ${serviceType === 'pickup' ? 'text-rose-600' : 'text-gray-400'}`} />
+                        <Store className={`w-5 h-5 ${serviceType === 'pickup' ? 'text-[#eb1901]' : 'text-gray-400'}`} />
                         <span className={`text-sm font-medium ${serviceType === 'pickup' ? 'text-rose-600' : 'text-gray-600'}`}>
                           Retiro en local
                         </span>
@@ -1003,6 +1035,12 @@ function BasketPage() {
                         <span className="w-6 h-6 bg-[#eb1902] text-white rounded-full flex items-center justify-center text-sm">{serviceType === 'pickup' ? '2' : '3'}</span>
                         {serviceType === 'pickup' ? 'Confirma tu retiro' : 'Método de pago'}
                       </h4>
+
+                      <FulfillmentMap
+                        type={serviceType}
+                        customerAddress={normalizedCustomerAddress}
+                        store={selectedStore}
+                      />
                       
                       {/* Resumen de entrega para delivery */}
                       {serviceType === 'delivery' && customerAddress && (
@@ -1528,9 +1566,3 @@ function BasketPage() {
 }
 
 export default BasketPage;
-
-
-
-
-
-
