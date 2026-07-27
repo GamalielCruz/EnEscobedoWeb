@@ -5,13 +5,12 @@ import {
   CustomerAddress,
   DEFAULT_CUSTOMER_ADDRESS,
   normalizeCustomerAddress,
-  parseCustomerAddress,
 } from "@/lib/customer-address";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { ChevronDown, Loader2, MapPin, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-export function AddressPicker({ isSignedIn }: { isSignedIn: boolean }) {
+export function AddressPicker() {
   const [active, setActive] = useState(DEFAULT_CUSTOMER_ADDRESS);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [draft, setDraft] = useState<CustomerAddress | null>(null);
@@ -28,10 +27,6 @@ export function AddressPicker({ isSignedIn }: { isSignedIn: boolean }) {
   };
 
   useEffect(() => {
-    const local = parseCustomerAddress(localStorage.getItem(ACTIVE_ADDRESS_KEY));
-    if (local) setActive(local);
-    if (!isSignedIn) return;
-
     setLoading(true);
     fetch("/api/user/addresses")
       .then((response) => response.json())
@@ -41,27 +36,25 @@ export function AddressPicker({ isSignedIn }: { isSignedIn: boolean }) {
           : [];
         setAddresses(saved);
         const selected = saved.find((address) => address.id === data.activeAddressId);
-        if (selected) activate(selected);
+        activate(selected ?? DEFAULT_CUSTOMER_ADDRESS);
       })
       .catch(() => setError("No pudimos cargar tus direcciones guardadas."))
       .finally(() => setLoading(false));
-  }, [isSignedIn]);
+  }, []);
 
   const choose = async (address: CustomerAddress) => {
     activate(address);
-    if (isSignedIn) {
-      try {
-        const response = await fetch("/api/user/addresses", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ address }),
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error();
-        setAddresses(data.addresses);
-      } catch {
-        setError("La dirección quedó activa en este dispositivo, pero no se pudo sincronizar.");
-      }
+    try {
+      const response = await fetch("/api/user/addresses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error();
+      setAddresses(data.addresses);
+    } catch {
+      setError("La dirección quedó activa en este dispositivo, pero no se pudo sincronizar.");
     }
   };
 
@@ -72,19 +65,15 @@ export function AddressPicker({ isSignedIn }: { isSignedIn: boolean }) {
     setLoading(true);
     setError("");
     try {
-      if (isSignedIn) {
-        const response = await fetch("/api/user/addresses", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ address: labeledAddress }),
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error);
-        setAddresses(data.addresses);
-        activate(data.address);
-      } else {
-        activate({ ...labeledAddress, id: draft.id || crypto.randomUUID() });
-      }
+      const response = await fetch("/api/user/addresses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: labeledAddress }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error);
+      setAddresses(data.addresses);
+      activate(data.address);
       setAdding(false);
       setDraft(null);
       setDraftAddress("");
@@ -232,9 +221,6 @@ export function AddressPicker({ isSignedIn }: { isSignedIn: boolean }) {
               >
                 {draft?.id ? "Guardar cambios" : "Guardar dirección"}
               </button>
-              {!isSignedIn && (
-                <p className="text-xs text-gray-500">Inicia sesión para sincronizar tus direcciones.</p>
-              )}
             </div>
           )}
 
