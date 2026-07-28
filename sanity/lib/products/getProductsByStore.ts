@@ -28,6 +28,8 @@ const PRODUCTS_BY_STORE_QUERY = defineQuery(`
       slug
     },
     optionGroups,
+    allowSpecialInstructions,
+    acceptsAllergyRequests,
     affiliateStore->{
       _id,
       name,

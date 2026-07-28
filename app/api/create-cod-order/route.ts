@@ -16,6 +16,8 @@ function normalizeItems(items: Array<any>): OrderItemInput[] {
     productId: String(item?.productId || item?.product?._id || item?.product?.id || ""),
     quantity: Number(item?.quantity || 0),
     customizations: item?.customizations,
+    notes: item?.notes,
+    allergies: item?.allergies,
   }));
 }
 

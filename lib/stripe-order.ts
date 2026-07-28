@@ -42,6 +42,7 @@ type StripeSessionMetadata = {
   shippingLongitude?: string;
   deliveryNotes?: string;
   orderItems?: string;
+  [key: string]: string | undefined;
 };
 
 type OrderDocumentRecord = {
@@ -95,8 +96,13 @@ function getOrderType(metadata: StripeSessionMetadata) {
 }
 
 function parseOrderItems(metadata: StripeSessionMetadata) {
-  if (!metadata.orderItems) throw new Error("Missing order items metadata");
-  const parsed = JSON.parse(metadata.orderItems) as OrderItemInput[];
+  const serialized = metadata.orderItems || Object.keys(metadata)
+    .filter((key) => /^orderItems\d+$/.test(key))
+    .sort((left, right) => Number(left.slice(10)) - Number(right.slice(10)))
+    .map((key) => metadata[key])
+    .join("");
+  if (!serialized) throw new Error("Missing order items metadata");
+  const parsed = JSON.parse(serialized) as OrderItemInput[];
   if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid order items metadata");
   return parsed;
 }

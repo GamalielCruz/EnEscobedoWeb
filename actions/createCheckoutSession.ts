@@ -28,6 +28,8 @@ export type Metadata = {
 
 export type GroupedBasketItem = {
   product: BasketItem["product"];
+  notes?: string;
+  allergies?: string[];
   quantity: number;
   customizations?: { [key: string]: string | string[] };
   customPrice?: number;
@@ -42,6 +44,8 @@ function buildOrderItems(items: GroupedBasketItem[]): OrderItemInput[] {
     productId: item.product._id,
     quantity: item.quantity,
     customizations: item.customizations,
+    notes: item.notes,
+    allergies: item.allergies,
   }));
 }
 
@@ -162,10 +166,12 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
   if (deliveryNotes) stripeMetadata.deliveryNotes = deliveryNotes;
 
   const compactOrderItems = JSON.stringify(buildOrderItems(items));
-  if (compactOrderItems.length > 500) {
-    throw new Error("Los detalles del pedido exceden el limite permitido");
+  for (let index = 0; index * 450 < compactOrderItems.length; index += 1) {
+    if (index >= 20) {
+      throw new Error("Los detalles del pedido exceden el limite permitido");
+    }
+    stripeMetadata[`orderItems${index}`] = compactOrderItems.slice(index * 450, (index + 1) * 450);
   }
-  stripeMetadata.orderItems = compactOrderItems;
 
   const itemLookup = new Map(items.map((item) => [item.product._id, item.product]));
   const lineItems = quotedOrder.items.map((item) => {

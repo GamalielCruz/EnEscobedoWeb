@@ -3,15 +3,15 @@
 import {
   ACTIVE_ADDRESS_KEY,
   CustomerAddress,
-  DEFAULT_CUSTOMER_ADDRESS,
+  customerAddressStorageKey,
   normalizeCustomerAddress,
 } from "@/lib/customer-address";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { ChevronDown, Loader2, MapPin, Pencil, Plus, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-export function AddressPicker() {
-  const [active, setActive] = useState(DEFAULT_CUSTOMER_ADDRESS);
+export function AddressPicker({ userId }: { userId: string }) {
+  const [active, setActive] = useState<CustomerAddress | null>(null);
   const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
   const [draft, setDraft] = useState<CustomerAddress | null>(null);
   const [draftAddress, setDraftAddress] = useState("");
@@ -20,27 +20,45 @@ export function AddressPicker() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const activate = (address: CustomerAddress) => {
+  const activate = (address: CustomerAddress | null) => {
     setActive(address);
-    localStorage.setItem(ACTIVE_ADDRESS_KEY, JSON.stringify(address));
+    if (address) {
+      localStorage.setItem(customerAddressStorageKey(userId), JSON.stringify(address));
+    } else {
+      localStorage.removeItem(customerAddressStorageKey(userId));
+    }
     window.dispatchEvent(new CustomEvent("customerAddressChanged", { detail: address }));
   };
 
   useEffect(() => {
+    let cancelled = false;
+    setActive(null);
+    setAddresses([]);
+    setError("");
+    localStorage.removeItem(ACTIVE_ADDRESS_KEY);
     setLoading(true);
     fetch("/api/user/addresses")
       .then((response) => response.json())
       .then((data) => {
+        if (cancelled) return;
         const saved = Array.isArray(data.addresses)
           ? data.addresses.map(normalizeCustomerAddress).filter(Boolean) as CustomerAddress[]
           : [];
         setAddresses(saved);
         const selected = saved.find((address) => address.id === data.activeAddressId);
-        activate(selected ?? DEFAULT_CUSTOMER_ADDRESS);
+        activate(selected ?? saved[0] ?? null);
       })
-      .catch(() => setError("No pudimos cargar tus direcciones guardadas."))
-      .finally(() => setLoading(false));
-  }, []);
+      .catch(() => {
+        if (!cancelled) setError("No pudimos cargar tus direcciones guardadas.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userId]);
 
   const choose = async (address: CustomerAddress) => {
     activate(address);
@@ -89,8 +107,12 @@ export function AddressPicker() {
     try {
       const response = await fetch(`/api/user/addresses?id=${encodeURIComponent(id)}`, { method: "DELETE" });
       if (!response.ok) throw new Error();
-      setAddresses((current) => current.filter((address) => address.id !== id));
-      if (active.id === id) activate(DEFAULT_CUSTOMER_ADDRESS);
+      const data = await response.json();
+      const next = Array.isArray(data.addresses)
+        ? data.addresses.map(normalizeCustomerAddress).filter(Boolean) as CustomerAddress[]
+        : [];
+      setAddresses(next);
+      if (active?.id === id) activate(next[0] ?? null);
     } catch {
       setError("No pudimos eliminar la dirección.");
     }
@@ -115,20 +137,20 @@ export function AddressPicker() {
       <DialogTrigger asChild>
         <button
           className="flex max-w-[190px] items-center gap-1 rounded-full px-1 py-0.5 text-left text-xs font-semibold text-gray-700 hover:bg-gray-100 sm:max-w-[260px]"
-          aria-label={`Dirección actual: ${active.label}. Cambiar dirección`}
+          aria-label={active ? `Dirección actual: ${active.label}. Cambiar dirección` : "Agregar dirección"}
         >
           <MapPin className="h-3.5 w-3.5 shrink-0 text-[#eb1901]" />
-          <span className="truncate">{active.label}</span>
+          <span className="truncate">{active?.label ?? "Agregar dirección"}</span>
           <ChevronDown className="h-3.5 w-3.5 shrink-0" />
         </button>
       </DialogTrigger>
 
-      <DialogContent className="max-h-[85vh] overflow-x-hidden overflow-y-auto p-0 sm:max-w-xl">
+      <DialogContent className="w-[calc(100vw-1.5rem)] max-w-xl overflow-hidden p-0">
         <DialogHeader className="border-b px-5 py-4">
           <DialogTitle>Direcciones</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-5 px-5 pb-5">
+        <div className="max-h-[calc(85vh-4rem)] min-w-0 space-y-5 overflow-x-hidden overflow-y-auto px-4 pb-5 sm:px-5">
           {error && (
             <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-700">
               {error}
@@ -143,11 +165,11 @@ export function AddressPicker() {
           </button>
 
           {adding && (
-            <div className="space-y-3 rounded-xl bg-gray-50 p-3">
+            <div className="min-w-0 max-w-full space-y-3 overflow-hidden rounded-xl bg-gray-50 p-3">
               {!draft?.id && (
                 <label className="block space-y-2">
                   <span className="text-xs font-semibold text-gray-700">Dirección completa</span>
-                  <div className="relative">
+                  <div className="relative min-w-0">
                     <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
                     <input
                       value={draftAddress}
@@ -164,8 +186,8 @@ export function AddressPicker() {
                       }}
                       maxLength={240}
                       autoComplete="street-address"
-                      placeholder="Ej. 5 de febrero #64, Pedro Escobedo"
-                      className="w-full rounded-lg border border-gray-300 bg-white py-3 pl-10 pr-3 text-sm outline-none focus:border-[#eb1901] focus:ring-2 focus:ring-[#eb1901]/20"
+                      placeholder="Ej. Calle, número, colonia y municipio"
+                      className="box-border w-full min-w-0 max-w-full rounded-lg border border-gray-300 bg-white py-3 pl-10 pr-3 text-sm outline-none focus:border-[#eb1901] focus:ring-2 focus:ring-[#eb1901]/20"
                     />
                   </div>
                   <span className="block text-xs text-gray-500">
@@ -174,7 +196,7 @@ export function AddressPicker() {
                 </label>
               )}
               {draft?.id && (
-                <p className="rounded-lg bg-white px-3 py-2 text-sm text-gray-600">
+                <p className="break-words rounded-lg bg-white px-3 py-2 text-sm text-gray-600">
                   {draft.formattedAddress}
                 </p>
               )}
@@ -205,7 +227,7 @@ export function AddressPicker() {
                   onChange={(event) => setDraftLabel(event.target.value.slice(0, 60))}
                   maxLength={60}
                   placeholder="Casa, Oficina, Casa de mamá…"
-                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#eb1901] focus:ring-2 focus:ring-[#eb1901]/20"
+                  className="box-border w-full min-w-0 max-w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#eb1901] focus:ring-2 focus:ring-[#eb1901]/20"
                 />
                 <datalist id="address-label-options">
                   <option value="Casa" />
@@ -217,7 +239,7 @@ export function AddressPicker() {
               <button
                 onClick={save}
                 disabled={!draft || !draftLabel.trim() || loading}
-                className="w-full rounded-lg bg-[#eb1901] px-4 py-2.5 text-sm font-semibold text-white disabled:bg-gray-300"
+                className="box-border w-full min-w-0 max-w-full rounded-lg bg-[#eb1901] px-4 py-2.5 text-sm font-semibold text-white disabled:bg-gray-300"
               >
                 {draft?.id ? "Guardar cambios" : "Guardar dirección"}
               </button>
@@ -226,7 +248,13 @@ export function AddressPicker() {
 
           <section>
             <h3 className="mb-2 text-sm font-bold text-gray-900">Dirección actual</h3>
-            <AddressRow address={active} active onChoose={choose} onEdit={() => editAddress(active)} />
+            {active ? (
+              <AddressRow address={active} active onChoose={choose} onEdit={() => editAddress(active)} />
+            ) : (
+              <p className="rounded-xl border border-dashed p-4 text-center text-xs text-gray-500">
+                Aún no has agregado una dirección.
+              </p>
+            )}
           </section>
 
           <section>
@@ -235,22 +263,19 @@ export function AddressPicker() {
               <Loader2 className="mx-auto my-6 h-5 w-5 animate-spin text-gray-400" />
             ) : (
               <div className="divide-y rounded-xl border">
-                {[DEFAULT_CUSTOMER_ADDRESS, ...addresses]
-                  .filter((address, index, all) => all.findIndex((item) => item.id === address.id) === index)
-                  .filter((address) => address.id !== active.id)
+                {addresses
+                  .filter((address) => address.id !== active?.id)
                   .map((address) => (
                     <AddressRow
                       key={address.id}
                       address={address}
-                      active={active.id === address.id}
+                      active={active?.id === address.id}
                       onChoose={choose}
                       onEdit={() => editAddress(address)}
-                      onRemove={
-                        address.id === DEFAULT_CUSTOMER_ADDRESS.id ? undefined : () => remove(address.id)
-                      }
+                      onRemove={() => remove(address.id)}
                     />
                   ))}
-                {[DEFAULT_CUSTOMER_ADDRESS, ...addresses].every((address) => address.id === active.id) && (
+                {addresses.every((address) => address.id === active?.id) && (
                   <p className="p-4 text-center text-xs text-gray-500">Agrega otra dirección para verla aquí.</p>
                 )}
               </div>

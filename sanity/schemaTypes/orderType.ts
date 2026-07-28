@@ -93,6 +93,12 @@ export const orderType = defineType({
               ],
             }),
             defineField({ name: "notes", title: "Item Notes", type: "text" }),
+            defineField({
+              name: "allergies",
+              title: "Allergy Requests",
+              type: "array",
+              of: [{ type: "string" }],
+            }),
           ],
           preview: {
             select: { product: "product.name", quantity: "quantity", image: "product.image", price: "product.price", currency: "product.currency" },

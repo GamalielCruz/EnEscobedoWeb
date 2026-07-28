@@ -138,6 +138,8 @@ function CashOnDeliveryCheckout() {
         } as any,
         quantity: item.quantity,
         customizations: item.customizations ?? {},
+        notes: item.notes,
+        allergies: item.allergies,
         customPrice: item.customPrice ?? item.product.price,
       }));
 

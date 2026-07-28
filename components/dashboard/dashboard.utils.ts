@@ -75,6 +75,8 @@ export function createEmptyProductForm(): ProductFormState {
     image: null,
     categories: [],
     optionGroups: [],
+    allowSpecialInstructions: true,
+    acceptsAllergyRequests: false,
   };
 }
 
@@ -89,6 +91,8 @@ export function productToFormState(product: Product): ProductFormState {
       ? product.categories.map((category: { _id: string }) => category._id)
       : [],
     optionGroups: Array.isArray(product?.optionGroups) ? product.optionGroups : [],
+    allowSpecialInstructions: product.allowSpecialInstructions !== false,
+    acceptsAllergyRequests: product.acceptsAllergyRequests === true,
   };
 }
 

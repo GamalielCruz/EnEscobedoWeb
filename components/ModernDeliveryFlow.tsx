@@ -5,14 +5,14 @@ import { MapPin, Navigation, Loader2, CheckCircle, Store, AlertCircle, ChevronRi
 import { CustomerAddressWithCoords } from "@/lib/clickCollect";
 import { calculateDistance } from "@/lib/clickCollect";
 import {
-  ACTIVE_ADDRESS_KEY,
   CustomerAddress as StoredAddress,
-  DEFAULT_CUSTOMER_ADDRESS,
+  customerAddressStorageKey,
   normalizeCustomerAddress,
   parseCustomerAddress,
 } from "@/lib/customer-address";
 
 interface ModernDeliveryFlowProps {
+  userId: string;
   onComplete: (data: {
     customerAddress: CustomerAddressWithCoords;
     selectedStore: any;
@@ -34,7 +34,7 @@ type DeliveryQuote = {
   debug?: string[];
 };
 
-export default function ModernDeliveryFlow({ onComplete, filterStoreId }: ModernDeliveryFlowProps) {
+export default function ModernDeliveryFlow({ userId, onComplete, filterStoreId }: ModernDeliveryFlowProps) {
   // Estados del flujo
   const [currentStep, setCurrentStep] = useState<FlowStep>('address');
   const [addressInput, setAddressInput] = useState("");
@@ -46,7 +46,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
   const [isGoogleMapsLoaded, setIsGoogleMapsLoaded] = useState(false);
   const [loadError, setLoadError] = useState<boolean>(false);
   const [deliveryQuote, setDeliveryQuote] = useState<DeliveryQuote | null>(null);
-  const [savedAddresses, setSavedAddresses] = useState<StoredAddress[]>([DEFAULT_CUSTOMER_ADDRESS]);
+  const [savedAddresses, setSavedAddresses] = useState<StoredAddress[]>([]);
 
   // Map refs
   const mapRef = useRef<HTMLDivElement>(null);
@@ -107,7 +107,8 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
 
   useEffect(() => {
     let cancelled = false;
-    const local = parseCustomerAddress(localStorage.getItem(ACTIVE_ADDRESS_KEY));
+    setSavedAddresses([]);
+    const local = parseCustomerAddress(localStorage.getItem(customerAddressStorageKey(userId)));
 
     fetch("/api/user/addresses")
       .then(async (response) => response.ok ? response.json() : null)
@@ -117,7 +118,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
           ? data.addresses.map(normalizeCustomerAddress).filter(Boolean) as StoredAddress[]
           : [];
         const active = addresses.find((address) => address.id === data?.activeAddressId);
-        const unique = [active, local, DEFAULT_CUSTOMER_ADDRESS, ...addresses]
+        const unique = [active, ...addresses]
           .filter(Boolean)
           .filter((address, index, all) =>
             all.findIndex((item) => item?.id === address?.id) === index
@@ -131,7 +132,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [userId]);
 
   // Inicializar mapa cuando estamos en el paso map-confirm
   useEffect(() => {
@@ -576,7 +577,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
     }
 
     setCustomerAddress(address);
-    localStorage.setItem(ACTIVE_ADDRESS_KEY, JSON.stringify(saved));
+    localStorage.setItem(customerAddressStorageKey(userId), JSON.stringify(saved));
     window.dispatchEvent(new CustomEvent("customerAddressChanged", { detail: saved }));
     void fetch("/api/user/addresses", {
       method: "POST",
@@ -584,7 +585,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
       body: JSON.stringify({ address: saved }),
     }).catch(() => {});
     setCurrentStep('map-confirm');
-  }, [geocodeAddress]);
+  }, [geocodeAddress, userId]);
 
   // Confirmar ubicación en mapa y buscar tiendas
   const handleConfirmLocation = useCallback(async () => {
@@ -656,7 +657,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
           <h3 className="text-lg font-semibold text-gray-900">¿Dónde entregaremos tu pedido?</h3>
         </div>
 
-        <label className="block space-y-2">
+        {savedAddresses.length > 0 && <label className="block space-y-2">
           <span className="text-sm font-semibold text-gray-800">Usar una dirección guardada</span>
           <div className="relative">
             <MapPin className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-[#eb1901]" />
@@ -677,7 +678,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
             </select>
             <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 rotate-90 text-gray-400" />
           </div>
-        </label>
+        </label>}
 
         {/* Botón de ubicación */}
         <button

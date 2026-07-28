@@ -380,6 +380,8 @@ export function useDashboardData() {
         if (formState.optionGroups.length > 0) {
           changes.optionGroups = formState.optionGroups;
         }
+        changes.allowSpecialInstructions = formState.allowSpecialInstructions;
+        changes.acceptsAllergyRequests = formState.acceptsAllergyRequests;
 
         const response = await fetch("/api/dashboard/product-update-requests", {
           method: "POST",
@@ -401,6 +403,8 @@ export function useDashboardData() {
             image: formState.image,
             categories: formState.categories.length > 0 ? formState.categories : undefined,
             optionGroups: formState.optionGroups.length > 0 ? formState.optionGroups : undefined,
+            allowSpecialInstructions: formState.allowSpecialInstructions,
+            acceptsAllergyRequests: formState.acceptsAllergyRequests,
           }),
         });
         const data = await response.json();

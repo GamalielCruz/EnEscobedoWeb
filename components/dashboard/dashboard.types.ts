@@ -58,6 +58,8 @@ export type Product = {
   image?: { _ref?: string } | null;
   categories?: Array<{ _id: string; title: string }>;
   optionGroups?: ProductOptionGroup[];
+  allowSpecialInstructions?: boolean;
+  acceptsAllergyRequests?: boolean;
   approvalStatus?: "pending" | "approved" | "rejected";
   isVisible?: boolean;
   pendingChanges?: Record<string, unknown>;
@@ -77,6 +79,8 @@ export type ProductFormState = {
   image: { _type: string; asset: { _type: string; _ref: string } } | null;
   categories: string[];
   optionGroups: ProductOptionGroup[];
+  allowSpecialInstructions: boolean;
+  acceptsAllergyRequests: boolean;
 };
 
 export type StoreAddress = {
@@ -146,6 +150,8 @@ export type ProductRequest = {
     image?: unknown;
     categories?: any[];
     optionGroups?: any[];
+    allowSpecialInstructions?: boolean;
+    acceptsAllergyRequests?: boolean;
   } | null;
 };
 

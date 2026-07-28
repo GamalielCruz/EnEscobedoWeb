@@ -121,6 +121,8 @@ function ClickCollectCheckout() {
             product: item.product,
             quantity: item.quantity,
             customizations: item.customizations,
+            notes: item.notes,
+            allergies: item.allergies,
             customPrice: item.customPrice,
           })),
           total: total,

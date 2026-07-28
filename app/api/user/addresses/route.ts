@@ -6,7 +6,9 @@ const readAddresses = async (userId: string) => {
   const client = await clerkClient();
   const user = await client.users.getUser(userId);
   const addresses = Array.isArray(user.privateMetadata.addresses)
-    ? user.privateMetadata.addresses.map(normalizeCustomerAddress).filter(Boolean)
+    ? user.privateMetadata.addresses
+        .map(normalizeCustomerAddress)
+        .filter((address) => address?.id !== "5-de-febrero-64")
     : [];
 
   return {

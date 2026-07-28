@@ -9,7 +9,6 @@ import type { BlockContent, Product } from "@/sanity.types";
 import { urlFor } from "@/sanity/lib/image";
 import { buildStoreProductUrl, portableTextToPlainText, sanitizeText } from "@/lib/utils";
 import useBasketStore from "@/store/store";
-import AddToBasketButtonNew from "./AddToBasketButtonNew";
 import AddToBasketWithCustomization from "./AddToBasketWithCustomization";
 import ShareButton from "@/app/(store)/product/ShareButton";
 
@@ -213,16 +212,12 @@ export default function ProductSidebar({
           </div>
         </div>
 
-        <div className="flex-shrink-0 border-t border-gray-200 bg-white p-4 shadow-[0_-8px_24px_rgba(0,0,0,0.05)]">
-          {product.optionGroups?.length ? (
-            <AddToBasketWithCustomization
-              product={product}
-              disabled={isOutOfStock}
-              onClose={handleClose}
-            />
-          ) : (
-            <AddToBasketButtonNew product={product} disabled={isOutOfStock} />
-          )}
+        <div className="max-h-[72dvh] flex-shrink-0 overflow-y-auto border-t border-gray-200 bg-white p-4 shadow-[0_-8px_24px_rgba(0,0,0,0.05)]">
+          <AddToBasketWithCustomization
+            product={product}
+            disabled={isOutOfStock}
+            onClose={handleClose}
+          />
         </div>
       </aside>
     </div>,

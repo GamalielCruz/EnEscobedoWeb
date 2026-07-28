@@ -41,6 +41,8 @@ interface ExtendedOrder {
       image?: any;
     };
     quantity?: number;
+    notes?: string;
+    allergies?: string[];
   }>;
   isClickCollect?: boolean;
   pickupCode?: string;
@@ -227,8 +229,16 @@ const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
                   )}
                   <div className="min-w-0">
                     <p className="truncate font-medium text-gray-900">
-                      {item.quantity}x {item.product?.name}
                     </p>
+                      {item.quantity}x {item.product?.name}
+                    {item.notes ? (
+                      <p className="mt-1 text-xs text-amber-700">Instrucciones: {item.notes}</p>
+                    ) : null}
+                    {item.allergies?.length ? (
+                      <p className="mt-1 text-xs font-medium text-red-700">
+                        Alergias: {item.allergies.join(", ")}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
                 <span className="shrink-0 font-medium text-gray-700">

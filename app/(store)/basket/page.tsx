@@ -16,8 +16,7 @@ import ModernDeliveryFlow from '@/components/ModernDeliveryFlow';
 import { getStoreOperationalState, getStoreServiceTiming } from "@/lib/storeOperationalState";
 import { FulfillmentMap } from "@/components/FulfillmentMap";
 import {
-  ACTIVE_ADDRESS_KEY,
-  DEFAULT_CUSTOMER_ADDRESS,
+  customerAddressStorageKey,
   normalizeCustomerAddress,
   parseCustomerAddress,
 } from "@/lib/customer-address";
@@ -233,8 +232,10 @@ function BasketPage() {
       setPickupPhone(initialPhone);
     }
 
-    setCustomerAddress((current: any) =>
-      current || parseCustomerAddress(localStorage.getItem(ACTIVE_ADDRESS_KEY)) || DEFAULT_CUSTOMER_ADDRESS
+    setCustomerAddress(
+      user?.id
+        ? parseCustomerAddress(localStorage.getItem(customerAddressStorageKey(user.id)))
+        : null
     );
 
     // Escuchar cuando se seleccione una tienda
@@ -253,7 +254,7 @@ function BasketPage() {
       window.removeEventListener('storeSelected', handleStoreSelected);
       window.removeEventListener('customerAddressChanged', handleAddressChanged);
     };
-  }, []);
+  }, [user?.id]);
 
   // Obtener el ID de la tienda de los productos en el carrito (si aplica)
 
@@ -266,9 +267,9 @@ function BasketPage() {
         const parsed = JSON.parse(saved);
         setSelectedStore(parsed);
         setCustomerAddress(
-          normalizeCustomerAddress(parsed.customerAddress) ||
-          parseCustomerAddress(localStorage.getItem(ACTIVE_ADDRESS_KEY)) ||
-          DEFAULT_CUSTOMER_ADDRESS
+          user?.id
+            ? parseCustomerAddress(localStorage.getItem(customerAddressStorageKey(user.id)))
+            : null
         );
         setShippingCost(parsed.shippingCost ?? null);
         setHasStoreSaved(true);
@@ -277,7 +278,7 @@ function BasketPage() {
         // ignore
       }
     }
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     if (serviceType !== 'pickup') return;
@@ -609,6 +610,8 @@ function BasketPage() {
         },
         quantity: item.quantity,
         customizations: item.customizations ?? {},
+        notes: item.notes,
+        allergies: item.allergies,
         customPrice: item.customPrice ?? item.product.price,
       }));
 
@@ -733,6 +736,8 @@ function BasketPage() {
         },
         quantity: item.quantity,
         customizations: item.customizations ?? {},
+        notes: item.notes,
+        allergies: item.allergies,
         customPrice: item.customPrice ?? item.product.price,
       }));
 
@@ -916,8 +921,9 @@ function BasketPage() {
                           setShippingCost(0);
                           setSelectedStore(null);
                           setCustomerAddress(
-                            parseCustomerAddress(localStorage.getItem(ACTIVE_ADDRESS_KEY)) ||
-                            DEFAULT_CUSTOMER_ADDRESS
+                            user?.id
+                              ? parseCustomerAddress(localStorage.getItem(customerAddressStorageKey(user.id)))
+                              : null
                           );
                           setClientSecret(null);
                           setShowCardPhoneForm(false);
@@ -945,6 +951,7 @@ function BasketPage() {
                       </h4>
                       <div className="border-2 border-rose-200 rounded-lg bg-white p-4 md:p-6">
                         <ModernDeliveryFlow
+                          userId={user!.id}
                           onComplete={(data) => {
                             
                             setCustomerAddress(data.customerAddress);

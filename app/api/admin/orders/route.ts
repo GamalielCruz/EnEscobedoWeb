@@ -44,7 +44,8 @@ const ORDER_PROJECTION = `{
     "productName": product->name,
     "productId": product->_id,
     quantity,
-    notes
+    notes,
+    allergies
   },
   "totalAmount": totalPrice,
   paymentMethod,

@@ -231,7 +231,7 @@ export function Header() {
           </div>
           {pathname === "/" && isLoaded && user && (
             <div className="col-start-1 col-end-4 row-start-2 min-w-0">
-              <AddressPicker />
+              <AddressPicker userId={user.id} />
             </div>
           )}
         </div>

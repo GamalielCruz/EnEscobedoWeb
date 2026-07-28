@@ -51,7 +51,8 @@ const ORDER_PROJECTION = `{
       title,
       "options": options[]{ _key, label, priceDelta }
     },
-    notes
+    notes,
+    allergies
   },
   "totalAmount": totalPrice,
   paymentMethod,

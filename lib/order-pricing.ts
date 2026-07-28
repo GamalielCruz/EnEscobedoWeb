@@ -7,6 +7,7 @@ import {
 } from "@/lib/delivery-zones";
 import { getStoreOperationalState } from "@/lib/storeOperationalState";
 import { backendClient } from "@/sanity/lib/backendClient";
+import { normalizeProductRequests } from "./product-requests";
 import {
   isStripePaymentProvider,
   normalizePaymentMethod,
@@ -77,6 +78,8 @@ type ProductRecord = {
   approvalStatus?: string;
   isVisible?: boolean;
   affiliateStore?: { _ref?: string };
+  allowSpecialInstructions?: boolean;
+  acceptsAllergyRequests?: boolean;
   optionGroups?: Array<{
     title?: string;
     required?: boolean;
@@ -92,6 +95,8 @@ export type OrderItemInput = {
   productId: string;
   quantity: number;
   customizations?: Record<string, string | string[]>;
+  notes?: string;
+  allergies?: string[];
 };
 
 export type OrderAddressInput = {
@@ -123,6 +128,8 @@ export type ValidatedOrderQuote = {
       options?: Array<{ _key: string; label?: string; priceDelta?: number }>;
     }>;
     unitBasePrice: number;
+    notes?: string;
+    allergies: string[];
     unitCustomizationPrice: number;
     unitTotalPrice: number;
     lineTotal: number;
@@ -166,7 +173,9 @@ const PRODUCTS_QUERY = `*[_type == "product" && _id in $productIds]{
   approvalStatus,
   isVisible,
   affiliateStore,
-  optionGroups
+  optionGroups,
+  allowSpecialInstructions,
+  acceptsAllergyRequests
 }`;
 
 async function getDeliveryConfig(storeId?: string) {
@@ -354,6 +363,7 @@ export async function validateAndQuoteOrder(input: {
     }
 
     const customizations = buildCustomizationSnapshot(product, item.customizations);
+    const requests = normalizeProductRequests(item, product);
     const unitCustomizationPrice = roundMoney(
       customizations.reduce(
         (sum, group) => sum + (group.options ?? []).reduce((groupSum, option) => groupSum + Number(option.priceDelta || 0), 0),
@@ -370,6 +380,8 @@ export async function validateAndQuoteOrder(input: {
       quantity,
       customizations,
       unitBasePrice,
+      notes: requests.notes,
+      allergies: requests.allergies,
       unitCustomizationPrice,
       unitTotalPrice,
       lineTotal,
@@ -568,7 +580,8 @@ export function buildOrderDocument(input: {
       product: item.product,
       quantity: item.quantity,
       customizations: item.customizations,
-      notes: `unitBasePrice=${item.unitBasePrice};unitCustomizationPrice=${item.unitCustomizationPrice};unitTotalPrice=${item.unitTotalPrice};lineTotal=${item.lineTotal}`,
+      notes: item.notes,
+      allergies: item.allergies,
     })),
     totalPrice: finalFinancials.grossTotal,
     subtotal: input.quote.productsSubtotal,

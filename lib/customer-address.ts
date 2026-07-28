@@ -13,16 +13,8 @@ export type CustomerAddress = {
 
 export const ACTIVE_ADDRESS_KEY = "activeCustomerAddress";
 
-export const DEFAULT_CUSTOMER_ADDRESS: CustomerAddress = {
-  id: "5-de-febrero-64",
-  label: "5 de febrero #64",
-  formattedAddress: "5 de febrero #64, Pedro Escobedo, Querétaro",
-  street: "5 de febrero #64",
-  city: "Pedro Escobedo",
-  state: "Querétaro",
-  postalCode: "",
-  country: "México",
-};
+export const customerAddressStorageKey = (userId: string) =>
+  `${ACTIVE_ADDRESS_KEY}:${userId}`;
 
 const text = (value: unknown, max: number) =>
   typeof value === "string" ? value.trim().slice(0, max) : "";
