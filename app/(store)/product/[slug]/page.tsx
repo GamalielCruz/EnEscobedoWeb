@@ -243,12 +243,6 @@ export default async function ProductPage({
             </Link>
           )}
 
-          {/* Opciones de personalización (similar a spice level, pero genérico) */}
-
-        </div>
-
-        {/* Botón fijo al fondo, estilo “Add 1 to cart • $18.00” */}
-        <div className="sticky bottom-0 z-10 max-h-[72dvh] overflow-y-auto border-t border-gray-200 bg-white/95 px-5 py-4 shadow-[0_-8px_24px_rgba(0,0,0,0.05)] backdrop-blur">
           <AddToBasketWithCustomization
             product={product as unknown as Product}
             disabled={isOutOfStock}

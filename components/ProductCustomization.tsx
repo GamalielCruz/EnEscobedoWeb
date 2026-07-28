@@ -142,14 +142,15 @@ export default function ProductCustomization({
                       }
                     }}
                     className={`
-                      relative w-full py-4 text-left transition-colors hover:bg-gray-50
+                      relative w-full py-4 text-left transition-colors hover:bg-[#70E000]/5
+                      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#70E000]
                     `}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <div className={`
                           flex h-5 w-5 items-center justify-center border-2
-                          ${group.selectionType === "multiple" ? "rounded" : "rounded-full"} ${isSelected ? 'border-black bg-black' : 'border-gray-400'}
+                          ${group.selectionType === "multiple" ? "rounded" : "rounded-full"} ${isSelected ? 'border-[#70E000] bg-[#70E000]' : 'border-gray-400'}
                         `}>
                           {isSelected && (
                             <Check className="w-3 h-3 text-white" />
@@ -162,7 +163,7 @@ export default function ProductCustomization({
                       </div>
                       
                       {additionalPrice > 0 && (
-                        <span className="text-sm font-semibold text-gray-700">
+                        <span className="text-sm font-semibold text-[#4d9f00]">
                           +${additionalPrice.toFixed(2)}
                         </span>
                       )}

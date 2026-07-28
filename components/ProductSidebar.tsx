@@ -209,15 +209,13 @@ export default function ProductSidebar({
                 </span>
               </div>
             ) : null}
-          </div>
-        </div>
 
-        <div className="max-h-[72dvh] flex-shrink-0 overflow-y-auto border-t border-gray-200 bg-white p-4 shadow-[0_-8px_24px_rgba(0,0,0,0.05)]">
-          <AddToBasketWithCustomization
-            product={product}
-            disabled={isOutOfStock}
-            onClose={handleClose}
-          />
+            <AddToBasketWithCustomization
+              product={product}
+              disabled={isOutOfStock}
+              onClose={handleClose}
+            />
+          </div>
         </div>
       </aside>
     </div>,
