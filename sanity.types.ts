@@ -15,6 +15,113 @@
 export declare const internalGroqTypeReferenceTo: unique symbol;
 
 // Source: schema.json
+export type OrderReference = {
+  _ref: string;
+  _type: "reference";
+  _weak?: boolean;
+  [internalGroqTypeReferenceTo]?: "order";
+};
+
+export type WhatsappTemplateDelivery = {
+  _id: string;
+  _type: "whatsappTemplateDelivery";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  order?: OrderReference;
+  idempotencyKey?: string;
+  templateName?: string;
+  status?: "pending" | "sent" | "failed";
+  claimToken?: string;
+  attemptedAt?: string;
+  sentAt?: string;
+  failedAt?: string;
+  metaMessageId?: string;
+  errorMessage?: string;
+  simulated?: boolean;
+};
+
+export type DeliveryScheduleConfig = {
+  _id: string;
+  _type: "deliveryScheduleConfig";
+  _createdAt: string;
+  _updatedAt: string;
+  _rev: string;
+  timezone?: string;
+  weeklySchedule?: {
+    monday?: {
+      enabled?: boolean;
+      startTime?: string;
+      endTime?: string;
+      scheduledOrdersEnabled?: boolean;
+    };
+    tuesday?: {
+      enabled?: boolean;
+      startTime?: string;
+      endTime?: string;
+      scheduledOrdersEnabled?: boolean;
+    };
+    wednesday?: {
+      enabled?: boolean;
+      startTime?: string;
+      endTime?: string;
+      scheduledOrdersEnabled?: boolean;
+    };
+    thursday?: {
+      enabled?: boolean;
+      startTime?: string;
+      endTime?: string;
+      scheduledOrdersEnabled?: boolean;
+    };
+    friday?: {
+      enabled?: boolean;
+      startTime?: string;
+      endTime?: string;
+      scheduledOrdersEnabled?: boolean;
+    };
+    saturday?: {
+      enabled?: boolean;
+      startTime?: string;
+      endTime?: string;
+      scheduledOrdersEnabled?: boolean;
+    };
+    sunday?: {
+      enabled?: boolean;
+      startTime?: string;
+      endTime?: string;
+      scheduledOrdersEnabled?: boolean;
+    };
+  };
+  scheduledOrdersEnabled?: boolean;
+  minimumAdvanceMinutes?: number;
+  maximumScheduledDays?: number;
+  slotMinutes?: number;
+  operationalMarginMinutes?: number;
+  driverAssignmentMarginMinutes?: number;
+  estimatedTravelMinutes?: number;
+  riskBeforeMinutes?: number;
+  adminAlertBeforeMinutes?: number;
+  contingencyBeforeMinutes?: number;
+  exceptions?: Array<{
+    date?: string;
+    deliveryEnabled?: boolean;
+    startTime?: string;
+    endTime?: string;
+    reason?: string;
+    _key: string;
+  }>;
+  pause?: {
+    active?: boolean;
+    startAt?: string;
+    estimatedResumeAt?: string;
+    reason?: string;
+    allowFutureScheduling?: boolean;
+  };
+  maximumOrdersPerSlot?: number;
+  maximumDeliveryOrdersPerSlot?: number;
+  maximumPickupOrdersPerSlot?: number;
+};
+
 export type DeliveryPricingConfig = {
   _id: string;
   _type: "deliveryPricingConfig";
@@ -247,6 +354,7 @@ export type Order = {
   email?: string;
   phone?: string;
   orderType?: "delivery" | "pickup";
+  fulfillmentType?: "delivery" | "pickup";
   paymentMethod?:
     | "stripe"
     | "cash_on_delivery"
@@ -317,6 +425,39 @@ export type Order = {
   bankTransferClabe?: string;
   oxxoReference?: string;
   orderDate?: string;
+  fulfillmentTiming?: "asap" | "scheduled";
+  scheduledSlot?: {
+    startAt?: string;
+    endAt?: string;
+    timezone?: string;
+  };
+  estimatedPreparationMinutes?: number;
+  storeScheduleSnapshot?: {
+    openingTime?: string;
+    closingTime?: string;
+  };
+  deliveryScheduleSnapshot?: {
+    openingTime?: string;
+    closingTime?: string;
+  };
+  scheduleStatus?:
+    | "not_required"
+    | "scheduled"
+    | "ready_for_dispatch"
+    | "dispatching"
+    | "completed"
+    | "cancelled";
+  scheduledPreparationAt?: string;
+  scheduledDispatchAt?: string;
+  preparationStartedAt?: string;
+  preparationStatus?: "not_started" | "in_preparation" | "completed";
+  scheduledDispatchStartedAt?: string;
+  scheduleRiskLevel?: "none" | "watch" | "risk" | "alert" | "contingency";
+  scheduleRiskAlertedAt?: string;
+  scheduleCustomerChoice?: "wait_for_driver" | "pickup" | "help";
+  scheduleCustomerChoiceAt?: string;
+  customerPickupConsentAt?: string;
+  customerHelpRequested?: boolean;
   fulfillmentProvider?:
     | "pickup"
     | "restaurant_delivery"
@@ -407,6 +548,7 @@ export type Order = {
   deliveryOfertaExpiresAt?: string;
   dispatchStatus?:
     | "not_required"
+    | "scheduled"
     | "waiting_for_driver"
     | "offered"
     | "accepted"
@@ -434,13 +576,6 @@ export type Order = {
     payloadJson?: string;
     _key: string;
   }>;
-};
-
-export type OrderReference = {
-  _ref: string;
-  _type: "reference";
-  _weak?: boolean;
-  [internalGroqTypeReferenceTo]?: "order";
 };
 
 export type Repartidor = {
@@ -505,6 +640,12 @@ export type StoreUpdateRequest = {
     isOpen?: boolean;
     highDemandMode?: boolean;
     hasOwnDelivery?: boolean;
+    scheduledOrdersEnabled?: boolean;
+    minimumPreparationMinutes?: number;
+    scheduledOrderIntervalMinutes?: number;
+    maximumScheduledDays?: number;
+    lastDeliveryOrderMinutesBeforeClose?: number;
+    lastPickupOrderMinutesBeforeClose?: number;
     contact?: {
       phone?: string;
       email?: string;
@@ -845,6 +986,12 @@ export type AffiliateStore = {
   deliveryFee?: number;
   deliveryTimeMin?: number;
   deliveryTimeMax?: number;
+  scheduledOrdersEnabled?: boolean;
+  minimumPreparationMinutes?: number;
+  scheduledOrderIntervalMinutes?: number;
+  maximumScheduledDays?: number;
+  lastDeliveryOrderMinutesBeforeClose?: number;
+  lastPickupOrderMinutesBeforeClose?: number;
   serviceTypes?: {
     delivery?: boolean;
     pickup?: boolean;
@@ -952,6 +1099,9 @@ export type Geopoint = {
 };
 
 export type AllSanitySchemaTypes =
+  | OrderReference
+  | WhatsappTemplateDelivery
+  | DeliveryScheduleConfig
   | DeliveryPricingConfig
   | SanityImageAssetReference
   | StoreCategory
@@ -967,7 +1117,6 @@ export type AllSanitySchemaTypes =
   | SanityFileAssetReference
   | RepartidorReference
   | Order
-  | OrderReference
   | Repartidor
   | StoreUpdateRequest
   | CategoryReference
@@ -1009,6 +1158,7 @@ export type MY_ORDERS_QUERY_RESULT = Array<{
   email?: string;
   phone?: string;
   orderType?: "delivery" | "pickup";
+  fulfillmentType?: "delivery" | "pickup";
   paymentMethod?:
     | "bank_transfer"
     | "card_at_store"
@@ -1166,6 +1316,39 @@ export type MY_ORDERS_QUERY_RESULT = Array<{
   bankTransferClabe?: string;
   oxxoReference?: string;
   orderDate?: string;
+  fulfillmentTiming?: "asap" | "scheduled";
+  scheduledSlot?: {
+    startAt?: string;
+    endAt?: string;
+    timezone?: string;
+  };
+  estimatedPreparationMinutes?: number;
+  storeScheduleSnapshot?: {
+    openingTime?: string;
+    closingTime?: string;
+  };
+  deliveryScheduleSnapshot?: {
+    openingTime?: string;
+    closingTime?: string;
+  };
+  scheduleStatus?:
+    | "cancelled"
+    | "completed"
+    | "dispatching"
+    | "not_required"
+    | "ready_for_dispatch"
+    | "scheduled";
+  scheduledPreparationAt?: string;
+  scheduledDispatchAt?: string;
+  preparationStartedAt?: string;
+  preparationStatus?: "completed" | "in_preparation" | "not_started";
+  scheduledDispatchStartedAt?: string;
+  scheduleRiskLevel?: "alert" | "contingency" | "none" | "risk" | "watch";
+  scheduleRiskAlertedAt?: string;
+  scheduleCustomerChoice?: "help" | "pickup" | "wait_for_driver";
+  scheduleCustomerChoiceAt?: string;
+  customerPickupConsentAt?: string;
+  customerHelpRequested?: boolean;
   fulfillmentProvider?:
     | "elmenu_delivery"
     | "pickup"
@@ -1260,6 +1443,7 @@ export type MY_ORDERS_QUERY_RESULT = Array<{
     | "completed"
     | "not_required"
     | "offered"
+    | "scheduled"
     | "waiting_for_driver";
   settlementStatus?: "cancelled" | "pending" | "ready" | "refunded" | "settled";
   cashCollectedBy?:
@@ -1785,7 +1969,7 @@ export type STORE_PRODUCT_ORDER_QUERY_RESULT = {
 
 // Source: sanity/lib/products/getStoreById.ts
 // Variable: STORE_BY_ID_QUERY
-// Query: *[_type == "affiliateStore" && _id == $storeId][0] {      _id,      name,      storeId,      image,      coverImage,      categories,      address,      coordinates,      contact,      operatingHours,      isActive,      isOpen,      manualOperationalStatus,      highDemandMode,      capacity,      averageDeliveryTime,      deliveryFee,      deliveryTimeMin,      deliveryTimeMax,      serviceTypes    }
+// Query: *[_type == "affiliateStore" && _id == $storeId][0] {      _id,      name,      storeId,      image,      coverImage,      categories,      address,      coordinates,      contact,      operatingHours,      isActive,      isOpen,      manualOperationalStatus,      highDemandMode,      capacity,      averageDeliveryTime,      deliveryFee,      deliveryTimeMin,      deliveryTimeMax,      scheduledOrdersEnabled,      minimumPreparationMinutes,      scheduledOrderIntervalMinutes,      maximumScheduledDays,      lastDeliveryOrderMinutesBeforeClose,      lastPickupOrderMinutesBeforeClose,      serviceTypes    }
 export type STORE_BY_ID_QUERY_RESULT = {
   _id: string;
   name: string | null;
@@ -1844,6 +2028,12 @@ export type STORE_BY_ID_QUERY_RESULT = {
   deliveryFee: number | null;
   deliveryTimeMin: number | null;
   deliveryTimeMax: number | null;
+  scheduledOrdersEnabled: boolean | null;
+  minimumPreparationMinutes: number | null;
+  scheduledOrderIntervalMinutes: number | null;
+  maximumScheduledDays: number | null;
+  lastDeliveryOrderMinutesBeforeClose: number | null;
+  lastPickupOrderMinutesBeforeClose: number | null;
   serviceTypes: {
     delivery?: boolean;
     pickup?: boolean;
@@ -2055,7 +2245,7 @@ declare module "@sanity/client" {
     '\n        *[\n            _type == "product"\n            && references(*[_type == "category" && slug.current == $categorySlug]._id)\n            && approvalStatus == "approved"\n            && isVisible != false\n            ] | order(name asc)\n        ': PRODUCTS_BY_CATEGORY_QUERY_RESULT;
     '\n  *[\n    _type == "product" &&\n    affiliateStore._ref == $storeId &&\n    approvalStatus == "approved" &&\n    isVisible != false\n  ] | order(name asc) {\n    _id,\n    _createdAt,\n    name,\n    slug,\n    image,\n    price,\n    stock,\n    approvalStatus,\n    isVisible,\n    description,\n    categories[]->{\n      _id,\n      title,\n      slug\n    },\n    optionGroups,\n    allowSpecialInstructions,\n    acceptsAllergyRequests,\n    affiliateStore->{\n      _id,\n      name,\n      categories,\n      averageDeliveryTime,\n      deliveryFee,\n      deliveryTimeMin,\n      deliveryTimeMax\n    }\n  }\n': PRODUCTS_BY_STORE_QUERY_RESULT;
     '\n  *[_type == "affiliateStore" && _id == $storeId][0]{\n    "all": productOrder[]._ref,\n    "categoryOrder": categoryOrder[]._ref,\n    "categories": categoryProductOrders[]{\n      "categoryId": category._ref,\n      "productIds": products[]._ref\n    }\n  }\n': STORE_PRODUCT_ORDER_QUERY_RESULT;
-    '\n    *[_type == "affiliateStore" && _id == $storeId][0] {\n      _id,\n      name,\n      storeId,\n      image,\n      coverImage,\n      categories,\n      address,\n      coordinates,\n      contact,\n      operatingHours,\n      isActive,\n      isOpen,\n      manualOperationalStatus,\n      highDemandMode,\n      capacity,\n      averageDeliveryTime,\n      deliveryFee,\n      deliveryTimeMin,\n      deliveryTimeMax,\n      serviceTypes\n    }\n  ': STORE_BY_ID_QUERY_RESULT;
+    '\n    *[_type == "affiliateStore" && _id == $storeId][0] {\n      _id,\n      name,\n      storeId,\n      image,\n      coverImage,\n      categories,\n      address,\n      coordinates,\n      contact,\n      operatingHours,\n      isActive,\n      isOpen,\n      manualOperationalStatus,\n      highDemandMode,\n      capacity,\n      averageDeliveryTime,\n      deliveryFee,\n      deliveryTimeMin,\n      deliveryTimeMax,\n      scheduledOrdersEnabled,\n      minimumPreparationMinutes,\n      scheduledOrderIntervalMinutes,\n      maximumScheduledDays,\n      lastDeliveryOrderMinutesBeforeClose,\n      lastPickupOrderMinutesBeforeClose,\n      serviceTypes\n    }\n  ': STORE_BY_ID_QUERY_RESULT;
     '\n     *[\n        _type == "product"\n        && name match $searchParam\n        && approvalStatus == "approved"\n        && isVisible != false\n     ] | order(name asc)\n    {\n      ...,\n      affiliateStore->{ _id, name }\n    }\n    ': PRODUCT_SEARCH_QUERY_RESULT;
     '\n  *[\n    _type == "promoBanner"\n    && isActive == true\n    && (!defined(validFrom) || validFrom <= now())\n    && (!defined(validUntil) || validUntil >= now())\n  ] | order(sortOrder asc, _createdAt desc) {\n    _id,\n    title,\n    description,\n    bannerType,\n    mainColor,\n    desktopImage,\n    mobileImage,\n    sortOrder,\n    displayDurationSeconds,\n    ctaText,\n    ctaLink,\n    affiliateStore-> {\n      _id,\n      name,\n      image\n    },\n\n    "sale": select(\n      defined(sale)\n      && sale->isActive == true\n      && (!defined(sale->validFrom) || sale->validFrom <= now())\n      && (!defined(sale->validUntil) || sale->validUntil >= now()) => sale->{\n        _id,\n        title,\n        description,\n        discountAmount,\n        discountType,\n        couponCode\n      },\n      null\n    )\n  }\n': ACTIVE_PROMO_BANNERS_QUERY_RESULT;
     '\n        *[\n            _type == "sale"\n            && isActive == true \n            && couponCode == $couponCode\n        ] | order(validFrom desc)[0]\n        ': ACTIVE_SALE_BY_COUPON_QUERY_RESULT;

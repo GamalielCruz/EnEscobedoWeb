@@ -5,6 +5,8 @@ import { syncBaserowOrderById } from "@/lib/baserow";
 import { appendOrderEvent, OrderEventType } from "@/lib/order-events";
 import { sendOrderCancelled, sendOrderDelivered, sendPickupReadyForCustomer } from "@/lib/whatsapp";
 import { buildStoreMapsUrl } from "@/lib/order-pricing";
+import { sendScheduledOrderPreparationStarted } from "@/lib/scheduled-order-whatsapp";
+import { shouldStartScheduledPreparation } from "@/lib/fulfillment-schedule";
 import {
   buildStateFields,
   DispatchStatusValue,
@@ -25,6 +27,10 @@ const ORDER_PROJECTION = `{
   dispatchStatus,
   settlementStatus,
   fulfillmentProvider,
+  fulfillmentTiming,
+  scheduledSlot,
+  scheduledPreparationAt,
+  preparationStatus,
   deliveryVerificationStatus,
   pickupCode,
   "customerInfo": { "name": customerName, "email": email, "clerkUserId": clerkUserId, "phone": phone },
@@ -89,10 +95,15 @@ const ORDER_BY_NUMBER = `*[_type == "order" && orderNumber == $orderNumber][0]{
   paymentProvider,
   requiresStripeReconciliation,
   stripeFee,
+  grossTotal,
+  totalPrice,
   orderStatus,
   paymentStatus,
   dispatchStatus,
   settlementStatus,
+  fulfillmentTiming,
+  scheduledSlot,
+  preparationStatus,
   readyAt,
   pickedUpAt,
   deliveredAt,
@@ -231,6 +242,15 @@ export async function PATCH(request: NextRequest) {
       ...buildStateFields({ orderType, orderStatus, paymentStatus, dispatchStatus, settlementStatus, paymentMethod: order.paymentMethod }),
       updatedAt: now,
     };
+    const scheduledPreparationStarted = shouldStartScheduledPreparation({
+      fulfillmentTiming: order.fulfillmentTiming,
+      nextOrderStatus: orderStatus,
+      preparationStatus: order.preparationStatus,
+    });
+    if (scheduledPreparationStarted) {
+      updateData.preparationStatus = "in_preparation";
+      updateData.preparationStartedAt = now;
+    }
 
     if (orderStatus === "ready_for_pickup" && !order.readyAt) {
       updateData.readyAt = now;
@@ -244,12 +264,19 @@ export async function PATCH(request: NextRequest) {
       updateData.pickupStatus = orderType === "pickup" ? "expired" : order.pickupStatus;
       updateData.cancelledAt = now;
       updateData.settlementStatus = settlementStatus;
+      if (order.fulfillmentTiming === "scheduled") updateData.scheduleStatus = "cancelled";
       if (isStripeOrder) {
         updateData.requiresStripeReconciliation = true;
       } else {
         updateData.requiresStripeReconciliation = false;
         updateData.stripeFee = 0;
       }
+    }
+    if (
+      order.fulfillmentTiming === "scheduled" &&
+      ["delivered", "completed", "picked_up"].includes(orderStatus)
+    ) {
+      updateData.scheduleStatus = "completed";
     }
 
     if (paymentStatus === "refunded") {
@@ -263,10 +290,16 @@ export async function PATCH(request: NextRequest) {
     if (shouldEmitRestaurantAccepted(order.orderStatus, orderStatus)) {
       events.push({ type: "restaurant_accepted" });
     }
+    if (scheduledPreparationStarted) {
+      events.push({ type: "scheduled_order_preparation_started" });
+    }
     if (isCancelled && order.orderStatus !== "cancelled") {
       events.push({ type: order.orderStatus === "pending" ? "restaurant_rejected" : "cancelled", reason: order.orderStatus === "pending" ? "store_rejected_order" : "store_cancelled_order" });
       if (order.orderStatus === "pending") {
         events.push({ type: "cancelled", reason: "store_rejected_order" });
+      }
+      if (order.fulfillmentTiming === "scheduled") {
+        events.push({ type: "scheduled_order_cancelled", reason: "store_cancelled_order" });
       }
     }
     if (orderType === "pickup" && orderStatus === "ready_for_pickup" && order.orderStatus !== "ready_for_pickup") {
@@ -322,6 +355,14 @@ export async function PATCH(request: NextRequest) {
         actor: userId,
         reason: event.reason,
         payload: event.payload,
+      });
+    }
+    if (scheduledPreparationStarted) {
+      void sendScheduledOrderPreparationStarted({
+        ...order,
+        _id: order._id,
+      }).catch((whatsappError) => {
+        console.error("[dashboard/store-orders PATCH] WhatsApp scheduled preparation error:", whatsappError);
       });
     }
 

@@ -27,6 +27,12 @@ export const orderType = defineType({
       validation: (Rule) => Rule.required(),
     }),
     defineField({
+      name: "fulfillmentType",
+      title: "Fulfillment Type",
+      type: "string",
+      options: { list: ["delivery", "pickup"] },
+    }),
+    defineField({
       name: "paymentMethod",
       title: "Payment Method",
       type: "string",
@@ -131,6 +137,60 @@ export const orderType = defineType({
     defineField({ name: "bankTransferClabe", title: "Bank Transfer CLABE", type: "string" }),
     defineField({ name: "oxxoReference", title: "OXXO Reference Number", type: "string" }),
     defineField({ name: "orderDate", title: "Order Date", type: "datetime", validation: (Rule) => Rule.required() }),
+    defineField({
+      name: "fulfillmentTiming",
+      title: "Momento de cumplimiento",
+      type: "string",
+      initialValue: "asap",
+      options: { list: [{ title: "Lo antes posible", value: "asap" }, { title: "Programado", value: "scheduled" }] },
+    }),
+    defineField({
+      name: "scheduledSlot",
+      title: "Intervalo programado",
+      type: "object",
+      fields: [
+        defineField({ name: "startAt", title: "Inicio", type: "datetime" }),
+        defineField({ name: "endAt", title: "Fin", type: "datetime" }),
+        defineField({ name: "timezone", title: "Zona horaria", type: "string" }),
+      ],
+    }),
+    defineField({ name: "estimatedPreparationMinutes", title: "Preparacion estimada (min)", type: "number" }),
+    defineField({
+      name: "storeScheduleSnapshot",
+      title: "Snapshot horario restaurante",
+      type: "object",
+      fields: [
+        defineField({ name: "openingTime", title: "Apertura", type: "string" }),
+        defineField({ name: "closingTime", title: "Cierre", type: "string" }),
+      ],
+    }),
+    defineField({
+      name: "deliveryScheduleSnapshot",
+      title: "Snapshot horario reparto",
+      type: "object",
+      fields: [
+        defineField({ name: "openingTime", title: "Apertura", type: "string" }),
+        defineField({ name: "closingTime", title: "Cierre", type: "string" }),
+      ],
+    }),
+    defineField({
+      name: "scheduleStatus",
+      title: "Estado programado",
+      type: "string",
+      initialValue: "not_required",
+      options: { list: ["not_required", "scheduled", "ready_for_dispatch", "dispatching", "completed", "cancelled"] },
+    }),
+    defineField({ name: "scheduledPreparationAt", title: "Entrada a preparacion", type: "datetime" }),
+    defineField({ name: "scheduledDispatchAt", title: "Entrada a dispatch", type: "datetime" }),
+    defineField({ name: "preparationStartedAt", title: "Preparacion iniciada", type: "datetime" }),
+    defineField({ name: "preparationStatus", title: "Estado de preparacion", type: "string", options: { list: ["not_started", "in_preparation", "completed"] } }),
+    defineField({ name: "scheduledDispatchStartedAt", title: "Dispatch iniciado", type: "datetime" }),
+    defineField({ name: "scheduleRiskLevel", title: "Riesgo operativo", type: "string", options: { list: ["none", "watch", "risk", "alert", "contingency"] } }),
+    defineField({ name: "scheduleRiskAlertedAt", title: "Alerta enviada", type: "datetime" }),
+    defineField({ name: "scheduleCustomerChoice", title: "Eleccion de contingencia", type: "string", options: { list: ["wait_for_driver", "pickup", "help"] } }),
+    defineField({ name: "scheduleCustomerChoiceAt", title: "Eleccion recibida", type: "datetime" }),
+    defineField({ name: "customerPickupConsentAt", title: "Consentimiento para recoleccion", type: "datetime" }),
+    defineField({ name: "customerHelpRequested", title: "Cliente solicito ayuda", type: "boolean" }),
     defineField({ name: "fulfillmentProvider", title: "Responsable de entrega", type: "string", options: { list: ["pickup", "restaurant_delivery", "elmenu_delivery", "third_party_logistics"] } }),
     defineField({ name: "sellerType", title: "Tipo de vendedor", type: "string", initialValue: "restaurant" }),
     defineField({ name: "sellerId", title: "ID del vendedor", type: "string" }),
@@ -204,7 +264,7 @@ export const orderType = defineType({
     defineField({ name: "repartidorAsignadoAt", title: "Assigned Driver At", type: "datetime" }),
     defineField({ name: "deliveryOfertaEnviada", title: "Delivery Offer Sent", type: "boolean", initialValue: false }),
     defineField({ name: "deliveryOfertaExpiresAt", title: "Delivery Offer Expires At", type: "datetime" }),
-    defineField({ name: "dispatchStatus", title: "Dispatch Status", type: "string", initialValue: "waiting_for_driver", options: { list: [{ title: "Not Required", value: "not_required" }, { title: "Waiting for Driver", value: "waiting_for_driver" }, { title: "Offered", value: "offered" }, { title: "Accepted", value: "accepted" }, { title: "At Door", value: "at_door" }, { title: "Completed", value: "completed" }] } }),
+    defineField({ name: "dispatchStatus", title: "Dispatch Status", type: "string", initialValue: "waiting_for_driver", options: { list: [{ title: "Not Required", value: "not_required" }, { title: "Scheduled", value: "scheduled" }, { title: "Waiting for Driver", value: "waiting_for_driver" }, { title: "Offered", value: "offered" }, { title: "Accepted", value: "accepted" }, { title: "At Door", value: "at_door" }, { title: "Completed", value: "completed" }] } }),
     defineField({ name: "settlementStatus", title: "Settlement Status", type: "string", initialValue: "pending", options: { list: [{ title: "Pending", value: "pending" }, { title: "Ready", value: "ready" }, { title: "Settled", value: "settled" }, { title: "Cancelled", value: "cancelled" }, { title: "Refunded", value: "refunded" }] } }),
     defineField({
       name: "cashCollectedBy",
@@ -255,4 +315,3 @@ export const orderType = defineType({
     },
   },
 });
-

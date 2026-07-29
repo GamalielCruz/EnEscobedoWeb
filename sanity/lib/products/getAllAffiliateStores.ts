@@ -17,6 +17,7 @@ export const getAllAffiliateStores = async () => {
             _updatedAt,
             _rev,
             name,
+            slug,
             storeId,
             image,
             coverImage,

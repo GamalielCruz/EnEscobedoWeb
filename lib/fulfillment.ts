@@ -8,6 +8,13 @@ export function isDriverDispatchEnabled(storeHasOwnDelivery?: boolean) {
   return storeHasOwnDelivery === true || isElmenuDriverDeliveryEnabled();
 }
 
+export function isDeliveryDriverAvailable(
+  storeHasOwnDelivery: boolean | undefined,
+  connectedCommunityDrivers: number
+) {
+  return storeHasOwnDelivery === true || connectedCommunityDrivers > 0;
+}
+
 export function resolveFulfillmentProvider(orderType: "delivery" | "pickup", storeHasOwnDelivery?: boolean): FulfillmentProvider {
   if (orderType === "pickup") return "pickup";
   if (storeHasOwnDelivery) return "restaurant_delivery";

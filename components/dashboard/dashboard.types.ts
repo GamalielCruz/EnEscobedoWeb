@@ -122,6 +122,12 @@ export type StoreConfig = {
   operatingHours?: StoreOperatingHours;
   deliveryTimeMin?: number;
   deliveryTimeMax?: number;
+  scheduledOrdersEnabled?: boolean;
+  minimumPreparationMinutes?: number;
+  scheduledOrderIntervalMinutes?: number;
+  maximumScheduledDays?: number;
+  lastDeliveryOrderMinutesBeforeClose?: number;
+  lastPickupOrderMinutesBeforeClose?: number;
 };
 
 export type StoreSettingsDraft = {
@@ -133,6 +139,12 @@ export type StoreSettingsDraft = {
   address: Required<StoreAddress>;
   operatingHours: Required<StoreOperatingHours>;
   serviceTypes: Required<StoreServiceTypes>;
+  scheduledOrdersEnabled: boolean;
+  minimumPreparationMinutes: number;
+  scheduledOrderIntervalMinutes: number;
+  maximumScheduledDays: number;
+  lastDeliveryOrderMinutesBeforeClose: number;
+  lastPickupOrderMinutesBeforeClose: number;
 };
 
 export type ProductRequest = {

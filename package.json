@@ -8,7 +8,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typegen": "npx sanity@latest schema extract && npx sanity@latest typegen generate",
+    "typegen": "npx --yes sanity@latest schema extract --force && npx --yes sanity@latest typegen generate",
     "sanity": "npx sanity@latest dev",
     "sanity:build": "npx sanity@latest build",
     "sanity:deploy": "npx sanity@latest deploy",
@@ -16,7 +16,8 @@
     "orders:mark-delivered": "node scripts/mark-all-orders-delivered.mjs",
     "legal:check": "node scripts/check-legal-config.mjs",
     "test:urls": "node scripts/test-public-base-url.mjs",
-    "migrate:v1-orders": "node scripts/migrate-v1-orders.mjs"
+    "migrate:v1-orders": "node scripts/migrate-v1-orders.mjs",
+    "test:scheduling": "node --experimental-strip-types --test lib/fulfillment-schedule.test.mjs lib/scheduled-order-whatsapp-config.test.mjs lib/scheduled-order-contingency.test.mjs lib/scheduled-orders.integration.test.mjs"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.97",

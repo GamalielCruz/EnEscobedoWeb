@@ -102,7 +102,7 @@ export function normalizeWhatsAppPhone(phone?: string | null) {
   return null;
 }
 
-async function sendWhatsAppTemplate(
+export async function sendWhatsAppTemplate(
   to: string,
   templateName: string,
   variables: string[],

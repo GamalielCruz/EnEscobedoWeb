@@ -22,7 +22,18 @@ export type OrderEventType =
   | "delivered"
   | "cancelled"
   | "refund_required"
-  | "manual_admin_action";
+  | "manual_admin_action"
+  | "scheduled_order_created"
+  | "scheduled_order_preparation_started"
+  | "scheduled_order_slot_changed"
+  | "scheduled_order_ready_for_dispatch"
+  | "scheduled_order_dispatch_started"
+  | "scheduled_order_driver_assigned"
+  | "scheduled_order_changed_to_pickup"
+  | "scheduled_order_cancelled"
+  | "scheduled_order_risk_alert"
+  | "whatsapp_template_sent"
+  | "whatsapp_template_failed";
 
 export async function appendOrderEvent(
   orderId: string,

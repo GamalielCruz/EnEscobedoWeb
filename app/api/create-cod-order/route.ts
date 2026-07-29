@@ -10,6 +10,8 @@ import { getPaymentMethodLabel } from "@/lib/payment";
 import { syncBaserowOrder } from "@/lib/baserow";
 import { assertCurrentLegalAcceptance } from "@/lib/legal-config";
 import { recordCurrentLegalAcceptance } from "@/lib/legal-acceptance";
+import { DeliverySlotUnavailableError } from "@/lib/fulfillment-schedule";
+import { sendScheduledOrderConfirmation } from "@/lib/scheduled-order-whatsapp";
 
 function normalizeItems(items: Array<any>): OrderItemInput[] {
   return (items || []).map((item) => ({
@@ -46,6 +48,10 @@ export async function POST(request: NextRequest) {
       orderType,
       paymentMethod,
       shippingAddress,
+      fulfillment:
+        metadata.fulfillmentTiming === "scheduled" && metadata.scheduledSlot
+          ? { timing: "scheduled", scheduledSlot: metadata.scheduledSlot }
+          : { timing: "asap" },
     });
 
     const orderData = buildOrderDocument({
@@ -62,7 +68,12 @@ export async function POST(request: NextRequest) {
       deliveryNotes,
       codInstructions: deliveryNotes,
       paymentStatus: "unpaid",
-      dispatchStatus: orderType === "delivery" ? "waiting_for_driver" : "not_required",
+      dispatchStatus:
+        orderType === "delivery" && quote.fulfillment.timing === "scheduled"
+          ? "scheduled"
+          : orderType === "delivery"
+            ? "waiting_for_driver"
+            : "not_required",
     }) as { _type: string; [key: string]: unknown };
 
     if (orderType === "pickup") {
@@ -75,8 +86,16 @@ export async function POST(request: NextRequest) {
 
     await appendOrderEvent(result._id, { type: "created", source: "api/create-cod-order", actor: userId });
     await appendOrderEvent(result._id, { type: "sent_to_restaurant", source: "api/create-cod-order" });
-    if (orderType === "delivery") {
+    if (orderType === "delivery" && quote.fulfillment.timing === "asap") {
       await appendOrderEvent(result._id, { type: "dispatch_started", source: "api/create-cod-order" });
+    }
+    if (quote.fulfillment.timing === "scheduled") {
+      await appendOrderEvent(result._id, {
+        type: "scheduled_order_created",
+        source: "api/create-cod-order",
+        actor: userId,
+        payload: { scheduledSlot: orderData.scheduledSlot },
+      });
     }
 
     after(async () => {
@@ -87,7 +106,16 @@ export async function POST(request: NextRequest) {
       const tasks: Array<Promise<unknown>> = [
         customerPhone && orderNumber ? (orderType === "pickup" ? sendPickupOrderReceived(customerPhone, customerName, orderNumber, String(quote.store.name || "Restaurante"), String(orderData.grossTotal || orderData.totalPrice || "0"), getPaymentMethodLabel(String(orderData.paymentMethod || "")), buildStoreMapsUrl(quote.store)) : sendOrderConfirmation(customerPhone, customerName, orderNumber)) : Promise.resolve(),
         notifyRestaurantNewOrder(result._id),
-        orderType === "delivery" ? dispatchDeliveryOffer(result._id) : Promise.resolve(),
+        orderType === "delivery" && quote.fulfillment.timing === "asap"
+          ? dispatchDeliveryOffer(result._id)
+          : Promise.resolve(),
+        quote.fulfillment.timing === "scheduled"
+          ? sendScheduledOrderConfirmation({
+              ...orderData,
+              _id: result._id,
+              storeName: quote.store.name,
+            })
+          : Promise.resolve(),
       ];
 
       await Promise.allSettled(tasks);
@@ -106,7 +134,14 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: unknown) {
     console.error("[create-cod-order]", { requestId, error });
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Error interno del servidor", requestId }, { status: 400 });
+    return NextResponse.json({
+      success: false,
+      ...(error instanceof DeliverySlotUnavailableError
+        ? { code: error.code, alternatives: error.alternatives }
+        : {}),
+      error: error instanceof Error ? error.message : "Error interno del servidor",
+      requestId,
+    }, { status: error instanceof DeliverySlotUnavailableError ? 409 : 400 });
   }
 }
 

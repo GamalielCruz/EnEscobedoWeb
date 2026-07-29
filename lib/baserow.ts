@@ -26,6 +26,9 @@ type BaserowOrder = {
   baserowRowId?: number;
   restaurantName?: string;
   orderUrl?: string;
+  fulfillmentTiming?: string;
+  scheduledSlot?: { startAt?: string; endAt?: string; timezone?: string };
+  scheduleStatus?: string;
 };
 
 const BASEROW_ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
@@ -47,6 +50,9 @@ const BASEROW_ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   driverPayout,
   stripeCheckoutSessionId,
   baserowRowId,
+  fulfillmentTiming,
+  scheduledSlot,
+  scheduleStatus,
   "restaurantName": coalesce(pickupStore->name, affiliateStore->name)
 }`;
 
@@ -220,6 +226,10 @@ export async function createBaserowOrder(order: BaserowOrder) {
     "Pago al repartidor": order.driverPayout,
     "ID de Stripe": order.stripeCheckoutSessionId,
     "URL del pedido": order.orderUrl,
+    "Horario programado": order.scheduledSlot?.startAt,
+    "Fin del intervalo": order.scheduledSlot?.endAt,
+    "Zona horaria": order.scheduledSlot?.timezone,
+    "Estado de programación": order.scheduleStatus,
     ...(restaurantRowId ? { Restaurante: [restaurantRowId] } : {}),
   };
   const path = rowId

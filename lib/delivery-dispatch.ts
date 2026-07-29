@@ -19,7 +19,7 @@ type DispatchOrder = {
   status?: string;
   orderStatus?: string;
   paymentStatus?: string;
-  dispatchStatus?: "waiting_for_driver" | "offered" | "accepted" | "at_door" | "completed";
+  dispatchStatus?: "scheduled" | "waiting_for_driver" | "offered" | "accepted" | "at_door" | "completed";
   deliveryOfertaEnviada?: boolean;
   deliveryOfertaExpiresAt?: string;
   repartidorAsignado?: unknown;

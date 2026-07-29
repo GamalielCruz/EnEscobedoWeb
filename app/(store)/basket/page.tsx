@@ -20,6 +20,8 @@ import {
   normalizeCustomerAddress,
   parseCustomerAddress,
 } from "@/lib/customer-address";
+import { FulfillmentTimingPicker } from "@/components/FulfillmentTimingPicker";
+import type { FulfillmentSelection } from "@/lib/fulfillment-schedule";
 
 interface SavedStoreInfo {
   storeId: string;
@@ -29,6 +31,29 @@ interface SavedStoreInfo {
   estimatedDelivery: string;
   customerAddress?: unknown;
 }
+
+type StoreServiceTypes = {
+  delivery?: boolean;
+  pickup?: boolean;
+  deliveryAvailability?: {
+    available: boolean;
+    provider: "restaurant" | "elmenu";
+    connectedDrivers: number | null;
+  };
+};
+
+type CheckoutDraft = {
+  version: 1;
+  updatedAt: number;
+  serviceType: "delivery" | "pickup" | null;
+  deliveryNotes: string;
+  fulfillmentSelection: FulfillmentSelection | null;
+};
+
+const CHECKOUT_DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+const checkoutDraftStorageKey = (userId: string, storeId: string) =>
+  `checkoutDraft:v1:${userId}:${storeId}`;
 
 const cleanDisplayText = (value: unknown, fallback = "") => {
   return String(value || fallback)
@@ -99,6 +124,9 @@ function BasketPage() {
   const [editingPhone, setEditingPhone] = useState(false);
   const [deliveryNotes, setDeliveryNotes] = useState("");
   const [legalAccepted, setLegalAccepted] = useState(false);
+  const [fulfillmentSelection, setFulfillmentSelection] = useState<FulfillmentSelection | null>(null);
+  const [storeServiceTypes, setStoreServiceTypes] = useState<StoreServiceTypes | null>(null);
+  const [hydratedDraftKey, setHydratedDraftKey] = useState<string | null>(null);
   const checkoutRef = useRef<any>(null);
   const stripeContainerRef = useRef<HTMLDivElement>(null);
   const normalizedCustomerAddress = useMemo(
@@ -265,6 +293,7 @@ function BasketPage() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
+        if (parsed.storeId && cartStoreId && parsed.storeId !== cartStoreId) return;
         setSelectedStore(parsed);
         setCustomerAddress(
           user?.id
@@ -278,7 +307,117 @@ function BasketPage() {
         // ignore
       }
     }
-  }, [user?.id]);
+  }, [cartStoreId, user?.id]);
+
+  useEffect(() => {
+    if (!cartStoreId) {
+      setStoreServiceTypes(null);
+      return;
+    }
+
+    let active = true;
+    fetchStoreServiceTypes(cartStoreId).then((storeConfig) => {
+      if (active) {
+        setStoreServiceTypes(
+          storeConfig?.serviceTypes
+            ? {
+                ...storeConfig.serviceTypes,
+                deliveryAvailability: storeConfig.deliveryAvailability,
+              }
+            : null
+        );
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [cartStoreId]);
+
+  useEffect(() => {
+    if (!storeServiceTypes) return;
+    const deliverySupported =
+      storeServiceTypes.delivery === true &&
+      storeServiceTypes.deliveryAvailability?.available !== false;
+    const pickupSupported = storeServiceTypes.pickup === true;
+
+    if (serviceType === "delivery" && !deliverySupported) {
+      setServiceType(pickupSupported ? "pickup" : null);
+    } else if (serviceType === "pickup" && !pickupSupported) {
+      setServiceType(deliverySupported ? "delivery" : null);
+    } else if (!serviceType && deliverySupported !== pickupSupported) {
+      setServiceType(deliverySupported ? "delivery" : "pickup");
+    }
+  }, [serviceType, storeServiceTypes]);
+
+  const checkoutDraftKey =
+    user?.id && cartStoreId ? checkoutDraftStorageKey(user.id, cartStoreId) : null;
+
+  useEffect(() => {
+    if (!checkoutDraftKey) return;
+    setHydratedDraftKey(null);
+    setServiceType(null);
+    setDeliveryNotes("");
+    setFulfillmentSelection(null);
+    setLegalAccepted(false);
+
+    try {
+      const saved = localStorage.getItem(checkoutDraftKey);
+      if (saved) {
+        const draft = JSON.parse(saved) as Partial<CheckoutDraft>;
+        const isCurrent =
+          draft.version === 1 &&
+          typeof draft.updatedAt === "number" &&
+          Date.now() - draft.updatedAt <= CHECKOUT_DRAFT_TTL_MS;
+        if (!isCurrent) {
+          localStorage.removeItem(checkoutDraftKey);
+        } else {
+          if (draft.serviceType === "delivery" || draft.serviceType === "pickup") {
+            setServiceType(draft.serviceType);
+          }
+          if (typeof draft.deliveryNotes === "string") {
+            setDeliveryNotes(draft.deliveryNotes.slice(0, 500));
+          }
+
+          const selection = draft.fulfillmentSelection;
+          if (selection?.timing === "asap") {
+            setFulfillmentSelection({ timing: "asap" });
+          } else if (
+            selection?.timing === "scheduled" &&
+            typeof selection.scheduledSlot?.startAt === "string" &&
+            typeof selection.scheduledSlot?.endAt === "string"
+          ) {
+            setFulfillmentSelection(selection as FulfillmentSelection);
+          }
+        }
+      }
+    } catch {
+      localStorage.removeItem(checkoutDraftKey);
+    } finally {
+      setHydratedDraftKey(checkoutDraftKey);
+    }
+  }, [checkoutDraftKey]);
+
+  useEffect(() => {
+    if (!checkoutDraftKey || hydratedDraftKey !== checkoutDraftKey) return;
+    const draft: CheckoutDraft = {
+      version: 1,
+      updatedAt: Date.now(),
+      serviceType,
+      deliveryNotes,
+      fulfillmentSelection,
+    };
+    try {
+      localStorage.setItem(checkoutDraftKey, JSON.stringify(draft));
+    } catch {
+      // El checkout sigue funcionando aunque el navegador bloquee almacenamiento local.
+    }
+  }, [checkoutDraftKey, deliveryNotes, fulfillmentSelection, hydratedDraftKey, serviceType]);
+
+  const clearCheckoutDraft = () => {
+    try {
+      if (checkoutDraftKey) localStorage.removeItem(checkoutDraftKey);
+    } catch {}
+  };
 
   useEffect(() => {
     if (serviceType !== 'pickup') return;
@@ -437,8 +576,8 @@ function BasketPage() {
       setCardError("Acepta los documentos legales vigentes para continuar.");
       return;
     }
-    if (selectedStore && !getStoreOperationalStateLegacy(selectedStore).effectiveIsOpen) {
-      setCardPhoneError("La tienda seleccionada esta cerrada temporalmente.");
+    if (!fulfillmentSelection) {
+      setCardPhoneError("Elige lo antes posible o un horario programado.");
       return;
     }
 
@@ -479,6 +618,11 @@ function BasketPage() {
         whatsappConsent: "true",
         deliveryNotes: deliveryNotes.trim() || undefined,
         legalAccepted,
+        fulfillmentTiming: fulfillmentSelection.timing,
+        scheduledSlot:
+          fulfillmentSelection.timing === "scheduled"
+            ? fulfillmentSelection.scheduledSlot
+            : undefined,
       };
 
       // Add delivery/pickup info if available
@@ -519,6 +663,9 @@ function BasketPage() {
 
       if (!response.ok) {
         console.error("Error en /api/checkout-session", data);
+        if (data?.code === "DELIVERY_SLOT_UNAVAILABLE") {
+          setFulfillmentSelection(null);
+        }
         const backendError = data?.details?.message || data?.error || "Error al crear la sesión de checkout";
         throw new Error(backendError);
       }
@@ -571,8 +718,8 @@ function BasketPage() {
       return;
     }
 
-    if (!getStoreOperationalStateLegacy(selectedStore).effectiveIsOpen) {
-      setCodError("La tienda seleccionada esta cerrada temporalmente.");
+    if (!fulfillmentSelection) {
+      setCodError("Elige lo antes posible o un horario programado.");
       return;
     }
 
@@ -646,6 +793,11 @@ function BasketPage() {
             shippingAddress: normalizedAddress,
             deliveryNotes: deliveryNotes.trim() || undefined,
             legalAccepted,
+            fulfillmentTiming: fulfillmentSelection.timing,
+            scheduledSlot:
+              fulfillmentSelection.timing === "scheduled"
+                ? fulfillmentSelection.scheduledSlot
+                : undefined,
             storeInfo: {
               storeId: selectedStoreId,
               storeName: selectedStoreName,
@@ -662,11 +814,15 @@ function BasketPage() {
       const result = await response.json();
 
       if (!response.ok || !result.success) {
+        if (result.code === "DELIVERY_SLOT_UNAVAILABLE") {
+          setFulfillmentSelection(null);
+        }
         throw new Error(result.error || "No se pudo procesar la orden.");
       }
 
       // Persist phone to Clerk for cross-device use
       await savePhoneToClerk(resolvedCodPhone, true);
+      clearCheckoutDraft();
       clearBasket();
       window.location.href = `/success-cod?orderNumber=${orderNumber}`;
     } catch (error: any) {
@@ -708,8 +864,8 @@ function BasketPage() {
       return;
     }
 
-    if (!getStoreOperationalStateLegacy(selectedStore).effectiveIsOpen) {
-      setPickupError("La sucursal seleccionada no esta disponible en este momento.");
+    if (!fulfillmentSelection) {
+      setPickupError("Elige lo antes posible o un horario programado.");
       return;
     }
 
@@ -765,17 +921,26 @@ function BasketPage() {
           total: useBasketStore.getState().getTotalPrice(),
           paymentMethod: "cash_on_pickup",
           legalAccepted,
+          fulfillmentTiming: fulfillmentSelection.timing,
+          scheduledSlot:
+            fulfillmentSelection.timing === "scheduled"
+              ? fulfillmentSelection.scheduledSlot
+              : undefined,
         }),
       });
 
       const result = await response.json();
 
       if (!response.ok || !result.success) {
+        if (result.code === "DELIVERY_SLOT_UNAVAILABLE") {
+          setFulfillmentSelection(null);
+        }
         throw new Error(result.error || "No se pudo procesar la orden.");
       }
 
       // Persist phone to Clerk for cross-device use
       await savePhoneToClerk(resolvedPickupPhone, true);
+      clearCheckoutDraft();
       clearBasket();
       window.location.href = `/success-click-collect?orderNumber=${orderNumber}`;
     } catch (error: any) {
@@ -789,6 +954,11 @@ function BasketPage() {
   const selectedStoreTiming = selectedStore ? getServiceTiming(selectedStore) : null;
   const selectedStoreState = selectedStore ? getStoreOperationalStateLegacy(selectedStore) : null;
   const isSelectedStoreClosed = Boolean(selectedStore && selectedStoreState && !selectedStoreState.effectiveIsOpen);
+  const deliveryConfigured = storeServiceTypes?.delivery === true;
+  const deliverySupported =
+    deliveryConfigured &&
+    storeServiceTypes.deliveryAvailability?.available !== false;
+  const pickupSupported = storeServiceTypes?.pickup === true;
 
   return (
     <div className="min-h-screen bg-gray-50 pt-20 pb-8">
@@ -896,15 +1066,18 @@ function BasketPage() {
                     </h4>
                     <div className="grid grid-cols-2 rounded-full bg-gray-100 p-1">
                       <button
+                        type="button"
+                        disabled={!deliverySupported}
                         onClick={() => {
                           setServiceType('delivery');
                           setShippingCost(null);
                           setSelectedStore(null);
                           setCustomerAddress(null);
                           setClientSecret(null);
+                          setFulfillmentSelection(null);
                           setShowCardPhoneForm(false);
                         }}
-                        className={`flex items-center justify-center gap-2 rounded-full border py-2.5 transition-all ${
+                        className={`flex items-center justify-center gap-2 rounded-full border py-2.5 transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
                           serviceType === 'delivery'
                             ? 'border-gray-200 bg-white shadow-sm'
                             : 'border-transparent text-gray-500 hover:text-gray-800'
@@ -916,6 +1089,8 @@ function BasketPage() {
                         </span>
                       </button>
                       <button
+                        type="button"
+                        disabled={!pickupSupported}
                         onClick={() => {
                           setServiceType('pickup');
                           setShippingCost(0);
@@ -926,9 +1101,10 @@ function BasketPage() {
                               : null
                           );
                           setClientSecret(null);
+                          setFulfillmentSelection(null);
                           setShowCardPhoneForm(false);
                         }}
-                        className={`flex items-center justify-center gap-2 rounded-full border py-2.5 transition-all ${
+                        className={`flex items-center justify-center gap-2 rounded-full border py-2.5 transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
                           serviceType === 'pickup'
                             ? 'border-gray-200 bg-white shadow-sm'
                             : 'border-transparent text-gray-500 hover:text-gray-800'
@@ -940,6 +1116,20 @@ function BasketPage() {
                         </span>
                       </button>
                     </div>
+                    {deliveryConfigured && !deliverySupported ? (
+                      <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        No hay repartidores de El Menú disponibles en este momento.
+                        Puedes elegir retiro en el local o intentarlo más tarde.
+                      </p>
+                    ) : storeServiceTypes && (!deliveryConfigured || !pickupSupported) ? (
+                      <p className="mt-2 text-xs text-gray-500">
+                        {deliveryConfigured
+                          ? "Esta tienda solo ofrece entrega a domicilio."
+                          : pickupSupported
+                            ? "Esta tienda solo ofrece retiro en local."
+                            : "Esta tienda no tiene modalidades de servicio activas."}
+                      </p>
+                    ) : null}
                   </div>
 
                   {/* Paso 2: Información de entrega (solo para delivery) */}
@@ -1042,6 +1232,24 @@ function BasketPage() {
                         <span className="w-6 h-6 bg-[#eb1902] text-white rounded-full flex items-center justify-center text-sm">{serviceType === 'pickup' ? '2' : '3'}</span>
                         {serviceType === 'pickup' ? 'Confirma tu retiro' : 'Método de pago'}
                       </h4>
+
+                      <FulfillmentTimingPicker
+                        storeId={
+                          selectedStore.store?._id ||
+                          selectedStore._id ||
+                          selectedStore.storeId
+                        }
+                        type={serviceType}
+                        address={normalizedCustomerAddress}
+                        value={fulfillmentSelection}
+                        onChange={(selection) => {
+                          setFulfillmentSelection(selection);
+                          setClientSecret(null);
+                          setCardError("");
+                          setCodError("");
+                          setPickupError("");
+                        }}
+                      />
 
                       <FulfillmentMap
                         type={serviceType}

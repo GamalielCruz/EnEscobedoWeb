@@ -1,6 +1,12 @@
 import { HomeIcon } from "@sanity/icons";
 import { defineField, defineType } from "sanity";
 
+const RESERVED_STORE_SLUGS = new Set([
+  "about", "admin", "api", "basket", "categories", "checkout", "dashboard",
+  "demo", "faq", "legal", "orders", "product", "search", "sign-in", "store",
+  "studio", "success", "terminos",
+]);
+
 export const affiliateStoreType = defineType({
   name: "affiliateStore",
   title: "Tienda Afiliada",
@@ -19,6 +25,28 @@ export const affiliateStoreType = defineType({
       title: "Nombre de la Tienda",
       type: "string",
       validation: (Rule) => Rule.required(),
+    }),
+    defineField({
+      name: "slug",
+      title: "Enlace público",
+      type: "slug",
+      description: "Dirección corta del restaurante. Ejemplo: elmenu.site/hornea",
+      options: {
+        source: "name",
+        maxLength: 96,
+        slugify: (value) =>
+          value
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, ""),
+      },
+      validation: (Rule) =>
+        Rule.required().custom((value) =>
+          value?.current && RESERVED_STORE_SLUGS.has(value.current)
+            ? "Este enlace está reservado por ElMenu.site."
+            : true
+        ),
     }),
     defineField({
       name: "storeCategories",
@@ -350,6 +378,46 @@ export const affiliateStoreType = defineType({
       name: "deliveryTimeMax",
       title: "Tiempo máximo de entrega (minutos)",
       type: "number",
+    }),
+    defineField({
+      name: "scheduledOrdersEnabled",
+      title: "Pedidos programados",
+      type: "boolean",
+      initialValue: true,
+    }),
+    defineField({
+      name: "minimumPreparationMinutes",
+      title: "Preparacion minima (minutos)",
+      type: "number",
+      validation: (Rule) => Rule.min(0),
+    }),
+    defineField({
+      name: "scheduledOrderIntervalMinutes",
+      title: "Duracion de intervalos (minutos)",
+      type: "number",
+      description: "Vacio para heredar la configuracion global.",
+      validation: (Rule) => Rule.min(30),
+    }),
+    defineField({
+      name: "maximumScheduledDays",
+      title: "Dias maximos para programar",
+      type: "number",
+      description: "No puede superar el limite global.",
+      validation: (Rule) => Rule.min(1),
+    }),
+    defineField({
+      name: "lastDeliveryOrderMinutesBeforeClose",
+      title: "Ultima entrega antes del cierre (minutos)",
+      type: "number",
+      initialValue: 30,
+      validation: (Rule) => Rule.min(0),
+    }),
+    defineField({
+      name: "lastPickupOrderMinutesBeforeClose",
+      title: "Ultima recoleccion antes del cierre (minutos)",
+      type: "number",
+      initialValue: 15,
+      validation: (Rule) => Rule.min(0),
     }),
     defineField({
       name: "serviceTypes",

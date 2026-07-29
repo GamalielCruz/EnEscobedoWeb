@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/check-repartidores",
+      "schedule": "*/5 * * * *"
+    }
+  ]
+}

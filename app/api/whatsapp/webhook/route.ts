@@ -11,6 +11,7 @@ import {
   sendClienteRepartidorEnPuerta,
   sendOrderCancelled,
   sendPickupReadyForCustomer,
+  sendWhatsAppMessage,
 } from '@/lib/whatsapp'
 import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
 import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
@@ -22,6 +23,9 @@ import { syncBaserowOrderById } from '@/lib/baserow'
 import { isDeliveryPinValid, revealDeliveryPin } from '@/lib/delivery-pin'
 import { parseDeliveryPinCommand } from '@/lib/delivery-pin-command'
 import { verifyWhatsAppSignature } from '@/lib/whatsapp-webhook'
+import { getDeliveryScheduleConfig } from '@/lib/delivery-schedule-config'
+import { getStoreAvailability, validateFulfillmentSelection } from '@/lib/fulfillment-schedule'
+import { calculatePickupConversionFinancials } from '@/lib/scheduled-order-contingency'
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN
 const MEXICO_TIME_ZONE = 'America/Mexico_City'
@@ -104,6 +108,7 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   status,
   dispatchStatus,
   orderStatus,
+  fulfillmentTiming,
   paymentMethod,
   paymentProvider,
   paymentStatus,
@@ -146,6 +151,7 @@ const ACTIVE_OFFER_ORDERS_BY_DRIVER_QUERY = `*[
   phone,
   status,
   dispatchStatus,
+  fulfillmentTiming,
   paymentMethod,
   paymentProvider,
   paymentStatus,
@@ -597,6 +603,217 @@ async function handlePickupRestaurantAction(action: string, orderId: string | nu
   }
   return true
 }
+
+async function handleScheduledCustomerAction(
+  action: string,
+  orderId: string | null,
+  fromPhone: string,
+  now: string
+) {
+  if (!orderId || !['SCHEDULE WAIT', 'SCHEDULE PICKUP', 'SCHEDULE HELP'].includes(action)) {
+    return false
+  }
+
+  let order = await backendClient.fetch(
+    `*[_type == "order" && _id == $orderId][0]{
+      _id,
+      _rev,
+      orderNumber,
+      customerName,
+      phone,
+      orderType,
+      orderStatus,
+      status,
+      paymentStatus,
+      paymentProvider,
+      paymentMethod,
+      fulfillmentTiming,
+      scheduledSlot,
+      scheduleCustomerChoice,
+      repartidorAsignado,
+      "offeredToRef": offeredTo._ref,
+      productsSubtotal,
+      shippingFee,
+      discount,
+      tax,
+      platformCommission,
+      stripeFee,
+      grossTotal,
+      totalPrice,
+      "store": affiliateStore->{
+        _id,
+        name,
+        contact,
+        isActive,
+        isOpen,
+        manualOperationalStatus,
+        operatingHours,
+        serviceTypes,
+        deliveryTimeMin,
+        scheduledOrdersEnabled,
+        minimumPreparationMinutes,
+        scheduledOrderIntervalMinutes,
+        maximumScheduledDays,
+        lastDeliveryOrderMinutesBeforeClose,
+        lastPickupOrderMinutesBeforeClose
+      },
+      orderEvents
+    }`,
+    { orderId }
+  ) as Record<string, any> | null
+
+  if (
+    !order ||
+    normalizeWhatsAppPhone(fromPhone) !== normalizeWhatsAppPhone(order.phone) ||
+    order.fulfillmentTiming !== 'scheduled' ||
+    order.orderType !== 'delivery' ||
+    order.repartidorAsignado ||
+    ['cancelled', 'delivered', 'completed'].includes(String(order.orderStatus || order.status))
+  ) {
+    console.warn('[whatsapp webhook] accion programada rechazada', { action, orderId })
+    return true
+  }
+
+  const idempotencyKey = `${orderId}:${action}`
+  const choice = action === 'SCHEDULE WAIT'
+    ? 'wait_for_driver'
+    : action === 'SCHEDULE PICKUP'
+      ? 'pickup'
+      : 'help'
+  if (order.scheduleCustomerChoice === choice) return true
+  const alreadyHandled = (order.orderEvents ?? []).some((event: Record<string, unknown>) => {
+    if (!event.payloadJson) return false
+    try {
+      return JSON.parse(String(event.payloadJson)).idempotencyKey === idempotencyKey
+    } catch {
+      return false
+    }
+  })
+  if (alreadyHandled) return true
+
+  if (action === 'SCHEDULE WAIT') {
+    await backendClient.patch(orderId).ifRevisionId(order._rev).set({
+      scheduleCustomerChoice: 'wait_for_driver',
+      scheduleCustomerChoiceAt: now,
+      updatedAt: now,
+    }).commit()
+    await appendOrderEvent(orderId, {
+      type: 'manual_admin_action',
+      source: 'whatsapp/webhook',
+      actor: 'customer',
+      reason: 'customer_waits_for_driver',
+      payload: { idempotencyKey },
+    })
+    await redispatchOrders([orderId])
+    return true
+  }
+
+  if (action === 'SCHEDULE HELP') {
+    await backendClient.patch(orderId).ifRevisionId(order._rev).set({
+      scheduleCustomerChoice: 'help',
+      scheduleCustomerChoiceAt: now,
+      customerHelpRequested: true,
+      scheduleRiskLevel: 'contingency',
+      updatedAt: now,
+    }).commit()
+    await appendOrderEvent(orderId, {
+      type: 'manual_admin_action',
+      source: 'whatsapp/webhook',
+      actor: 'customer',
+      reason: 'customer_requested_help',
+      payload: { idempotencyKey },
+    })
+    return true
+  }
+
+  if (order.store?.serviceTypes?.pickup !== true) return true
+  const config = await getDeliveryScheduleConfig()
+  const pickupAvailability = getStoreAvailability({
+    store: order.store,
+    config,
+    fulfillmentType: 'pickup',
+    now: new Date(now),
+  })
+  validateFulfillmentSelection(pickupAvailability, {
+    timing: 'scheduled',
+    scheduledSlot: {
+      startAt: order.scheduledSlot.startAt,
+      endAt: order.scheduledSlot.endAt,
+    },
+  })
+
+  if (order.offeredToRef) {
+    await releaseOrdersForDriver([orderId], String(order.offeredToRef), 'customer_changed_to_pickup')
+    const refreshed = await backendClient.fetch<{ _rev: string }>(
+      `*[_type == "order" && _id == $orderId][0]{ _rev }`,
+      { orderId }
+    )
+    order._rev = refreshed._rev
+  }
+
+  const shippingFee = Number(order.shippingFee ?? 0)
+  const needsPartialRefund = order.paymentProvider === 'stripe' && shippingFee > 0
+  const financials = calculatePickupConversionFinancials({
+    productsSubtotal: Number(order.productsSubtotal ?? 0),
+    discount: Number(order.discount ?? 0),
+    tax: Number(order.tax ?? 0),
+    platformCommission: Number(order.platformCommission ?? 0),
+    stripeFee: Number(order.stripeFee ?? 0),
+    shippingFee,
+    paidWithStripe: order.paymentProvider === 'stripe',
+  })
+
+  await backendClient.patch(orderId).ifRevisionId(String(order._rev)).set({
+    orderType: 'pickup',
+    fulfillmentType: 'pickup',
+    fulfillmentProvider: 'pickup',
+    fulfillmentProviderSnapshot: { provider: 'pickup', restaurantName: order.store?.name || 'Restaurante' },
+    dispatchStatus: 'not_required',
+    driverType: 'none',
+    driverPayout: financials.driverPayout,
+    shippingFee: financials.shippingFee,
+    shippingCost: 0,
+    totalPrice: financials.grossTotal,
+    grossTotal: financials.grossTotal,
+    stripeNetAmount: financials.stripeNetAmount,
+    storeNetTotal: financials.storeNetTotal,
+    platformNetTotal: financials.platformNetTotal,
+    cashCollectedBy: order.paymentProvider === 'stripe' ? 'none' : 'store',
+    scheduleCustomerChoice: 'pickup',
+    scheduleCustomerChoiceAt: now,
+    customerPickupConsentAt: now,
+    requiresStripeReconciliation: needsPartialRefund,
+    refundStatus: needsPartialRefund ? 'requested' : 'not_requested',
+    ...(needsPartialRefund
+      ? {
+          refundAmount: financials.refundAmount,
+          refundReason: 'Cambio de entrega programada a recoleccion',
+        }
+      : {}),
+    updatedAt: now,
+  }).unset([
+    'offeredTo',
+    'deliveryOfertaExpiresAt',
+    'deliveryOfertaEnviada',
+    'repartidorAsignado',
+    'repartidorAsignadoAt',
+  ]).commit()
+
+  await appendOrderEvent(orderId, {
+    type: 'scheduled_order_changed_to_pickup',
+    source: 'whatsapp/webhook',
+    actor: 'customer',
+    payload: { idempotencyKey, previousShippingFee: shippingFee, grossTotal: financials.grossTotal },
+  })
+  after(() => syncBaserowOrderById(orderId))
+  if (order.store?.contact?.phone) {
+    await sendWhatsAppMessage(
+      String(order.store.contact.phone),
+      `El pedido #${order.orderNumber} cambio a recoleccion con consentimiento del cliente.`
+    ).catch(() => null)
+  }
+  return true
+}
 // Meta llama este GET para verificar el webhook
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -728,6 +945,9 @@ export async function POST(req: NextRequest) {
     })
     // #endregion
 
+    if (await handleScheduledCustomerAction(textBody, buttonOrderId, fromPhone, new Date().toISOString())) {
+      return NextResponse.json({ status: 'ok' })
+    }
     if (await handlePickupRestaurantAction(textBody, buttonOrderId, fromPhone, new Date().toISOString())) {
       return NextResponse.json({ status: 'ok' })
     }
@@ -1111,6 +1331,7 @@ Te avisaremos 10 minutos antes de finalizar.`
               status: 'shipped',
               orderStatus: 'shipped',
               dispatchStatus: 'accepted',
+              ...(order.fulfillmentTiming === 'scheduled' ? { scheduleStatus: 'dispatching' } : {}),
               deliveryOfertaEnviada: false,
               updatedAt: now,
             })
@@ -1120,6 +1341,9 @@ Te avisaremos 10 minutos antes de finalizar.`
           after(() => syncBaserowOrderById(String(order._id)))
           await appendOrderEvent(String(order._id), { type: 'offer_accepted', source: 'whatsapp/webhook', actor: repartidor._id })
           await appendOrderEvent(String(order._id), { type: 'driver_assigned', source: 'whatsapp/webhook', actor: repartidor._id, payload: { driverId: repartidor._id } })
+          if (order.fulfillmentTiming === 'scheduled') {
+            await appendOrderEvent(String(order._id), { type: 'scheduled_order_driver_assigned', source: 'whatsapp/webhook', actor: repartidor._id, payload: { driverId: repartidor._id } })
+          }
 
           void notifyRestaurantDriverEnRoute(
             String(order._id),
@@ -1475,6 +1699,7 @@ Te avisaremos 10 minutos antes de finalizar.`
           deliveryPinVerifiedAt: verifiedAt,
           deliveryPinVerifiedBy: repartidor._id,
           deliveryVerificationStatus: 'verified',
+          ...(targetOrder.fulfillmentTiming === 'scheduled' ? { scheduleStatus: 'completed' } : {}),
           updatedAt: verifiedAt,
         }).commit()
 

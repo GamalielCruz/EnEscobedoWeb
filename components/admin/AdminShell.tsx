@@ -11,6 +11,7 @@ import {
   PackageCheck,
   Truck,
   WalletCards,
+  Settings2,
   X,
 } from "lucide-react";
 
@@ -24,6 +25,7 @@ const navItems = [
   { href: "/admin/pending-products", label: "Aprobaciones", icon: PackageCheck },
   { href: "/admin/repartidores", label: "Repartidores", icon: Truck },
   { href: "/admin/finanzas", label: "Finanzas", icon: WalletCards },
+  { href: "/admin/configuracion/reparto", label: "Horarios de reparto", icon: Settings2 },
 ];
 
 export function AdminShell({ children, className }: { children: React.ReactNode; className?: string }) {

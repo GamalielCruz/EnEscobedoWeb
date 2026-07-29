@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { client } from '@/sanity/lib/client';
+import { isDeliveryDriverAvailable } from '@/lib/fulfillment';
+import { backendClient } from '@/sanity/lib/backendClient';
 
 const STORE_SERVICE_TYPES_QUERY = `*[_type == "affiliateStore" && _id == $storeId][0] {
   _id,
@@ -7,7 +8,23 @@ const STORE_SERVICE_TYPES_QUERY = `*[_type == "affiliateStore" && _id == $storeI
   isOpen,
   manualOperationalStatus,
   highDemandMode,
-  serviceTypes
+  hasOwnDelivery,
+  serviceTypes,
+  "connectedCommunityDrivers": count(*[
+    _type == "repartidor" &&
+    activo == true &&
+    disponible == true &&
+    (!defined(disponibleHasta) || disponibleHasta > now()) &&
+    !defined(tiendaAsignada)
+  ]),
+  operatingHours,
+  deliveryTimeMin,
+  scheduledOrdersEnabled,
+  minimumPreparationMinutes,
+  scheduledOrderIntervalMinutes,
+  maximumScheduledDays,
+  lastDeliveryOrderMinutesBeforeClose,
+  lastPickupOrderMinutesBeforeClose
 }`;
 
 export async function GET(request: NextRequest) {
@@ -76,10 +93,13 @@ export async function GET(request: NextRequest) {
     let highDemandMode =
       mockStoreStates[storeId]?.highDemandMode ??
       defaultStoreState.highDemandMode;
+    let hasOwnDelivery = Boolean(mockServiceTypes[storeId]);
+    let connectedCommunityDrivers = 0;
+    let scheduleConfig: Record<string, unknown> = {};
 
     if (!mockServiceTypes[storeId]) {
       try {
-        const store = await client.fetch(STORE_SERVICE_TYPES_QUERY, { storeId });
+        const store = await backendClient.fetch(STORE_SERVICE_TYPES_QUERY, { storeId });
         if (store) {
           serviceTypes = store.serviceTypes || defaultServiceTypes;
           storeName = store.name;
@@ -87,6 +107,18 @@ export async function GET(request: NextRequest) {
           manualOperationalStatus = store.manualOperationalStatus ?? defaultStoreState.manualOperationalStatus;
           highDemandMode =
             store.highDemandMode ?? store.serviceTypes?.onDemand ?? defaultStoreState.highDemandMode;
+          hasOwnDelivery = store.hasOwnDelivery === true;
+          connectedCommunityDrivers = Number(store.connectedCommunityDrivers || 0);
+          scheduleConfig = {
+            operatingHours: store.operatingHours,
+            deliveryTimeMin: store.deliveryTimeMin,
+            scheduledOrdersEnabled: store.scheduledOrdersEnabled,
+            minimumPreparationMinutes: store.minimumPreparationMinutes,
+            scheduledOrderIntervalMinutes: store.scheduledOrderIntervalMinutes,
+            maximumScheduledDays: store.maximumScheduledDays,
+            lastDeliveryOrderMinutesBeforeClose: store.lastDeliveryOrderMinutesBeforeClose,
+            lastPickupOrderMinutesBeforeClose: store.lastPickupOrderMinutesBeforeClose,
+          };
         }
       } catch (sanityError) {
         console.log('Error obteniendo de Sanity, usando configuracion por defecto:', sanityError);
@@ -108,6 +140,14 @@ export async function GET(request: NextRequest) {
       isOpen,
       manualOperationalStatus,
       highDemandMode,
+      deliveryAvailability: {
+        available:
+          serviceTypes.delivery === true &&
+          isDeliveryDriverAvailable(hasOwnDelivery, connectedCommunityDrivers),
+        provider: hasOwnDelivery ? 'restaurant' : 'elmenu',
+        connectedDrivers: hasOwnDelivery ? null : connectedCommunityDrivers,
+      },
+      ...scheduleConfig,
       serviceTypes: {
         ...serviceTypes,
         onDemand: highDemandMode

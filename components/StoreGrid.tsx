@@ -6,12 +6,14 @@ import { useEffect, useState } from "react";
 import { ChevronDown } from "lucide-react";
 
 import { getStoreOperationalState, getStoreServiceTiming } from "@/lib/storeOperationalState";
+import { getStorePath } from "@/lib/store-url";
 import { urlFor } from "@/sanity/lib/image";
 
 interface Store {
   _id: string;
   name?: string;
   storeId?: string;
+  slug?: { current?: string };
   image?: any;
   coverImage?: any;
   address?: {
@@ -96,7 +98,7 @@ export default function StoreGrid({ stores }: StoreGridProps) {
             key={store._id}
             className="group flex flex-col overflow-hidden rounded-lg bg-white shadow-md transition-shadow duration-200 hover:shadow-lg"
           >
-            <Link href={`/store/${store._id}`} className="relative block h-48 w-full overflow-hidden bg-black">
+            <Link href={getStorePath(store)} className="relative block h-48 w-full overflow-hidden bg-black">
               {store.coverImage ? (
                 <Image
                   src={urlFor(store.coverImage).width(600).height(400).url()}
@@ -126,7 +128,7 @@ export default function StoreGrid({ stores }: StoreGridProps) {
             </Link>
 
             <div className="space-y-2 p-4">
-              <Link href={`/store/${store._id}`} className="block space-y-2">
+              <Link href={getStorePath(store)} className="block space-y-2">
                 <h3 className="line-clamp-1 text-lg font-bold text-black">{store.name}</h3>
 
                 {store.address && (

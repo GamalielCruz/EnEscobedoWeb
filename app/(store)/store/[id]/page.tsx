@@ -1,8 +1,9 @@
 import Image from "next/image";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { StoreStatus } from "@/components/StoreStatus";
+import { FulfillmentTimingPicker } from "@/components/FulfillmentTimingPicker";
 import { getStoreServiceTiming } from "@/lib/storeOperationalState";
+import { getStorePath } from "@/lib/store-url";
 import { buildUrl } from "@/lib/urls";
 import {
   buildStoreProductUrl,
@@ -66,11 +67,10 @@ export async function generateMetadata({
     };
   }
 
-  const storeUrl = buildUrl(`/store/${id}`);
+  const storeUrl = buildUrl(getStorePath(store));
   const title = `${storeName} | ElMenu`;
   const description = `Consulta el menú y pide en ${storeName}.`;
-  const storeImage = store.coverImage || store.image;
-  const imageUrl = storeImage ? getShareableImageUrl(storeImage) : undefined;
+  const imageUrl = buildUrl(`/api/og/store/${id}`);
 
   return {
     title,
@@ -80,15 +80,15 @@ export async function generateMetadata({
       title,
       description,
       url: storeUrl,
-      siteName: "ElMenu",
+      siteName: "ElMenu.site",
       type: "website",
-      images: imageUrl ? [imageUrl] : [],
+      images: [{ url: imageUrl, width: 1200, height: 630, alt: storeName }],
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
-      images: imageUrl ? [imageUrl] : [],
+      images: [{ url: imageUrl, width: 1200, height: 630, alt: storeName }],
     },
   };
 }
@@ -112,7 +112,7 @@ export default async function StorePage({
   const timing = getStoreServiceTiming(store);
   const highlightedProductSlug = requestedProduct?.trim() || "";
   const storeName = sanitizeText(store.name) || "Tienda";
-  const storeUrl = buildUrl(`/store/${id}`);
+  const storeUrl = buildUrl(getStorePath(store));
   const categoriesMap = new Map<
     string,
     { _id: string; title?: string; slug?: { current?: string } }
@@ -181,12 +181,10 @@ export default async function StorePage({
         <section className="relative border-b border-gray-200 bg-white">
           <div className="py-4 pl-4 pr-16">
             <div className="flex items-center gap-4 text-sm">
-              <StoreStatus
-                operatingHours={store.operatingHours || undefined}
-                isOpen={store.isOpen}
-                manualOperationalStatus={store.manualOperationalStatus}
-                highDemandMode={store.highDemandMode}
-                serviceTypes={store.serviceTypes || undefined}
+              <FulfillmentTimingPicker
+                storeId={id}
+                type={store.serviceTypes?.delivery === false ? "pickup" : "delivery"}
+                variant="store-status"
               />
               <div className="flex items-center gap-1 text-gray-600">
                 {timing.label ? <span>Entrega estimada: {timing.label}</span> : null}

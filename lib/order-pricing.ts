@@ -5,7 +5,6 @@ import {
   getDeliveryPricingConfigId,
   normalizeDeliveryConfig,
 } from "@/lib/delivery-zones";
-import { getStoreOperationalState } from "@/lib/storeOperationalState";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { normalizeProductRequests } from "./product-requests";
 import {
@@ -25,8 +24,17 @@ import {
   buildStateFields,
 } from "./order-state";
 import { createDeliveryPin } from "./delivery-pin";
-import { resolveFulfillmentProvider } from "./fulfillment";
+import { isDeliveryDriverAvailable, resolveFulfillmentProvider } from "./fulfillment";
 import { legalVersions } from "./legal-config";
+import { getDeliveryScheduleConfig } from "./delivery-schedule-config";
+import {
+  calculateScheduledDispatchAt,
+  calculateScheduledPreparationAt,
+  getStoreAvailability,
+  validateFulfillmentSelection,
+  type FulfillmentSelection,
+  type FulfillmentSlot,
+} from "./fulfillment-schedule";
 
 const DEFAULT_DELIVERY_DRIVER_PAYOUT_RATE = 1;
 const DEFAULT_PLATFORM_COMMISSION_RATE = 0;
@@ -57,7 +65,15 @@ type StoreRecord = {
   manualOperationalStatus?: "open" | "closed" | "auto" | null;
   highDemandMode?: boolean | null;
   hasOwnDelivery?: boolean;
+  connectedCommunityDrivers?: number;
   deliveryFee?: number;
+  deliveryTimeMin?: number | null;
+  scheduledOrdersEnabled?: boolean | null;
+  minimumPreparationMinutes?: number | null;
+  scheduledOrderIntervalMinutes?: number | null;
+  maximumScheduledDays?: number | null;
+  lastDeliveryOrderMinutesBeforeClose?: number | null;
+  lastPickupOrderMinutesBeforeClose?: number | null;
   platformCommissionPercent?: number;
   operatingHours?: Record<string, string>;
   serviceTypes?: {
@@ -118,6 +134,13 @@ export type ValidatedOrderQuote = {
   discount: number;
   tax: number;
   grossTotal: number;
+  fulfillment: {
+    timing: "asap" | "scheduled";
+    estimatedPreparationMinutes: number;
+    slot?: FulfillmentSlot;
+    scheduledPreparationAt?: string;
+    scheduledDispatchAt?: string;
+  };
   items: Array<{
     _key: string;
     product: { _type: "reference"; _ref: string };
@@ -159,7 +182,21 @@ const STORE_QUERY = `*[_type == "affiliateStore" && _id == $storeId][0]{
   manualOperationalStatus,
   highDemandMode,
   hasOwnDelivery,
+  "connectedCommunityDrivers": count(*[
+    _type == "repartidor" &&
+    activo == true &&
+    disponible == true &&
+    (!defined(disponibleHasta) || disponibleHasta > now()) &&
+    !defined(tiendaAsignada)
+  ]),
   deliveryFee,
+  deliveryTimeMin,
+  scheduledOrdersEnabled,
+  minimumPreparationMinutes,
+  scheduledOrderIntervalMinutes,
+  maximumScheduledDays,
+  lastDeliveryOrderMinutesBeforeClose,
+  lastPickupOrderMinutesBeforeClose,
   platformCommissionPercent,
   operatingHours,
   serviceTypes
@@ -178,7 +215,7 @@ const PRODUCTS_QUERY = `*[_type == "product" && _id in $productIds]{
   acceptsAllergyRequests
 }`;
 
-async function getDeliveryConfig(storeId?: string) {
+export async function getDeliveryConfig(storeId?: string) {
   const doc = await backendClient.fetch(
     `*[_type == "deliveryPricingConfig" && _id == $id][0]`,
     { id: getDeliveryPricingConfigId(storeId) }
@@ -318,26 +355,29 @@ export async function validateAndQuoteOrder(input: {
   orderType: OrderTypeValue;
   paymentMethod: string;
   shippingAddress?: OrderAddressInput | null;
+  fulfillment?: FulfillmentSelection | null;
 }) {
   assert(input.storeId, "Tienda requerida.");
   assert(Array.isArray(input.items) && input.items.length > 0, "La lista de productos esta vacia.");
 
-  const [store, products] = await Promise.all([
+  const [store, products, deliverySchedule] = await Promise.all([
     backendClient.fetch<StoreRecord | null>(STORE_QUERY, { storeId: input.storeId }),
     backendClient.fetch<ProductRecord[]>(PRODUCTS_QUERY, {
       productIds: [...new Set(input.items.map((item) => item.productId).filter(Boolean))],
     }),
+    getDeliveryScheduleConfig(),
   ]);
 
   assert(store, "La tienda no existe.");
   assert(store.isActive === true, "La tienda no esta activa.");
 
-  const operationalState = getStoreOperationalState(store);
-  assert(operationalState.canAcceptOrders, "La tienda no acepta pedidos en este momento.");
-
   if (input.orderType === "delivery") {
     assert(store.serviceTypes?.delivery === true, "La tienda no permite entregas.");
     resolveFulfillmentProvider("delivery", store.hasOwnDelivery);
+    assert(
+      isDeliveryDriverAvailable(store.hasOwnDelivery, Number(store.connectedCommunityDrivers || 0)),
+      "No hay repartidores de El Menú disponibles en este momento. Puedes elegir retiro en el local o intentarlo más tarde."
+    );
   } else {
     assert(store.serviceTypes?.pickup === true, "La tienda no permite pickup.");
   }
@@ -346,6 +386,11 @@ export async function validateAndQuoteOrder(input: {
   if (input.orderType === "delivery") {
     assert(normalizedAddress?.line1, "Direccion requerida para delivery.");
     assert(normalizedAddress?.city, "Ciudad requerida para delivery.");
+    assert(
+      typeof normalizedAddress?.latitude === "number" &&
+        typeof normalizedAddress?.longitude === "number",
+      "Confirma la ubicacion en el mapa para validar la cobertura."
+    );
   }
 
   const productMap = new Map(products.map((product) => [product._id, product]));
@@ -394,6 +439,41 @@ export async function validateAndQuoteOrder(input: {
   }
 
   const shippingFee = input.orderType === "delivery" ? await computeShippingFee(store, normalizedAddress) : 0;
+  const availability = getStoreAvailability({
+    store,
+    config: deliverySchedule,
+    fulfillmentType: input.orderType,
+    coverageAllowed: true,
+  });
+  const validatedFulfillment = validateFulfillmentSelection(availability, input.fulfillment);
+  const estimatedPreparationMinutes = Math.max(
+    0,
+    Number(store.minimumPreparationMinutes ?? store.deliveryTimeMin ?? 30) || 30
+  );
+  const fulfillment =
+    validatedFulfillment.timing === "scheduled"
+      ? {
+          timing: "scheduled" as const,
+          estimatedPreparationMinutes,
+          slot: validatedFulfillment.slot,
+          scheduledPreparationAt: calculateScheduledPreparationAt({
+            startAt: validatedFulfillment.slot.start,
+            estimatedPreparationMinutes,
+          }),
+          scheduledDispatchAt:
+            input.orderType === "delivery"
+              ? calculateScheduledDispatchAt({
+                  startAt: validatedFulfillment.slot.start,
+                  estimatedTravelMinutes: deliverySchedule.estimatedTravelMinutes,
+                  driverAssignmentMarginMinutes:
+                    deliverySchedule.driverAssignmentMarginMinutes,
+                })
+              : undefined,
+        }
+      : {
+          timing: "asap" as const,
+          estimatedPreparationMinutes,
+        };
   const discount = 0;
   const tax = 0;
   const financials = computeFinancials({
@@ -415,6 +495,7 @@ export async function validateAndQuoteOrder(input: {
     discount,
     tax,
     grossTotal: financials.grossTotal,
+    fulfillment,
     items: pricedItems,
     financials,
   } satisfies ValidatedOrderQuote;
@@ -528,13 +609,17 @@ export function buildOrderDocument(input: {
         });
 
   const cashCollectedBy = resolveCashCollectedBy({ paymentMethod: normalizedPaymentMethod, orderType: input.orderType, driverType });
+  const scheduledDelivery =
+    input.orderType === "delivery" && input.quote.fulfillment.timing === "scheduled";
   const states = buildStateFields({
     orderType: input.orderType,
     orderStatus: input.orderStatus ?? "pending",
     paymentStatus: input.paymentStatus,
     dispatchStatus:
       fulfillmentProvider === "restaurant_delivery" || fulfillmentProvider === "elmenu_delivery"
-        ? input.dispatchStatus
+        ? scheduledDelivery
+          ? "scheduled"
+          : input.dispatchStatus
         : "not_required",
     settlementStatus: resolveSettlementStatus({
       paymentStatus: input.paymentStatus,
@@ -558,6 +643,26 @@ export function buildOrderDocument(input: {
     email: input.customerEmail,
     phone: normalizePhone(input.phone),
     orderType: input.orderType,
+    fulfillmentType: input.orderType,
+    fulfillmentTiming: input.quote.fulfillment.timing,
+    scheduledSlot:
+      input.quote.fulfillment.timing === "scheduled" && input.quote.fulfillment.slot
+        ? {
+            startAt: input.quote.fulfillment.slot.start,
+            endAt: input.quote.fulfillment.slot.end,
+            timezone: input.quote.fulfillment.slot.timezone,
+          }
+        : undefined,
+    estimatedPreparationMinutes: input.quote.fulfillment.estimatedPreparationMinutes,
+    storeScheduleSnapshot: input.quote.fulfillment.slot?.storeScheduleSnapshot,
+    deliveryScheduleSnapshot: input.quote.fulfillment.slot?.deliveryScheduleSnapshot,
+    scheduleStatus:
+      input.quote.fulfillment.timing === "scheduled" ? "scheduled" : "not_required",
+    scheduledPreparationAt: input.quote.fulfillment.scheduledPreparationAt,
+    scheduledDispatchAt: input.quote.fulfillment.scheduledDispatchAt,
+    preparationStatus:
+      input.quote.fulfillment.timing === "scheduled" ? "not_started" : undefined,
+    scheduleRiskLevel: scheduledDelivery ? "none" : undefined,
     fulfillmentProvider,
     sellerType: "restaurant",
     sellerId: input.storeId,

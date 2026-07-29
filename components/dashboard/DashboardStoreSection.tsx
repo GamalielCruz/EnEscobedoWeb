@@ -488,6 +488,55 @@ export function DashboardStoreSection({
         </DashboardPanelBody>
       </DashboardPanel>
 
+      <DashboardPanel>
+        <DashboardPanelHeader>
+          <DashboardEyebrow>Pedidos programados</DashboardEyebrow>
+          <DashboardTitle className="text-[17px]">Preparación y límites</DashboardTitle>
+          <DashboardDescription>
+            Puedes reducir tus límites, pero el horario global de reparto siempre tiene prioridad.
+          </DashboardDescription>
+        </DashboardPanelHeader>
+        <DashboardPanelBody className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <label className="flex items-center gap-2 rounded-xl border border-black/8 p-3 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={draft.scheduledOrdersEnabled}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  scheduledOrdersEnabled: event.target.checked,
+                }))
+              }
+            />
+            Aceptar pedidos programados
+          </label>
+          {([
+            ["minimumPreparationMinutes", "Preparación mínima (min)"],
+            ["scheduledOrderIntervalMinutes", "Duración del intervalo (min)"],
+            ["maximumScheduledDays", "Días máximos"],
+            ["lastDeliveryOrderMinutesBeforeClose", "Última entrega antes de cerrar (min)"],
+            ["lastPickupOrderMinutesBeforeClose", "Última recolección antes de cerrar (min)"],
+          ] as Array<[keyof StoreSettingsDraft, string]>).map(([key, label]) => (
+            <label key={key} className="text-sm">
+              <span className="mb-1 block font-medium text-gray-700">{label}</span>
+              <Input
+                type="number"
+                min={key === "scheduledOrderIntervalMinutes" ? 30 : 0}
+                step={key === "scheduledOrderIntervalMinutes" ? 30 : 1}
+                className="h-10 rounded-lg border-black/8 shadow-none"
+                value={Number(draft[key])}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    [key]: Number(event.target.value),
+                  }))
+                }
+              />
+            </label>
+          ))}
+        </DashboardPanelBody>
+      </DashboardPanel>
+
       <RequestStatusList
         title="Historial de solicitudes"
         description="Seguimiento de cambios enviados al administrador."

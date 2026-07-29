@@ -7,6 +7,7 @@ export const getStoreById = async (storeId: string) => {
     *[_type == "affiliateStore" && _id == $storeId][0] {
       _id,
       name,
+      slug,
       storeId,
       image,
       coverImage,
@@ -24,6 +25,12 @@ export const getStoreById = async (storeId: string) => {
       deliveryFee,
       deliveryTimeMin,
       deliveryTimeMax,
+      scheduledOrdersEnabled,
+      minimumPreparationMinutes,
+      scheduledOrderIntervalMinutes,
+      maximumScheduledDays,
+      lastDeliveryOrderMinutesBeforeClose,
+      lastPickupOrderMinutesBeforeClose,
       serviceTypes
     }
   `);
