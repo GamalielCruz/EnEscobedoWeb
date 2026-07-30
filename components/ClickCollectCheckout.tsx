@@ -6,6 +6,7 @@ import useBasketStore from "@/store/store";
 import { useUser } from "@clerk/nextjs";
 import { formatCurrency } from "@/lib/formatCurrency";
 import { CustomerAddress } from "@/lib/clickCollect";
+import { calculateOrderTotal, PLATFORM_SERVICE_FEE_MXN } from "@/lib/platform-service-fee";
 import {
   Store,
   MapPin,
@@ -29,6 +30,7 @@ function ClickCollectCheckout() {
   const { user } = useUser();
   const { items, getTotalPrice, clearBasket } = useBasketStore();
   const [isLoading, setIsLoading] = useState(false);
+  const [platformServiceFee, setPlatformServiceFee] = useState(PLATFORM_SERVICE_FEE_MXN);
   const [storeInfo, setStoreInfo] = useState<StoreInfo | null>(null);
   const [formData, setFormData] = useState({
     phone: "",
@@ -44,9 +46,17 @@ function ClickCollectCheckout() {
   console.log("[ClickCollectCheckout] Component loaded - Items:", items);
   console.log("[ClickCollectCheckout] Component loaded - Items length:", items.length);
 
+  const storeId = (items[0]?.product?.affiliateStore as any)?._ref || (items[0]?.product?.affiliateStore as any)?._id;
+  useEffect(() => {
+    if (!storeId) return;
+    fetch(`/api/store-service-types?storeId=${storeId}`, { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => setPlatformServiceFee(Number(data?.commercial?.serviceFee ?? PLATFORM_SERVICE_FEE_MXN)))
+      .catch(() => {});
+  }, [storeId]);
   const subtotal = getTotalPrice();
   const shippingCost = 0; // Siempre gratis para Click & Collect
-  const total = subtotal + shippingCost;
+  const total = calculateOrderTotal({ productsSubtotal: subtotal, shippingFee: shippingCost, platformServiceFee });
 
   // Cargar información de la tienda desde localStorage
   useEffect(() => {
@@ -246,6 +256,10 @@ function ClickCollectCheckout() {
           <div className="flex justify-between">
             <span>Envío a tienda:</span>
             <span className="text-green-600 font-medium">¡Gratis!</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Tarifa de servicio:</span>
+            <span>{formatCurrency(platformServiceFee, "mxn")}</span>
           </div>
           <div className="border-t pt-2 flex justify-between font-bold text-lg">
             <span>Total a pagar en tienda:</span>

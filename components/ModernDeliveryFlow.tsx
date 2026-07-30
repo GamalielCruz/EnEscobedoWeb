@@ -27,6 +27,9 @@ type FlowStep = 'address' | 'validating' | 'map-confirm' | 'finding-stores' | 's
 type DeliveryQuote = {
   allowed: boolean;
   finalPrice: number | null;
+  deliveryBasePrice?: number;
+  deliveryBenefitDiscount?: number;
+  deliveryBenefitAbsorbedBy?: "platform" | "restaurant" | null;
   zone: { id: string; name: string; basePrice: number } | null;
   demandMultiplier: number;
   scheduleMultiplier: number;
@@ -874,6 +877,9 @@ export default function ModernDeliveryFlow({ userId, onComplete, filterStoreId }
               <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
                 <span className="font-semibold">Zona:</span> {deliveryQuote.zone?.name || "Tarifa especial"} ·
                 <span className="font-semibold"> Envio:</span> ${deliveryQuote.finalPrice} MXN
+                {deliveryQuote.deliveryBenefitDiscount ? (
+                  <span className="block text-xs">Beneficio: -${deliveryQuote.deliveryBenefitDiscount} MXN · lo absorbe {deliveryQuote.deliveryBenefitAbsorbedBy === "platform" ? "ElMenu" : "el restaurante"}.</span>
+                ) : null}
               </div>
             )}
 

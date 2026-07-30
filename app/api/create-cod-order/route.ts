@@ -11,6 +11,7 @@ import { syncBaserowOrder } from "@/lib/baserow";
 import { assertCurrentLegalAcceptance } from "@/lib/legal-config";
 import { recordCurrentLegalAcceptance } from "@/lib/legal-acceptance";
 import { DeliverySlotUnavailableError } from "@/lib/fulfillment-schedule";
+import { createOrderWithCommercialCap } from "@/lib/commercial-order";
 import { sendScheduledOrderConfirmation } from "@/lib/scheduled-order-whatsapp";
 
 function normalizeItems(items: Array<any>): OrderItemInput[] {
@@ -81,7 +82,7 @@ export async function POST(request: NextRequest) {
       orderData.pickupCode = crypto.randomUUID().split("-")[0].toUpperCase();
     }
 
-    const result = await writeClient.create(orderData);
+    const result = await createOrderWithCommercialCap(orderData);
     after(() => syncBaserowOrder({ ...orderData, _id: result._id, restaurantName: quote.store.name }));
 
     await appendOrderEvent(result._id, { type: "created", source: "api/create-cod-order", actor: userId });
@@ -129,6 +130,7 @@ export async function POST(request: NextRequest) {
       totals: {
         productsSubtotal: orderData.productsSubtotal,
         shippingFee: orderData.shippingFee,
+        platformServiceFee: orderData.platformServiceFee,
         grossTotal: orderData.grossTotal,
       },
     });

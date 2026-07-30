@@ -6,12 +6,14 @@ import useBasketStore from "@/store/store";
 import { useUser } from "@clerk/nextjs";
 import { formatCurrency } from "@/lib/formatCurrency";
 import { Truck, MapPin, DollarSign, CheckCircle } from "lucide-react";
+import { calculateOrderTotal, PLATFORM_SERVICE_FEE_MXN } from "@/lib/platform-service-fee";
 
 function CashOnDeliveryCheckout() {
   const router = useRouter();
   const { user } = useUser();
   const { items, getTotalPrice, clearBasket } = useBasketStore();
   const [isLoading, setIsLoading] = useState(false);
+  const [platformServiceFee, setPlatformServiceFee] = useState(PLATFORM_SERVICE_FEE_MXN);
   const [shippingCalculated, setShippingCalculated] = useState(false);
   const [shippingError, setShippingError] = useState("");
   const [addressPreloaded, setAddressPreloaded] = useState(false);
@@ -28,9 +30,17 @@ function CashOnDeliveryCheckout() {
     },
   });
 
+  const storeId = (items[0]?.product?.affiliateStore as any)?._ref || (items[0]?.product?.affiliateStore as any)?._id;
+  useEffect(() => {
+    if (!storeId) return;
+    fetch(`/api/store-service-types?storeId=${storeId}`, { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => setPlatformServiceFee(Number(data?.commercial?.serviceFee ?? PLATFORM_SERVICE_FEE_MXN)))
+      .catch(() => {});
+  }, [storeId]);
   const subtotal = getTotalPrice();
   const [shippingCost, setShippingCost] = useState(0);
-  const total = subtotal + shippingCost;
+  const total = calculateOrderTotal({ productsSubtotal: subtotal, shippingFee: shippingCost, platformServiceFee });
 
   // Cargar información guardada del carrito
   useEffect(() => {
@@ -291,6 +301,10 @@ function CashOnDeliveryCheckout() {
                 <span className="text-gray-500">Calcular envío</span>
               )}
             </span>
+          </div>
+          <div className="flex justify-between">
+            <span>Tarifa de servicio:</span>
+            <span>{formatCurrency(platformServiceFee, "mxn")}</span>
           </div>
           <div className="border-t pt-2 flex justify-between font-bold text-lg">
             <span>Total a pagar en efectivo:</span>

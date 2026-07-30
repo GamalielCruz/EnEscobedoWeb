@@ -6,7 +6,7 @@
 
 La configuración global vive en el documento singleton de Sanity `deliveryScheduleConfig` con `_id = "deliveryScheduleConfig"`. Si todavía no existe, se usan los valores iniciales 10:00–18:00, 60 minutos de anticipación, 7 días, intervalos de 30 minutos y margen de cierre de 30 minutos. Se administra en `/admin/configuracion/reparto`.
 
-Una entrega programada se guarda con `dispatchStatus = "scheduled"`. `scheduledDispatchAt` se calcula como inicio del intervalo menos traslado estimado menos margen para conseguir repartidor. El cron existente `/api/cron/check-repartidores`, configurado cada cinco minutos en `vercel.json`, la cambia mediante compare-and-set a `waiting_for_driver` / `ready_for_dispatch` y llama al dispatch actual. Los umbrales `riskBeforeMinutes`, `adminAlertBeforeMinutes` y `contingencyBeforeMinutes` son editables.
+Una entrega programada se guarda con `dispatchStatus = "scheduled"`. `scheduledDispatchAt` se calcula como inicio del intervalo menos traslado estimado menos margen para conseguir repartidor. GitHub Actions llama cada cinco minutos a `/api/cron/check-repartidores`, que la cambia mediante compare-and-set a `waiting_for_driver` / `ready_for_dispatch` y llama al dispatch actual. Los umbrales `riskBeforeMinutes`, `adminAlertBeforeMinutes` y `contingencyBeforeMinutes` son editables.
 
 No se agregó ninguna variable de entorno. Se reutilizan `CRON_SECRET`, la configuración actual de Sanity y las variables existentes de WhatsApp (`WHATSAPP_ACCESS_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_APP_SECRET`, `WHATSAPP_VERIFY_TOKEN`; `ADMIN_WHATSAPP_PHONE` sigue siendo opcional). Los envíos reales solo ocurren cuando la protección existente reconoce producción.
 

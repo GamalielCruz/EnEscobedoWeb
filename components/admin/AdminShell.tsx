@@ -25,6 +25,7 @@ const navItems = [
   { href: "/admin/pending-products", label: "Aprobaciones", icon: PackageCheck },
   { href: "/admin/repartidores", label: "Repartidores", icon: Truck },
   { href: "/admin/finanzas", label: "Finanzas", icon: WalletCards },
+  { href: "/admin/configuracion/comercial", label: "Configuración comercial", icon: Settings2 },
   { href: "/admin/configuracion/reparto", label: "Horarios de reparto", icon: Settings2 },
 ];
 

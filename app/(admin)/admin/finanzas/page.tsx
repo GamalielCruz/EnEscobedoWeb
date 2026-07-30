@@ -25,6 +25,7 @@ function MetricsTable({
     driverCollectedCash: number;
     stripeFee: number;
     platformCommission: number;
+    platformServiceFee: number;
     storeNetTotal: number;
     pendingSettlement: number;
   }>;
@@ -45,7 +46,8 @@ function MetricsTable({
               <th className="px-4 py-3">Cobrado tienda</th>
               <th className="px-4 py-3">Cobrado repartidor</th>
               <th className="px-4 py-3">Stripe</th>
-              <th className="px-4 py-3">Comision ElMenu</th>
+              <th className="px-4 py-3">Comisión ElMenu</th>
+              <th className="px-4 py-3">Tarifa de servicio</th>
               <th className="px-4 py-3">Neto tienda</th>
               <th className="px-4 py-3">Pendiente liquidar</th>
             </tr>
@@ -53,7 +55,7 @@ function MetricsTable({
           <tbody>
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={10} className="px-4 py-6 text-center text-gray-500">Sin movimientos para el dia seleccionado.</td>
+                <td colSpan={11} className="px-4 py-6 text-center text-gray-500">Sin movimientos para el dia seleccionado.</td>
               </tr>
             ) : (
               rows.map((row) => (
@@ -66,6 +68,7 @@ function MetricsTable({
                   <td className="px-4 py-3 text-gray-700">{formatMoney(row.driverCollectedCash)}</td>
                   <td className="px-4 py-3 text-gray-700">{formatMoney(row.stripeFee)}</td>
                   <td className="px-4 py-3 text-gray-700">{formatMoney(row.platformCommission)}</td>
+                  <td className="px-4 py-3 text-gray-700">{formatMoney(row.platformServiceFee)}</td>
                   <td className="px-4 py-3 text-gray-700">{formatMoney(row.storeNetTotal)}</td>
                   <td className="px-4 py-3 text-gray-700">{formatMoney(row.pendingSettlement)}</td>
                 </tr>
@@ -96,7 +99,8 @@ export default async function AdminFinanzasPage({ searchParams }: { searchParams
         <SummaryCard title="Cobrado en tienda" value={snapshot.totals.storeCollectedCash} />
         <SummaryCard title="Cobrado por repartidor" value={snapshot.totals.driverCollectedCash} />
         <SummaryCard title="Stripe fee" value={snapshot.totals.stripeFee} />
-        <SummaryCard title="Comision ElMenu" value={snapshot.totals.platformCommission} />
+        <SummaryCard title="Comisión ElMenu" value={snapshot.totals.platformCommission} />
+        <SummaryCard title="Tarifa de servicio" value={snapshot.totals.platformServiceFee} />
         <SummaryCard title="Pago repartidor" value={snapshot.totals.driverPayout} />
         <SummaryCard title="Pendiente por liquidar" value={snapshot.totals.pendingSettlement} />
       </div>
@@ -131,7 +135,8 @@ export default async function AdminFinanzasPage({ searchParams }: { searchParams
                 <th className="px-4 py-3">Quien cobro</th>
                 <th className="px-4 py-3">Subtotal</th>
                 <th className="px-4 py-3">Envio</th>
-                <th className="px-4 py-3">Comision ElMenu</th>
+                <th className="px-4 py-3">Comisión ElMenu</th>
+              <th className="px-4 py-3">Tarifa de servicio</th>
                 <th className="px-4 py-3">Stripe</th>
                 <th className="px-4 py-3">Pago repartidor</th>
                 <th className="px-4 py-3">Total cliente</th>
@@ -143,7 +148,7 @@ export default async function AdminFinanzasPage({ searchParams }: { searchParams
             <tbody>
               {snapshot.orders.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="px-4 py-6 text-center text-gray-500">No hay pedidos para este dia.</td>
+                  <td colSpan={14} className="px-4 py-6 text-center text-gray-500">No hay pedidos para este dia.</td>
                 </tr>
               ) : (
                 snapshot.orders.map((order) => (
@@ -155,6 +160,7 @@ export default async function AdminFinanzasPage({ searchParams }: { searchParams
                     <td className="px-4 py-3 text-gray-700">{formatMoney(order.productsSubtotal || 0)}</td>
                     <td className="px-4 py-3 text-gray-700">{formatMoney(order.shippingFee || 0)}</td>
                     <td className="px-4 py-3 text-gray-700">{formatMoney(order.platformCommission || 0)}</td>
+                    <td className="px-4 py-3 text-gray-700">{formatMoney(order.platformServiceFee || 0)}</td>
                     <td className="px-4 py-3 text-gray-700">{formatMoney(order.stripeFee || 0)}</td>
                     <td className="px-4 py-3 text-gray-700">{formatMoney(order.driverPayout || 0)}</td>
                     <td className="px-4 py-3 text-gray-700">{formatMoney(order.grossTotal || 0)}</td>

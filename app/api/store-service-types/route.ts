@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isDeliveryDriverAvailable } from '@/lib/fulfillment';
 import { backendClient } from '@/sanity/lib/backendClient';
+import { getCommercialSettings } from '@/lib/commercial-config';
+import { resolveEffectiveCommercialConditions } from '@/lib/commercial-rules';
 
 const STORE_SERVICE_TYPES_QUERY = `*[_type == "affiliateStore" && _id == $storeId][0] {
   _id,
@@ -10,6 +12,12 @@ const STORE_SERVICE_TYPES_QUERY = `*[_type == "affiliateStore" && _id == $storeI
   highDemandMode,
   hasOwnDelivery,
   serviceTypes,
+  commercialPlanId,
+  commercialOverrides,
+  commercialReviewRequired,
+  commercialNotes,
+  commercialPlanStartedAt,
+  platformCommissionPercent,
   "connectedCommunityDrivers": count(*[
     _type == "repartidor" &&
     activo == true &&
@@ -96,12 +104,14 @@ export async function GET(request: NextRequest) {
     let hasOwnDelivery = Boolean(mockServiceTypes[storeId]);
     let connectedCommunityDrivers = 0;
     let scheduleConfig: Record<string, unknown> = {};
+    let commercial = resolveEffectiveCommercialConditions({}, await getCommercialSettings());
 
     if (!mockServiceTypes[storeId]) {
       try {
         const store = await backendClient.fetch(STORE_SERVICE_TYPES_QUERY, { storeId });
         if (store) {
           serviceTypes = store.serviceTypes || defaultServiceTypes;
+          commercial = resolveEffectiveCommercialConditions(store, await getCommercialSettings());
           storeName = store.name;
           isOpen = store.isOpen ?? defaultStoreState.isOpen;
           manualOperationalStatus = store.manualOperationalStatus ?? defaultStoreState.manualOperationalStatus;
@@ -148,6 +158,7 @@ export async function GET(request: NextRequest) {
         connectedDrivers: hasOwnDelivery ? null : connectedCommunityDrivers,
       },
       ...scheduleConfig,
+      commercial,
       serviceTypes: {
         ...serviceTypes,
         onDemand: highDemandMode

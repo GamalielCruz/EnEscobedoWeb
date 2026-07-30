@@ -35,9 +35,11 @@ import {
   type FulfillmentSelection,
   type FulfillmentSlot,
 } from "./fulfillment-schedule";
+import { calculateOrderTotal } from "./platform-service-fee";
+import { getCommercialSettings, getMonthlyCommissionAccumulated } from "./commercial-config";
+import { calculateCappedCommission, resolveEffectiveCommercialConditions, type EffectiveCommercialConditions } from "./commercial-rules";
 
 const DEFAULT_DELIVERY_DRIVER_PAYOUT_RATE = 1;
-const DEFAULT_PLATFORM_COMMISSION_RATE = 0;
 
 function getNumberEnv(name: string, fallback: number) {
   const raw = process.env[name];
@@ -75,6 +77,11 @@ type StoreRecord = {
   lastDeliveryOrderMinutesBeforeClose?: number | null;
   lastPickupOrderMinutesBeforeClose?: number | null;
   platformCommissionPercent?: number;
+  commercialPlanId?: "community" | "premium";
+  commercialOverrides?: Record<string, unknown>;
+  commercialReviewRequired?: boolean;
+  commercialNotes?: string;
+  commercialPlanStartedAt?: string;
   operatingHours?: Record<string, string>;
   serviceTypes?: {
     delivery?: boolean;
@@ -131,6 +138,7 @@ export type ValidatedOrderQuote = {
   orderType: OrderTypeValue;
   productsSubtotal: number;
   shippingFee: number;
+  platformServiceFee: number;
   discount: number;
   tax: number;
   grossTotal: number;
@@ -141,6 +149,8 @@ export type ValidatedOrderQuote = {
     scheduledPreparationAt?: string;
     scheduledDispatchAt?: string;
   };
+  commercial: EffectiveCommercialConditions;
+  accumulatedCommission: number;
   items: Array<{
     _key: string;
     product: { _type: "reference"; _ref: string };
@@ -160,6 +170,7 @@ export type ValidatedOrderQuote = {
   financials: {
     productsSubtotal: number;
     shippingFee: number;
+    platformServiceFee: number;
     discount: number;
     tax: number;
     platformCommission: number;
@@ -169,6 +180,11 @@ export type ValidatedOrderQuote = {
     grossTotal: number;
     storeNetTotal: number;
     platformNetTotal: number;
+    commissionWaivedByCap: number;
+    commissionCalculated: number;
+    accumulatedBeforeOrder: number;
+    deliveryBaseFee: number;
+    deliveryDiscount: number;
   };
 };
 
@@ -198,6 +214,11 @@ const STORE_QUERY = `*[_type == "affiliateStore" && _id == $storeId][0]{
   lastDeliveryOrderMinutesBeforeClose,
   lastPickupOrderMinutesBeforeClose,
   platformCommissionPercent,
+  commercialPlanId,
+  commercialOverrides,
+  commercialReviewRequired,
+  commercialNotes,
+  commercialPlanStartedAt,
   operatingHours,
   serviceTypes
 }`;
@@ -307,39 +328,57 @@ function computeFinancials(input: {
   storeHasOwnDelivery?: boolean;
   productsSubtotal: number;
   shippingFee: number;
+  deliveryBaseFee: number;
   discount: number;
   tax: number;
   paymentMethod: string;
   stripeFee?: number;
-  platformCommissionPercent?: number;
+  commercial: EffectiveCommercialConditions;
+  accumulatedCommission: number;
 }) {
   const paymentMethod = normalizePaymentMethod(input.paymentMethod, input.orderType === "pickup" ? "cash_at_store" : "cash_on_delivery");
   const paymentProvider = resolvePaymentProvider(paymentMethod);
-  const grossTotal = roundMoney(input.productsSubtotal + input.shippingFee - input.discount + input.tax);
-  const commissionRate = typeof input.platformCommissionPercent === "number" &&
-    Number.isFinite(input.platformCommissionPercent) &&
-    input.platformCommissionPercent >= 0 &&
-    input.platformCommissionPercent <= 100
-    ? input.platformCommissionPercent / 100
-    : getNumberEnv("PLATFORM_COMMISSION_RATE", DEFAULT_PLATFORM_COMMISSION_RATE);
+  const platformServiceFee = input.commercial.serviceFee;
+  const grossTotal = calculateOrderTotal({
+    productsSubtotal: input.productsSubtotal,
+    shippingFee: input.shippingFee,
+    platformServiceFee,
+    discount: input.discount,
+    tax: input.tax,
+  });
+  const commission = calculateCappedCommission({
+    productsSubtotal: input.productsSubtotal,
+    commissionPercent: input.commercial.commissionPercent,
+    monthlyCommissionCap: input.commercial.monthlyCommissionCap,
+    accumulatedCommission: input.accumulatedCommission,
+  });
   const deliveryDriverRate = getNumberEnv(
     input.storeHasOwnDelivery ? "STORE_DRIVER_PAYOUT_RATE" : "COMMUNITY_DRIVER_PAYOUT_RATE",
     DEFAULT_DELIVERY_DRIVER_PAYOUT_RATE
   );
-
-  const platformCommission = roundMoney(input.productsSubtotal * commissionRate);
+  const deliveryDiscount = roundMoney(Math.max(0, input.deliveryBaseFee - input.shippingFee));
+  const platformDeliverySubsidy = input.commercial.deliveryBenefitAbsorbedBy === "platform" ? deliveryDiscount : 0;
+  const platformCommission = commission.chargedCommission;
   const stripeFee = isStripePaymentProvider(paymentProvider) ? roundMoney(input.stripeFee ?? 0) : 0;
   const stripeNetAmount = isStripePaymentProvider(paymentProvider) ? roundMoney(grossTotal - stripeFee) : 0;
-  const driverPayout = input.orderType === "delivery" ? roundMoney(input.shippingFee * deliveryDriverRate) : 0;
-  const storeNetTotal = roundMoney(grossTotal - platformCommission - stripeFee - driverPayout);
-  const platformNetTotal = roundMoney(platformCommission - stripeFee);
+  const driverPayout = input.orderType === "delivery" ? roundMoney(input.deliveryBaseFee * deliveryDriverRate) : 0;
+  const storeNetTotal = roundMoney(
+    grossTotal - platformServiceFee - platformCommission - stripeFee - driverPayout + platformDeliverySubsidy
+  );
+  const platformNetTotal = roundMoney(platformCommission + platformServiceFee - stripeFee - platformDeliverySubsidy);
 
   return {
     productsSubtotal: roundMoney(input.productsSubtotal),
     shippingFee: roundMoney(input.shippingFee),
+    platformServiceFee,
     discount: roundMoney(input.discount),
     tax: roundMoney(input.tax),
     platformCommission,
+    commissionWaivedByCap: commission.commissionWaivedByCap,
+    commissionCalculated: commission.rawCommission,
+    accumulatedBeforeOrder: commission.accumulatedBeforeOrder,
+    deliveryBaseFee: roundMoney(input.deliveryBaseFee),
+    deliveryDiscount,
     stripeFee,
     stripeNetAmount,
     driverPayout,
@@ -348,7 +387,6 @@ function computeFinancials(input: {
     platformNetTotal,
   };
 }
-
 export async function validateAndQuoteOrder(input: {
   storeId: string;
   items: OrderItemInput[];
@@ -360,16 +398,23 @@ export async function validateAndQuoteOrder(input: {
   assert(input.storeId, "Tienda requerida.");
   assert(Array.isArray(input.items) && input.items.length > 0, "La lista de productos esta vacia.");
 
-  const [store, products, deliverySchedule] = await Promise.all([
+  const [store, products, deliverySchedule, commercialSettings, accumulatedCommission] = await Promise.all([
     backendClient.fetch<StoreRecord | null>(STORE_QUERY, { storeId: input.storeId }),
     backendClient.fetch<ProductRecord[]>(PRODUCTS_QUERY, {
       productIds: [...new Set(input.items.map((item) => item.productId).filter(Boolean))],
     }),
     getDeliveryScheduleConfig(),
+    getCommercialSettings(),
+    getMonthlyCommissionAccumulated(input.storeId),
   ]);
 
   assert(store, "La tienda no existe.");
   assert(store.isActive === true, "La tienda no esta activa.");
+  const commercial = resolveEffectiveCommercialConditions(store, commercialSettings);
+  assert(
+    !isStripePaymentProvider(resolvePaymentProvider(normalizePaymentMethod(input.paymentMethod))) || commercial.onlinePaymentsEnabled,
+    "Este restaurante no tiene pagos en línea habilitados."
+  );
 
   if (input.orderType === "delivery") {
     assert(store.serviceTypes?.delivery === true, "La tienda no permite entregas.");
@@ -438,7 +483,10 @@ export async function validateAndQuoteOrder(input: {
     assert(productsSubtotal >= Number(store.serviceTypes.minimumOrderDelivery), `El pedido minimo para entrega es de $${Number(store.serviceTypes.minimumOrderDelivery).toFixed(2)} MXN.`);
   }
 
-  const shippingFee = input.orderType === "delivery" ? await computeShippingFee(store, normalizedAddress) : 0;
+  const deliveryBaseFee = input.orderType === "delivery" ? await computeShippingFee(store, normalizedAddress) : 0;
+  const shippingFee = commercial.deliveryBenefitEnabled
+    ? Math.max(0, roundMoney(deliveryBaseFee - commercial.deliveryDiscountAmount))
+    : deliveryBaseFee;
   const availability = getStoreAvailability({
     store,
     config: deliverySchedule,
@@ -481,10 +529,12 @@ export async function validateAndQuoteOrder(input: {
     storeHasOwnDelivery: store.hasOwnDelivery,
     productsSubtotal,
     shippingFee,
+    deliveryBaseFee,
     discount,
     tax,
     paymentMethod: input.paymentMethod,
-    platformCommissionPercent: store.platformCommissionPercent,
+    commercial,
+    accumulatedCommission,
   });
 
   return {
@@ -492,10 +542,13 @@ export async function validateAndQuoteOrder(input: {
     orderType: input.orderType,
     productsSubtotal,
     shippingFee,
+    platformServiceFee: financials.platformServiceFee,
     discount,
     tax,
     grossTotal: financials.grossTotal,
     fulfillment,
+    commercial,
+    accumulatedCommission,
     items: pricedItems,
     financials,
   } satisfies ValidatedOrderQuote;
@@ -591,21 +644,25 @@ export function buildOrderDocument(input: {
           storeHasOwnDelivery: input.quote.store.hasOwnDelivery,
           productsSubtotal: input.quote.productsSubtotal,
           shippingFee: input.quote.shippingFee,
+          deliveryBaseFee: input.quote.financials.deliveryBaseFee,
           discount: appliedDiscount,
           tax: input.quote.tax,
           paymentMethod: normalizedPaymentMethod,
           stripeFee: input.stripeFee,
-          platformCommissionPercent: input.quote.store.platformCommissionPercent,
+          commercial: input.quote.commercial,
+          accumulatedCommission: input.quote.accumulatedCommission,
         })
       : computeFinancials({
           orderType: input.orderType,
           storeHasOwnDelivery: input.quote.store.hasOwnDelivery,
           productsSubtotal: input.quote.productsSubtotal,
           shippingFee: input.quote.shippingFee,
+          deliveryBaseFee: input.quote.financials.deliveryBaseFee,
           discount: appliedDiscount,
           tax: input.quote.tax,
           paymentMethod: normalizedPaymentMethod,
-          platformCommissionPercent: input.quote.store.platformCommissionPercent,
+          commercial: input.quote.commercial,
+          accumulatedCommission: input.quote.accumulatedCommission,
         });
 
   const cashCollectedBy = resolveCashCollectedBy({ paymentMethod: normalizedPaymentMethod, orderType: input.orderType, driverType });
@@ -703,9 +760,30 @@ export function buildOrderDocument(input: {
     ...states,
     productsSubtotal: finalFinancials.productsSubtotal,
     shippingFee: finalFinancials.shippingFee,
+    platformServiceFee: finalFinancials.platformServiceFee,
     discount: finalFinancials.discount,
     tax: finalFinancials.tax,
     platformCommission: finalFinancials.platformCommission,
+    commissionWaivedByCap: finalFinancials.commissionWaivedByCap,
+    commercialSnapshot: {
+      planId: input.quote.commercial.id,
+      planName: input.quote.commercial.name,
+      commissionPercent: input.quote.commercial.commissionPercent,
+      monthlyCommissionCap: input.quote.commercial.monthlyCommissionCap,
+      commissionBase: finalFinancials.productsSubtotal,
+      commissionCalculated: finalFinancials.commissionCalculated,
+      commissionCharged: finalFinancials.platformCommission,
+      commissionWaivedByCap: finalFinancials.commissionWaivedByCap,
+      accumulatedBeforeOrder: finalFinancials.accumulatedBeforeOrder,
+      serviceFeeMode: input.quote.commercial.serviceFeeMode,
+      serviceFee: finalFinancials.platformServiceFee,
+      onlinePaymentsEnabled: input.quote.commercial.onlinePaymentsEnabled,
+      premiumBadgeEnabled: input.quote.commercial.premiumBadgeEnabled,
+      bannerEligible: input.quote.commercial.bannerEligible,
+      deliveryBaseFee: finalFinancials.deliveryBaseFee,
+      deliveryDiscount: finalFinancials.deliveryDiscount,
+      deliveryBenefitAbsorbedBy: input.quote.commercial.deliveryBenefitAbsorbedBy,
+    },
     stripeFee: finalFinancials.stripeFee,
     stripeNetAmount: finalFinancials.stripeNetAmount,
     driverPayout: finalFinancials.driverPayout,

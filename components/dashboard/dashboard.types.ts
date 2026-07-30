@@ -115,6 +115,18 @@ export type StoreConfig = {
   highDemandMode?: boolean;
   hasOwnDelivery?: boolean;
   platformCommissionPercent?: number;
+  commercial?: {
+    id: "community" | "premium";
+    name: string;
+    commissionPercent: number;
+    monthlyCommissionCap: number;
+    serviceFee: number;
+    onlinePaymentsEnabled: boolean;
+    premiumBadgeEnabled: boolean;
+    bannerEligible: boolean;
+    deliveryBenefitEnabled: boolean;
+    reviewRequired: boolean;
+  };
   coordinates?: { latitude?: number; longitude?: number };
   serviceTypes?: StoreServiceTypes;
   contact?: StoreContact;

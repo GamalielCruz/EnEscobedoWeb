@@ -52,6 +52,7 @@ interface Store {
   averageDeliveryTime?: number;
   isActive?: boolean;
   promotionalMessages?: string[];
+  promotionalMessagesEnabled?: boolean;
 }
 
 interface StoreCategory {

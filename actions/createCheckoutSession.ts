@@ -10,6 +10,7 @@ import { assertCurrentLegalAcceptance } from "@/lib/legal-config";
 import { resolvePromotionCode, type AutoPromotion } from "@/lib/stripe-promotion";
 import type { FulfillmentSelection } from "@/lib/fulfillment-schedule";
 import { appendOrderEvent } from "@/lib/order-events";
+import { createOrderWithCommercialCap } from "@/lib/commercial-order";
 
 export type Metadata = {
   orderNumber: string;
@@ -162,6 +163,7 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
     pickupStoreId: storeId,
     pickupStoreName: metadata.pickupStoreName || quotedOrder.store.name || "",
     shippingFee: String(quotedOrder.shippingFee),
+    platformServiceFee: String(quotedOrder.platformServiceFee),
     productsSubtotal: String(quotedOrder.productsSubtotal),
     grossTotal: String(quotedOrder.grossTotal),
     discount: String(quotedOrder.discount),
@@ -227,6 +229,20 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
   }
 
   const autoPromotionCode = await getEligibleAutoPromotion(orderType, "stripe", storeId);
+
+  if (quotedOrder.platformServiceFee > 0) lineItems.push({
+    price_data: {
+      currency: "mxn",
+      unit_amount: Math.round(quotedOrder.platformServiceFee * 100),
+      product_data: {
+        name: "Tarifa de servicio de ElMenu",
+        description: "Uso de la plataforma",
+        metadata: { id: "platform-service-fee" },
+        images: undefined,
+      },
+    },
+    quantity: 1,
+  });
   const totalStripeAmount = lineItems.reduce((sum, item) => sum + item.price_data.unit_amount * item.quantity, 0);
   if (totalStripeAmount < 1000) {
     throw new Error("El monto minimo para procesar el pago con tarjeta es de $10.00 MXN.");
@@ -281,7 +297,7 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
       ? new Date(session.expires_at * 1000).toISOString()
       : undefined,
   };
-  const storedReservation = await backendClient.createIfNotExists(reservedOrder as any) as any;
+  const storedReservation = await createOrderWithCommercialCap(reservedOrder as any) as any;
   if (!Array.isArray(storedReservation.orderEvents) || storedReservation.orderEvents.length === 0) {
     await appendOrderEvent(storedReservation._id, {
       type: "created",

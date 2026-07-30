@@ -19,9 +19,11 @@ import {
   customerAddressStorageKey,
   normalizeCustomerAddress,
   parseCustomerAddress,
+  restoreCustomerAddress,
 } from "@/lib/customer-address";
 import { FulfillmentTimingPicker } from "@/components/FulfillmentTimingPicker";
 import type { FulfillmentSelection } from "@/lib/fulfillment-schedule";
+import { calculateOrderTotal, PLATFORM_SERVICE_FEE_MXN } from "@/lib/platform-service-fee";
 
 interface SavedStoreInfo {
   storeId: string;
@@ -35,6 +37,11 @@ interface SavedStoreInfo {
 type StoreServiceTypes = {
   delivery?: boolean;
   pickup?: boolean;
+  isOpen?: boolean;
+  manualOperationalStatus?: "open" | "closed" | "auto";
+  highDemandMode?: boolean;
+  operatingHours?: Record<string, string>;
+  commercial?: { serviceFee?: number; onlinePaymentsEnabled?: boolean; premiumBadgeEnabled?: boolean };
   deliveryAvailability?: {
     available: boolean;
     provider: "restaurant" | "elmenu";
@@ -231,6 +238,9 @@ function BasketPage() {
 
   useEffect(() => {
     setIsClient(true);
+    const storedAddressValue = user?.id
+      ? localStorage.getItem(customerAddressStorageKey(user.id))
+      : null;
     
     // Verificar si hay una tienda guardada
     const checkStoreSaved = () => {
@@ -240,12 +250,14 @@ function BasketPage() {
           const storeData = JSON.parse(savedStore);
           setHasStoreSaved(true);
           setSavedStoreInfo(storeData);
+          setCustomerAddress(restoreCustomerAddress(storedAddressValue, storeData.customerAddress));
         } catch {
           localStorage.removeItem('clickCollectStore');
         }
       } else {
         setHasStoreSaved(false);
         setSavedStoreInfo(null);
+        setCustomerAddress(parseCustomerAddress(storedAddressValue));
       }
     };
     
@@ -259,12 +271,6 @@ function BasketPage() {
       setCashOnDeliveryPhone(initialPhone);
       setPickupPhone(initialPhone);
     }
-
-    setCustomerAddress(
-      user?.id
-        ? parseCustomerAddress(localStorage.getItem(customerAddressStorageKey(user.id)))
-        : null
-    );
 
     // Escuchar cuando se seleccione una tienda
     const handleStoreSelected = () => {
@@ -287,6 +293,8 @@ function BasketPage() {
   // Obtener el ID de la tienda de los productos en el carrito (si aplica)
 
   const cartStoreId = (groupedItems[0]?.product?.affiliateStore as any)?._ref || (groupedItems[0]?.product?.affiliateStore as any)?._id;
+  const platformServiceFee = storeServiceTypes?.commercial?.serviceFee ?? PLATFORM_SERVICE_FEE_MXN;
+  const onlinePaymentsEnabled = storeServiceTypes?.commercial?.onlinePaymentsEnabled !== false;
   useEffect(() => {
     // Si hay un store guardado en localStorage, cargarlo
     const saved = localStorage.getItem('clickCollectStore');
@@ -294,12 +302,13 @@ function BasketPage() {
       try {
         const parsed = JSON.parse(saved);
         if (parsed.storeId && cartStoreId && parsed.storeId !== cartStoreId) return;
-        setSelectedStore(parsed);
-        setCustomerAddress(
+        const storedAddressValue =
           user?.id
-            ? parseCustomerAddress(localStorage.getItem(customerAddressStorageKey(user.id)))
-            : null
-        );
+            ? localStorage.getItem(customerAddressStorageKey(user.id))
+            : null;
+        const restoredAddress = restoreCustomerAddress(storedAddressValue, parsed.customerAddress);
+        setSelectedStore(restoredAddress || parsed.deliveryMethod === "pickup" ? parsed : null);
+        setCustomerAddress(restoredAddress);
         setShippingCost(parsed.shippingCost ?? null);
         setHasStoreSaved(true);
         setSavedStoreInfo(parsed);
@@ -323,6 +332,11 @@ function BasketPage() {
             ? {
                 ...storeConfig.serviceTypes,
                 deliveryAvailability: storeConfig.deliveryAvailability,
+                isOpen: storeConfig.isOpen,
+                manualOperationalStatus: storeConfig.manualOperationalStatus,
+                highDemandMode: storeConfig.highDemandMode,
+                operatingHours: storeConfig.operatingHours,
+                commercial: storeConfig.commercial,
               }
             : null
         );
@@ -601,7 +615,7 @@ function BasketPage() {
 
     try {
       const subtotal = useBasketStore.getState().getTotalPrice();
-      const totalAmount = subtotal + (serviceType === 'delivery' ? (shippingCost ?? 0) : 0);
+      const totalAmount = calculateOrderTotal({ productsSubtotal: subtotal, shippingFee: serviceType === 'delivery' ? (shippingCost ?? 0) : 0, platformServiceFee });
       if (totalAmount < 10) {
         setCardError("El monto total mínimo para pagar con tarjeta es de $10.00 MXN. Por favor agrega más productos o selecciona un método de pago en efectivo.");
         setIsLoading(false);
@@ -918,7 +932,7 @@ function BasketPage() {
           storePhone: selectedStorePhone,
           estimatedDelivery,
           items: payloadItems,
-          total: useBasketStore.getState().getTotalPrice(),
+          total: calculateOrderTotal({ productsSubtotal: useBasketStore.getState().getTotalPrice(), platformServiceFee }),
           paymentMethod: "cash_on_pickup",
           legalAccepted,
           fulfillmentTiming: fulfillmentSelection.timing,
@@ -952,7 +966,15 @@ function BasketPage() {
   };
 
   const selectedStoreTiming = selectedStore ? getServiceTiming(selectedStore) : null;
-  const selectedStoreState = selectedStore ? getStoreOperationalStateLegacy(selectedStore) : null;
+  const selectedStoreSource = selectedStore?.store ?? selectedStore;
+  const selectedStoreState = selectedStore ? getStoreOperationalStateLegacy({
+    ...selectedStoreSource,
+    isOpen: storeServiceTypes?.isOpen ?? selectedStoreSource.isOpen,
+    manualOperationalStatus:
+      storeServiceTypes?.manualOperationalStatus ?? selectedStoreSource.manualOperationalStatus,
+    highDemandMode: storeServiceTypes?.highDemandMode ?? selectedStoreSource.highDemandMode,
+    operatingHours: storeServiceTypes?.operatingHours ?? selectedStoreSource.operatingHours,
+  }) : null;
   const isSelectedStoreClosed = Boolean(selectedStore && selectedStoreState && !selectedStoreState.effectiveIsOpen);
   const deliveryConfigured = storeServiceTypes?.delivery === true;
   const deliverySupported =
@@ -1288,12 +1310,15 @@ function BasketPage() {
                                   Costo de envío: ${shippingCost} MXN
                                 </p>
                               )}
+                              <p className="text-sm font-semibold mt-1">
+                                Tarifa de servicio: ${platformServiceFee.toFixed(2)} MXN
+                              </p>
                              <br />
                               <div className="flex items-baseline justify-between pt-3 border-t-2 border-rose-200">
                                 <span className="text-sm font-semibold text-gray-700">Total:</span>
                                 <span className="text-2xl font-bold text-[#000]">
-                                  ${(useBasketStore.getState().getTotalPrice() + (shippingCost ?? 0)).toFixed(2).split('.')[0]}
-                                  <span className="text-sm">.{(useBasketStore.getState().getTotalPrice() + (shippingCost ?? 0)).toFixed(2).split('.')[1]}</span>
+                                  ${calculateOrderTotal({ productsSubtotal: useBasketStore.getState().getTotalPrice(), shippingFee: shippingCost ?? 0, platformServiceFee }).toFixed(2).split('.')[0]}
+                                  <span className="text-sm">.{calculateOrderTotal({ productsSubtotal: useBasketStore.getState().getTotalPrice(), shippingFee: shippingCost ?? 0, platformServiceFee }).toFixed(2).split('.')[1]}</span>
                                 </span>
                               </div>
 
@@ -1335,11 +1360,14 @@ function BasketPage() {
                                   : "Puedes pagar en línea con tarjeta o al recoger en sucursal."
                                 }
                               </p>
+                              <p className="text-sm font-semibold mt-1">
+                                Tarifa de servicio: ${platformServiceFee.toFixed(2)} MXN
+                              </p>
                               <div className="flex items-baseline justify-between pt-3 border-t-2 border-rose-200 mt-3">
                                 <span className="text-sm font-semibold text-gray-700">Total:</span>
                                 <span className="text-2xl font-bold text-[#000]">
-                                  ${useBasketStore.getState().getTotalPrice().toFixed(2).split('.')[0]}
-                                  <span className="text-sm">.{useBasketStore.getState().getTotalPrice().toFixed(2).split('.')[1]}</span>
+                                  ${calculateOrderTotal({ productsSubtotal: useBasketStore.getState().getTotalPrice(), platformServiceFee }).toFixed(2).split('.')[0]}
+                                  <span className="text-sm">.{calculateOrderTotal({ productsSubtotal: useBasketStore.getState().getTotalPrice(), platformServiceFee }).toFixed(2).split('.')[1]}</span>
                                 </span>
                               </div>
                             </div>
@@ -1438,11 +1466,12 @@ function BasketPage() {
                               )}
                               <button
                                 onClick={() => handleCheckout(clerkPhone)}
-                                disabled={isLoading}
+                                disabled={isLoading || !onlinePaymentsEnabled}
+                                title={onlinePaymentsEnabled ? undefined : "Este restaurante no tiene pagos en línea habilitados"}
                                 className="w-full bg-[#eb1902] text-white px-4 py-3.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
                               >
                                 <CreditCard className="w-5 h-5" />
-                                {isLoading ? "Procesando..." : "Pagar con tarjeta"}
+                                {isLoading ? "Procesando..." : onlinePaymentsEnabled ? "Pagar con tarjeta" : "Pago en línea no disponible"}
                               </button>
                             </div>
                           ) : showCardPhoneForm || editingPhone ? (
@@ -1517,7 +1546,7 @@ function BasketPage() {
                                 )}
                                 <button
                                   onClick={() => handleCheckout()}
-                                  disabled={isLoading}
+                                  disabled={isLoading || !onlinePaymentsEnabled}
                                   className="flex-1 bg-[#eb1902] text-white px-4 py-2.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-colors font-semibold text-sm shadow-sm"
                                 >
                                   <CreditCard className="w-4 h-4" />
@@ -1529,11 +1558,11 @@ function BasketPage() {
                             /* Botón inicial para pagar con tarjeta */
                             <button
                               onClick={handleCardPhoneStart}
-                              disabled={isLoading}
+                              disabled={isLoading || !onlinePaymentsEnabled}
                               className="w-full bg-[#eb1902] text-white px-4 py-3.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
                             >
                               <CreditCard className="w-5 h-5" />
-                              {isLoading ? "Procesando..." : "Pagar con tarjeta"}
+                              {isLoading ? "Procesando..." : onlinePaymentsEnabled ? "Pagar con tarjeta" : "Pago en línea no disponible"}
                             </button>
                           )}
 
@@ -1747,8 +1776,6 @@ function BasketPage() {
                       )}
                     </div>
                   )}
-
-
                   {/* Beneficios */}
                   {serviceType && (
                     <div className="bg-gray-50 rounded-lg p-3 space-y-2 text-xs text-gray-600">

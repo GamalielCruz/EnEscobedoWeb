@@ -39,6 +39,8 @@ interface Store {
   manualOperationalStatus?: "open" | "closed" | "auto";
   highDemandMode?: boolean;
   promotionalMessages?: string[];
+  promotionalMessagesEnabled?: boolean;
+  premiumBadgeEnabled?: boolean;
   serviceTypes?: {
     onDemand?: boolean;
     onDemandExtraMinutes?: number;
@@ -129,7 +131,12 @@ export default function StoreGrid({ stores }: StoreGridProps) {
 
             <div className="space-y-2 p-4">
               <Link href={getStorePath(store)} className="block space-y-2">
-                <h3 className="line-clamp-1 text-lg font-bold text-black">{store.name}</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="min-w-0 line-clamp-1 text-lg font-bold text-black">{store.name}</h3>
+                  {store.premiumBadgeEnabled ? (
+                    <Image src="/elmenuplus.svg" alt="ElMenu Plus" title="Restaurante participante del Plan Premium de ElMenu, con pagos en línea y beneficios para sus clientes." width={28} height={28} className="shrink-0" />
+                  ) : null}
+                </div>
 
                 {store.address && (
                   <p className="line-clamp-1 text-xs text-black">
@@ -161,7 +168,7 @@ export default function StoreGrid({ stores }: StoreGridProps) {
                   </>
                 )}
               </div>
-              {isOpen && (
+              {isOpen && store.promotionalMessagesEnabled && (
                 <div className="min-h-8 overflow-hidden">
                   <p key={messageIndex} className="restaurant-message line-clamp-2 text-xs italic">
                     {messages[messageIndex % messages.length]}

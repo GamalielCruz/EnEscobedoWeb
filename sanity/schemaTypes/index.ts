@@ -17,6 +17,9 @@ import { repartidorType } from './repartidorType';
 import { legalAcceptanceType } from './legalAcceptanceType';
 import { deliveryScheduleConfigType } from './deliveryScheduleConfigType';
 import { whatsappTemplateDeliveryType } from './whatsappTemplateDeliveryType';
+import { commercialSettingsType } from './commercialSettingsType';
+import { commercialAuditType } from './commercialAuditType';
+import { commercialCommissionUsageType } from './commercialCommissionUsageType';
 
 export const schema: { types: SchemaTypeDefinition[] } = {
   types: [
@@ -36,6 +39,9 @@ export const schema: { types: SchemaTypeDefinition[] } = {
     storeCategoryType,
     deliveryPricingConfigType,
     deliveryScheduleConfigType,
-    whatsappTemplateDeliveryType
+    whatsappTemplateDeliveryType,
+    commercialSettingsType,
+    commercialAuditType,
+    commercialCommissionUsageType
   ],
 };

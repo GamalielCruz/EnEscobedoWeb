@@ -171,9 +171,14 @@ export default async function StorePage({
                   </span>
                 )}
               </div>
-              <h1 className="text-2xl font-bold text-white drop-shadow-lg md:text-3xl">
-                {storeName}
-              </h1>
+              <div className="flex items-center justify-center gap-2">
+                <h1 className="text-2xl font-bold text-white drop-shadow-lg md:text-3xl">
+                  {storeName}
+                </h1>
+                {store.premiumBadgeEnabled ? (
+                  <Image src="/elmenuplus.svg" alt="ElMenu Plus" title="Restaurante participante del Plan Premium de ElMenu, con pagos en línea y beneficios para sus clientes." width={32} height={32} className="shrink-0" />
+                ) : null}
+              </div>
             </div>
           </div>
         </section>

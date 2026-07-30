@@ -1,6 +1,8 @@
 import { defineQuery } from "next-sanity";
 import { sanityFetch } from "../live";
 import { sanitizeText } from "@/lib/utils";
+import { getCommercialSettings } from "@/lib/commercial-config";
+import { resolveEffectiveCommercialConditions } from "@/lib/commercial-rules";
 
 export const getStoreById = async (storeId: string) => {
   const STORE_BY_ID_QUERY = defineQuery(`
@@ -20,6 +22,10 @@ export const getStoreById = async (storeId: string) => {
       isOpen,
       manualOperationalStatus,
       highDemandMode,
+      commercialPlanId,
+      commercialOverrides,
+      commercialReviewRequired,
+      commercialPlanStartedAt,
       capacity,
       averageDeliveryTime,
       deliveryFee,
@@ -43,8 +49,12 @@ export const getStoreById = async (storeId: string) => {
 
     if (!store.data) return null;
 
+    const commercial = resolveEffectiveCommercialConditions(store.data, await getCommercialSettings());
+
     return {
       ...store.data,
+      premiumBadgeEnabled: commercial.premiumBadgeEnabled,
+      commercial,
       name: sanitizeText(store.data.name),
       address: store.data.address
         ? {

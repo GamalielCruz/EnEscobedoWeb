@@ -392,11 +392,14 @@ export function DashboardStoreSection({
                   <p className="mt-1 text-[13px] text-gray-600">
                     Esta configuracion aplica solo a tu tienda y cualquier cambio requiere aprobacion del administrador.
                   </p>
-                  <p className="mt-1 text-[13px] text-gray-600">
-                    Comision de El Menu sobre productos: {storeConfig?.platformCommissionPercent != null
-                      ? `${storeConfig.platformCommissionPercent}%`
-                      : "segun convenio"}.
-                  </p>
+                  <div className="mt-2 grid gap-1 text-[13px] text-gray-600 sm:grid-cols-2">
+                    <p>Plan: {storeConfig?.commercial?.reviewRequired ? "Pendiente de revisión" : storeConfig?.commercial?.name || "Sin asignar"}</p>
+                    <p>Comisión sobre productos: {storeConfig?.commercial ? `${storeConfig.commercial.commissionPercent}%` : "según convenio"}</p>
+                    <p>Tope mensual: {storeConfig?.commercial?.monthlyCommissionCap ? `$${storeConfig.commercial.monthlyCommissionCap.toFixed(2)} MXN` : "Sin tope"}</p>
+                    <p>Tarifa de servicio: {storeConfig?.commercial ? `$${storeConfig.commercial.serviceFee.toFixed(2)} MXN` : "Según convenio"}</p>
+                    <p>Pagos en línea: {storeConfig?.commercial?.onlinePaymentsEnabled ? "Activos" : "Inactivos"}</p>
+                    <p>Badge: {storeConfig?.commercial?.premiumBadgeEnabled ? "Activo" : "Inactivo"}</p>
+                  </div>
                 </div>
                 <div className="flex items-center gap-3">
                   <span className="text-sm font-medium text-gray-700">

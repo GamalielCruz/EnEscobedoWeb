@@ -20,6 +20,7 @@ type BaserowOrder = {
   discount?: number;
   grossTotal?: number;
   platformCommission?: number;
+  platformServiceFee?: number;
   storeNetTotal?: number;
   driverPayout?: number;
   stripeCheckoutSessionId?: string;
@@ -46,6 +47,7 @@ const BASEROW_ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   discount,
   grossTotal,
   platformCommission,
+  platformServiceFee,
   storeNetTotal,
   driverPayout,
   stripeCheckoutSessionId,
@@ -221,7 +223,7 @@ export async function createBaserowOrder(order: BaserowOrder) {
     "Costo de envío": order.shippingFee,
     Descuento: order.discount,
     Total: order.grossTotal,
-    "Comisión de ElMenu": roundForIntegerColumn(order.platformCommission),
+    "Comisión de ElMenu": roundForIntegerColumn(Number(order.platformCommission || 0) + Number(order.platformServiceFee || 0)),
     "Pago al restaurante": roundForIntegerColumn(order.storeNetTotal),
     "Pago al repartidor": order.driverPayout,
     "ID de Stripe": order.stripeCheckoutSessionId,

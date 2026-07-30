@@ -1,4 +1,5 @@
 import { appendOrderEvent } from "@/lib/order-events";
+import { createOrderWithCommercialCap } from "@/lib/commercial-order";
 import { buildOrderDocument, buildStoreMapsUrl, OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
 import { notifyRestaurantNewOrder } from "@/lib/restaurant-notifications";
 import { getPaymentMethodLabel } from "@/lib/payment";
@@ -273,6 +274,7 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
       const discount = (session.total_details?.amount_discount ?? 0) / 100;
       const grossTotal = (session.amount_total ?? Number(confirmedOrder.grossTotal || 0) * 100) / 100;
       const platformCommission = Number(confirmedOrder.platformCommission ?? 0);
+      const platformServiceFee = Number(confirmedOrder.platformServiceFee ?? 0);
       const driverPayout = Number(confirmedOrder.driverPayout ?? 0);
       confirmedOrder = (await backendClient
         .patch(existingOrder._id)
@@ -285,10 +287,10 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
           stripeNetAmount: Math.round((grossTotal - stripeFee) * 100) / 100,
           storeNetTotal:
             Math.round(
-              (grossTotal - platformCommission - stripeFee - driverPayout) * 100
+              (grossTotal - platformServiceFee - platformCommission - stripeFee - driverPayout) * 100
             ) / 100,
           platformNetTotal:
-            Math.round((platformCommission - stripeFee) * 100) / 100,
+            Math.round((platformCommission + platformServiceFee - stripeFee) * 100) / 100,
           ...(typeof session.payment_intent === "string"
             ? { stripePaymentIntentId: session.payment_intent }
             : {}),
@@ -348,7 +350,7 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
   let isNewOrder = false;
 
   try {
-    order = await backendClient.create(orderData);
+    order = await createOrderWithCommercialCap(orderData);
     isNewOrder = true;
   } catch (error: any) {
     if (error.statusCode === 409 || error.message?.includes("already exists")) {

@@ -23,6 +23,7 @@ type FinanceOrder = {
   shippingCost?: number;
   totalPrice?: number;
   platformCommission?: number;
+  platformServiceFee?: number;
   stripeFee?: number;
   stripeNetAmount?: number;
   tax?: number;
@@ -47,6 +48,7 @@ type NormalizedFinanceOrder = FinanceOrder & {
   productsSubtotal: number;
   shippingFee: number;
   platformCommission: number;
+  platformServiceFee: number;
   stripeFee: number;
   stripeNetAmount: number;
   tax: number;
@@ -85,6 +87,7 @@ const FINANCE_QUERY = `*[
   shippingCost,
   totalPrice,
   platformCommission,
+  platformServiceFee,
   stripeFee,
   stripeNetAmount,
   tax,
@@ -134,10 +137,11 @@ function normalizeOrder(order: FinanceOrder): NormalizedFinanceOrder {
   const shippingFee = money(order.shippingFee ?? order.shippingCost);
   const discount = money(order.discount);
   const tax = money(order.tax);
+  const platformServiceFee = money(order.platformServiceFee);
   const grossTotal = money(
     order.grossTotal ??
       order.totalPrice ??
-      Math.max(productsSubtotal + shippingFee - discount + tax, 0)
+      Math.max(productsSubtotal + shippingFee + platformServiceFee - discount + tax, 0)
   );
   const platformCommission = money(order.platformCommission);
   const driverPayout = money(order.driverPayout);
@@ -145,9 +149,9 @@ function normalizeOrder(order: FinanceOrder): NormalizedFinanceOrder {
   const stripeNetAmount =
     paymentProvider === "stripe" ? money(order.stripeNetAmount ?? grossTotal - stripeFee) : 0;
   const storeNetTotal = money(
-    order.storeNetTotal ?? Math.max(grossTotal - platformCommission - stripeFee - driverPayout, 0)
+    order.storeNetTotal ?? Math.max(grossTotal - platformServiceFee - platformCommission - stripeFee - driverPayout, 0)
   );
-  const platformNetTotal = money(order.platformNetTotal ?? platformCommission - stripeFee);
+  const platformNetTotal = money(order.platformNetTotal ?? platformCommission + platformServiceFee - stripeFee);
 
   return {
     ...order,
@@ -158,6 +162,7 @@ function normalizeOrder(order: FinanceOrder): NormalizedFinanceOrder {
     productsSubtotal,
     shippingFee,
     platformCommission,
+    platformServiceFee,
     stripeFee,
     stripeNetAmount,
     tax,
@@ -179,6 +184,7 @@ function createBucket(id: string, name: string) {
     productsSubtotal: 0,
     shippingFee: 0,
     platformCommission: 0,
+    platformServiceFee: 0,
     driverPayout: 0,
     stripeFee: 0,
     stripeNetAmount: 0,
@@ -206,6 +212,7 @@ function addSummary(target: ReturnType<typeof createBucket>, order: NormalizedFi
   target.productsSubtotal += money(order.productsSubtotal);
   target.shippingFee += money(order.shippingFee);
   target.platformCommission += money(order.platformCommission);
+  target.platformServiceFee += money(order.platformServiceFee);
   target.driverPayout += money(order.driverPayout);
   target.stripeFee += money(order.stripeFee);
   target.stripeNetAmount += money(order.stripeNetAmount);

@@ -58,3 +58,7 @@ export function parseCustomerAddress(value: string | null) {
     return null;
   }
 }
+
+export function restoreCustomerAddress(storedValue: string | null, checkoutValue: unknown) {
+  return parseCustomerAddress(storedValue) ?? normalizeCustomerAddress(checkoutValue);
+}
