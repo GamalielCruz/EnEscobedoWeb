@@ -211,6 +211,13 @@ export function parseOptionalPrice(value: string) {
   return Number.isFinite(price) && price >= 0 ? price : null;
 }
 
+export function updateDeliveryZone(config: DeliveryPricingConfig, zoneId: string, patch: Partial<DeliveryZone>) {
+  return {
+    ...config,
+    zones: config.zones.map((zone) => (zone.id === zoneId ? { ...zone, ...patch } : zone)),
+  };
+}
+
 export function normalizeDeliveryConfig(config?: Partial<DeliveryPricingConfig> | null): DeliveryPricingConfig {
   return {
     zones: Array.isArray(config?.zones) ? config.zones : DEFAULT_DELIVERY_CONFIG.zones,

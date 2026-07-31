@@ -24,6 +24,7 @@ import {
   parseOptionalPrice,
   PEDRO_ESCOBEDO_DELIVERY_TEMPLATE,
   ScheduleRule,
+  updateDeliveryZone,
   validateZoneOverlaps,
 } from "@/lib/delivery-zones";
 
@@ -121,11 +122,10 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter, si
   };
 
   const updateZone = (zoneId: string, patch: Partial<DeliveryZone>) => {
-    updateConfig({
-      ...config,
-      zones: config.zones.map((zone) => (zone.id === zoneId ? { ...zone, ...patch } : zone)),
-    });
+    setConfig((current) => updateDeliveryZone(current, zoneId, patch));
   };
+
+  useEffect(() => setJsonDraft(JSON.stringify(config, null, 2)), [config]);
 
   const addZone = () => {
     const id = `zona-${Date.now()}`;
