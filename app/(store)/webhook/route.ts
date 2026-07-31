@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
     if (event.type === "checkout.session.expired") {
       const session = event.data.object as Stripe.Checkout.Session;
       const now = new Date().toISOString();
-      const patched = await patchOrderBySession(
+      await patchOrderBySession(
         session.id,
         {
           status: "expired",
@@ -102,11 +102,7 @@ export async function POST(req: NextRequest) {
         "manual_admin_action"
       );
 
-      if (!patched) {
-        const order = await createOrderInSanity(session, stripe);
-        await backendClient.patch(order._id).set({ status: "expired", paymentStatus: "expired", expiredAt: now, updatedAt: now }).commit();
-        after(() => syncBaserowOrderById(order._id));
-      }
+      // An abandoned checkout is not an order. Legacy reservations are marked expired above.
     }
 
     if (event.type === "payment_intent.payment_failed") {

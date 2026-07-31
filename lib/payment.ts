@@ -45,6 +45,13 @@ export function isStripePaymentProvider(provider: PaymentProviderValue) {
   return provider === "stripe";
 }
 
+export function isRestaurantVisibleOrder(order: {
+  paymentProvider?: string;
+  paymentStatus?: string;
+}) {
+  return order.paymentProvider !== "stripe" || order.paymentStatus === "paid";
+}
+
 export function resolvePaidOnline(provider: PaymentProviderValue) {
   return provider === "stripe";
 }

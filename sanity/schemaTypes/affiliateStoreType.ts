@@ -4,7 +4,7 @@ import { defineField, defineType } from "sanity";
 const RESERVED_STORE_SLUGS = new Set([
   "about", "admin", "api", "basket", "categories", "checkout", "dashboard",
   "demo", "faq", "legal", "orders", "product", "search", "sign-in", "store",
-  "studio", "success", "terminos",
+  "studio", "success", "terminos", "unete-a-elmenu",
 ]);
 
 export const affiliateStoreType = defineType({

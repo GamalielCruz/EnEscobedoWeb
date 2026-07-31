@@ -4,13 +4,11 @@ import { imageUrl } from "@/lib/imageUrl";
 import { getStripe } from "@/lib/stripe";
 import { buildUrl } from "@/lib/urls";
 import { BasketItem } from "@/store/store";
-import { buildOrderDocument, OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
+import { OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { assertCurrentLegalAcceptance } from "@/lib/legal-config";
 import { resolvePromotionCode, type AutoPromotion } from "@/lib/stripe-promotion";
 import type { FulfillmentSelection } from "@/lib/fulfillment-schedule";
-import { appendOrderEvent } from "@/lib/order-events";
-import { createOrderWithCommercialCap } from "@/lib/commercial-order";
 
 export type Metadata = {
   orderNumber: string;
@@ -269,56 +267,5 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
     session = await createSession();
   }
 
-  const reservedOrder = {
-    ...buildOrderDocument({
-      orderNumber: metadata.orderNumber,
-      clerkUserId: metadata.clerkUserId,
-      customerName: metadata.customerName,
-      customerEmail: metadata.customerEmail,
-      phone: String(metadata.phone || ""),
-      storeId,
-      orderType,
-      paymentMethod: "stripe",
-      quote: quotedOrder,
-      shippingAddress,
-      paymentStatus: "pending",
-      dispatchStatus:
-        orderType === "delivery" && quotedOrder.fulfillment.timing === "scheduled"
-          ? "scheduled"
-          : orderType === "delivery"
-            ? "waiting_for_driver"
-            : "not_required",
-      stripeCheckoutSessionId: session.id,
-      stripeCustomerId: customerId,
-      deliveryNotes,
-    }),
-    _id: `stripe-order-${session.id}`,
-    expiredAt: session.expires_at
-      ? new Date(session.expires_at * 1000).toISOString()
-      : undefined,
-  };
-  const storedReservation = await createOrderWithCommercialCap(reservedOrder as any) as any;
-  if (!Array.isArray(storedReservation.orderEvents) || storedReservation.orderEvents.length === 0) {
-    await appendOrderEvent(storedReservation._id, {
-      type: "created",
-      source: "checkout-reservation",
-      actor: metadata.clerkUserId,
-    });
-    await appendOrderEvent(storedReservation._id, {
-      type: "payment_pending",
-      source: "checkout-reservation",
-      actor: metadata.clerkUserId,
-    });
-    if (quotedOrder.fulfillment.timing === "scheduled") {
-      await appendOrderEvent(storedReservation._id, {
-        type: "scheduled_order_created",
-        source: "checkout-reservation",
-        actor: metadata.clerkUserId,
-        payload: { scheduledSlot: reservedOrder.scheduledSlot },
-      });
-    }
-  }
-
   return session.client_secret;
 }
-

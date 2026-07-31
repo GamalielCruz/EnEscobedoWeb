@@ -14,6 +14,7 @@ import {
   PaymentStatusValue,
   SettlementStatusValue,
 } from "@/lib/order-state";
+import { isRestaurantVisibleOrder } from "@/lib/payment";
 
 const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
 const ORDERS_BASE_FILTER = `!(_id in path('drafts.**')) && _type == "order" && (pickupStore._ref == $storeId || affiliateStore._ref == $storeId)`;
@@ -62,6 +63,7 @@ const ORDER_PROJECTION = `{
   },
   "totalAmount": totalPrice,
   paymentMethod,
+  paymentProvider,
   status,
   estimatedPickupDate,
   readyAt,
@@ -176,8 +178,8 @@ export async function GET(request: NextRequest) {
       queryParams.beforeAt = beforeAt;
     }
 
-    const orders = await readSanity.fetch(query, queryParams);
-    return NextResponse.json({ success: true, orders: orders ?? [], requestId }, {
+    const orders = await readSanity.fetch<Array<{ paymentProvider?: string; paymentStatus?: string }>>(query, queryParams);
+    return NextResponse.json({ success: true, orders: (orders ?? []).filter(isRestaurantVisibleOrder), requestId }, {
       headers: {
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
         Pragma: "no-cache",
