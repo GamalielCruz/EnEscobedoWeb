@@ -19,6 +19,7 @@ export type StoreAvailabilityStatus =
   | "closed_scheduling_available"
   | "closed_no_future_schedule"
   | "delivery_temporarily_unavailable"
+  | "no_delivery_drivers"
   | "outside_delivery_hours"
   | "outside_coverage";
 
@@ -377,7 +378,7 @@ export function getStoreAvailability(input: {
   fulfillmentType: FulfillmentType;
   coverageAllowed?: boolean;
   now?: Date;
-}) {
+}): StoreAvailability {
   const config = normalizeDeliveryScheduleConfig(input.config);
   const now = input.now ?? new Date();
   const localNow = zonedParts(now);

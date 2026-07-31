@@ -252,13 +252,17 @@ export function FulfillmentTimingPicker({
     const canSchedule = availability?.schedulingAvailable;
     const noDeliveryDrivers =
       type === "delivery" &&
-      availability.isStoreOpen &&
-      !availability.asapAvailable;
+      availability.status === "no_delivery_drivers";
+    const statusLabel = noDeliveryDrivers
+      ? "Sin repartidores disponibles"
+      : type === "delivery" && availability.isStoreOpen && availability.status === "closed_scheduling_available"
+        ? "Fuera de horario de reparto"
+        : "Cerrado";
     return (
       <>
-        <div className="flex items-center gap-2 whitespace-nowrap text-sm font-medium">
+        <div className="flex flex-wrap items-center gap-2 text-sm font-medium">
           <span className="h-2 w-2 rounded-full bg-red-500" />
-          <span>{noDeliveryDrivers ? "Sin repartidores disponibles" : "Cerrado"}</span>
+          <span>{statusLabel}</span>
           {canSchedule ? (
             <>
               <span aria-hidden="true">·</span>

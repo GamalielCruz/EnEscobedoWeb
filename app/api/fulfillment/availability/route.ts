@@ -80,6 +80,7 @@ export async function GET(request: NextRequest) {
       availability.asapAvailable = false;
       availability.schedulingAvailable = false;
       availability.slots = [];
+      availability.status = "no_delivery_drivers";
       availability.reason =
         "No hay repartidores de El Menú disponibles en este momento. Puedes elegir retiro en el local o intentarlo más tarde.";
     }
