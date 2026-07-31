@@ -176,7 +176,7 @@ export default async function StorePage({
                   {storeName}
                 </h1>
                 {store.premiumBadgeEnabled ? (
-                  <Image src="/elmenuplus.svg" alt="ElMenu Plus" title="Restaurante participante del Plan Premium de ElMenu, con pagos en línea y beneficios para sus clientes." width={32} height={32} className="shrink-0" />
+                  <Image src="/elmenuplus.png" alt="ElMenu Plus" title="Restaurante participante del Plan Premium de ElMenu, con pagos en línea y beneficios para sus clientes." width={32} height={32} className="shrink-0" />
                 ) : null}
               </div>
             </div>

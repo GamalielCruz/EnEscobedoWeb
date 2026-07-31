@@ -134,7 +134,7 @@ export default function StoreGrid({ stores }: StoreGridProps) {
                 <div className="flex items-center gap-2">
                   <h3 className="min-w-0 line-clamp-1 text-lg font-bold text-black">{store.name}</h3>
                   {store.premiumBadgeEnabled ? (
-                    <Image src="/elmenuplus.svg" alt="ElMenu Plus" title="Restaurante participante del Plan Premium de ElMenu, con pagos en línea y beneficios para sus clientes." width={28} height={28} className="shrink-0" />
+                    <Image src="/elmenuplus.png" alt="ElMenu Plus" title="Restaurante participante del Plan Premium de ElMenu, con pagos en línea y beneficios para sus clientes." width={28} height={28} className="shrink-0" />
                   ) : null}
                 </div>
 
