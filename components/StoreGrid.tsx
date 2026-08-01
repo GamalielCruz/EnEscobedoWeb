@@ -86,7 +86,7 @@ export default function StoreGrid({ stores }: StoreGridProps) {
   }
 
   return (
-    <div className="mt-4 grid w-full grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+    <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
       {stores.map((store) => {
         const storeState = getStoreOperationalState(store);
         const isOpen = mounted ? storeState.effectiveIsOpen : false;

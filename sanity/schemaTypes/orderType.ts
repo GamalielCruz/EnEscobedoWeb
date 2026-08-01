@@ -19,6 +19,25 @@ export const orderType = defineType({
     defineField({ name: "email", title: "Customer Email", type: "string", validation: (Rule) => Rule.required().email() }),
     defineField({ name: "phone", title: "Customer Phone", type: "string", description: "Customer phone number for delivery and order updates" }),
     defineField({
+      name: "serviceKind",
+      title: "Tipo de servicio",
+      type: "string",
+      initialValue: "restaurant",
+      options: { list: [{ title: "Pedido de restaurante", value: "restaurant" }, { title: "Mandado", value: "mandado" }] },
+    }),
+    defineField({ name: "mandadoMode", title: "Tipo de mandado", type: "string", options: { list: [{ title: "Recoger y entregar", value: "pickup" }, { title: "Comprar y entregar", value: "purchase" }] }, hidden: ({ document }) => document?.serviceKind !== "mandado" }),
+    defineField({ name: "mandadoOrigin", title: "Punto de inicio", type: "object", fields: [
+      defineField({ name: "label", title: "Dirección", type: "string" }),
+      defineField({ name: "lat", title: "Latitud", type: "number" }),
+      defineField({ name: "lng", title: "Longitud", type: "number" }),
+    ], hidden: ({ document }) => document?.serviceKind !== "mandado" }),
+    defineField({ name: "mandadoDestination", title: "Punto de entrega", type: "object", fields: [
+      defineField({ name: "label", title: "Dirección", type: "string" }),
+      defineField({ name: "lat", title: "Latitud", type: "number" }),
+      defineField({ name: "lng", title: "Longitud", type: "number" }),
+    ], hidden: ({ document }) => document?.serviceKind !== "mandado" }),
+    defineField({ name: "mandadoDetails", title: "Solicitud del mandado", type: "text", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
+    defineField({
       name: "orderType",
       title: "Order Type",
       type: "string",

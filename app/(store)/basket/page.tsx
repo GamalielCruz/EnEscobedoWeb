@@ -24,6 +24,8 @@ import {
 import { FulfillmentTimingPicker } from "@/components/FulfillmentTimingPicker";
 import type { FulfillmentSelection } from "@/lib/fulfillment-schedule";
 import { calculateOrderTotal, PLATFORM_SERVICE_FEE_MXN } from "@/lib/platform-service-fee";
+import MandadoCheckout from "@/components/MandadoCheckout";
+import type { MandadoDraft } from "@/lib/mandado";
 
 interface SavedStoreInfo {
   storeId: string;
@@ -108,6 +110,8 @@ function BasketPage() {
   const router = useRouter();
 
   const [isClient, setIsClient] = useState(false);
+  const [isMandadoCheckout, setIsMandadoCheckout] = useState(false);
+  const [mandadoDraft, setMandadoDraft] = useState<MandadoDraft | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [hasStoreSaved, setHasStoreSaved] = useState(false);
   const [savedStoreInfo, setSavedStoreInfo] = useState<SavedStoreInfo | null>(null);
@@ -237,6 +241,15 @@ function BasketPage() {
   }, [clientSecret]);
 
   useEffect(() => {
+    const mandadoRequested = new URLSearchParams(window.location.search).get("service") === "mandado";
+    setIsMandadoCheckout(mandadoRequested);
+    if (mandadoRequested) {
+      try {
+        setMandadoDraft(JSON.parse(sessionStorage.getItem("mandadoCheckoutDraft") || "null"));
+      } catch {
+        sessionStorage.removeItem("mandadoCheckoutDraft");
+      }
+    }
     setIsClient(true);
     const storedAddressValue = user?.id
       ? localStorage.getItem(customerAddressStorageKey(user.id))
@@ -557,6 +570,8 @@ function BasketPage() {
   if (!isClient) {
     return <Loader />;
   }
+
+  if (isMandadoCheckout) return <MandadoCheckout draft={mandadoDraft} />;
 
   if (groupedItems.length === 0) {
     return (

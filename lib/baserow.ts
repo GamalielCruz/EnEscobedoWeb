@@ -55,7 +55,7 @@ const BASEROW_ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   fulfillmentTiming,
   scheduledSlot,
   scheduleStatus,
-  "restaurantName": coalesce(pickupStore->name, affiliateStore->name)
+  "restaurantName": coalesce(pickupStore->name, affiliateStore->name, sellerSnapshot.name)
 }`;
 
 export class BaserowError extends Error {

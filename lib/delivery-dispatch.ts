@@ -35,6 +35,8 @@ type DispatchOrder = {
   storeHasOwnDelivery?: boolean;
   storeName?: string;
   storeAddress?: string;
+  serviceKind?: string;
+  mandadoOrigin?: { label?: string; lat?: number; lng?: number };
 };
 
 type DispatchDriver = {
@@ -68,10 +70,12 @@ const ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   repartidorAsignado,
   "offeredToRef": offeredTo._ref,
   "shippingAddress": shippingAddress,
+  serviceKind,
+  mandadoOrigin,
   "storeId": affiliateStore._ref,
   "storeHasOwnDelivery": affiliateStore->hasOwnDelivery,
-  "storeName": affiliateStore->name,
-  "storeAddress": affiliateStore->address.street
+  "storeName": coalesce(affiliateStore->name, select(serviceKind == "mandado" => "Punto de inicio")),
+  "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label)
 }`;
 
 const ORDERS_QUERY = `*[_type == "order" && _id in $orderIds]{
@@ -91,10 +95,12 @@ const ORDERS_QUERY = `*[_type == "order" && _id in $orderIds]{
   repartidorAsignado,
   "offeredToRef": offeredTo._ref,
   "shippingAddress": shippingAddress,
+  serviceKind,
+  mandadoOrigin,
   "storeId": affiliateStore._ref,
   "storeHasOwnDelivery": affiliateStore->hasOwnDelivery,
-  "storeName": affiliateStore->name,
-  "storeAddress": affiliateStore->address.street
+  "storeName": coalesce(affiliateStore->name, select(serviceKind == "mandado" => "Punto de inicio")),
+  "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label)
 }`;
 
 const STORE_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && disponible == true && estadoDisponibilidad == "available" && (!defined(disponibleHasta) || disponibleHasta > $now) && tiendaAsignada._ref == $storeId] | order(_updatedAt asc){
@@ -288,14 +294,15 @@ async function markOrdersAsOffered(orderIds: string[], driverId: string, expires
   );
 }
 
-async function prepareDriverForOffer(driver: DispatchDriver, orderIds: string[], storeId: string, offerType: "single" | "bundle", nowIso: string, expiresAtIso: string) {
+async function prepareDriverForOffer(driver: DispatchDriver, orderIds: string[], storeId: string | null, offerType: "single" | "bundle", nowIso: string, expiresAtIso: string) {
+  const restaurantPatch = storeId ? { restauranteOferta: createOrderRef(storeId) } : {};
   await backendClient
     .patch(driver._id)
     .set({
       estadoDisponibilidad: "offer_pending",
       ofertaTipo: offerType,
       pedidosOfertados: orderIds.map((orderId) => createOrderRef(orderId)),
-      restauranteOferta: createOrderRef(storeId),
+      ...restaurantPatch,
       ofertaEnviadaAt: nowIso,
       ofertaExpiraAt: expiresAtIso,
       ultimoPedidoOfertado: createOrderRef(orderIds[orderIds.length - 1]),
@@ -343,7 +350,7 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
   const { nowIso, expiresAtIso } = buildOfferWindow();
 
   await markOrdersAsOffered([order._id], selectedDriver._id, expiresAtIso);
-  await prepareDriverForOffer(selectedDriver, [order._id], order.storeId ?? "", "single", nowIso, expiresAtIso);
+  await prepareDriverForOffer(selectedDriver, [order._id], order.storeId ?? null, "single", nowIso, expiresAtIso);
 
   try {
     await sendDeliveryOffer(

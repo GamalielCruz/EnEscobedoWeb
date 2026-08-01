@@ -46,6 +46,7 @@ export default async function Home(props: NextPageProps) {
 
   const currentPage = getCurrentPage(searchParams);
   const selectedCategory = getSelectedCategory(searchParams);
+  const isMandado = (Array.isArray(searchParams.service) ? searchParams.service[0] : searchParams.service) === "mandado";
 
   // Debug
   console.log('Selected category:', selectedCategory);
@@ -101,7 +102,7 @@ export default async function Home(props: NextPageProps) {
         </div>
       )}
 
-      <div className="flex flex-col min-h-screen bg-white p-4 w-full">
+      <div className="flex min-h-screen w-full flex-col bg-white px-4 pb-4">
         <div className="w-full max-w-7xl mx-auto">
           <StoresView
             stores={convertedStores as any}
@@ -111,7 +112,7 @@ export default async function Home(props: NextPageProps) {
         </div>
 
         {/* Pagination Controls */}
-        {totalPages > 1 && (
+        {!isMandado && totalPages > 1 && (
           <div className="flex gap-2 mt-6 justify-center w-full max-w-7xl mx-auto">
             <Button asChild variant="outline" disabled={currentPage <= 1}>
               <Link

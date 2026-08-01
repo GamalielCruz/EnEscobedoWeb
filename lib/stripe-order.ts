@@ -12,6 +12,7 @@ import { backendClient } from "@/sanity/lib/backendClient";
 import { after } from "next/server";
 import Stripe from "stripe";
 import { sendScheduledOrderConfirmation } from "@/lib/scheduled-order-whatsapp";
+import { buildMandadoOrderDocument, quoteMandado } from "@/lib/mandado-order";
 
 type ExistingOrder = {
   _id: string;
@@ -27,6 +28,7 @@ type ExistingOrder = {
 };
 
 type StripeSessionMetadata = {
+  serviceKind?: string;
   orderNumber?: string;
   customerName?: string;
   customerEmail?: string;
@@ -49,6 +51,15 @@ type StripeSessionMetadata = {
   scheduledEndAt?: string;
   scheduledTimezone?: string;
   orderItems?: string;
+  mandadoMode?: string;
+  mandadoOriginLabel?: string;
+  mandadoOriginLat?: string;
+  mandadoOriginLng?: string;
+  mandadoDestinationLabel?: string;
+  mandadoDestinationLat?: string;
+  mandadoDestinationLng?: string;
+  mandadoDetails0?: string;
+  mandadoDetails1?: string;
   [key: string]: string | undefined;
 };
 
@@ -68,7 +79,7 @@ function getMetadata(session: Stripe.Checkout.Session) {
 }
 
 async function findExistingOrder(sessionId: string, orderNumber?: string) {
-  return backendClient.fetch<ExistingOrder | null>(`*[_type == "order" && (stripeCheckoutSessionId == $sessionId || orderNumber == $orderNumber)][0]{ ..., "restaurantName": affiliateStore->name }`,
+  return backendClient.fetch<ExistingOrder | null>(`*[_type == "order" && (stripeCheckoutSessionId == $sessionId || orderNumber == $orderNumber)][0]{ ..., "restaurantName": coalesce(affiliateStore->name, sellerSnapshot.name) }`,
     { sessionId, orderNumber }
   );
 }
@@ -194,6 +205,33 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
   const clerkUserId = String(metadata.clerkUserId || "").trim();
   const storeId = String(metadata.pickupStoreId || "").trim();
 
+  if (metadata.serviceKind === "mandado") {
+    if (!orderNumber || !customerName || !customerEmail || !clerkUserId) throw new Error("Missing required order metadata");
+    const draft = await quoteMandado({
+      mode: metadata.mandadoMode,
+      origin: { label: metadata.mandadoOriginLabel, lat: metadata.mandadoOriginLat, lng: metadata.mandadoOriginLng },
+      destination: { label: metadata.mandadoDestinationLabel, lat: metadata.mandadoDestinationLat, lng: metadata.mandadoDestinationLng },
+      details: `${metadata.mandadoDetails0 || ""}${metadata.mandadoDetails1 || ""}`,
+    });
+    const orderData = buildMandadoOrderDocument({
+      draft,
+      orderNumber,
+      clerkUserId,
+      customerName,
+      customerEmail,
+      phone: String(metadata.phone || session.customer_details?.phone || ""),
+      paymentMethod: "stripe",
+      paymentStatus: getPaymentStatus(session),
+      stripeCheckoutSessionId: session.id,
+      stripePaymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : undefined,
+      stripeCustomerId: typeof session.customer === "string" ? session.customer : undefined,
+      stripeFee: await resolveStripeFee(stripe, session),
+    }) as OrderDocumentRecord;
+    orderData._id = `stripe-order-${session.id}`;
+    orderData.restaurantName = "Mandado El Menú";
+    return orderData;
+  }
+
   if (!orderNumber || !customerName || !customerEmail || !clerkUserId || !storeId) {
     throw new Error("Missing required order metadata");
   }
@@ -306,7 +344,7 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
         source: "stripe-webhook",
         actor: "stripe",
       });
-      await notifyRestaurantNewOrder(existingOrder._id);
+      if (confirmedOrder.serviceKind !== "mandado") await notifyRestaurantNewOrder(existingOrder._id);
       const phone = String(confirmedOrder.phone || "");
       if (confirmedOrder.fulfillmentTiming !== "scheduled" && phone && confirmedOrder.orderNumber) {
         if (confirmedOrder.orderType === "pickup") {
@@ -404,7 +442,7 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
   }
 
   if (isNewOrder) {
-    await notifyRestaurantNewOrder(order._id);
+    if (orderData.serviceKind !== "mandado") await notifyRestaurantNewOrder(order._id);
     if (orderData.fulfillmentTiming === "scheduled" && orderData.paymentStatus === "paid") {
       await sendScheduledOrderConfirmation({
         ...orderData,
@@ -465,5 +503,3 @@ export async function markOrderPaidBySession(sessionId: string) {
   after(() => syncBaserowOrderById(existingOrder._id));
   return updated;
 }
-
-

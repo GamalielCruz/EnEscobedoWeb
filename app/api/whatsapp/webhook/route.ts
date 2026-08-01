@@ -126,10 +126,12 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   deliveryOfertaExpiresAt,
   "repartidorAsignadoRef": repartidorAsignado._ref,
   "offeredToRef": offeredTo._ref,
+  serviceKind,
+  mandadoOrigin,
   "storeId": affiliateStore._ref,
-  "storeAddress": affiliateStore->address.street,
-  "storeCoordinates": affiliateStore->coordinates,
-  "storeName": affiliateStore->name,
+  "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
+  "storeCoordinates": coalesce(affiliateStore->coordinates, {"latitude": mandadoOrigin.lat, "longitude": mandadoOrigin.lng}),
+  "storeName": coalesce(affiliateStore->name, select(serviceKind == "mandado" => "Punto de inicio")),
   "shippingAddress": shippingAddress
 }`
 
@@ -162,10 +164,12 @@ const ACTIVE_OFFER_ORDERS_BY_DRIVER_QUERY = `*[
   deliveryOfertaExpiresAt,
   "repartidorAsignadoRef": repartidorAsignado._ref,
   "offeredToRef": offeredTo._ref,
+  serviceKind,
+  mandadoOrigin,
   "storeId": affiliateStore._ref,
-  "storeAddress": affiliateStore->address.street,
-  "storeCoordinates": affiliateStore->coordinates,
-  "storeName": affiliateStore->name,
+  "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
+  "storeCoordinates": coalesce(affiliateStore->coordinates, {"latitude": mandadoOrigin.lat, "longitude": mandadoOrigin.lng}),
+  "storeName": coalesce(affiliateStore->name, select(serviceKind == "mandado" => "Punto de inicio")),
   "shippingAddress": shippingAddress,
   deliveryNotes
 }`
@@ -209,8 +213,10 @@ const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._r
   deliveryPinLockedUntil,
   deliveryVerificationMethod,
   deliveryVerificationStatus,
-  "storeName": affiliateStore->name,
-  "storeAddress": affiliateStore->address.street,
+  serviceKind,
+  mandadoOrigin,
+  "storeName": coalesce(affiliateStore->name, select(serviceKind == "mandado" => "Punto de inicio")),
+  "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
   "shippingAddress": shippingAddress,
   deliveryNotes
 }`
@@ -1745,8 +1751,6 @@ Te avisaremos 10 minutos antes de finalizar.`
 
   return NextResponse.json({ status: 'ok' })
 }
-
-
 
 
 

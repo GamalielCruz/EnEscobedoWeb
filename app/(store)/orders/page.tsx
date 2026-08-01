@@ -53,6 +53,11 @@ interface ExtendedOrder {
   };
   amountDiscount?: number;
   orderType?: string;
+  serviceKind?: string;
+  mandadoMode?: "pickup" | "purchase";
+  mandadoOrigin?: { label?: string };
+  mandadoDestination?: { label?: string };
+  mandadoDetails?: string;
   deliveryPinCiphertext?: string;
   deliveryVerificationStatus?: string;
 }
@@ -99,16 +104,18 @@ const getStatusLabel = (status: string | undefined, isClickCollect?: boolean) =>
 const OrderStepper = ({
   status,
   isClickCollect,
+  isMandado,
 }: {
   status: string | undefined;
   isClickCollect: boolean | undefined;
+  isMandado?: boolean;
 }) => {
   const currentStep = getOrderStep(status);
   const progress = currentStep > 0 ? ((currentStep - 1) / 3) * 100 : 0;
 
   const steps = [
     { id: 1, label: "Recibido", icon: Bell },
-    { id: 2, label: "Preparando", icon: ChefHat },
+    { id: 2, label: isMandado ? "Asignando" : "Preparando", icon: isMandado ? Truck : ChefHat },
     {
       id: 3,
       label: isClickCollect ? "Listo para Recoger" : "En Camino",
@@ -193,7 +200,7 @@ const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
 
       <CardContent className="pt-5">
         {deliveryPin && <DeliveryPinCard pin={deliveryPin} />}
-        <OrderStepper status={order.status} isClickCollect={order.isClickCollect} />
+        <OrderStepper status={order.status} isClickCollect={order.isClickCollect} isMandado={order.serviceKind === "mandado"} />
 
         <div className="mt-4 rounded-lg border border-gray-100 bg-gray-50 p-4">
           {order.isClickCollect && order.status === "ready_for_pickup" && order.pickupCode && (
@@ -207,10 +214,16 @@ const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
 
           <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700">
             <ShoppingBag className="h-4 w-4" />
-            Resumen del pedido
+            {order.serviceKind === "mandado" ? "Resumen del mandado" : "Resumen del pedido"}
           </p>
 
-          <ul className="space-y-2">
+          {order.serviceKind === "mandado" ? (
+            <div className="space-y-3 rounded-md border border-gray-100 bg-white p-4 text-sm">
+              <p><strong>{order.mandadoMode === "purchase" ? "Comprar en:" : "Recoger en:"}</strong> {order.mandadoOrigin?.label}</p>
+              <p><strong>Entregar en:</strong> {order.mandadoDestination?.label}</p>
+              <p className="rounded-lg bg-gray-50 p-3 text-gray-700">{order.mandadoDetails}</p>
+            </div>
+          ) : <ul className="space-y-2">
             {order.products?.map((item, idx) => (
               <li
                 key={idx}
@@ -246,7 +259,7 @@ const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
                 </span>
               </li>
             ))}
-          </ul>
+          </ul>}
 
           {order.amountDiscount ? (
             <p className="mt-3 text-right text-sm font-medium" style={{ color: BRAND_COLOR }}>
@@ -273,7 +286,7 @@ const PastOrderCard = ({ order }: { order: ExtendedOrder }) => {
             {order.isClickCollect && <Badge variant="outline" className="h-5 text-[10px]">Click & Collect</Badge>}
           </div>
           <p className="mt-1 text-sm text-gray-500">
-            {createdAt ? new Date(createdAt).toLocaleDateString("es-MX") : ""} · {order.products?.length ?? 0} productos
+            {createdAt ? new Date(createdAt).toLocaleDateString("es-MX") : ""} · {order.serviceKind === "mandado" ? "Mandado" : `${order.products?.length ?? 0} productos`}
           </p>
           <Badge
             variant="secondary"
