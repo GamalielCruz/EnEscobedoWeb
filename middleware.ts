@@ -8,8 +8,13 @@ assertSafeDeploymentConfiguration();
 
 export default clerkMiddleware(async (auth, req: NextRequest) => {
   const { userId } = await auth();
+  const pathname = req.nextUrl.pathname;
 
-  if (req.nextUrl.pathname.startsWith("/dashboard") && !req.nextUrl.pathname.startsWith("/api/")) {
+  if (pathname === "/super" || pathname === "/super/") {
+    return NextResponse.redirect(new URL("/abarrotes-pilot", req.url));
+  }
+
+  if (pathname.startsWith("/dashboard") && !pathname.startsWith("/api/")) {
     if (!userId) {
       return NextResponse.redirect(buildUrl("/"));
     }

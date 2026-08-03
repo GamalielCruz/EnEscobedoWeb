@@ -7,6 +7,10 @@ const nextConfig: NextConfig = {
         protocol: "https",
         hostname: "cdn.sanity.io",
       },
+      {
+        protocol: "https",
+        hostname: "coreva-normal.trae.ai",
+      },
     ],
     // Optimizaciones para móviles
     formats: ['image/webp', 'image/avif'],

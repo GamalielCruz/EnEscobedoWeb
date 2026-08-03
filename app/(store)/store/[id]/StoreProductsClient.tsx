@@ -5,10 +5,15 @@ import Image from "next/image";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { urlFor } from "@/sanity/lib/image";
 import { CategoryFilter } from "@/components/ui/category-filter";
+import { SuperCategoryFilter } from "@/components/ui/super-category-filter";
 import ProductSidebar from "@/components/ProductSidebar";
 import ProductCounter from "@/components/ProductCounter";
 import MiniBasket from "@/components/MiniBasket";
 import { orderProducts } from "@/lib/product-order";
+import {
+  getPrimaryProductCategoryName,
+  getRetailProductImageUrl,
+} from "@/lib/retail-product-images";
 import type { Product as SanityProduct } from "@/sanity.types";
 
 interface Category {
@@ -78,6 +83,7 @@ export function StoreProductsClient({
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
+  const enableCatalogFallback = pathname?.startsWith("/super") ?? false;
 
   // Filtrar productos según la categoría seleccionada
   const filteredProducts = selectedCategory
@@ -143,11 +149,19 @@ export function StoreProductsClient({
     <div className="py-6 pb-24">
       {/* Filtro de categorías - siempre mostrar */}
       <div className="mb-8">
-        <CategoryFilter
-          categories={categories}
-          selectedCategory={selectedCategory || ""}
-          onCategoryChange={setSelectedCategory}
-        />
+        {enableCatalogFallback ? (
+          <SuperCategoryFilter
+            categories={categories}
+            selectedCategory={selectedCategory || ""}
+            onCategoryChange={setSelectedCategory}
+          />
+        ) : (
+          <CategoryFilter
+            categories={categories}
+            selectedCategory={selectedCategory || ""}
+            onCategoryChange={setSelectedCategory}
+          />
+        )}
       </div>
 
       {/* Título de sección */}
@@ -171,6 +185,18 @@ export function StoreProductsClient({
           <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-4">
             {filteredProducts.map((product) => {
               const isOutOfStock = product.stock != null && product.stock <= 0;
+              const hasSanityImage = Boolean(product.image?.asset?._ref);
+              const fallbackImageUrl =
+                !hasSanityImage && enableCatalogFallback
+                  ? getRetailProductImageUrl({
+                      productName: product.name,
+                      categoryName: getPrimaryProductCategoryName(product.categories),
+                    })
+                  : null;
+              const productImageSrc = hasSanityImage
+                ? urlFor(product.image as NonNullable<Product["image"]>).width(400).height(400).url()
+                : fallbackImageUrl;
+              const usesGeneratedImage = !hasSanityImage && Boolean(fallbackImageUrl);
 
               return (
                 <div
@@ -185,13 +211,16 @@ export function StoreProductsClient({
                     aria-label={`Ver ${product.name || "producto"}`}
                   />
                   <div className="relative mb-2 aspect-square overflow-hidden rounded-2xl bg-white shadow-lg">
-                    {product.image ? (
+                    {productImageSrc ? (
                       <Image
-                        src={urlFor(product.image).width(400).height(400).url()}
+                        src={productImageSrc}
                         alt={product.name || "Producto"}
                         fill
-                        className="object-cover transition-transform duration-200 group-hover:scale-105"
+                        className={`transition-transform duration-200 group-hover:scale-105 ${
+                          usesGeneratedImage ? "object-contain bg-white p-4" : "object-cover"
+                        }`}
                         sizes="(max-width: 768px) 50vw, (max-width: 1024px) 33vw, 25vw"
+                        unoptimized={usesGeneratedImage}
                       />
                     ) : (
                       <div className="flex h-full items-center justify-center text-sm text-gray-400">
@@ -238,6 +267,7 @@ export function StoreProductsClient({
         <ProductSidebar
           product={selectedProduct as unknown as SanityProduct}
           storeId={storeId}
+          enableCatalogFallback={enableCatalogFallback}
           isOpen={isSidebarOpen}
           onClose={handleCloseSidebar}
         />
@@ -248,4 +278,3 @@ export function StoreProductsClient({
     </div>
   );
 }
-

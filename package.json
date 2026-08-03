@@ -17,7 +17,8 @@
     "legal:check": "node scripts/check-legal-config.mjs",
     "test:urls": "node scripts/test-public-base-url.mjs",
     "migrate:v1-orders": "node scripts/migrate-v1-orders.mjs",
-    "test:scheduling": "node --experimental-strip-types --test lib/fulfillment-schedule.test.mjs lib/scheduled-order-whatsapp-config.test.mjs lib/scheduled-order-contingency.test.mjs lib/scheduled-orders.integration.test.mjs"
+    "test:scheduling": "node --experimental-strip-types --test lib/fulfillment-schedule.test.mjs lib/scheduled-order-whatsapp-config.test.mjs lib/scheduled-order-contingency.test.mjs lib/scheduled-orders.integration.test.mjs",
+    "catalog:import": "node --experimental-strip-types scripts/catalog-images/import-walmart-assets.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.97",
