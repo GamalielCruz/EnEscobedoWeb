@@ -46,7 +46,7 @@ export function StoreCategoryFilter({
   };
 
   return (
-    <div className="scrollbar-hide flex snap-x snap-mandatory items-start justify-around gap-4 overflow-x-auto pb-1 sm:gap-6" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
+    <div className="scrollbar-hide flex snap-x snap-mandatory items-start justify-start gap-4 overflow-x-auto pb-1 sm:gap-6" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
       <CategoryButton
         label="Mandado"
         selected={mandadoSelected}
@@ -54,12 +54,13 @@ export function StoreCategoryFilter({
         icon={<Image src="/repartidor.png" alt="" width={72} height={72} className="h-full w-full object-contain transition-transform duration-200 group-hover:scale-105" />}
       />
 
-      <CategoryButton
+      {/* Súper filter hidden */}
+      {/* <CategoryButton
         label="Súper"
         selected={superSelected}
         onClick={onSuperSelect}
         icon={<Image src="/store.svg" alt="" width={72} height={72} className="h-full w-full object-contain transition-transform duration-200 group-hover:scale-105" />}
-      />
+      /> */}
 
       {categories.map((category) => {
         const label = category.title || "Sin nombre";
@@ -79,7 +80,7 @@ export function StoreCategoryFilter({
 function CategoryButton({ label, selected, onClick, icon }: { label: string; selected: boolean; onClick?: () => void; icon: React.ReactNode }) {
   return (
     <button type="button" onClick={onClick} aria-pressed={selected} className="group flex w-max min-w-20 shrink-0 snap-start flex-col items-center gap-1.5 rounded-xl px-1 py-1 text-center transition-transform focus:outline-none focus-visible:ring-2 focus-visible:ring-[#eb1901] focus-visible:ring-offset-2 active:scale-95">
-      <span className={cn("flex h-18 w-18 items-center justify-center overflow-visible transition-all duration-200 sm:h-20 sm:w-20", selected ? "drop-shadow-md" : "group-hover:scale-105")}>
+      <span className={cn("flex h-16 w-16 items-center justify-center overflow-visible transition-all duration-200 sm:h-20 sm:w-20", selected ? "drop-shadow-md" : "group-hover:scale-105")}>
         {icon}
       </span>
       <span className={cn("whitespace-nowrap text-sm leading-tight transition-colors", selected ? "font-bold text-[#eb1901]" : "font-semibold text-gray-900")}>{label}</span>

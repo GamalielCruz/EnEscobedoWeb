@@ -5,6 +5,8 @@ import { createDeliveryPin } from "@/lib/delivery-pin";
 import { legalVersions } from "@/lib/legal-config";
 import { calculateMandadoQuote, type MandadoAddressPoint, type MandadoDraft, type MandadoMode } from "@/lib/mandado";
 import { buildStateFields } from "@/lib/order-state";
+import { type OrderAddressInput } from "@/lib/order-pricing";
+import { createSettlementSnapshot, type OrderFinancials } from "@/lib/settlements";
 import { backendClient } from "@/sanity/lib/backendClient";
 
 function point(value: unknown, field: string): MandadoAddressPoint {
@@ -52,6 +54,13 @@ export function buildMandadoOrderDocument(input: {
   stripePaymentIntentId?: string;
   stripeCustomerId?: string;
   stripeFee?: number;
+  stripeFeePercentage?: number;
+  stripeFixedFee?: number;
+  paymentProcessingFee?: number;
+  paymentProcessingFeePercentage?: number;
+  paymentProcessingFixedFee?: number;
+  paymentNetAmount?: number;
+  settlementSnapshot?: any;
 }) {
   const now = new Date().toISOString();
   const paidOnline = input.paymentMethod === "stripe";
@@ -103,13 +112,20 @@ export function buildMandadoOrderDocument(input: {
     tax: 0,
     platformCommission: 0,
     stripeFee,
+    stripeFeePercentage: input.stripeFeePercentage ?? 0,
+    stripeFixedFee: input.stripeFixedFee ?? 0,
     stripeNetAmount: paidOnline ? Math.max(0, input.draft.price - stripeFee) : 0,
+    paymentProcessingFee: stripeFee,
+    paymentProcessingFeePercentage: input.stripeFeePercentage ?? 0,
+    paymentProcessingFixedFee: input.stripeFixedFee ?? 0,
+    paymentNetAmount: paidOnline ? Math.max(0, input.draft.price - stripeFee) : 0,
     driverPayout: input.draft.price,
     grossTotal: input.draft.price,
     storeNetTotal: 0,
     platformNetTotal: paidOnline ? -stripeFee : 0,
     cashCollectedBy: paidOnline ? "none" : "community_driver",
     driverType: "community",
+    settlementSnapshot: input.settlementSnapshot,
     shippingAddress: {
       line1: input.draft.destination.label,
       country: "MX",

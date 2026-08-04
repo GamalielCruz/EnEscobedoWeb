@@ -37,6 +37,9 @@ type DispatchOrder = {
   storeAddress?: string;
   serviceKind?: string;
   mandadoOrigin?: { label?: string; lat?: number; lng?: number };
+  driverPayout?: number;
+  shippingFee?: number;
+  productsSubtotal?: number;
 };
 
 type DispatchDriver = {
@@ -75,7 +78,10 @@ const ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   "storeId": affiliateStore._ref,
   "storeHasOwnDelivery": affiliateStore->hasOwnDelivery,
   "storeName": coalesce(affiliateStore->name, select(serviceKind == "mandado" => "Punto de inicio")),
-  "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label)
+  "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
+  driverPayout,
+  shippingFee,
+  productsSubtotal
 }`;
 
 const ORDERS_QUERY = `*[_type == "order" && _id in $orderIds]{
@@ -349,6 +355,11 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
   const mapsUrl = buildAddressMapsUrl(order.shippingAddress, address);
   const { nowIso, expiresAtIso } = buildOfferWindow();
 
+  // Calculate breakdown for driver
+  const restaurantAmount = (order.totalPrice ?? 0) - (order.driverPayout ?? 0);
+  const restaurantLabel = buildTotalLabel(restaurantAmount);
+  const driverLabel = buildTotalLabel(order.driverPayout ?? 0);
+
   await markOrdersAsOffered([order._id], selectedDriver._id, expiresAtIso);
   await prepareDriverForOffer(selectedDriver, [order._id], order.storeId ?? null, "single", nowIso, expiresAtIso);
 
@@ -361,7 +372,9 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
       address,
       totalLabel,
       paymentMethodLabel,
-      mapsUrl
+      mapsUrl,
+      restaurantLabel,
+      driverLabel
     );
   } catch (error) {
     await rollbackDriverOffer(selectedDriver._id);

@@ -463,12 +463,18 @@ export async function sendDeliveryOffer(
   address: string,
   total: string,
   paymentMethod: string,
-  mapsUrl: string
+  mapsUrl: string,
+  restaurantLabel?: string,
+  driverLabel?: string
 ) {
+  const breakdown = restaurantLabel && driverLabel
+    ? `\n\nCobrar al cliente\n\nRestaurante: ${restaurantLabel}\nTu envío: ${driverLabel}\n\nTotal: ${total}`
+    : total;
+
   return sendWhatsAppTemplate(
     phone,
     "oferta_reparto",
-    [orderNumber, customerName, restaurantName, address, total, paymentMethod],
+    [orderNumber, customerName, restaurantName, address, breakdown, paymentMethod],
     "es_MX",
     [
       {

@@ -140,7 +140,7 @@ export default function StoresView({
   return (
     <>
       {/* Filtro de categorías */}
-      <div className="mb-2">
+      <div className="mb-2 w-full">
         <StoreCategoryFilter
           categories={storeCategories}
           selectedCategory={selectedCategory}
@@ -153,7 +153,7 @@ export default function StoresView({
       </div>
 
       {/* Grid de tiendas */}
-      <div aria-busy={isPending}>
+      <div className="w-full max-w-7xl mx-auto" aria-busy={isPending}>
         {isPending ? <StoreGridSkeleton /> : mandadoSelected ? <MandadoFlow /> : <StoreGrid stores={stores} />}
       </div>
     </>

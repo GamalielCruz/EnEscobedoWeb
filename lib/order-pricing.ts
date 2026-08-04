@@ -175,7 +175,13 @@ export type ValidatedOrderQuote = {
     tax: number;
     platformCommission: number;
     stripeFee: number;
+    stripeFeePercentage: number;
+    stripeFixedFee: number;
     stripeNetAmount: number;
+    paymentProcessingFee: number;
+    paymentProcessingFeePercentage: number;
+    paymentProcessingFixedFee: number;
+    paymentNetAmount: number;
     driverPayout: number;
     grossTotal: number;
     storeNetTotal: number;
@@ -333,6 +339,8 @@ function computeFinancials(input: {
   tax: number;
   paymentMethod: string;
   stripeFee?: number;
+  stripeFeePercentage?: number;
+  stripeFixedFee?: number;
   commercial: EffectiveCommercialConditions;
   accumulatedCommission: number;
 }) {
@@ -380,7 +388,13 @@ function computeFinancials(input: {
     deliveryBaseFee: roundMoney(input.deliveryBaseFee),
     deliveryDiscount,
     stripeFee,
+    stripeFeePercentage: input.stripeFeePercentage ?? 0,
+    stripeFixedFee: input.stripeFixedFee ?? 0,
     stripeNetAmount,
+    paymentProcessingFee: stripeFee,
+    paymentProcessingFeePercentage: input.stripeFeePercentage ?? 0,
+    paymentProcessingFixedFee: input.stripeFixedFee ?? 0,
+    paymentNetAmount: stripeNetAmount,
     driverPayout,
     grossTotal,
     storeNetTotal,
@@ -626,8 +640,15 @@ export function buildOrderDocument(input: {
   stripeCustomerId?: string | null;
   amountDiscount?: number;
   stripeFee?: number;
+  stripeFeePercentage?: number;
+  stripeFixedFee?: number;
+  paymentProcessingFee?: number;
+  paymentProcessingFeePercentage?: number;
+  paymentProcessingFixedFee?: number;
+  paymentNetAmount?: number;
   deliveryNotes?: string;
   codInstructions?: string;
+  settlementSnapshot?: any;
 }) {
   const now = new Date().toISOString();
   const shippingAddress = normalizeAddress(input.shippingAddress);
@@ -785,11 +806,18 @@ export function buildOrderDocument(input: {
       deliveryBenefitAbsorbedBy: input.quote.commercial.deliveryBenefitAbsorbedBy,
     },
     stripeFee: finalFinancials.stripeFee,
+    stripeFeePercentage: finalFinancials.stripeFeePercentage,
+    stripeFixedFee: finalFinancials.stripeFixedFee,
     stripeNetAmount: finalFinancials.stripeNetAmount,
+    paymentProcessingFee: finalFinancials.paymentProcessingFee,
+    paymentProcessingFeePercentage: finalFinancials.paymentProcessingFeePercentage,
+    paymentProcessingFixedFee: finalFinancials.paymentProcessingFixedFee,
+    paymentNetAmount: finalFinancials.paymentNetAmount,
     driverPayout: finalFinancials.driverPayout,
     grossTotal: finalFinancials.grossTotal,
     storeNetTotal: finalFinancials.storeNetTotal,
     platformNetTotal: finalFinancials.platformNetTotal,
+    settlementSnapshot: input.settlementSnapshot,
     cashCollectedBy,
     driverType,
     refundStatus: "not_requested",

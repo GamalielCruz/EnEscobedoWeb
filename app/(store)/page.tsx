@@ -201,8 +201,8 @@ export default async function Home(props: NextPageProps) {
         </div>
       )}
 
-      <div className="flex min-h-screen w-full flex-col bg-white px-4 pb-4">
-        <div className="w-full max-w-7xl mx-auto">
+      <div className="flex min-h-screen w-full flex-col bg-white pb-4">
+        <div className="w-full">
           <StoresView
             stores={convertedStores}
             storeCategories={visibleStoreCategories}

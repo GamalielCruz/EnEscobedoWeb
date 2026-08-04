@@ -13,6 +13,9 @@ import { after } from "next/server";
 import Stripe from "stripe";
 import { sendScheduledOrderConfirmation } from "@/lib/scheduled-order-whatsapp";
 import { buildMandadoOrderDocument, quoteMandado } from "@/lib/mandado-order";
+import { getMexicoDateKey } from "@/lib/mexico-time";
+import { calculateEstimatedFees, calculateFeesFromActual, getProcessorType } from "@/lib/payment-processor-fees";
+import { createSettlementSnapshot, type OrderFinancials } from "@/lib/settlements";
 
 type ExistingOrder = {
   _id: string;
@@ -145,7 +148,9 @@ function parseShippingAddress(metadata: StripeSessionMetadata): OrderAddressInpu
 }
 
 async function resolveStripeFee(stripe: Stripe, session: Stripe.Checkout.Session) {
-  if (!session.payment_intent) return 0;
+  if (!session.payment_intent) {
+    return { fee: 0, percentage: 0, fixedFee: 0, netAmount: 0 };
+  }
 
   try {
     const pi = await stripe.paymentIntents.retrieve(session.payment_intent as string, {
@@ -153,10 +158,18 @@ async function resolveStripeFee(stripe: Stripe, session: Stripe.Checkout.Session
     });
     const latestCharge = pi.latest_charge as Stripe.Charge | null;
     const balanceTx = latestCharge?.balance_transaction as Stripe.BalanceTransaction | null;
-    return Math.round((balanceTx?.fee ?? 0)) / 100;
+    const actualFee = Math.round((balanceTx?.fee ?? 0)) / 100;
+    const amount = (session.amount_total ?? 0) / 100;
+
+    // Use centralized fee calculation
+    const { calculateFeesFromActual } = await import("./payment-processor-fees");
+    return calculateFeesFromActual(amount, actualFee, "stripe");
   } catch (error) {
-    console.log("[stripe-order] Could not retrieve Stripe fee:", error);
-    return 0;
+    console.log("[stripe-order] Could not retrieve Stripe fee, using fallback:", error);
+    // Fallback to estimated calculation
+    const { calculateEstimatedFees } = await import("./payment-processor-fees");
+    const amount = (session.amount_total ?? 0) / 100;
+    return calculateEstimatedFees(amount, "stripe");
   }
 }
 
@@ -213,7 +226,30 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
       destination: { label: metadata.mandadoDestinationLabel, lat: metadata.mandadoDestinationLat, lng: metadata.mandadoDestinationLng },
       details: `${metadata.mandadoDetails0 || ""}${metadata.mandadoDetails1 || ""}`,
     });
-    const orderData = buildMandadoOrderDocument({
+    const stripeFees = await resolveStripeFee(stripe, session);
+  
+  // Create financial snapshot for mandado settlements
+  const mandadoFinancials: OrderFinancials = {
+    grossTotal: draft.price,
+    productsSubtotal: 0,
+    shippingFee: draft.price,
+    platformServiceFee: 0,
+    platformCommission: 0,
+    paymentProcessingFee: stripeFees.fee,
+    paymentProcessingFeePercentage: stripeFees.percentage,
+    paymentProcessingFixedFee: stripeFees.fixedFee,
+    paymentNetAmount: stripeFees.netAmount,
+    driverPayout: draft.price,
+    storeNetTotal: 0,
+    platformNetTotal: stripeFees.fee > 0 ? -stripeFees.fee : 0,
+  };
+  const mandadoSettlementSnapshot = createSettlementSnapshot(mandadoFinancials, {
+    orderType: "delivery",
+    storeHasOwnDelivery: false,
+    paymentProvider: "stripe",
+  }, "stripe");
+
+  const orderData = buildMandadoOrderDocument({
       draft,
       orderNumber,
       clerkUserId,
@@ -225,7 +261,14 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
       stripeCheckoutSessionId: session.id,
       stripePaymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : undefined,
       stripeCustomerId: typeof session.customer === "string" ? session.customer : undefined,
-      stripeFee: await resolveStripeFee(stripe, session),
+      stripeFee: stripeFees.fee,
+      stripeFeePercentage: stripeFees.percentage,
+      stripeFixedFee: stripeFees.fixedFee,
+      paymentProcessingFee: stripeFees.fee,
+      paymentProcessingFeePercentage: stripeFees.percentage,
+      paymentProcessingFixedFee: stripeFees.fixedFee,
+      paymentNetAmount: stripeFees.netAmount,
+      settlementSnapshot: mandadoSettlementSnapshot,
     }) as OrderDocumentRecord;
     orderData._id = `stripe-order-${session.id}`;
     orderData.restaurantName = "Mandado El Menú";
@@ -261,11 +304,46 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
         : { timing: "asap" },
   });
 
-  const stripeFee = await resolveStripeFee(stripe, session);
+  const stripeFees = await resolveStripeFee(stripe, session);
   const paymentStatus = getPaymentStatus(session);
   const deliveryNotes = orderType === "delivery"
     ? String(metadata.deliveryNotes || "").trim().slice(0, 500) || undefined
-    : metadata.pickupStoreName ? `Recoger en: ${metadata.pickupStoreName}` : undefined;
+    : undefined;
+
+  // Create financial snapshot for settlements
+  const financials: OrderFinancials = {
+    grossTotal: quote.financials.grossTotal,
+    productsSubtotal: quote.financials.productsSubtotal,
+    shippingFee: quote.financials.shippingFee,
+    platformServiceFee: quote.financials.platformServiceFee,
+    platformCommission: quote.financials.platformCommission,
+    paymentProcessingFee: stripeFees.fee,
+    paymentProcessingFeePercentage: stripeFees.percentage,
+    paymentProcessingFixedFee: stripeFees.fixedFee,
+    paymentNetAmount: stripeFees.netAmount,
+    driverPayout: quote.financials.driverPayout,
+    storeNetTotal: quote.financials.storeNetTotal,
+    platformNetTotal: quote.financials.platformNetTotal,
+  };
+  const settlementSnapshot = createSettlementSnapshot(financials, {
+    orderType,
+    storeHasOwnDelivery: quote.store.hasOwnDelivery ?? false,
+    paymentProvider: "stripe",
+  }, "stripe");
+
+  const fulfillment =
+    metadata.fulfillmentTiming === "scheduled" &&
+    metadata.scheduledStartAt &&
+    metadata.scheduledEndAt
+      ? {
+          timing: "scheduled",
+          scheduledSlot: {
+            startAt: metadata.scheduledStartAt,
+            endAt: metadata.scheduledEndAt,
+            timezone: metadata.scheduledTimezone,
+          },
+        }
+      : { timing: "asap" };
 
   const orderData = buildOrderDocument({
     orderNumber,
@@ -289,8 +367,15 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
     stripePaymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : null,
     stripeCustomerId: typeof session.customer === "string" ? session.customer : null,
     amountDiscount: session.total_details?.amount_discount ? session.total_details.amount_discount / 100 : 0,
-    stripeFee,
+    stripeFee: stripeFees.fee,
+    stripeFeePercentage: stripeFees.percentage,
+    stripeFixedFee: stripeFees.fixedFee,
+    paymentProcessingFee: stripeFees.fee,
+    paymentProcessingFeePercentage: stripeFees.percentage,
+    paymentProcessingFixedFee: stripeFees.fixedFee,
+    paymentNetAmount: stripeFees.netAmount,
     deliveryNotes,
+    settlementSnapshot,
   }) as OrderDocumentRecord;
 
   orderData._id = `stripe-order-${session.id}`;
@@ -308,7 +393,7 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
       confirmedOrder = (await markOrderPaidBySession(session.id)) as ExistingOrder;
     }
     if (session.payment_status === "paid") {
-      const stripeFee = await resolveStripeFee(stripe, session);
+      const stripeFees = await resolveStripeFee(stripe, session);
       const discount = (session.total_details?.amount_discount ?? 0) / 100;
       const grossTotal = (session.amount_total ?? Number(confirmedOrder.grossTotal || 0) * 100) / 100;
       const platformCommission = Number(confirmedOrder.platformCommission ?? 0);
@@ -321,14 +406,20 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
           discount,
           totalPrice: grossTotal,
           grossTotal,
-          stripeFee,
-          stripeNetAmount: Math.round((grossTotal - stripeFee) * 100) / 100,
+          stripeFee: stripeFees.fee,
+          stripeFeePercentage: stripeFees.percentage,
+          stripeFixedFee: stripeFees.fixedFee,
+          stripeNetAmount: stripeFees.netAmount,
+          paymentProcessingFee: stripeFees.fee,
+          paymentProcessingFeePercentage: stripeFees.percentage,
+          paymentProcessingFixedFee: stripeFees.fixedFee,
+          paymentNetAmount: stripeFees.netAmount,
           storeNetTotal:
             Math.round(
-              (grossTotal - platformServiceFee - platformCommission - stripeFee - driverPayout) * 100
+              (grossTotal - platformServiceFee - platformCommission - stripeFees.fee - driverPayout) * 100
             ) / 100,
           platformNetTotal:
-            Math.round((platformCommission + platformServiceFee - stripeFee) * 100) / 100,
+            Math.round((platformCommission + platformServiceFee - stripeFees.fee) * 100) / 100,
           ...(typeof session.payment_intent === "string"
             ? { stripePaymentIntentId: session.payment_intent }
             : {}),

@@ -25,7 +25,13 @@ type FinanceOrder = {
   platformCommission?: number;
   platformServiceFee?: number;
   stripeFee?: number;
+  stripeFeePercentage?: number;
+  stripeFixedFee?: number;
   stripeNetAmount?: number;
+  paymentProcessingFee?: number;
+  paymentProcessingFeePercentage?: number;
+  paymentProcessingFixedFee?: number;
+  paymentNetAmount?: number;
   tax?: number;
   grossTotal?: number;
   storeNetTotal?: number;
@@ -38,6 +44,27 @@ type FinanceOrder = {
   storeName?: string;
   driverId?: string;
   driverName?: string;
+  settlementSnapshot?: {
+    version?: number;
+    createdAt?: string;
+    paymentProvider?: string;
+    settlementPolicy?: string;
+    currency?: string;
+    restaurantSubtotal?: number;
+    deliveryAmount?: number;
+    platformCommission?: number;
+    platformServiceFee?: number;
+    paymentProcessingFee?: number;
+    paymentProcessingFeePercentage?: number;
+    paymentProcessingFixedFee?: number;
+    restaurantProcessingFee?: number;
+    courierProcessingFee?: number;
+    platformProcessingFee?: number;
+    restaurantSettlement?: number;
+    courierSettlement?: number;
+    platformNetRevenue?: number;
+    grossTotal?: number;
+  };
 };
 
 type NormalizedFinanceOrder = FinanceOrder & {
@@ -50,7 +77,13 @@ type NormalizedFinanceOrder = FinanceOrder & {
   platformCommission: number;
   platformServiceFee: number;
   stripeFee: number;
+  stripeFeePercentage: number;
+  stripeFixedFee: number;
   stripeNetAmount: number;
+  paymentProcessingFee: number;
+  paymentProcessingFeePercentage: number;
+  paymentProcessingFixedFee: number;
+  paymentNetAmount: number;
   tax: number;
   grossTotal: number;
   storeNetTotal: number;
@@ -89,7 +122,13 @@ const FINANCE_QUERY = `*[
   platformCommission,
   platformServiceFee,
   stripeFee,
+  stripeFeePercentage,
+  stripeFixedFee,
   stripeNetAmount,
+  paymentProcessingFee,
+  paymentProcessingFeePercentage,
+  paymentProcessingFixedFee,
+  paymentNetAmount,
   tax,
   grossTotal,
   storeNetTotal,
@@ -101,7 +140,8 @@ const FINANCE_QUERY = `*[
   "storeId": affiliateStore._ref,
   "storeName": affiliateStore->name,
   "driverId": repartidorAsignado._ref,
-  "driverName": repartidorAsignado->nombre
+  "driverName": repartidorAsignado->nombre,
+  settlementSnapshot
 }`;
 
 function money(value?: number) {
@@ -146,8 +186,16 @@ function normalizeOrder(order: FinanceOrder): NormalizedFinanceOrder {
   const platformCommission = money(order.platformCommission);
   const driverPayout = money(order.driverPayout);
   const stripeFee = paymentProvider === "stripe" ? money(order.stripeFee) : 0;
+  const stripeFeePercentage = money(order.stripeFeePercentage ?? 0);
+  const stripeFixedFee = money(order.stripeFixedFee ?? 0);
   const stripeNetAmount =
     paymentProvider === "stripe" ? money(order.stripeNetAmount ?? grossTotal - stripeFee) : 0;
+  
+  // Use generic payment processing fees, falling back to Stripe-specific fields for compatibility
+  const paymentProcessingFee = money(order.paymentProcessingFee ?? order.stripeFee ?? 0);
+  const paymentProcessingFeePercentage = money(order.paymentProcessingFeePercentage ?? order.stripeFeePercentage ?? 0);
+  const paymentProcessingFixedFee = money(order.paymentProcessingFixedFee ?? order.stripeFixedFee ?? 0);
+  const paymentNetAmount = money(order.paymentNetAmount ?? order.stripeNetAmount ?? grossTotal - paymentProcessingFee);
   const storeNetTotal = money(
     order.storeNetTotal ?? Math.max(grossTotal - platformServiceFee - platformCommission - stripeFee - driverPayout, 0)
   );
@@ -164,7 +212,13 @@ function normalizeOrder(order: FinanceOrder): NormalizedFinanceOrder {
     platformCommission,
     platformServiceFee,
     stripeFee,
+    stripeFeePercentage,
+    stripeFixedFee,
     stripeNetAmount,
+    paymentProcessingFee,
+    paymentProcessingFeePercentage,
+    paymentProcessingFixedFee,
+    paymentNetAmount,
     tax,
     grossTotal,
     storeNetTotal,
@@ -187,6 +241,8 @@ function createBucket(id: string, name: string) {
     platformServiceFee: 0,
     driverPayout: 0,
     stripeFee: 0,
+    stripeFeePercentage: 0,
+    stripeFixedFee: 0,
     stripeNetAmount: 0,
     tax: 0,
     grossTotal: 0,
@@ -215,6 +271,8 @@ function addSummary(target: ReturnType<typeof createBucket>, order: NormalizedFi
   target.platformServiceFee += money(order.platformServiceFee);
   target.driverPayout += money(order.driverPayout);
   target.stripeFee += money(order.stripeFee);
+  target.stripeFeePercentage += money(order.stripeFeePercentage);
+  target.stripeFixedFee += money(order.stripeFixedFee);
   target.stripeNetAmount += money(order.stripeNetAmount);
   target.tax += money(order.tax);
   target.grossTotal += money(order.grossTotal);

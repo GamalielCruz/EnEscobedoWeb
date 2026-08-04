@@ -98,7 +98,7 @@ export default function StoreGrid({ stores }: StoreGridProps) {
         return (
           <article
             key={store._id}
-            className="group flex flex-col overflow-hidden rounded-lg bg-white shadow-md transition-shadow duration-200 hover:shadow-lg"
+            className="group flex flex-col overflow-hidden bg-white shadow-md transition-shadow duration-200 hover:shadow-lg"
           >
             <Link href={getStorePath(store)} className="relative block h-48 w-full overflow-hidden bg-black">
               {store.coverImage ? (
