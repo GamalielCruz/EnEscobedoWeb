@@ -11,6 +11,17 @@ const NUEVO_PEDIDO_RESTAURANTE_SAFETY_MARGIN = 48;
 const NUEVO_PEDIDO_RESTAURANTE_FIXED_BODY =
   "Tienes un nuevo pedido en .\n\nPedido: #\nCliente: \nProductos:\n\n\nTotal: $\nTipo: \n\nGracias por utilizar ElMenu.";
 
+/**
+ * Sanitize text for WhatsApp template parameters
+ * Removes newlines, tabs, and excessive spaces (more than 4 consecutive)
+ */
+function sanitizeWhatsAppParam(text: string): string {
+  return text
+    .replace(/[\n\r\t]/g, ' ') // Replace newlines, tabs with space
+    .replace(/\s{5,}/g, '    ') // Limit to max 4 consecutive spaces
+    .trim();
+}
+
 type WhatsAppErrorPayload = {
   message?: string;
   type?: string;
@@ -281,8 +292,8 @@ export async function sendOrderConfirmation(
   orderNumber: string
 ) {
   return sendSpanishTemplate(phone, "confirmacion_pedido", [
-    name.substring(0, 30),
-    orderNumber.substring(0, 30),
+    sanitizeWhatsAppParam(name.substring(0, 30)),
+    sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
   ]);
 }
 
@@ -299,11 +310,11 @@ export async function sendPickupOrderReceived(
     phone,
     "cliente_pickup_recibido",
     [
-      name.substring(0, 30),
-      orderNumber.substring(0, 30),
-      storeName.substring(0, 60),
-      total.substring(0, 30),
-      paymentMethod.substring(0, 40),
+      sanitizeWhatsAppParam(name.substring(0, 30)),
+      sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
+      sanitizeWhatsAppParam(storeName.substring(0, 60)),
+      sanitizeWhatsAppParam(total.substring(0, 30)),
+      sanitizeWhatsAppParam(paymentMethod.substring(0, 40)),
     ],
     [
       {
@@ -327,16 +338,19 @@ export async function sendRestaurantePickupPedido(
   orderId: string
 ) {
   const safeProducts = fitTextToBudget(products, 500, "Sin productos");
+  // Sanitize products to remove newlines, tabs, and excessive spaces
+  const sanitizedProducts = sanitizeWhatsAppParam(safeProducts);
+  
   return sendSpanishTemplate(
     phone,
     RESTAURANTE_PICKUP_TEMPLATE_NAME,
     [
-      orderNumber.substring(0, 30),
-      customerName.substring(0, 60),
-      customerPhone.substring(0, 30),
-      safeProducts,
-      total.substring(0, 30),
-      paymentMethod.substring(0, 40),
+      sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
+      sanitizeWhatsAppParam(customerName.substring(0, 60)),
+      sanitizeWhatsAppParam(customerPhone.substring(0, 30)),
+      sanitizedProducts,
+      sanitizeWhatsAppParam(total.substring(0, 30)),
+      sanitizeWhatsAppParam(paymentMethod.substring(0, 40)),
     ],
     [
       buildQuickReplyPayloadButton("0", `ORDEN_LISTA_PICKUP|${orderId}`),
@@ -348,7 +362,6 @@ export async function sendRestaurantePickupPedido(
 
 export async function sendPickupReadyForCustomer(
   phone: string,
-  name: string,
   orderNumber: string,
   storeName: string,
   _storeMapsUrl: string
@@ -356,7 +369,7 @@ export async function sendPickupReadyForCustomer(
   return sendSpanishTemplate(
     phone,
     CLIENTE_PICKUP_READY_TEMPLATE_NAME,
-    [orderNumber.substring(0, 30), storeName.substring(0, 60)]
+    [sanitizeWhatsAppParam(orderNumber.substring(0, 30)), sanitizeWhatsAppParam(storeName.substring(0, 60))]
   );
 }
 export async function sendNuevoPedidoRestaurante(
@@ -395,16 +408,19 @@ export async function sendNuevoPedidoRestaurante(
     });
   }
 
+  // Sanitize products to remove newlines, tabs, and excessive spaces
+  const sanitizedProducts = sanitizeWhatsAppParam(safeProducts);
+
   return sendSpanishTemplate(
     phone,
     "nuevo_pedido_restaurante",
     [
-      safeRestaurantName,
-      safeOrderNumber,
-      safeCustomerName,
-      safeProducts,
-      safeTotal,
-      safeDeliveryType,
+      sanitizeWhatsAppParam(safeRestaurantName),
+      sanitizeWhatsAppParam(safeOrderNumber),
+      sanitizeWhatsAppParam(safeCustomerName),
+      sanitizedProducts,
+      sanitizeWhatsAppParam(safeTotal),
+      sanitizeWhatsAppParam(safeDeliveryType),
     ],
     [],
     1024
@@ -417,8 +433,8 @@ export async function sendRepartidorEnCaminoRestaurante(
   orderNumber: string
 ) {
   return sendSpanishTemplate(phone, "repartidor_en_camino_restaurante", [
-    driverName.substring(0, 60),
-    orderNumber.substring(0, 30),
+    sanitizeWhatsAppParam(driverName.substring(0, 60)),
+    sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
   ]);
 }
 
@@ -428,8 +444,8 @@ export async function sendOrderOnTheWay(
   orderNumber: string
 ) {
   return sendSpanishTemplate(phone, "pedido_en_camino", [
-    name.substring(0, 30),
-    orderNumber.substring(0, 30),
+    sanitizeWhatsAppParam(name.substring(0, 30)),
+    sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
   ]);
 }
 
@@ -439,8 +455,8 @@ export async function sendOrderDelivered(
   orderNumber: string
 ) {
   return sendSpanishTemplate(phone, "pedido_entregado", [
-    name.substring(0, 30),
-    orderNumber.substring(0, 30),
+    sanitizeWhatsAppParam(name.substring(0, 30)),
+    sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
   ]);
 }
 
@@ -450,8 +466,8 @@ export async function sendOrderCancelled(
   orderNumber: string
 ) {
   return sendSpanishTemplate(phone, "pedido_cancelado", [
-    name.substring(0, 30),
-    orderNumber.substring(0, 30),
+    sanitizeWhatsAppParam(name.substring(0, 30)),
+    sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
   ]);
 }
 
@@ -468,13 +484,23 @@ export async function sendDeliveryOffer(
   driverLabel?: string
 ) {
   const breakdown = restaurantLabel && driverLabel
-    ? `\n\nCobrar al cliente\n\nRestaurante: ${restaurantLabel}\nTu envío: ${driverLabel}\n\nTotal: ${total}`
+    ? `Cobrar al cliente - Restaurante: ${restaurantLabel} - Tu envío: ${driverLabel} - Total: ${total}`
     : total;
+
+  // Sanitize breakdown to remove newlines, tabs, and excessive spaces
+  const sanitizedBreakdown = sanitizeWhatsAppParam(breakdown);
 
   return sendWhatsAppTemplate(
     phone,
     "oferta_reparto",
-    [orderNumber, customerName, restaurantName, address, breakdown, paymentMethod],
+    [
+      sanitizeWhatsAppParam(orderNumber),
+      sanitizeWhatsAppParam(customerName),
+      sanitizeWhatsAppParam(restaurantName),
+      sanitizeWhatsAppParam(address),
+      sanitizedBreakdown,
+      sanitizeWhatsAppParam(paymentMethod),
+    ],
     "es_MX",
     [
       {
@@ -502,7 +528,7 @@ export async function sendBundleDeliveryOffer(
   );
 }
 
-export async function sendConfirmacionRepartidor(
+export async function sendDriverConfirmation(
   phone: string,
   orderNumber: string,
   restaurantName: string,
@@ -515,10 +541,10 @@ export async function sendConfirmacionRepartidor(
     phone,
     "confirmacion_repartidor",
     [
-      orderNumber.substring(0, 30),
-      restaurantName.substring(0, 30),
-      deliveryAddress.substring(0, 60),
-      paymentMethod.substring(0, 30),
+      sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
+      sanitizeWhatsAppParam(restaurantName.substring(0, 30)),
+      sanitizeWhatsAppParam(deliveryAddress.substring(0, 60)),
+      sanitizeWhatsAppParam(paymentMethod.substring(0, 30)),
     ],
     [
       {
@@ -541,7 +567,7 @@ export async function sendRepartidorEnCamino(phone: string, orderNumber: string,
   return sendSpanishTemplate(
     phone,
     "repartidor_en_camino",
-    [orderNumber.substring(0, 30)],
+    [sanitizeWhatsAppParam(orderNumber.substring(0, 30))],
     [buildQuickReplyPayloadButton("0", `EN_PUERTA|${orderId}`)]
   );
 }
@@ -550,7 +576,7 @@ export async function sendRepartidorEnPuerta(phone: string, orderNumber: string,
   return sendSpanishTemplate(
     phone,
     "repartidor_en_puerta",
-    [orderNumber.substring(0, 30)],
+    [sanitizeWhatsAppParam(orderNumber.substring(0, 30))],
     [buildQuickReplyPayloadButton("0", `ENTREGADO|${orderId}`)]
   );
 }
@@ -566,8 +592,8 @@ export async function sendClienteRepartidorEnPuerta(
     : orderNumber;
 
   return sendSpanishTemplate(phone, "cliente_repartidor_en_puerta", [
-    customerName.substring(0, 30),
-    orderReference,
+    sanitizeWhatsAppParam(customerName.substring(0, 30)),
+    sanitizeWhatsAppParam(orderReference),
   ]);
 }
 

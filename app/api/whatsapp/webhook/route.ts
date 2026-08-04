@@ -5,7 +5,7 @@ import {
   sendOrderOnTheWay,
   sendOrderDelivered,
   normalizeWhatsAppPhone,
-  sendConfirmacionRepartidor,
+  sendDriverConfirmation,
   sendRepartidorEnCamino,
   sendRepartidorEnPuerta,
   sendClienteRepartidorEnPuerta,
@@ -577,7 +577,7 @@ async function handlePickupRestaurantAction(action: string, orderId: string | nu
     after(() => syncBaserowOrderById(String(order._id)))
     await appendOrderEvent(String(order._id), { type: 'ready_for_pickup', source: 'whatsapp/webhook', actor: 'store' })
     if (customerPhone) {
-      await sendPickupReadyForCustomer(customerPhone, customerName, orderNumber, storeName, storeMapsUrl).catch(() => null)
+      await sendPickupReadyForCustomer(customerPhone, orderNumber, storeName, storeMapsUrl).catch(() => null)
     }
     return true
   }
@@ -1432,7 +1432,7 @@ Te avisaremos 10 minutos antes de finalizar.`
         const deliveryNotes = String(order.deliveryNotes ?? '').trim()
 
         const confirmationResults = await Promise.allSettled([
-          sendConfirmacionRepartidor(
+          sendDriverConfirmation(
             fromPhone,
             String(order.orderNumber),
             String(order.storeName ?? 'La Tienda'),

@@ -335,7 +335,6 @@ export async function PATCH(request: NextRequest) {
     if (orderType === "pickup" && orderStatus === "ready_for_pickup" && order.phone) {
       void sendPickupReadyForCustomer(
         order.phone,
-        order.customerName || "Cliente",
         order.orderNumber,
         order.storeName || "Restaurante",
         buildStoreMapsUrl({
