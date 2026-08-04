@@ -5,6 +5,9 @@ import { defineQuery } from "next-sanity";
 import { getStoreBySlug } from "@/sanity/lib/products/getStoreBySlug";
 import { getStoreById } from "@/sanity/lib/products/getStoreById";
 import { getProductsByStore } from "@/sanity/lib/products/getProductsByStore";
+import { getStoreServiceTiming } from "@/lib/storeOperationalState";
+import { getStorePath } from "@/lib/store-url";
+import { buildUrl } from "@/lib/urls";
 
 export const dynamic = "force-dynamic";
 
@@ -63,16 +66,33 @@ export async function GET(req: NextRequest) {
       try {
         const storeById = await getStoreById(store._id);
         results.step5_getStoreById = storeById ? { _id: storeById._id, name: storeById.name } : null;
+
+        // 6. Everything StorePage does
+        if (storeById) {
+          try {
+            const { products } = await getProductsByStore(store._id);
+            results.step6_productsCount = products.length;
+
+            // 7. Simulate exact StorePage calls
+            try {
+              const timing = getStoreServiceTiming(storeById);
+              results.step7_timing = timing;
+            } catch (e) {
+              results.step7_timing_error = String(e);
+            }
+            try {
+              const storePath = getStorePath(storeById);
+              const storeUrl = buildUrl(storePath);
+              results.step7_storeUrl = storeUrl;
+            } catch (e) {
+              results.step7_url_error = String(e);
+            }
+          } catch (e) {
+            results.step6_products_error = String(e);
+          }
+        }
       } catch (e) {
         results.step5_getStoreById_error = String(e);
-      }
-
-      // 6. getProductsByStore
-      try {
-        const { products } = await getProductsByStore(store._id);
-        results.step6_productsCount = products.length;
-      } catch (e) {
-        results.step6_products_error = String(e);
       }
     }
   } catch (e) {
