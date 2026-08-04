@@ -3,6 +3,8 @@ import { client } from "@/sanity/lib/client";
 import { sanityFetch } from "@/sanity/lib/live";
 import { defineQuery } from "next-sanity";
 import { getStoreBySlug } from "@/sanity/lib/products/getStoreBySlug";
+import { getStoreById } from "@/sanity/lib/products/getStoreById";
+import { getProductsByStore } from "@/sanity/lib/products/getProductsByStore";
 
 export const dynamic = "force-dynamic";
 
@@ -55,6 +57,24 @@ export async function GET(req: NextRequest) {
   try {
     const store = await getStoreBySlug(slug);
     results.step4_getStoreBySlug = store ? { _id: store._id, name: store.name } : null;
+
+    // 5. getStoreById with the found id
+    if (store) {
+      try {
+        const storeById = await getStoreById(store._id);
+        results.step5_getStoreById = storeById ? { _id: storeById._id, name: storeById.name } : null;
+      } catch (e) {
+        results.step5_getStoreById_error = String(e);
+      }
+
+      // 6. getProductsByStore
+      try {
+        const { products } = await getProductsByStore(store._id);
+        results.step6_productsCount = products.length;
+      } catch (e) {
+        results.step6_products_error = String(e);
+      }
+    }
   } catch (e) {
     results.step4_error = String(e);
   }
