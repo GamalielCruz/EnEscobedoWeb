@@ -42,7 +42,7 @@ const STORE_BY_ID_QUERY = defineQuery(`
 `);
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function buildStoreResult(data: Record<string, any>, commercial: ReturnType<typeof resolveEffectiveCommercialConditions>) {
+function buildStoreResult(data: Record<string, any> & { _id: string }, commercial: ReturnType<typeof resolveEffectiveCommercialConditions>) {
   return {
     ...data,
     premiumBadgeEnabled: commercial.premiumBadgeEnabled,
@@ -63,7 +63,7 @@ function buildStoreResult(data: Record<string, any>, commercial: ReturnType<type
 
 export const getStoreById = async (storeId: string) => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let storeData: Record<string, any> | null = null;
+  let storeData: (Record<string, any> & { _id: string }) | null = null;
 
   // Primary: sanityFetch (live updates)
   try {
@@ -89,12 +89,12 @@ export const getStoreById = async (storeId: string) => {
   if (!storeData) return null;
 
   try {
-    const commercial = resolveEffectiveCommercialConditions(storeData, await getCommercialSettings());
+    const commercial = resolveEffectiveCommercialConditions(storeData as Parameters<typeof resolveEffectiveCommercialConditions>[0], await getCommercialSettings());
     return buildStoreResult(storeData, commercial);
   } catch (error) {
     console.error("[getStoreById] commercial resolution failed:", error);
     // Return store without commercial data rather than null
-    const commercial = resolveEffectiveCommercialConditions(storeData, null);
+    const commercial = resolveEffectiveCommercialConditions(storeData as Parameters<typeof resolveEffectiveCommercialConditions>[0], null);
     return buildStoreResult(storeData, commercial);
   }
 };
