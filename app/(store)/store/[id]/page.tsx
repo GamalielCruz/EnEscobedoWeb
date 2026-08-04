@@ -1,6 +1,8 @@
 import Image from "next/image";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+
+export const dynamic = "force-dynamic";
 import { FulfillmentTimingPicker } from "@/components/FulfillmentTimingPicker";
 import { getStoreServiceTiming } from "@/lib/storeOperationalState";
 import { getStorePath } from "@/lib/store-url";

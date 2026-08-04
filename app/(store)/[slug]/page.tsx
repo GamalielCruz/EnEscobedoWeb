@@ -5,6 +5,8 @@ import StorePage, {
 } from "../store/[id]/page";
 import { getStoreBySlug } from "@/sanity/lib/products/getStoreBySlug";
 
+export const dynamic = "force-dynamic";
+
 type Props = {
   params: Promise<{ slug: string }>;
   searchParams?: Promise<{ product?: string }>;
