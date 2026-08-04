@@ -251,7 +251,13 @@ export function findMatchingZone(zones: DeliveryZone[], lat: number, lng: number
 }
 
 export function findScheduleRule(rules: ScheduleRule[], date: Date) {
-  const minutes = date.getHours() * 60 + date.getMinutes();
+  // Use Mexico City timezone for schedule calculations
+  const mexicoTimeStr = date.toLocaleString('en-US', { 
+    timeZone: 'America/Mexico_City',
+    hour12: false 
+  });
+  const mexicoDate = new Date(mexicoTimeStr);
+  const minutes = mexicoDate.getHours() * 60 + mexicoDate.getMinutes();
 
   return rules.find((rule) => {
     if (rule.active === false) return false;
