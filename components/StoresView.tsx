@@ -99,6 +99,7 @@ export default function StoresView({
   const [pendingCategory, setPendingCategory] = useState("");
   const selectedCategory = isPending ? pendingCategory : initialCategory || "";
   const mandadoSelected = searchParams?.get("service") === "mandado";
+  const superSelected = searchParams?.get("service") === "super";
 
   const handleCategoryChange = (categoryId: string | null) => {
     setPendingCategory(categoryId || "");
@@ -132,6 +133,10 @@ export default function StoresView({
     startTransition(() => router.push(queryString ? `/?${queryString}` : "/"));
   };
 
+  const handleSuperSelect = () => {
+    startTransition(() => router.push("/super"));
+  };
+
   return (
     <>
       {/* Filtro de categorías */}
@@ -142,6 +147,8 @@ export default function StoresView({
           onCategoryChange={handleCategoryChange}
           mandadoSelected={mandadoSelected}
           onMandadoSelect={handleMandadoSelect}
+          superSelected={superSelected}
+          onSuperSelect={handleSuperSelect}
         />
       </div>
 

@@ -6,6 +6,7 @@ import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { urlFor } from "@/sanity/lib/image";
 import { CategoryFilter } from "@/components/ui/category-filter";
 import { SuperCategoryFilter } from "@/components/ui/super-category-filter";
+import PasillosModal from "@/components/PasillosModal";
 import ProductSidebar from "@/components/ProductSidebar";
 import ProductCounter from "@/components/ProductCounter";
 import MiniBasket from "@/components/MiniBasket";
@@ -79,11 +80,13 @@ export function StoreProductsClient({
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isPasillosOpen, setIsPasillosOpen] = useState(false);
   const [dismissedHighlightedSlug, setDismissedHighlightedSlug] = useState<string | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
   const pathname = usePathname();
-  const enableCatalogFallback = pathname?.startsWith("/super") ?? false;
+  const enableCatalogFallback =
+    storeId === "abarrotes-pilot" || pathname?.startsWith("/super") === true;
 
   // Filtrar productos según la categoría seleccionada
   const filteredProducts = selectedCategory
@@ -275,6 +278,30 @@ export function StoreProductsClient({
 
       {/* MiniBasket persistente */}
       <MiniBasket />
+
+      {/* Botón Pasillos - solo para super/retail */}
+      {enableCatalogFallback && categories.length > 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setIsPasillosOpen(true)}
+            className="fixed bottom-24 right-4 z-40 flex h-14 w-14 flex-col items-center justify-center rounded-full bg-gray-900 text-white shadow-xl hover:bg-gray-800 active:scale-95 transition-all"
+            aria-label="Ver pasillos"
+          >
+            <span className="text-lg leading-none">🛒</span>
+            <span className="mt-0.5 text-[9px] font-bold uppercase tracking-wide leading-none">
+              Pasillos
+            </span>
+          </button>
+
+          <PasillosModal
+            isOpen={isPasillosOpen}
+            onClose={() => setIsPasillosOpen(false)}
+            categories={categories}
+            onCategorySelect={setSelectedCategory}
+          />
+        </>
+      )}
     </div>
   );
 }

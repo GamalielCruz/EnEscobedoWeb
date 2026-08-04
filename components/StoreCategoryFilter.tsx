@@ -23,6 +23,8 @@ interface StoreCategoryFilterProps {
   onCategoryChange?: (categoryId: string | null) => void;
   mandadoSelected?: boolean;
   onMandadoSelect?: () => void;
+  superSelected?: boolean;
+  onSuperSelect?: () => void;
 }
 
 export function StoreCategoryFilter({
@@ -31,6 +33,8 @@ export function StoreCategoryFilter({
   onCategoryChange,
   mandadoSelected = false,
   onMandadoSelect,
+  superSelected = false,
+  onSuperSelect,
 }: StoreCategoryFilterProps) {
   const [internalSelectedCategory, setInternalSelectedCategory] = useState("");
   const selectedCategory = externalSelectedCategory ?? internalSelectedCategory;
@@ -48,6 +52,13 @@ export function StoreCategoryFilter({
         selected={mandadoSelected}
         onClick={onMandadoSelect}
         icon={<Image src="/repartidor.png" alt="" width={72} height={72} className="h-full w-full object-contain transition-transform duration-200 group-hover:scale-105" />}
+      />
+
+      <CategoryButton
+        label="Súper"
+        selected={superSelected}
+        onClick={onSuperSelect}
+        icon={<Image src="/store.svg" alt="" width={72} height={72} className="h-full w-full object-contain transition-transform duration-200 group-hover:scale-105" />}
       />
 
       {categories.map((category) => {

@@ -90,6 +90,11 @@ function normalizeCategoryName(value: string | null | undefined) {
     .trim();
 }
 
+function isHiddenHomeStore(store: RawAffiliateStore) {
+  const normalizedName = normalizeCategoryName(store.name);
+  return normalizedName === "abarrotes" || store.storeId === "abarrotes-pilot";
+}
+
 export default async function Home(props: NextPageProps) {
   const searchParams: Record<string, string | string[] | undefined> =
     await (props?.searchParams ?? Promise.resolve({}));
@@ -146,19 +151,13 @@ export default async function Home(props: NextPageProps) {
       ? selectedCategory
       : undefined;
 
-  // Debug
-  console.log('Selected category:', effectiveSelectedCategory);
-  console.log('Total stores:', stores.length);
-  console.log('Sample store categories:', stores[0]?.storeCategories);
-
   // Filter stores by category
+  const visibleStores = stores.filter((store: RawAffiliateStore) => !isHiddenHomeStore(store));
   const filteredStores = effectiveSelectedCategory
-    ? stores.filter((store: RawAffiliateStore) =>
+    ? visibleStores.filter((store: RawAffiliateStore) =>
         store.storeCategories?.some((cat: RawStoreCategory) => cat._id === effectiveSelectedCategory)
       )
-    : stores;
-
-  console.log('Filtered stores:', filteredStores.length);
+    : visibleStores;
 
   // Pagination for filtered stores
   const totalStores = filteredStores.length;

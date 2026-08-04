@@ -7,29 +7,36 @@ const STORE_SLUG_ALIASES: Record<string, string> = {
 };
 
 export async function getStoreBySlug(slug: string) {
-  const normalizedSlug = slug.toLowerCase();
+  const normalizedSlug = slug.toLowerCase().trim();
   const resolvedSlug = STORE_SLUG_ALIASES[normalizedSlug] || normalizedSlug;
-  // #region debug-point A:getStoreBySlug-entry
-  (() => { try { const fs = require("fs"); let u = "http://127.0.0.1:7777/event", s = "staging-super-404"; try { const e = fs.readFileSync(".dbg/staging-super-404.env", "utf8"); u = e.match(/DEBUG_SERVER_URL=(.+)/)?.[1] || u; s = e.match(/DEBUG_SESSION_ID=(.+)/)?.[1] || s; } catch {} fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: s, runId: "post-fix", hypothesisId: "A", location: "getStoreBySlug.ts:9", msg: "[DEBUG] getStoreBySlug entry", data: { slug: normalizedSlug, resolvedSlug }, ts: Date.now() }) }).catch(() => {}); } catch {} })();
-  // #endregion
+
+  // 1. Exact slug.current match
   const exactId = await client.fetch<string | null>(
     `*[_type == "affiliateStore" && slug.current == $slug][0]._id`,
     { slug: resolvedSlug }
   );
-  // #region debug-point B:getStoreBySlug-exact
-  (() => { try { const fs = require("fs"); let u = "http://127.0.0.1:7777/event", s = "staging-super-404"; try { const e = fs.readFileSync(".dbg/staging-super-404.env", "utf8"); u = e.match(/DEBUG_SERVER_URL=(.+)/)?.[1] || u; s = e.match(/DEBUG_SESSION_ID=(.+)/)?.[1] || s; } catch {} fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: s, runId: "post-fix", hypothesisId: "B", location: "getStoreBySlug.ts:16", msg: "[DEBUG] getStoreBySlug exact lookup", data: { slug: normalizedSlug, resolvedSlug, exactId: exactId || null }, ts: Date.now() }) }).catch(() => {}); } catch {} })();
-  // #endregion
+
   if (exactId) return getStoreById(exactId);
 
-  // ponytail: keeps existing stores live until their editable slugs are saved in Sanity.
+  // 2. Legacy: stores without slug.current — match by slugified name
   const legacyStores = await client.fetch<Array<{ _id: string; name?: string }>>(
     `*[_type == "affiliateStore" && !defined(slug.current)]{ _id, name }`
   );
+
   const legacyStore = legacyStores.find(
     (store) => slugifyStoreName(store.name || "") === resolvedSlug
   );
-  // #region debug-point C:getStoreBySlug-legacy
-  (() => { try { const fs = require("fs"); let u = "http://127.0.0.1:7777/event", s = "staging-super-404"; try { const e = fs.readFileSync(".dbg/staging-super-404.env", "utf8"); u = e.match(/DEBUG_SERVER_URL=(.+)/)?.[1] || u; s = e.match(/DEBUG_SESSION_ID=(.+)/)?.[1] || s; } catch {} fetch(u, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: s, runId: "post-fix", hypothesisId: "C", location: "getStoreBySlug.ts:27", msg: "[DEBUG] getStoreBySlug legacy lookup", data: { slug: normalizedSlug, resolvedSlug, legacyMatchId: legacyStore?._id || null }, ts: Date.now() }) }).catch(() => {}); } catch {} })();
-  // #endregion
-  return legacyStore ? getStoreById(legacyStore._id) : null;
+
+  if (legacyStore) return getStoreById(legacyStore._id);
+
+  // 3. Broad fallback: any store whose slugified name matches, regardless of slug field
+  const allStores = await client.fetch<Array<{ _id: string; name?: string; slug?: { current?: string } }>>(
+    `*[_type == "affiliateStore"]{ _id, name, "slugCurrent": slug.current }`
+  );
+
+  const fallbackStore = allStores.find(
+    (store) => slugifyStoreName(store.name || "") === resolvedSlug
+  );
+
+  return fallbackStore ? getStoreById(fallbackStore._id) : null;
 }

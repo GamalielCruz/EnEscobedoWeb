@@ -1,6 +1,23 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { LucideIcon } from "lucide-react";
+import {
+  Apple,
+  BadgePercent,
+  Beef,
+  Coffee,
+  Croissant,
+  CupSoda,
+  Grid2x2,
+  House,
+  Milk,
+  Package,
+  Popcorn,
+  ShoppingBasket,
+  Soup,
+  SprayCan,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Category {
@@ -18,7 +35,17 @@ interface SuperCategoryFilterProps {
   onCategoryChange?: (categoryId: string | null) => void;
 }
 
-const STOP_WORDS = new Set(["de", "del", "la", "las", "el", "los", "y"]);
+type CategoryVisual = {
+  icon: LucideIcon;
+  bgClass: string;
+  iconClass: string;
+};
+
+const DEFAULT_VISUAL: CategoryVisual = {
+  icon: ShoppingBasket,
+  bgClass: "bg-amber-50",
+  iconClass: "text-amber-600",
+};
 
 function getDisplayName(category: Category) {
   const rawName = category.title || category.name || "Sin nombre";
@@ -26,21 +53,57 @@ function getDisplayName(category: Category) {
   return leafName || rawName;
 }
 
-function getBadgeText(label: string) {
-  const compactLabel = label
+function normalizeLabel(label: string) {
+  return label
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+}
 
-  const words = compactLabel
-    .split(/[^a-z0-9]+/)
-    .filter((word) => word && !STOP_WORDS.has(word))
-    .slice(0, 2);
+function getCategoryVisual(label: string): CategoryVisual {
+  const normalized = normalizeLabel(label);
 
-  if (words.length === 0) return "CA";
-  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  if (normalized.includes("todo")) {
+    return { icon: Grid2x2, bgClass: "bg-slate-100", iconClass: "text-slate-700" };
+  }
+  if (normalized.includes("oferta")) {
+    return { icon: BadgePercent, bgClass: "bg-red-50", iconClass: "text-red-500" };
+  }
+  if (normalized.includes("botana") || normalized.includes("dulce")) {
+    return { icon: Popcorn, bgClass: "bg-orange-50", iconClass: "text-orange-500" };
+  }
+  if (normalized.includes("pan") || normalized.includes("panader")) {
+    return { icon: Croissant, bgClass: "bg-yellow-50", iconClass: "text-yellow-600" };
+  }
+  if (normalized.includes("carn") || normalized.includes("marisc")) {
+    return { icon: Beef, bgClass: "bg-rose-50", iconClass: "text-rose-500" };
+  }
+  if (normalized.includes("enlat") || normalized.includes("despensa") || normalized.includes("basic")) {
+    return { icon: Soup, bgClass: "bg-amber-50", iconClass: "text-amber-600" };
+  }
+  if (normalized.includes("fruta") || normalized.includes("verdura")) {
+    return { icon: Apple, bgClass: "bg-green-50", iconClass: "text-green-600" };
+  }
+  if (normalized.includes("bebida")) {
+    return { icon: CupSoda, bgClass: "bg-emerald-50", iconClass: "text-emerald-600" };
+  }
+  if (normalized.includes("lacteo") || normalized.includes("huevo")) {
+    return { icon: Milk, bgClass: "bg-indigo-50", iconClass: "text-indigo-500" };
+  }
+  if (normalized.includes("limpieza")) {
+    return { icon: SprayCan, bgClass: "bg-cyan-50", iconClass: "text-cyan-600" };
+  }
+  if (normalized.includes("desayun")) {
+    return { icon: Coffee, bgClass: "bg-yellow-50", iconClass: "text-yellow-700" };
+  }
+  if (normalized.includes("hogar") || normalized.includes("desechable")) {
+    return { icon: House, bgClass: "bg-fuchsia-50", iconClass: "text-fuchsia-600" };
+  }
+  if (normalized.includes("producto")) {
+    return { icon: Package, bgClass: "bg-orange-50", iconClass: "text-orange-600" };
+  }
 
-  return words.map((word) => word[0]).join("").toUpperCase();
+  return DEFAULT_VISUAL;
 }
 
 export function SuperCategoryFilter({
@@ -96,7 +159,6 @@ export function SuperCategoryFilter({
         style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
         <CategoryCard
-          badge="TO"
           label="Todo"
           selected={selectedCategory === ""}
           onClick={() => handleCategorySelect("")}
@@ -108,7 +170,6 @@ export function SuperCategoryFilter({
           return (
             <CategoryCard
               key={category._id}
-              badge={getBadgeText(displayName)}
               label={displayName}
               selected={selectedCategory === category._id}
               onClick={() => handleCategorySelect(category._id)}
@@ -125,32 +186,41 @@ export function SuperCategoryFilter({
 }
 
 function CategoryCard({
-  badge,
   label,
   selected,
   onClick,
 }: {
-  badge: string;
   label: string;
   selected: boolean;
   onClick: () => void;
 }) {
+  const visual = getCategoryVisual(label);
+  const Icon = visual.icon;
+
   return (
     <button
       type="button"
       onClick={onClick}
       aria-pressed={selected}
-      className="group flex w-[92px] shrink-0 snap-start flex-col items-center gap-2 rounded-xl px-1 py-1 text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-[#eb1902] focus-visible:ring-offset-2"
+      className="group flex w-[96px] shrink-0 snap-start flex-col items-center gap-2 rounded-xl px-1 py-1 text-center focus:outline-none focus-visible:ring-2 focus-visible:ring-[#eb1902] focus-visible:ring-offset-2"
     >
       <span
         className={cn(
-          "flex h-16 w-16 items-center justify-center rounded-full border text-lg font-bold transition-all duration-200 sm:h-20 sm:w-20",
+          "flex h-16 w-16 items-center justify-center rounded-full transition-all duration-200 sm:h-20 sm:w-20",
           selected
-            ? "border-[#eb1902] bg-[#fff1ef] text-[#eb1902] shadow-sm"
-            : "border-gray-200 bg-white text-gray-700 group-hover:-translate-y-0.5 group-hover:shadow-sm"
+            ? "scale-[1.03] ring-2 ring-[#eb1902]/20"
+            : "group-hover:-translate-y-0.5"
         )}
       >
-        {badge}
+        <span
+          className={cn(
+            "flex h-full w-full items-center justify-center rounded-full shadow-sm transition-transform duration-200 group-hover:scale-105",
+            visual.bgClass,
+            selected && "ring-2 ring-[#eb1902]"
+          )}
+        >
+          <Icon className={cn("h-8 w-8 sm:h-10 sm:w-10", visual.iconClass)} strokeWidth={2.2} />
+        </span>
       </span>
       <span
         className={cn(
