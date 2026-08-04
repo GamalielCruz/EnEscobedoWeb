@@ -33,7 +33,7 @@ export async function generateMetadata({
   );
   const store = await getStoreById(id);
 
-  if (!store) return notFound();
+  if (!store) return { title: "Tienda | ElMenu" };
 
   const storeName = sanitizeText(store.name) || "Tienda";
   const productSlug = requestedProduct?.trim();
