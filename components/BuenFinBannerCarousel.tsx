@@ -20,7 +20,7 @@ function getBannerDurationSeconds(banner: PromoBannerItem) {
 
 function buildImageUrl(image: PromoBannerItem["desktopImage"], width: number, height: number) {
   if (!image) return null;
-  return urlFor(image).width(width).height(height).fit("crop").url();
+  return urlFor(image).width(width).height(height).fit("fill").crop("center").url();
 }
 
 function isExternalLink(link: string) {
