@@ -13,6 +13,11 @@ import {
   sendPickupReadyForCustomer,
   sendWhatsAppMessage,
 } from '@/lib/whatsapp'
+import {
+  sendMandadoClienteRecogido,
+  sendMandadoDestinatarioEnCamino,
+  sendMandadoOrdenPorCompletar,
+} from '@/lib/mandado-whatsapp'
 import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
 import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
 import { appendOrderEvent } from '@/lib/order-events'
@@ -28,6 +33,7 @@ import { getStoreAvailability, validateFulfillmentSelection } from '@/lib/fulfil
 import { calculatePickupConversionFinancials } from '@/lib/scheduled-order-contingency'
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN
+const ADMIN_PHONE = process.env.ADMIN_WHATSAPP_PHONE
 const MEXICO_TIME_ZONE = 'America/Mexico_City'
 const SESSION_OPTIONS = {
   '1': { minutes: 60, label: '1 hora' },
@@ -128,6 +134,8 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   "offeredToRef": offeredTo._ref,
   serviceKind,
   mandadoOrigin,
+  mandadoDestination,
+  mandadoRecipientPhone,
   "storeId": affiliateStore._ref,
   "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
   "storeCoordinates": coalesce(affiliateStore->coordinates, {"latitude": mandadoOrigin.lat, "longitude": mandadoOrigin.lng}),
@@ -166,6 +174,8 @@ const ACTIVE_OFFER_ORDERS_BY_DRIVER_QUERY = `*[
   "offeredToRef": offeredTo._ref,
   serviceKind,
   mandadoOrigin,
+  mandadoDestination,
+  mandadoRecipientPhone,
   "storeId": affiliateStore._ref,
   "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
   "storeCoordinates": coalesce(affiliateStore->coordinates, {"latitude": mandadoOrigin.lat, "longitude": mandadoOrigin.lng}),
@@ -215,6 +225,8 @@ const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._r
   deliveryVerificationStatus,
   serviceKind,
   mandadoOrigin,
+  mandadoDestination,
+  mandadoRecipientPhone,
   "storeName": coalesce(affiliateStore->name, select(serviceKind == "mandado" => "Punto de inicio")),
   "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
   "shippingAddress": shippingAddress,
@@ -822,6 +834,128 @@ async function handleScheduledCustomerAction(
   }
   return true
 }
+// Acciones del cliente desde plantillas de Mandados (boton Ayuda de orden_repartidor
+// y los botones de contingencia de cliente_entrega_programada_sin_repartidor).
+async function handleMandadoCustomerAction(
+  action: string,
+  orderId: string | null,
+  fromPhone: string,
+  now: string
+) {
+  // El action llega normalizado (los guiones bajos se convierten en espacios),
+  // por eso se aceptan ambas formas: MANDADO AYUDA / MANDADO_AYUDA.
+  const isHelpAction = action === 'MANDADO AYUDA' || action === 'MANDADO_AYUDA'
+  const isContingencyAction = ['SCHEDULE WAIT', 'SCHEDULE PICKUP', 'SCHEDULE HELP'].includes(action)
+  if (!orderId || (!isHelpAction && !isContingencyAction)) {
+    return false
+  }
+
+  const order = await backendClient.fetch(
+    `*[_type == "order" && _id == $orderId][0]{
+      _id,
+      _rev,
+      orderNumber,
+      customerName,
+      phone,
+      serviceKind,
+      status,
+      orderStatus,
+      repartidorAsignado,
+      scheduleCustomerChoice,
+      orderEvents
+    }`,
+    { orderId }
+  ) as Record<string, any> | null
+
+  // MANDADO AYUDA se envía en EN PUERTA (cuando ya hay repartidor asignado),
+  // por lo que el guard de repartidorAsignado aplica solo a las acciones de contingencia.
+  if (
+    !order ||
+    String(order.serviceKind ?? '') !== 'mandado' ||
+    normalizeWhatsAppPhone(fromPhone) !== normalizeWhatsAppPhone(order.phone) ||
+    (isContingencyAction && order.repartidorAsignado) ||
+    ['cancelled', 'delivered', 'completed'].includes(String(order.orderStatus || order.status))
+  ) {
+    console.warn('[whatsapp webhook] accion mandado rechazada', { action, orderId })
+    return true
+  }
+
+  const idempotencyKey = `${orderId}:${action}`
+  const alreadyHandled = (order.orderEvents ?? []).some((event: Record<string, unknown>) => {
+    if (!event.payloadJson) return false
+    try {
+      return JSON.parse(String(event.payloadJson)).idempotencyKey === idempotencyKey
+    } catch {
+      return false
+    }
+  })
+  if (alreadyHandled) return true
+
+  if (action === 'SCHEDULE WAIT') {
+    await backendClient.patch(orderId).ifRevisionId(order._rev).set({
+      scheduleCustomerChoice: 'wait_for_driver',
+      scheduleCustomerChoiceAt: now,
+      updatedAt: now,
+    }).commit()
+    await appendOrderEvent(orderId, {
+      type: 'manual_admin_action',
+      source: 'whatsapp/webhook',
+      actor: 'customer',
+      reason: 'customer_waits_for_driver_mandado',
+      payload: { idempotencyKey },
+    })
+    await redispatchOrders([orderId])
+    return true
+  }
+
+  if (isHelpAction || action === 'SCHEDULE HELP') {
+    await backendClient.patch(orderId).ifRevisionId(order._rev).set({
+      scheduleCustomerChoice: 'help',
+      scheduleCustomerChoiceAt: now,
+      customerHelpRequested: true,
+      updatedAt: now,
+    }).commit()
+    await appendOrderEvent(orderId, {
+      type: 'manual_admin_action',
+      source: 'whatsapp/webhook',
+      actor: 'customer',
+      reason: 'customer_requested_help_mandado',
+      payload: { idempotencyKey },
+    })
+    if (ADMIN_PHONE) {
+      await sendBotMessage(
+        ADMIN_PHONE,
+        `El cliente pidio ayuda para el mandado #${String(order.orderNumber ?? '')}. Revisa la orden ${orderId}.`
+      ).catch(() => null)
+    }
+    return true
+  }
+
+  if (action === 'SCHEDULE PICKUP') {
+    await backendClient.patch(orderId).ifRevisionId(order._rev).set({
+      scheduleCustomerChoice: 'pickup',
+      scheduleCustomerChoiceAt: now,
+      updatedAt: now,
+    }).commit()
+    await appendOrderEvent(orderId, {
+      type: 'manual_admin_action',
+      source: 'whatsapp/webhook',
+      actor: 'customer',
+      reason: 'customer_changed_mandado_to_pickup',
+      payload: { idempotencyKey },
+    })
+    if (ADMIN_PHONE) {
+      await sendBotMessage(
+        ADMIN_PHONE,
+        `El cliente cambio su mandado #${String(order.orderNumber ?? '')} a recoleccion. Gestiona manualmente.`
+      ).catch(() => null)
+    }
+    return true
+  }
+
+  return false
+}
+
 // Meta llama este GET para verificar el webhook
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -953,6 +1087,9 @@ export async function POST(req: NextRequest) {
     })
     // #endregion
 
+    if (await handleMandadoCustomerAction(textBody, buttonOrderId, fromPhone, new Date().toISOString())) {
+      return NextResponse.json({ status: 'ok' })
+    }
     if (await handleScheduledCustomerAction(textBody, buttonOrderId, fromPhone, new Date().toISOString())) {
       return NextResponse.json({ status: 'ok' })
     }
@@ -1511,15 +1648,41 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
+        const isMandadoOrder = String((targetOrder as Record<string, unknown>).serviceKind ?? '') === 'mandado'
         const notifications: Promise<unknown>[] = [
           sendRepartidorEnCamino(fromPhone, String((targetOrder as Record<string, unknown>).orderNumber), String((targetOrder as Record<string, unknown>)._id)),
         ]
 
         const customerPhone = normalizeWhatsAppPhone(String((targetOrder as Record<string, unknown>).phone ?? ''))
         if (customerPhone && (targetOrder as Record<string, unknown>).customerName) {
-          notifications.push(
-            sendOrderOnTheWay(customerPhone, String((targetOrder as Record<string, unknown>).customerName), String((targetOrder as Record<string, unknown>).orderNumber))
-          )
+          if (isMandadoOrder) {
+            const mandado = targetOrder as Record<string, unknown>
+            const destination =
+              (mandado.mandadoDestination as { label?: string } | undefined)?.label
+              ?? (String((mandado.shippingAddress as { line1?: string } | undefined)?.line1 ?? '') || 'la dirección indicada')
+            notifications.push(sendMandadoClienteRecogido({
+              _id: String(mandado._id),
+              phone: customerPhone,
+              customerName: String(mandado.customerName),
+              orderNumber: String(mandado.orderNumber ?? ''),
+              deliveryAddress: destination,
+            }))
+
+            // Si el cliente proporcionó teléfono del destinatario, avisarle también
+            const recipientPhone = normalizeWhatsAppPhone(String(mandado.mandadoRecipientPhone ?? '').replace(/\D/g, ''))
+            if (recipientPhone) {
+              notifications.push(sendMandadoDestinatarioEnCamino({
+                _id: String(mandado._id),
+                recipientPhone,
+                customerName: String(mandado.customerName ?? 'Un remitente'),
+                orderNumber: String(mandado.orderNumber ?? ''),
+              }))
+            }
+          } else {
+            notifications.push(
+              sendOrderOnTheWay(customerPhone, String((targetOrder as Record<string, unknown>).customerName), String((targetOrder as Record<string, unknown>).orderNumber))
+            )
+          }
         }
 
         await Promise.allSettled(notifications)
@@ -1593,6 +1756,15 @@ Te avisaremos 10 minutos antes de finalizar.`
             String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
             deliveryPin
           ))
+
+          // En mandados, además confirmamos el estado de la orden con botón de Ayuda
+          if (String((resolvedTargetOrder as Record<string, unknown>).serviceKind ?? '') === 'mandado') {
+            notifications.push(sendMandadoOrdenPorCompletar({
+              _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
+              phone: customerPhone,
+              orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
+            }))
+          }
         }
 
         await Promise.allSettled(notifications)

@@ -6,12 +6,24 @@ export type MandadoPointQuote = {
 
 export type MandadoMode = "pickup" | "purchase";
 export type MandadoAddressPoint = { label: string; lat: number; lng: number };
+export type MandadoPinReceiver = "me" | "recipient";
+
 export type MandadoDraft = {
   mode: MandadoMode;
   origin: MandadoAddressPoint;
   destination: MandadoAddressPoint;
   details: string;
   price: number;
+  // Detalles opcionales de los puntos
+  businessName?: string;
+  originReference?: string;
+  destinationReference?: string;
+  destinationPerson?: string;
+  // Entrega segura con NIP
+  pinEnabled?: boolean;
+  pinReceiver?: MandadoPinReceiver;
+  recipientName?: string;
+  recipientPhone?: string;
 };
 
 export const MANDADO_SERVICE_FEE = 14;

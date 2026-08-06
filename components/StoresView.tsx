@@ -5,7 +5,7 @@ import { useState, useTransition } from "react";
 import StoreGrid from "./StoreGrid";
 import { StoreCategoryFilter } from "./StoreCategoryFilter";
 import { Skeleton } from "./ui/skeleton";
-import MandadoFlow from "./MandadoFlow";
+import MandadoMapFlow from "./MandadoMapFlow";
 
 interface StoreCategoryIcon {
   type?: string;
@@ -137,6 +137,11 @@ export default function StoresView({
     startTransition(() => router.push("/super"));
   };
 
+  // En modo mandado, renderizar solo el componente sin wrappers
+  if (mandadoSelected) {
+    return <MandadoMapFlow />;
+  }
+
   return (
     <>
       {/* Filtro de categorías */}
@@ -154,7 +159,7 @@ export default function StoresView({
 
       {/* Grid de tiendas */}
       <div className="w-full max-w-7xl mx-auto" aria-busy={isPending}>
-        {isPending ? <StoreGridSkeleton /> : mandadoSelected ? <MandadoFlow /> : <StoreGrid stores={stores} />}
+        {isPending ? <StoreGridSkeleton /> : <StoreGrid stores={stores} />}
       </div>
     </>
   );

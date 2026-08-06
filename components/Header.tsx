@@ -14,7 +14,7 @@ import useBasketStore from "@/store/store";
 import Image from "next/image";
 import { useHydration } from "@/hooks/useHydration";
 import { useEffect, useState } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { AddressPicker } from "@/components/AddressPicker";
 
 type OwnedStore = { _id: string; name: string; storeId?: string };
@@ -22,6 +22,7 @@ type OwnedStore = { _id: string; name: string; storeId?: string };
 export function Header() {
   const { user, isLoaded } = useUser();
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const isHydrated = useHydration();
   const [ownedStores, setOwnedStores] = useState<OwnedStore[]>([]);
   const [isVisible, setIsVisible] = useState(true);
@@ -97,6 +98,13 @@ export function Header() {
     isLoaded &&
     Boolean(user) &&
     ownedStores.length > 0;
+
+  // Ocultar header en modo mandados
+  const isMandadoMode = pathname === "/" && searchParams?.get("service") === "mandado";
+
+  if (isMandadoMode) {
+    return null;
+  }
 
   return (
     <header

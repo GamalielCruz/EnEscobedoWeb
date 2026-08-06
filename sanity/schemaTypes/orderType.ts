@@ -37,6 +37,11 @@ export const orderType = defineType({
       defineField({ name: "lng", title: "Longitud", type: "number" }),
     ], hidden: ({ document }) => document?.serviceKind !== "mandado" }),
     defineField({ name: "mandadoDetails", title: "Solicitud del mandado", type: "text", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
+    defineField({ name: "mandadoRecipientPhone", title: "Teléfono del destinatario (opcional)", description: "Si se captura, el destinatario recibe la notificación del mandado en camino.", type: "string", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
+    defineField({ name: "mandadoRecipientName", title: "Nombre del destinatario", description: "Quien recibe el NIP por WhatsApp antes de la entrega.", type: "string", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
+    defineField({ name: "mandadoBusinessName", title: "Nombre del negocio / tienda", description: "Nombre del negocio o tienda del punto de recolección.", type: "string", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
+    defineField({ name: "mandadoOriginReference", title: "Referencias de recolección", type: "string", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
+    defineField({ name: "mandadoDestinationReference", title: "Referencias de entrega", type: "string", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
     defineField({
       name: "orderType",
       title: "Order Type",

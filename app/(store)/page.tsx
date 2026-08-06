@@ -192,10 +192,9 @@ export default async function Home(props: NextPageProps) {
   }));
 
   return (
-    <div className="">
-      
-      {/* Click & Collect Banner - Solo en la primera página */}
-      {currentPage === 1 && (
+    <>
+      {/* Click & Collect Banner - Solo en la primera página y no en mandado */}
+      {currentPage === 1 && !isMandado && (
         <div className="">
           <BuenFinBanner />
         </div>
@@ -210,7 +209,7 @@ export default async function Home(props: NextPageProps) {
           />
         </div>
 
-        {/* Pagination Controls */}
+        {/* Pagination Controls - Solo cuando no es mandado */}
         {!isMandado && totalPages > 1 && (
           <div className="flex gap-2 mt-6 justify-center w-full max-w-7xl mx-auto">
             <Button asChild variant="outline" disabled={currentPage <= 1}>
@@ -241,7 +240,7 @@ export default async function Home(props: NextPageProps) {
           </div>
         )}
       </div>
-    </div>
+    </>
   );
 }
 

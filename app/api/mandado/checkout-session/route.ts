@@ -44,6 +44,12 @@ export async function POST(request: NextRequest) {
         mandadoDestinationLng: String(draft.destination.lng),
         mandadoDetails0: draft.details.slice(0, 450),
         mandadoDetails1: draft.details.slice(450),
+        mandadoRecipientPhone: String(body.recipientPhone || "").replace(/\D/g, "").slice(-12),
+        mandadoRecipientName: String(body.recipientName || "").trim().slice(0, 60),
+        mandadoBusinessName: String(body.businessName || "").trim().slice(0, 80),
+        mandadoOriginReference: String(body.originReference || "").trim().slice(0, 120),
+        mandadoDestinationReference: String(body.destinationReference || "").trim().slice(0, 120),
+        mandadoDestinationPerson: String(body.destinationPerson || "").trim().slice(0, 60),
       },
       line_items: [{
         price_data: {

@@ -484,8 +484,8 @@ export async function sendDeliveryOffer(
   driverLabel?: string
 ) {
   const breakdown = restaurantLabel && driverLabel
-    ? `Cobrar al cliente - Restaurante: ${restaurantLabel} - Tu envío: ${driverLabel} - Total: ${total}`
-    : total;
+    ? `Restaurante: ${restaurantLabel} - Tu envío: ${driverLabel} - Total a cobrar: ${total}`
+    : `Total a cobrar: ${total}`;
 
   // Sanitize breakdown to remove newlines, tabs, and excessive spaces
   const sanitizedBreakdown = sanitizeWhatsAppParam(breakdown);

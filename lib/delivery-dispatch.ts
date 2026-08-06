@@ -3,6 +3,7 @@ import { buildAddressMapsUrl } from "@/lib/order-maps";
 import { isOrderDispatchable } from "@/lib/order-state";
 import { isDriverDispatchEnabled } from "@/lib/fulfillment";
 import { backendClient } from "@/sanity/lib/backendClient";
+import { sendMandadoNoDriverAvailable } from "@/lib/mandado-whatsapp";
 import { sendBundleDeliveryOffer, sendDeliveryOffer, sendWhatsAppMessage } from "./whatsapp";
 
 const OFFER_TTL_SECONDS = 10 * 60;
@@ -346,6 +347,17 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
     console.log("[delivery-dispatch] no hay repartidores disponibles", { orderId: order._id, orderNumber: order.orderNumber });
     await setOrdersWaiting([order._id], "no_drivers_available");
     await notifyNoDrivers([order.orderNumber]);
+    // Mandados: avisar al cliente con la plantilla de contingencia (esperar / recoger / ayuda)
+    if (order.serviceKind === "mandado" && order.phone) {
+      await sendMandadoNoDriverAvailable({
+        _id: order._id,
+        phone: order.phone,
+        customerName: order.customerName ?? "Cliente",
+        orderNumber: order.orderNumber,
+      }).catch((error) =>
+        console.error("[delivery-dispatch] error notificando contingencia mandado:", error)
+      );
+    }
     return false;
   }
 

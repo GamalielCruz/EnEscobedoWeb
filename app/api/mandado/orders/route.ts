@@ -30,6 +30,12 @@ export async function POST(request: NextRequest) {
       phone,
       paymentMethod: "cash_on_delivery",
       paymentStatus: "unpaid",
+      recipientPhone: String(body.recipientPhone || ""),
+      recipientName: String(body.recipientName || ""),
+      businessName: String(body.businessName || ""),
+      originReference: String(body.originReference || ""),
+      destinationReference: String(body.destinationReference || ""),
+      destinationPerson: String(body.destinationPerson || ""),
     });
     const order = await createOrderWithCommercialCap(orderData);
     await appendOrderEvent(order._id, { type: "created", source: "api/mandado/orders", actor: userId });

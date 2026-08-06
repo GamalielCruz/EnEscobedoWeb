@@ -14,6 +14,8 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
   const { user } = useUser();
   const [method, setMethod] = useState<"card" | "cash" | null>(null);
   const [phone, setPhone] = useState("");
+  const [recipientName, setRecipientName] = useState("");
+  const [recipientPhone, setRecipientPhone] = useState("");
   const [legalAccepted, setLegalAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -23,6 +25,12 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
   useEffect(() => {
     setPhone(String(user?.publicMetadata?.phone || localStorage.getItem("customerPhone") || ""));
   }, [user?.publicMetadata?.phone]);
+
+  // Preferencias elegidas en el flujo de creación del mandado
+  useEffect(() => {
+    setRecipientName(String(draft?.recipientName || ""));
+    setRecipientPhone(String(draft?.recipientPhone || "").replace(/\D/g, "").slice(0, 10));
+  }, [draft?.recipientName, draft?.recipientPhone]);
 
   useEffect(() => {
     if (!clientSecret || !stripeContainerRef.current) return;
@@ -64,7 +72,12 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
   }
 
   const digits = phone.replace(/\D/g, "").slice(-10);
-  const ready = digits.length === 10 && legalAccepted && method;
+  // El NIP se envía al destinatario: nombre y teléfono obligatorios
+  const pinRecipientMode = draft.pinEnabled && draft.pinReceiver === "recipient";
+  const recipientDigits = recipientPhone.replace(/\D/g, "").slice(0, 10);
+  const recipientInfoValid =
+    !pinRecipientMode || (recipientName.trim().length > 0 && recipientDigits.length === 10);
+  const ready = digits.length === 10 && legalAccepted && method && recipientInfoValid;
   const leaveCheckout = () => {
     sessionStorage.removeItem("mandadoCheckoutDraft");
     router.push("/?service=mandado");
@@ -82,7 +95,20 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
       const response = await fetch(method === "card" ? "/api/mandado/checkout-session" : "/api/mandado/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ draft, orderNumber, customerName: user.fullName || user.firstName || "Cliente", customerEmail: user.emailAddresses[0]?.emailAddress || "", phone: `52${digits}`, legalAccepted }),
+        body: JSON.stringify({
+          draft,
+          orderNumber,
+          customerName: user.fullName || user.firstName || "Cliente",
+          customerEmail: user.emailAddresses[0]?.emailAddress || "",
+          phone: `52${digits}`,
+          recipientPhone: recipientDigits,
+          recipientName: recipientName.trim(),
+          businessName: draft.businessName || "",
+          originReference: draft.originReference || "",
+          destinationReference: draft.destinationReference || "",
+          destinationPerson: draft.destinationPerson || "",
+          legalAccepted,
+        }),
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "No pudimos procesar tu mandado.");
@@ -131,13 +157,28 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
               <h2 className="font-semibold text-gray-900">Datos del mandado</h2>
               <div className="mt-4 space-y-4">
-                <RoutePoint label="Punto de inicio" value={draft.origin.label} />
+                <RoutePoint label={draft.mode === "purchase" ? "Tienda / compra" : "Punto de inicio"} value={draft.origin.label} />
+                {draft.businessName && <RoutePoint label="Negocio" value={draft.businessName} />}
+                {draft.originReference && <RoutePoint label="Referencias de recolección" value={draft.originReference} />}
                 <RoutePoint label="Punto de entrega" value={draft.destination.label} />
+                {draft.destinationReference && <RoutePoint label="Referencias de entrega" value={draft.destinationReference} />}
+                {draft.destinationPerson && <RoutePoint label="Persona que recibe" value={draft.destinationPerson} />}
               </div>
               <div className="mt-4 border-t border-gray-200 pt-4">
                 <p className="text-sm font-semibold text-gray-900">Solicitud</p>
                 <p className="mt-1 whitespace-pre-line text-sm text-gray-600">{draft.details}</p>
                 {draft.mode === "purchase" && <p className="mt-3 text-xs text-amber-700">Los productos se pagan por separado; aquí solo cubres el servicio de envío.</p>}
+                {draft.pinEnabled && (
+                  <p className="mt-3 flex items-start gap-2 rounded-lg bg-[#09193B]/5 p-3 text-xs leading-5 text-gray-700">
+                    <span className="mt-0.5 shrink-0">🔒</span>
+                    <span>
+                      <strong>Entrega segura:</strong>{" "}
+                      {draft.pinReceiver === "recipient" && draft.recipientName
+                        ? `el NIP se enviará por WhatsApp a ${draft.recipientName} (${draft.recipientPhone ? `+52 ${draft.recipientPhone}` : "su teléfono"}) antes de la entrega.`
+                        : "el NIP se enviará a tu WhatsApp para que tú decidas cuándo compartirlo."}
+                    </span>
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -164,6 +205,41 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                             <input value={phone} onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 10))} inputMode="numeric" autoComplete="tel-national" maxLength={10} placeholder="4421234567" className="min-w-0 flex-1 bg-transparent text-sm font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none" />
                           </div>
                         </label>
+
+                        {draft.pinEnabled && (
+                          <div className="mt-3">
+                            {pinRecipientMode ? (
+                              <>
+                                <label className="block rounded-xl border border-gray-200 bg-white p-4">
+                                  <span className="block text-sm font-semibold text-gray-900">Persona que recibirá el NIP</span>
+                                  <span className="mt-1 block text-xs text-gray-500">El destinatario recibirá automáticamente el NIP mediante WhatsApp antes de la entrega.</span>
+                                  <input
+                                    value={recipientName}
+                                    onChange={(event) => setRecipientName(event.target.value.slice(0, 60))}
+                                    placeholder="Nombre de quien recibe"
+                                    className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none focus:border-[#eb1902] focus:ring-2 focus:ring-[#eb1902]/20"
+                                  />
+                                  <div className="mt-2 flex items-center gap-2 rounded-lg border-2 border-gray-200 bg-gray-50 px-3 py-2.5 focus-within:border-[#eb1902] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#eb1902]/20 transition-all">
+                                    <span className="text-sm font-semibold text-gray-600 whitespace-nowrap">+52</span>
+                                    <div className="w-px h-4 bg-gray-300" />
+                                    <input value={recipientPhone} onChange={(event) => setRecipientPhone(event.target.value.replace(/\D/g, "").slice(0, 10))} inputMode="numeric" autoComplete="tel-national" maxLength={10} placeholder="4421234567" className="min-w-0 flex-1 bg-transparent text-sm font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none" />
+                                  </div>
+                                  {recipientDigits.length > 0 && recipientDigits.length < 10 && (
+                                    <p className="mt-1.5 text-xs font-medium text-[#eb1902]">Ingresa los 10 dígitos del teléfono.</p>
+                                  )}
+                                </label>
+                                {recipientInfoValid === false && recipientDigits.length > 0 && (
+                                  <p className="mt-1.5 text-xs font-medium text-[#eb1902]">Agrega el nombre y un teléfono válido de 10 dígitos.</p>
+                                )}
+                              </>
+                            ) : (
+                              <div className="rounded-xl border border-[#09193B]/10 bg-[#09193B]/[0.04] p-4">
+                                <p className="text-sm font-semibold text-gray-900">Entrega segura activada</p>
+                                <p className="mt-1 text-xs leading-5 text-gray-600">El NIP se enviará a tu WhatsApp ({phone ? `+52 ${digits}` : "tu teléfono"}) para que tú decidas cuándo compartirlo con el repartidor.</p>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       <div className="space-y-3">

@@ -63,6 +63,12 @@ type StripeSessionMetadata = {
   mandadoDestinationLng?: string;
   mandadoDetails0?: string;
   mandadoDetails1?: string;
+  mandadoRecipientPhone?: string;
+  mandadoRecipientName?: string;
+  mandadoBusinessName?: string;
+  mandadoOriginReference?: string;
+  mandadoDestinationReference?: string;
+  mandadoDestinationPerson?: string;
   [key: string]: string | undefined;
 };
 
@@ -269,6 +275,12 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
       paymentProcessingFixedFee: stripeFees.fixedFee,
       paymentNetAmount: stripeFees.netAmount,
       settlementSnapshot: mandadoSettlementSnapshot,
+      recipientPhone: String(metadata.mandadoRecipientPhone || ""),
+      recipientName: String(metadata.mandadoRecipientName || ""),
+      businessName: String(metadata.mandadoBusinessName || ""),
+      originReference: String(metadata.mandadoOriginReference || ""),
+      destinationReference: String(metadata.mandadoDestinationReference || ""),
+      destinationPerson: String(metadata.mandadoDestinationPerson || ""),
     }) as OrderDocumentRecord;
     orderData._id = `stripe-order-${session.id}`;
     orderData.restaurantName = "Mandado El Menú";

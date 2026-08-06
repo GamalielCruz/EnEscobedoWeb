@@ -61,6 +61,12 @@ export function buildMandadoOrderDocument(input: {
   paymentProcessingFixedFee?: number;
   paymentNetAmount?: number;
   settlementSnapshot?: any;
+  recipientPhone?: string;
+  recipientName?: string;
+  businessName?: string;
+  originReference?: string;
+  destinationReference?: string;
+  destinationPerson?: string;
 }) {
   const now = new Date().toISOString();
   const paidOnline = input.paymentMethod === "stripe";
@@ -85,6 +91,12 @@ export function buildMandadoOrderDocument(input: {
     mandadoOrigin: input.draft.origin,
     mandadoDestination: input.draft.destination,
     mandadoDetails: input.draft.details,
+    mandadoRecipientPhone: input.recipientPhone?.replace(/\D/g, "").slice(-12) || undefined,
+    mandadoRecipientName: input.recipientName?.trim().slice(0, 60) || undefined,
+    mandadoBusinessName: input.businessName?.trim().slice(0, 80) || undefined,
+    mandadoOriginReference: input.originReference?.trim().slice(0, 120) || undefined,
+    mandadoDestinationReference: input.destinationReference?.trim().slice(0, 120) || undefined,
+    authorizedRecipientName: input.destinationPerson?.trim().slice(0, 60) || undefined,
     orderType: "delivery",
     fulfillmentType: "delivery",
     fulfillmentTiming: "asap",

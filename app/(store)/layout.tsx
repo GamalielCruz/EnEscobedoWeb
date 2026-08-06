@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { Header } from "@/components/Header";
 import { draftMode } from "next/headers";
 import { VisualEditing } from "next-sanity";
@@ -35,7 +36,9 @@ export default async function StoreLayout({
         </>
       )}
       <main>
-        <Header />
+        <Suspense fallback={null}>
+          <Header />
+        </Suspense>
         {children}
       </main>
       <Footer />
