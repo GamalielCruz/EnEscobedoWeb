@@ -20,6 +20,8 @@ import { whatsappTemplateDeliveryType } from './whatsappTemplateDeliveryType';
 import { commercialSettingsType } from './commercialSettingsType';
 import { commercialAuditType } from './commercialAuditType';
 import { commercialCommissionUsageType } from './commercialCommissionUsageType';
+import { dispatchConfigType } from './dispatchConfigType';
+import { dispatchAuditType } from './dispatchAuditType';
 
 export const schema: { types: SchemaTypeDefinition[] } = {
   types: [
@@ -42,6 +44,8 @@ export const schema: { types: SchemaTypeDefinition[] } = {
     whatsappTemplateDeliveryType,
     commercialSettingsType,
     commercialAuditType,
-    commercialCommissionUsageType
+    commercialCommissionUsageType,
+    dispatchConfigType,
+    dispatchAuditType
   ],
 };

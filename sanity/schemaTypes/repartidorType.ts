@@ -175,6 +175,53 @@ export const repartidorType = defineType({
       type: "text",
       description: "Notas internas sobre el repartidor",
     }),
+    defineField({
+      name: "bloqueado",
+      title: "Bloqueado",
+      type: "boolean",
+      initialValue: false,
+      description: "Bloqueado por el Dispatch Center: no recibe ofertas ni asignaciones",
+    }),
+    defineField({
+      name: "prioridad",
+      title: "Prioridad de asignación",
+      type: "number",
+      initialValue: 0,
+      description: "Mayor valor = se le asigna antes (0 = normal)",
+    }),
+    defineField({
+      name: "foto",
+      title: "Foto",
+      type: "image",
+      options: { hotspot: true },
+      description: "Foto del repartidor para el Dispatch Center",
+    }),
+    defineField({
+      name: "calificacion",
+      title: "Calificación",
+      type: "number",
+      initialValue: 5,
+      validation: (Rule) => Rule.min(0).max(5),
+      description: "Calificación promedio (0 a 5)",
+    }),
+    defineField({
+      name: "ultimaUbicacion",
+      title: "Última ubicación",
+      type: "object",
+      fields: [
+        { name: "lat", title: "Latitud", type: "number" },
+        { name: "lng", title: "Longitud", type: "number" },
+        { name: "reportedAt", title: "Reportada", type: "datetime" },
+      ],
+      description: "Última posición GPS conocida (opcional; aún no se reporta en el app)",
+    }),
+    defineField({
+      name: "bateria",
+      title: "Batería (%)",
+      type: "number",
+      validation: (Rule) => Rule.min(0).max(100),
+      description: "Nivel de batería reportado por el teléfono (opcional)",
+    }),
   ],
 });
 

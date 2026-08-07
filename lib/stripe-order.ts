@@ -449,7 +449,13 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
       });
       if (confirmedOrder.serviceKind !== "mandado") await notifyRestaurantNewOrder(existingOrder._id);
       const phone = String(confirmedOrder.phone || "");
-      if (confirmedOrder.fulfillmentTiming !== "scheduled" && phone && confirmedOrder.orderNumber) {
+      // Los Mandados no reutilizan las plantillas de restaurantes (`confirmacion_pedido`).
+      if (
+        confirmedOrder.serviceKind !== "mandado" &&
+        confirmedOrder.fulfillmentTiming !== "scheduled" &&
+        phone &&
+        confirmedOrder.orderNumber
+      ) {
         if (confirmedOrder.orderType === "pickup") {
           await sendPickupOrderReceived(
             phone,
@@ -532,7 +538,8 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
   const safeCustomerName = typeof orderData.customerName === "string" && orderData.customerName ? orderData.customerName : "Cliente";
   const createdOrderNumber = typeof orderData.orderNumber === "string" ? orderData.orderNumber : "";
 
-  if (isNewOrder && customerPhone && createdOrderNumber) {
+  // Los Mandados no reutilizan las plantillas de restaurantes (`confirmacion_pedido`).
+  if (isNewOrder && orderData.serviceKind !== "mandado" && customerPhone && createdOrderNumber) {
     try {
       if (orderData.orderType === "pickup") {
         await sendPickupOrderReceived(customerPhone, safeCustomerName, createdOrderNumber, String(orderData.pickupStoreName || orderData.storeName || "Restaurante"), String(orderData.grossTotal || orderData.totalPrice || "0"), getPaymentMethodLabel(String(orderData.paymentMethod || "")), String(orderData.pickupStoreMapsUrl || buildStoreMapsUrl({ name: String(orderData.pickupStoreName || orderData.storeName || "Restaurante") })));

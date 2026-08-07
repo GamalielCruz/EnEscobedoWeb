@@ -6,7 +6,6 @@ export type MandadoPointQuote = {
 
 export type MandadoMode = "pickup" | "purchase";
 export type MandadoAddressPoint = { label: string; lat: number; lng: number };
-export type MandadoPinReceiver = "me" | "recipient";
 
 export type MandadoDraft = {
   mode: MandadoMode;
@@ -19,9 +18,10 @@ export type MandadoDraft = {
   originReference?: string;
   destinationReference?: string;
   destinationPerson?: string;
-  // Entrega segura con NIP
+  // Entrega segura con NIP: el NIP se envía únicamente al WhatsApp del cliente
+  // (remitente), quien decide si lo comparte con el destinatario.
   pinEnabled?: boolean;
-  pinReceiver?: MandadoPinReceiver;
+  // Notificación al destinatario (plantilla `mandado__destinatario`, sin NIP).
   recipientName?: string;
   recipientPhone?: string;
 };

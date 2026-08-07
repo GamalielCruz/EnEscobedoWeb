@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   Menu,
   PackageCheck,
+  Radar,
   Truck,
   WalletCards,
   Settings2,
@@ -21,6 +22,7 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/admin", label: "Inicio", icon: LayoutDashboard },
+  { href: "/admin/dispatch", label: "Dispatch Center", icon: Radar },
   { href: "/admin/orders", label: "Pedidos", icon: ClipboardList },
   { href: "/admin/pending-products", label: "Aprobaciones", icon: PackageCheck },
   { href: "/admin/repartidores", label: "Repartidores", icon: Truck },

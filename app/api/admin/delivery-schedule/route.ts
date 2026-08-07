@@ -10,6 +10,7 @@ import {
 } from "@/lib/fulfillment-schedule";
 import { isAdminUser } from "@/lib/admin";
 import { syncBaserowOrderById } from "@/lib/baserow";
+import { assignOrderToDriver } from "@/lib/dispatch/dispatch-core";
 import { backendClient } from "@/sanity/lib/backendClient";
 
 const SCHEDULED_ORDERS_QUERY = `*[
@@ -158,35 +159,21 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Orden o repartidor no disponible." }, { status: 409 });
     }
 
-    const now = new Date().toISOString();
-    await backendClient
-      .transaction()
-      .patch(orderId, (patch) =>
-        patch
-          .ifRevisionId(order._rev)
-          .set({
-            repartidorAsignado: { _type: "reference", _ref: driverId },
-            repartidorAsignadoAt: now,
-            dispatchStatus: "accepted",
-            scheduleStatus: "dispatching",
-            scheduledDispatchStartedAt: now,
-            updatedAt: now,
-          })
-          .unset(["offeredTo", "deliveryOfertaExpiresAt"])
-      )
-      .patch(driverId, (patch) =>
-        patch
-          .ifRevisionId(driver._rev)
-          .set({ estadoDisponibilidad: "busy", ultimaActividad: now })
-          .unset(["ultimoPedidoOfertado", "pedidosOfertados", "restauranteOferta", "ofertaTipo", "ofertaEnviadaAt", "ofertaExpiraAt"])
-      )
-      .commit();
-    await appendOrderEvent(orderId, {
-      type: "driver_assigned",
-      source: "api/admin/delivery-schedule",
-      actor: admin.userId,
-      payload: { driverId, manual: true },
+    // La asignación pasa por el servicio único (lib/dispatch/dispatch-core.ts)
+    // para mantener la misma transacción y auditoría que el Dispatch Center.
+    const assigned = await assignOrderToDriver({
+      orderId,
+      driverId,
+      actorUserId: admin.userId,
+      actorName: "Operador admin",
+      mode: "manual",
+      reason: "asignación manual de pedido programado",
+      notifyDriver: true,
+      markShipped: false, // los pedidos programados no se marcan shipped hasta su ventana
     });
+    if (!assigned.ok) {
+      return NextResponse.json({ error: assigned.error }, { status: 409 });
+    }
     await appendOrderEvent(orderId, {
       type: "scheduled_order_driver_assigned",
       source: "api/admin/delivery-schedule",

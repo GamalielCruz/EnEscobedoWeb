@@ -19,6 +19,7 @@ import {
   sendMandadoOrdenPorCompletar,
 } from '@/lib/mandado-whatsapp'
 import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
+import { assignOrderToDriver } from '@/lib/dispatch/dispatch-core'
 import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
 import { appendOrderEvent } from '@/lib/order-events'
 import { resolveSettlementStatusOnDelivery } from '@/lib/order-state'
@@ -1467,21 +1468,20 @@ Te avisaremos 10 minutos antes de finalizar.`
 
       try {
         for (const order of offerOrders as Array<Record<string, unknown>>) {
-          await backendClient
-            .patch(String(order._id))
-            .ifRevisionId(String(order._rev))
-            .set({
-              repartidorAsignado: { _type: 'reference', _ref: repartidor._id },
-              repartidorAsignadoAt: now,
-              status: 'shipped',
-              orderStatus: 'shipped',
-              dispatchStatus: 'accepted',
-              ...(order.fulfillmentTiming === 'scheduled' ? { scheduleStatus: 'dispatching' } : {}),
-              deliveryOfertaEnviada: false,
-              updatedAt: now,
-            })
-            .unset(['deliveryOfertaExpiresAt', 'offeredTo'])
-            .commit()
+          // Toda asignación pasa por el servicio único del Dispatch Center
+          // (lib/dispatch/dispatch-core.ts) para mantener una sola fuente de
+          // verdad en validaciones, eventos y auditoría.
+          const assigned = await assignOrderToDriver({
+            orderId: String(order._id),
+            driverId: repartidor._id,
+            mode: 'auto',
+            actorName: String(repartidor.nombre ?? ''),
+            notifyDriver: false,
+            skipEvents: true,
+          })
+          if (!assigned.ok) {
+            throw new Error(assigned.error)
+          }
 
           after(() => syncBaserowOrderById(String(order._id)))
           await appendOrderEvent(String(order._id), { type: 'offer_accepted', source: 'whatsapp/webhook', actor: repartidor._id })
@@ -1509,6 +1509,23 @@ Te avisaremos 10 minutos antes de finalizar.`
         if (remainingOfferOrders.length === 0) {
           await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
           await sendBotMessage(fromPhone, 'La oferta ya no esta disponible o ya fue tomada.').catch(() => null)
+        } else {
+          // La oferta sigue vigente pero no se pudo completar la asignación
+          // (p. ej. validación de capacidad al aceptar un bundle). Liberamos
+          // las ofertas restantes para que vuelvan a la cola de asignación.
+          const releasedOrderIds = await releaseOrdersForDriver(
+            remainingOfferOrders.map((order) => String(order._id)),
+            repartidor._id,
+            'assign_failed_after_validation'
+          ).catch(() => [])
+          await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
+          if (releasedOrderIds.length > 0) {
+            await redispatchOrders(releasedOrderIds, [repartidor._id]).catch(() => null)
+          }
+          await sendBotMessage(
+            fromPhone,
+            'No se pudo completar la asignacion por una restriccion de capacidad. Las ofertas se liberaron y se buscara otro repartidor.'
+          ).catch(() => null)
         }
         console.error('[whatsapp webhook] error asignando oferta', {
           repartidorId: repartidor._id,
@@ -1669,6 +1686,7 @@ Te avisaremos 10 minutos antes de finalizar.`
             }))
 
             // Si el cliente proporcionó teléfono del destinatario, avisarle también
+            // con la plantilla mandado__destinatario (sin NIP).
             const recipientPhone = normalizeWhatsAppPhone(String(mandado.mandadoRecipientPhone ?? '').replace(/\D/g, ''))
             if (recipientPhone) {
               notifications.push(sendMandadoDestinatarioEnCamino({
@@ -1757,7 +1775,11 @@ Te avisaremos 10 minutos antes de finalizar.`
             deliveryPin
           ))
 
-          // En mandados, además confirmamos el estado de la orden con botón de Ayuda
+          // En mandados, además se envía la plantilla orden_repartidor (nombre heredado
+          // de Meta; va al CLIENTE, no al repartidor): la orden está por completarse
+          // y ofrece el botón Ayuda. El NIP ya llegó al cliente con
+          // cliente_repartidor_en_puerta (sendClienteRepartidorEnPuerta) y él decide
+          // si lo comparte con el destinatario.
           if (String((resolvedTargetOrder as Record<string, unknown>).serviceKind ?? '') === 'mandado') {
             notifications.push(sendMandadoOrdenPorCompletar({
               _id: String((resolvedTargetOrder as Record<string, unknown>)._id),

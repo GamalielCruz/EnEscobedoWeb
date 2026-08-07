@@ -22,7 +22,6 @@ import {
   ShieldCheck,
   ShoppingBasket,
   Store,
-  User,
   X,
 } from "lucide-react";
 import { Button } from "./ui/button";
@@ -32,7 +31,6 @@ import {
   calculateMandadoQuote,
   type MandadoAddressPoint,
   type MandadoMode,
-  type MandadoPinReceiver,
   type MandadoPointQuote,
 } from "@/lib/mandado";
 
@@ -133,9 +131,11 @@ export default function MandadoMapFlow() {
   const [destinationReference, setDestinationReference] = useState("");
   const [destinationPerson, setDestinationPerson] = useState("");
 
-  // Entrega segura (NIP) — desactivada por defecto
+  // Entrega segura (NIP): el NIP se envía únicamente al WhatsApp del cliente
+  // (remitente). El sistema NO lo envía automáticamente al destinatario.
   const [pinEnabled, setPinEnabled] = useState(false);
-  const [pinReceiver, setPinReceiver] = useState<MandadoPinReceiver>("me");
+  // Destinatario (opcional): nombre y teléfono para la plantilla
+  // `mandado__destinatario` (aviso de mandado en camino, SIN NIP).
   const [recipientName, setRecipientName] = useState("");
   const [recipientPhone, setRecipientPhone] = useState("");
 
@@ -462,17 +462,14 @@ export default function MandadoMapFlow() {
 
 
   // ── Validación y CTA ──────────────────────────────────────────────
+  // El teléfono del destinatario es opcional (solo para la notificación
+  // `mandado__destinatario`); nunca bloquea la confirmación del mandado.
   const recipientPhoneDigits = recipientPhone.replace(/\D/g, "");
-  const recipientValid =
-    !pinEnabled ||
-    pinReceiver === "me" ||
-    (recipientName.trim().length > 0 && recipientPhoneDigits.length === 10);
   const canConfirm =
-    Boolean(origin && destination && details.trim() && quote.status === "ready" && recipientValid);
+    Boolean(origin && destination && details.trim() && quote.status === "ready");
 
   const goToCheckout = useCallback(() => {
     if (!canConfirm || quote.status !== "ready" || !origin || !destination) return;
-    const useRecipientPhone = pinEnabled && pinReceiver === "recipient";
     const draft = {
       mode,
       origin,
@@ -484,9 +481,8 @@ export default function MandadoMapFlow() {
       destinationReference: destinationReference.trim() || undefined,
       destinationPerson: destinationPerson.trim() || undefined,
       pinEnabled,
-      pinReceiver,
-      recipientName: useRecipientPhone ? recipientName.trim() || undefined : undefined,
-      recipientPhone: useRecipientPhone ? recipientPhoneDigits : "",
+      recipientName: recipientName.trim() || undefined,
+      recipientPhone: recipientPhoneDigits,
     };
     try {
       sessionStorage.setItem("mandadoCheckoutDraft", JSON.stringify(draft));
@@ -496,7 +492,7 @@ export default function MandadoMapFlow() {
     router.push("/basket?service=mandado");
   }, [
     canConfirm, quote, mode, origin, destination, details, businessName, originReference,
-    destinationReference, destinationPerson, pinEnabled, pinReceiver, recipientName,
+    destinationReference, destinationPerson, pinEnabled, recipientName,
     recipientPhoneDigits, router,
   ]);
 
@@ -1140,7 +1136,9 @@ export default function MandadoMapFlow() {
                       </Card>
                       )}
 
-                      {/* 4. Seguridad (NIP) — solo al confirmar */}
+                      {/* 4. Seguridad (NIP) — solo al confirmar.
+                          El NIP SIEMPRE se envía al WhatsApp del cliente (remitente);
+                          el sistema no lo envía automáticamente al destinatario. */}
                       {progress === "confirm" && (
                       <Card>
                         <div className="flex items-start gap-3">
@@ -1165,71 +1163,68 @@ export default function MandadoMapFlow() {
                               transition={{ duration: 0.28, ease: "easeOut" }}
                               className="overflow-hidden"
                             >
-                              <div className="mt-4 border-t border-slate-100 pt-4">
-                                <p className="text-sm font-bold text-[#09193B]">¿Quién recibirá el NIP?</p>
-                                <div className="mt-2.5 grid grid-cols-2 gap-2">
-                                  <ReceiverOption
-                                    active={pinReceiver === "me"}
-                                    onClick={() => setPinReceiver("me")}
-                                    icon={User}
-                                    title="Yo"
-                                    subtitle="Lo comparto al entregar"
-                                  />
-                                  <ReceiverOption
-                                    active={pinReceiver === "recipient"}
-                                    onClick={() => setPinReceiver("recipient")}
-                                    icon={Phone}
-                                    title="El destinatario"
-                                    subtitle="Lo recibe en WhatsApp"
-                                  />
-                                </div>
-
-                                {pinReceiver === "me" ? (
-                                  <div className="mt-3 rounded-xl bg-[#09193B]/[0.05] px-3.5 py-3">
-                                    <p className="text-xs leading-5 text-slate-600">
-                                      El NIP se enviará a tu WhatsApp para que tú decidas cuándo compartirlo.
-                                    </p>
-                                  </div>
-                                ) : (
-                                  <div className="mt-3 space-y-3">
-                                    <div>
-                                      <label className={labelCls} htmlFor="nip-recipient-name">Nombre</label>
-                                      <input
-                                        id="nip-recipient-name"
-                                        value={recipientName}
-                                        onChange={(e) => setRecipientName(e.target.value.slice(0, 60))}
-                                        placeholder="Ej. María Fernández"
-                                        className={inputCls}
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className={labelCls} htmlFor="nip-recipient-phone">Número telefónico</label>
-                                      <div className="flex items-center gap-2 rounded-xl border-2 border-slate-200 bg-white px-3 py-3 transition focus-within:border-[#eb1901] focus-within:ring-2 focus-within:ring-[#eb1901]/20">
-                                        <span className="whitespace-nowrap text-sm font-semibold text-slate-600">+52</span>
-                                        <div className="h-4 w-px bg-slate-300" />
-                                        <input
-                                          id="nip-recipient-phone"
-                                          value={recipientPhone}
-                                          onChange={(e) => setRecipientPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
-                                          inputMode="numeric"
-                                          maxLength={10}
-                                          placeholder="4421234567"
-                                          className="min-w-0 flex-1 bg-transparent text-sm font-medium text-[#09193B] placeholder:text-slate-400 focus:outline-none"
-                                        />
-                                      </div>
-                                      {recipientPhoneDigits.length > 0 && recipientPhoneDigits.length < 10 && (
-                                        <p className="mt-1.5 text-xs font-medium text-[#eb1901]">Ingresa los 10 dígitos del teléfono.</p>
-                                      )}
-                                    </div>
-                                    <p className="text-xs leading-5 text-slate-500">
-                                      El destinatario recibirá automáticamente el NIP mediante WhatsApp antes de la entrega.
-                                    </p>
-                                  </div>
-                                )}
+                              <div className="mt-4 rounded-xl bg-[#09193B]/[0.05] px-3.5 py-3">
+                                <p className="text-xs leading-5 text-slate-600">
+                                  El NIP se enviará a tu WhatsApp para que tú decidas cuándo compartirlo
+                                  con el destinatario. El sistema no lo envía automáticamente a otra persona.
+                                </p>
                               </div>
                             </motion.div>
                           )}
                         </AnimatePresence>
+                      </Card>
+                      )}
+
+                      {/* 5. Notificar al destinatario (opcional) — solo al confirmar.
+                          Captura nombre y teléfono del destinatario para la plantilla
+                          `mandado__destinatario` (aviso de mandado en camino, SIN NIP). */}
+                      {progress === "confirm" && (
+                      <Card>
+                        <div className="mb-3 flex items-start gap-3">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
+                            <Phone className="h-5 w-5 text-[#09193B]" />
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <h3 className="text-sm font-bold text-[#09193B]">
+                              Notificar al destinatario{" "}
+                              <span className="font-medium text-slate-400">(opcional)</span>
+                            </h3>
+                            <p className="mt-0.5 text-xs leading-5 text-slate-500">
+                              El destinatario recibirá una notificación por WhatsApp cuando tu mandado vaya en camino.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div>
+                            <label className={labelCls} htmlFor="recipient-name">Nombre</label>
+                            <input
+                              id="recipient-name"
+                              value={recipientName}
+                              onChange={(e) => setRecipientName(e.target.value.slice(0, 60))}
+                              placeholder="Ej. María Fernández"
+                              className={inputCls}
+                            />
+                          </div>
+                          <div>
+                            <label className={labelCls} htmlFor="recipient-phone">Número telefónico</label>
+                            <div className="flex items-center gap-2 rounded-xl border-2 border-slate-200 bg-white px-3 py-3 transition focus-within:border-[#eb1901] focus-within:ring-2 focus-within:ring-[#eb1901]/20">
+                              <span className="whitespace-nowrap text-sm font-semibold text-slate-600">+52</span>
+                              <div className="h-4 w-px bg-slate-300" />
+                              <input
+                                id="recipient-phone"
+                                value={recipientPhone}
+                                onChange={(e) => setRecipientPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                                inputMode="numeric"
+                                maxLength={10}
+                                placeholder="4421234567"
+                                className="min-w-0 flex-1 bg-transparent text-sm font-medium text-[#09193B] placeholder:text-slate-400 focus:outline-none"
+                              />
+                            </div>
+                            {recipientPhoneDigits.length > 0 && recipientPhoneDigits.length < 10 && (
+                              <p className="mt-1.5 text-xs font-medium text-[#eb1901]">Ingresa los 10 dígitos del teléfono.</p>
+                            )}
+                          </div>
+                        </div>
                       </Card>
                       )}
                       </motion.div>
@@ -1355,38 +1350,6 @@ function ModernSwitch({ checked, onChange, label }: { checked: boolean; onChange
         transition={{ type: "spring", stiffness: 600, damping: 34 }}
         className={`absolute top-0.5 h-6 w-6 rounded-full bg-white shadow ${checked ? "left-[22px]" : "left-0.5"}`}
       />
-    </button>
-  );
-}
-
-function ReceiverOption({
-  active,
-  onClick,
-  icon: Icon,
-  title,
-  subtitle,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: typeof User;
-  title: string;
-  subtitle: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex items-center gap-2.5 rounded-xl border-2 px-3 py-3 text-left transition-all duration-200 ${
-        active ? "border-[#eb1901] bg-rose-50/50" : "border-slate-200 bg-white hover:border-slate-300"
-      }`}
-    >
-      <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors duration-200 ${active ? "bg-[#eb1901] text-white" : "bg-slate-100 text-slate-500"}`}>
-        <Icon className="h-4 w-4" />
-      </div>
-      <div className="min-w-0">
-        <p className={`text-sm font-bold ${active ? "text-[#09193B]" : "text-slate-600"}`}>{title}</p>
-        <p className="truncate text-[11px] text-slate-400">{subtitle}</p>
-      </div>
     </button>
   );
 }

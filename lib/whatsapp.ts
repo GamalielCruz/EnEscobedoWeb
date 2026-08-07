@@ -1,11 +1,12 @@
 import { assertProductionIntegration } from "./deployment-environment";
+import { WHATSAPP_TEMPLATES } from "./whatsapp/templates";
 
 const WHATSAPP_API_URL = "https://graph.facebook.com/v25.0";
 const WHATSAPP_FETCH_TIMEOUT_MS = 8000;
 const RESTAURANTE_PICKUP_TEMPLATE_NAME =
-  process.env.WHATSAPP_TEMPLATE_RESTAURANTE_PICKUP?.trim() || "restaurante_pickup_pedido";
+  process.env.WHATSAPP_TEMPLATE_RESTAURANTE_PICKUP?.trim() || WHATSAPP_TEMPLATES.restaurantePickupPedido;
 const CLIENTE_PICKUP_READY_TEMPLATE_NAME =
-  process.env.WHATSAPP_TEMPLATE_CLIENTE_PICKUP_READY?.trim() || "cliente_pickup_orden_lista";
+  process.env.WHATSAPP_TEMPLATE_CLIENTE_PICKUP_READY?.trim() || WHATSAPP_TEMPLATES.clientePickupOrdenLista;
 const NUEVO_PEDIDO_RESTAURANTE_BODY_LIMIT = 1024;
 const NUEVO_PEDIDO_RESTAURANTE_SAFETY_MARGIN = 48;
 const NUEVO_PEDIDO_RESTAURANTE_FIXED_BODY =
@@ -291,7 +292,7 @@ export async function sendOrderConfirmation(
   name: string,
   orderNumber: string
 ) {
-  return sendSpanishTemplate(phone, "confirmacion_pedido", [
+  return sendSpanishTemplate(phone, WHATSAPP_TEMPLATES.confirmacionPedido, [
     sanitizeWhatsAppParam(name.substring(0, 30)),
     sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
   ]);
@@ -308,7 +309,7 @@ export async function sendPickupOrderReceived(
 ) {
   return sendSpanishTemplate(
     phone,
-    "cliente_pickup_recibido",
+    WHATSAPP_TEMPLATES.clientePickupRecibido,
     [
       sanitizeWhatsAppParam(name.substring(0, 30)),
       sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
@@ -413,7 +414,7 @@ export async function sendNuevoPedidoRestaurante(
 
   return sendSpanishTemplate(
     phone,
-    "nuevo_pedido_restaurante",
+    WHATSAPP_TEMPLATES.nuevoPedidoRestaurante,
     [
       sanitizeWhatsAppParam(safeRestaurantName),
       sanitizeWhatsAppParam(safeOrderNumber),
@@ -432,7 +433,7 @@ export async function sendRepartidorEnCaminoRestaurante(
   driverName: string,
   orderNumber: string
 ) {
-  return sendSpanishTemplate(phone, "repartidor_en_camino_restaurante", [
+  return sendSpanishTemplate(phone, WHATSAPP_TEMPLATES.repartidorEnCaminoRestaurante, [
     sanitizeWhatsAppParam(driverName.substring(0, 60)),
     sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
   ]);
@@ -443,7 +444,7 @@ export async function sendOrderOnTheWay(
   name: string,
   orderNumber: string
 ) {
-  return sendSpanishTemplate(phone, "pedido_en_camino", [
+  return sendSpanishTemplate(phone, WHATSAPP_TEMPLATES.pedidoEnCamino, [
     sanitizeWhatsAppParam(name.substring(0, 30)),
     sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
   ]);
@@ -454,7 +455,7 @@ export async function sendOrderDelivered(
   name: string,
   orderNumber: string
 ) {
-  return sendSpanishTemplate(phone, "pedido_entregado", [
+  return sendSpanishTemplate(phone, WHATSAPP_TEMPLATES.pedidoEntregado, [
     sanitizeWhatsAppParam(name.substring(0, 30)),
     sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
   ]);
@@ -465,7 +466,7 @@ export async function sendOrderCancelled(
   name: string,
   orderNumber: string
 ) {
-  return sendSpanishTemplate(phone, "pedido_cancelado", [
+  return sendSpanishTemplate(phone, WHATSAPP_TEMPLATES.pedidoCancelado, [
     sanitizeWhatsAppParam(name.substring(0, 30)),
     sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
   ]);
@@ -492,7 +493,7 @@ export async function sendDeliveryOffer(
 
   return sendWhatsAppTemplate(
     phone,
-    "oferta_reparto",
+    WHATSAPP_TEMPLATES.ofertaReparto,
     [
       sanitizeWhatsAppParam(orderNumber),
       sanitizeWhatsAppParam(customerName),
@@ -539,7 +540,7 @@ export async function sendDriverConfirmation(
 ) {
   return sendSpanishTemplate(
     phone,
-    "confirmacion_repartidor",
+    WHATSAPP_TEMPLATES.confirmacionRepartidor,
     [
       sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
       sanitizeWhatsAppParam(restaurantName.substring(0, 30)),
@@ -566,7 +567,7 @@ export async function sendDriverConfirmation(
 export async function sendRepartidorEnCamino(phone: string, orderNumber: string, orderId: string) {
   return sendSpanishTemplate(
     phone,
-    "repartidor_en_camino",
+    WHATSAPP_TEMPLATES.repartidorEnCamino,
     [sanitizeWhatsAppParam(orderNumber.substring(0, 30))],
     [buildQuickReplyPayloadButton("0", `EN_PUERTA|${orderId}`)]
   );
@@ -575,7 +576,7 @@ export async function sendRepartidorEnCamino(phone: string, orderNumber: string,
 export async function sendRepartidorEnPuerta(phone: string, orderNumber: string, orderId: string) {
   return sendSpanishTemplate(
     phone,
-    "repartidor_en_puerta",
+    WHATSAPP_TEMPLATES.repartidorEnPuerta,
     [sanitizeWhatsAppParam(orderNumber.substring(0, 30))],
     [buildQuickReplyPayloadButton("0", `ENTREGADO|${orderId}`)]
   );
@@ -591,7 +592,7 @@ export async function sendClienteRepartidorEnPuerta(
     ? `${orderNumber}. NIP: ${deliveryPin}`
     : orderNumber;
 
-  return sendSpanishTemplate(phone, "cliente_repartidor_en_puerta", [
+  return sendSpanishTemplate(phone, WHATSAPP_TEMPLATES.clienteRepartidorEnPuerta, [
     sanitizeWhatsAppParam(customerName.substring(0, 30)),
     sanitizeWhatsAppParam(orderReference),
   ]);

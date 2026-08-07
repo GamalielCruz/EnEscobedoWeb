@@ -8,6 +8,7 @@ import {
   type ScheduledOrderTemplateName,
 } from "@/lib/scheduled-order-whatsapp-config";
 import { normalizeWhatsAppPhone, sendWhatsAppTemplate } from "@/lib/whatsapp";
+import { WHATSAPP_TEMPLATES } from "@/lib/whatsapp/templates";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { createHash } from "node:crypto";
 
@@ -168,7 +169,7 @@ export function sendScheduledOrderConfirmation(order: ScheduledOrderNotification
   const labels = scheduleLabels(order);
   return sendScheduledOrderWhatsAppTemplate({
     order,
-    templateName: "cliente_pedido_programado",
+    templateName: WHATSAPP_TEMPLATES.clientePedidoProgramado,
     bodyParameters: [
       order.customerName || "Cliente",
       `#${order.orderNumber || ""}`,
@@ -187,7 +188,7 @@ export function sendScheduledOrderPreparationStarted(order: ScheduledOrderNotifi
   const labels = scheduleLabels(order);
   return sendScheduledOrderWhatsAppTemplate({
     order,
-    templateName: "cliente_pedido_programado_en_preparacion",
+    templateName: WHATSAPP_TEMPLATES.clientePedidoProgramadoEnPreparacion,
     bodyParameters: [
       order.customerName || "Cliente",
       `#${order.orderNumber || ""}`,
@@ -203,7 +204,7 @@ export function sendScheduledOrderNoDriver(order: ScheduledOrderNotification) {
   const labels = scheduleLabels(order);
   return sendScheduledOrderWhatsAppTemplate({
     order,
-    templateName: "cliente_entrega_programada_sin_repartidor",
+    templateName: WHATSAPP_TEMPLATES.clienteEntregaProgramadaSinRepartidor,
     bodyParameters: [
       order.customerName || "Cliente",
       `#${order.orderNumber || ""}`,

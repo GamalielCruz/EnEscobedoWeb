@@ -1,20 +1,34 @@
 /**
  * Plantillas WhatsApp del flujo de Mandados.
  *
- * NIP (validación de entrega):
- *  - El NIP se genera al crear la orden (lib/delivery-pin.ts) y se envía al
- *    cliente mediante la plantilla `cliente_repartidor_en_puerta` cuando el
- *    repartidor llega a la puerta (ver lib/whatsapp.ts y el webhook).
- *  - `mandado_cliente` avisa que el destinatario deberá proporcionar el NIP.
- *  - `mandado__destinatario` NO incluye NIP: solo notifica al receptor.
- *  - `orden_repartidor` confirma el estado de la orden y ofrece el botón Ayuda.
+ * Los NOMBRES se importan desde `lib/whatsapp/templates.ts` (única fuente de
+ * verdad); aquí solo se define el detalle de cada plantilla (idioma, variables
+ * de cuerpo y botones) según lo aprobado en Meta.
  *
- * Los nombres deben coincidir EXACTAMENTE con las plantillas aprobadas en Meta.
+ * ── Flujo aprobado ──
+ *  1. Cliente crea el mandado.
+ *  2. Se asigna repartidor (si no hay: `cliente_entrega_programada_sin_repartidor`).
+ *  3. El repartidor recoge el paquete.
+ *  4. Se envía `mandado_cliente`  → remitente: recogido y en camino; explica que el
+ *     destinatario deberá proporcionar el NIP para recibir el paquete.
+ *  5. Se envía `mandado__destinatario` → destinatario: le enviaron un mandado.
+ *     NO incluye NIP (el destinatario simplemente espera la llegada del repartidor).
+ *  6. El repartidor llega al destino → `cliente_repartidor_en_puerta` (definida en
+ *     lib/whatsapp.ts) envía el NIP al CLIENTE (remitente) para validar la entrega.
+ *     Además se envía `orden_repartidor` (nombre heredado de Meta; va al CLIENTE,
+ *     no al repartidor) con el botón Ayuda.
+ *  7. El remitente comparte el NIP con el destinatario por el medio que prefiera.
+ *  8. El repartidor valida el NIP y se completa la orden.
+ *
+ * El NIP solo lo recibe el cliente (remitente). El sistema NUNCA envía el NIP al
+ * destinatario automáticamente.
  */
+import { WHATSAPP_TEMPLATES } from "./whatsapp/templates.ts";
+
 export const MANDADO_WHATSAPP_TEMPLATES = {
   /** Cliente (remitente): el mandado fue recogido y va en camino. */
   clientPickedUp: {
-    name: "mandado_cliente",
+    name: WHATSAPP_TEMPLATES.mandadoCliente,
     language: "es_MX",
     hasButtons: false,
     bodyVariables: ["customerName", "orderNumber", "deliveryAddress"],
@@ -22,15 +36,19 @@ export const MANDADO_WHATSAPP_TEMPLATES = {
   },
   /** Receptor (destinatario): le enviaron un mandado; NO requiere código. */
   recipientOnTheWay: {
-    name: "mandado__destinatario",
+    name: WHATSAPP_TEMPLATES.mandadoDestinatario,
     language: "es_MX",
     hasButtons: false,
     bodyVariables: ["senderName", "orderNumber"],
     buttons: [],
   },
-  /** Cliente (remitente): la orden está por completarse, botón Ayuda. */
+  /**
+   * Cliente (remitente): la orden está por completarse, botón Ayuda.
+   * El nombre `orden_repartidor` es heredado de Meta y es engañoso: esta
+   * plantilla NO se envía al repartidor, SIEMPRE se envía al cliente.
+   */
   orderAboutToComplete: {
-    name: "orden_repartidor",
+    name: WHATSAPP_TEMPLATES.ordenRepartidor,
     language: "es_MX",
     hasButtons: true,
     bodyVariables: ["orderNumber", "orderStatus"],
@@ -38,7 +56,7 @@ export const MANDADO_WHATSAPP_TEMPLATES = {
   },
   /** Cliente: no hay repartidor disponible; 3 botones de contingencia. */
   noDriverAvailable: {
-    name: "cliente_entrega_programada_sin_repartidor",
+    name: WHATSAPP_TEMPLATES.clienteEntregaProgramadaSinRepartidor,
     language: "es_MX",
     hasButtons: true,
     bodyVariables: ["customerName", "orderNumber", "time"],

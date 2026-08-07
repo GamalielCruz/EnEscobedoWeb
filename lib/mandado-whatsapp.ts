@@ -7,6 +7,7 @@ import {
   type MandadoTemplateName,
 } from "@/lib/mandado-whatsapp-config";
 import { normalizeWhatsAppPhone, sendWhatsAppTemplate } from "@/lib/whatsapp";
+import { WHATSAPP_TEMPLATES } from "@/lib/whatsapp/templates";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { createHash } from "node:crypto";
 
@@ -130,12 +131,17 @@ export async function sendMandadoWhatsAppTemplate(input: {
 
 /**
  * Cliente (remitente): el mandado fue recogido y va en camino.
- * El destinatario deberá proporcionar el NIP al repartidor para liberar la entrega.
+ * El mensaje explica que el destinatario deberá proporcionar el NIP para
+ * recibir el paquete y que llegará otra notificación antes de la entrega
+ * (cliente_repartidor_en_puerta con el NIP).
  */
+// NOTA: los `idempotencyKey` embeben el nombre de la plantilla como identificador
+// estable de evento. NO reemplazarlos por constantes de WHATSAPP_TEMPLATES:
+// cambiarlos rompería la idempotencia de envíos ya registrados.
 export function sendMandadoClienteRecogido(order: MandadoNotification) {
   return sendMandadoWhatsAppTemplate({
     order,
-    templateName: "mandado_cliente",
+    templateName: WHATSAPP_TEMPLATES.mandadoCliente,
     bodyParameters: [
       order.customerName || "Cliente",
       `#${order.orderNumber || ""}`,
@@ -153,7 +159,7 @@ export function sendMandadoClienteRecogido(order: MandadoNotification) {
 export function sendMandadoDestinatarioEnCamino(order: MandadoNotification) {
   return sendMandadoWhatsAppTemplate({
     order: { _id: order._id, phone: order.recipientPhone ?? null },
-    templateName: "mandado__destinatario",
+    templateName: WHATSAPP_TEMPLATES.mandadoDestinatario,
     bodyParameters: [
       order.customerName || "Un remitente",
       `#${order.orderNumber || ""}`,
@@ -166,11 +172,15 @@ export function sendMandadoDestinatarioEnCamino(order: MandadoNotification) {
 /**
  * Cliente (remitente): la orden está por completarse. Botón de Ayuda
  * para solicitar un agente si necesita asistencia.
+ *
+ * IMPORTANTE: el nombre de la plantilla (`orden_repartidor`) es heredado de
+ * Meta y es engañoso, pero NO se envía al repartidor: SIEMPRE se envía al
+ * cliente. No renombrar la plantilla; solo se envía a `order.phone`.
  */
 export function sendMandadoOrdenPorCompletar(order: MandadoNotification) {
   return sendMandadoWhatsAppTemplate({
     order,
-    templateName: "orden_repartidor",
+    templateName: WHATSAPP_TEMPLATES.ordenRepartidor,
     bodyParameters: [
       `#${order.orderNumber || ""}`,
       order.orderStatus || "por completarse",
@@ -190,7 +200,7 @@ export function sendMandadoOrdenPorCompletar(order: MandadoNotification) {
 export function sendMandadoNoDriverAvailable(order: MandadoNotification) {
   return sendMandadoWhatsAppTemplate({
     order,
-    templateName: "cliente_entrega_programada_sin_repartidor",
+    templateName: WHATSAPP_TEMPLATES.clienteEntregaProgramadaSinRepartidor,
     bodyParameters: [
       order.customerName || "Cliente",
       `#${order.orderNumber || ""}`,

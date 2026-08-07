@@ -7,7 +7,6 @@ import { assertCurrentLegalAcceptance } from "@/lib/legal-config";
 import { recordCurrentLegalAcceptance } from "@/lib/legal-acceptance";
 import { buildMandadoOrderDocument, quoteMandado } from "@/lib/mandado-order";
 import { syncBaserowOrder } from "@/lib/baserow";
-import { sendOrderConfirmation } from "@/lib/whatsapp";
 
 export async function POST(request: NextRequest) {
   try {
@@ -41,10 +40,13 @@ export async function POST(request: NextRequest) {
     await appendOrderEvent(order._id, { type: "created", source: "api/mandado/orders", actor: userId });
     await appendOrderEvent(order._id, { type: "dispatch_started", source: "api/mandado/orders" });
     after(async () => {
+      // Confirmación inicial: NO reutilizar `confirmacion_pedido` (plantilla de
+      // restaurantes). Los Mandados tienen flujo propio: cuando Meta apruebe una
+      // plantilla exclusiva de confirmación, registrarla en lib/whatsapp/templates.ts
+      // y enviarla aquí.
       await Promise.allSettled([
         dispatchDeliveryOffer(order._id),
         syncBaserowOrder({ ...orderData, _id: order._id, restaurantName: "Mandado El Menú" }),
-        sendOrderConfirmation(String(orderData.phone || ""), String(orderData.customerName || "Cliente"), orderNumber),
       ]);
     });
     return NextResponse.json({ success: true, orderId: order._id, orderNumber });

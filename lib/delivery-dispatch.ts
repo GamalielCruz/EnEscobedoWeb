@@ -4,6 +4,7 @@ import { isOrderDispatchable } from "@/lib/order-state";
 import { isDriverDispatchEnabled } from "@/lib/fulfillment";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { sendMandadoNoDriverAvailable } from "@/lib/mandado-whatsapp";
+import { getDispatchConfig } from "@/lib/dispatch/dispatch-config";
 import { sendBundleDeliveryOffer, sendDeliveryOffer, sendWhatsAppMessage } from "./whatsapp";
 
 const OFFER_TTL_SECONDS = 10 * 60;
@@ -409,6 +410,30 @@ export async function dispatchDeliveryBundle(orderIds: string[], options: Dispat
   const uniqueOrderIds = [...new Set(orderIds.filter(Boolean))].slice(0, 2);
   if (uniqueOrderIds.length <= 1) return uniqueOrderIds[0] ? dispatchDeliveryOffer(uniqueOrderIds[0], options) : false;
 
+  // Modo del Dispatch Center: en manual/asistido el sistema NO ofrece bundles
+  // automáticamente por WhatsApp. El operador asigna desde /admin/dispatch.
+  const bundleConfig = await getDispatchConfig().catch(() => null);
+  if (bundleConfig && bundleConfig.mode !== "auto") {
+    console.log(`[delivery-dispatch] modo ${bundleConfig.mode}: se omite bundle automático`);
+    await setOrdersWaiting(uniqueOrderIds, `dispatch_mode_${bundleConfig.mode}`).catch(() => null);
+    return false;
+  }
+
+  // No ofrecer un bundle que el repartidor no podría aceptar: si la
+  // configuración no permite múltiples pedidos o el bundle supera la
+  // capacidad máxima, se cae a ofertas individuales.
+  if (bundleConfig && !bundleConfig.allowMultipleOrders) {
+    console.log("[delivery-dispatch] bundle omitido por allowMultipleOrders=false", { orderIds: uniqueOrderIds });
+    return false;
+  }
+  if (bundleConfig && bundleConfig.maxOrdersPerDriver < uniqueOrderIds.length) {
+    console.log("[delivery-dispatch] bundle omitido por exceder maxOrdersPerDriver", {
+      orderIds: uniqueOrderIds,
+      maxOrdersPerDriver: bundleConfig.maxOrdersPerDriver,
+    });
+    return false;
+  }
+
   const orders = await fetchOrders(uniqueOrderIds);
   if (orders.some((order) => !isDriverDispatchEnabled(order.storeHasOwnDelivery))) return false;
   if (orders.length !== uniqueOrderIds.length) {
@@ -512,6 +537,15 @@ export async function dispatchWaitingOrdersForDriver(driverId: string): Promise<
 
 export async function dispatchDeliveryOffer(orderId: string, options: DispatchOptions = {}): Promise<boolean> {
   console.log(`[delivery-dispatch] iniciando dispatch ${orderId}`);
+
+  // Modo del Dispatch Center: en manual/asistido el sistema NO ofrece pedidos
+  // automáticamente por WhatsApp. El operador asigna desde /admin/dispatch.
+  const dispatchConfig = await getDispatchConfig().catch(() => null);
+  if (dispatchConfig && dispatchConfig.mode !== "auto") {
+    console.log(`[delivery-dispatch] modo ${dispatchConfig.mode}: se omite oferta automática ${orderId}`);
+    await setOrdersWaiting([orderId], `dispatch_mode_${dispatchConfig.mode}`).catch(() => null);
+    return false;
+  }
 
   try {
     const order = (await backendClient.fetch(ORDER_QUERY, { orderId })) as DispatchOrder | null;

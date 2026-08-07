@@ -1,6 +1,8 @@
+import { WHATSAPP_TEMPLATES } from "./whatsapp/templates.ts";
+
 export const SCHEDULED_ORDER_WHATSAPP_TEMPLATES = {
   orderConfirmed: {
-    name: "cliente_pedido_programado",
+    name: WHATSAPP_TEMPLATES.clientePedidoProgramado,
     language: "es_MX",
     hasButtons: false,
     bodyVariables: [
@@ -15,14 +17,14 @@ export const SCHEDULED_ORDER_WHATSAPP_TEMPLATES = {
     buttons: [],
   },
   preparationStarted: {
-    name: "cliente_pedido_programado_en_preparacion",
+    name: WHATSAPP_TEMPLATES.clientePedidoProgramadoEnPreparacion,
     language: "es_MX",
     hasButtons: true,
     bodyVariables: ["customerName", "orderNumber", "storeName", "time"],
     buttons: [{ index: 0, type: "url", text: "Ver mi pedido", dynamicParameters: 0 }],
   },
   noDriverAvailable: {
-    name: "cliente_entrega_programada_sin_repartidor",
+    name: WHATSAPP_TEMPLATES.clienteEntregaProgramadaSinRepartidor,
     language: "es_MX",
     hasButtons: true,
     bodyVariables: ["customerName", "orderNumber", "time"],
