@@ -1,12 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { GoogleMap, Marker, Polyline, useJsApiLoader } from "@react-google-maps/api";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowLeft,
+  Bike,
   CheckCircle,
+  ChevronDown,
   ChevronRight,
   House,
   Loader2,
@@ -15,13 +17,17 @@ import {
   Package,
   Pencil,
   Phone,
+  Route,
   Search,
   ShieldCheck,
+  ShoppingBasket,
   Store,
   User,
+  X,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
+import { SegmentedTabs } from "./SegmentedTabs";
 import {
   calculateMandadoQuote,
   type MandadoAddressPoint,
@@ -86,8 +92,8 @@ const mapOptions = {
     { featureType: "poi.school", elementType: "geometry.fill", stylers: [{ color: "#e4e0d6" }] },
     { featureType: "poi.school", elementType: "labels.text.fill", stylers: [{ color: "#5a7a9a" }] },
     { featureType: "poi", elementType: "geometry.fill", stylers: [{ color: "#eae4d8" }] },
-    { featureType: "poi.business", elementType: "labels.icon", stylers: [{ visibility: "off" }] },
-    { featureType: "poi.business", elementType: "labels.text", stylers: [{ visibility: "off" }] },
+    { featureType: "poi.business", elementType: "labels.icon", stylers: [{ visibility: "on" }] },
+    { featureType: "poi.business", elementType: "labels.text", stylers: [{ visibility: "on" }] },
     { featureType: "transit", elementType: "geometry", stylers: [{ visibility: "off" }] },
     { featureType: "transit", elementType: "labels", stylers: [{ visibility: "off" }] },
     { featureType: "all", elementType: "labels.text.fill", stylers: [{ color: "#3a3a3a" }] },
@@ -114,6 +120,8 @@ export default function MandadoMapFlow() {
   const [modeCompact, setModeCompact] = useState(false);
   const [view, setView] = useState<View>("main");
   const [pickingFor, setPickingFor] = useState<"origin" | "destination">("origin");
+  // Vista de ruta a pantalla completa (cuando ya están ambos puntos)
+  const [routeOpen, setRouteOpen] = useState(false);
 
   const [origin, setOrigin] = useState<AddressPoint | null>(null);
   const [destination, setDestination] = useState<AddressPoint | null>(null);
@@ -152,6 +160,19 @@ export default function MandadoMapFlow() {
   const mounted = useRef(true);
   const skipPrediction = useRef(false);
   const fittedRouteKey = useRef<string | null>(null);
+  const routeLineRef = useRef<google.maps.Polyline | null>(null);
+  const dotOffsetRef = useRef(0);
+
+  // Centra y aplica zoom al mapa usando la instancia viva (panTo/setZoom),
+  // porque las props center/zoom de <GoogleMap> solo se aplican al montarse.
+  // Sin esto, al editar un punto el pin quedaba fuera de pantalla y el zoom
+  // lejano del paso 2 nunca se ejecutaba.
+  const panMap = useCallback((position: google.maps.LatLngLiteral, zoom: number) => {
+    setMapCenter(position);
+    setMapZoom(zoom);
+    mapRef.current?.panTo(position);
+    mapRef.current?.setZoom(zoom);
+  }, []);
 
   const isPickup = mode === "pickup";
   const originTitle = isPickup ? "¿Dónde recogemos?" : "¿Dónde compramos?";
@@ -215,18 +236,48 @@ export default function MandadoMapFlow() {
   // ── Ajustar la vista del mapa a la ruta completa en la vista principal ──
   useEffect(() => {
     if (view !== "main" || !origin || !destination || !mapRef.current) return;
-    const key = `${origin.lat.toFixed(5)},${origin.lng.toFixed(5)}|${destination.lat.toFixed(5)},${destination.lng.toFixed(5)}`;
+    const key = `${origin.lat.toFixed(5)},${origin.lng.toFixed(5)}|${destination.lat.toFixed(5)},${destination.lng.toFixed(5)}|${routeOpen ? "route" : "panel"}`;
     if (fittedRouteKey.current === key) return;
     fittedRouteKey.current = key;
     const bounds = new google.maps.LatLngBounds();
     bounds.extend(origin);
     bounds.extend(destination);
-    // En este punto el panel ya está a pantalla completa (confirm), así que la
-    // ruta se encuadra en la franja visible debajo del control superior.
-    mapRef.current.fitBounds(bounds, { top: 130, bottom: 96, left: 48, right: 48 });
+    const height = window.innerHeight || 0;
+    // El padding de fitBounds se mide desde los bordes del mapa. Con el panel
+    // de direcciones abierto (68dvh) la ruta debe quedar centrada en la franja
+    // libre de arriba, así que el padding inferior equivale a la altura del
+    // panel (+ margen para el pin). Con la vista de ruta ocupa el mapa entero.
+    mapRef.current.fitBounds(
+      bounds,
+      routeOpen
+        ? { top: 84, bottom: 130, left: 48, right: 48 }
+        : { top: 84, bottom: height * 0.68 + 56, left: 48, right: 48 }
+    );
     // isLoaded en deps: si el mapa termina de cargar después de tener ambos
     // puntos (red lenta), el encuadre se recalcula al montarse.
-  }, [view, origin, destination, isLoaded]);
+  }, [view, origin, destination, isLoaded, routeOpen]);
+
+  // ── Al salir de la pantalla de confirmación o al editar un punto,
+  //    la vista de ruta vuelve al contenedor de direcciones. ──
+  useEffect(() => {
+    if (view !== "main" || progress !== "confirm") setRouteOpen(false);
+  }, [view, progress]);
+
+  // ── Puntitos animados sobre la ruta (misma animación que en el carrito) ──
+  useEffect(() => {
+    if (!routeOpen || !origin || !destination) return;
+    const timer = window.setInterval(() => {
+      const line = routeLineRef.current;
+      if (!line) return;
+      dotOffsetRef.current = (dotOffsetRef.current + 1) % 100;
+      const icons = line.get("icons");
+      if (icons?.[0]) {
+        icons[0].offset = `${dotOffsetRef.current}%`;
+        line.set("icons", icons);
+      }
+    }, 45);
+    return () => window.clearInterval(timer);
+  }, [routeOpen, origin, destination]);
 
   // ── Autocompletado de búsqueda ────────────────────────────────────
   useEffect(() => {
@@ -258,8 +309,7 @@ export default function MandadoMapFlow() {
     setDraftAddress(next);
     setSearchInput(fallback || "Buscando dirección...");
     setPredictions([]);
-    setMapCenter(position);
-    setMapZoom(16);
+    panMap(position, 16);
 
     new google.maps.Geocoder().geocode({ location: position }, (results, status) => {
       if (!mounted.current) return;
@@ -357,23 +407,21 @@ export default function MandadoMapFlow() {
     setPredictions([]);
     setLocationDetected(false);
     const point = target === "origin" ? origin : destination;
-    if (target === "destination" && origin) {
-      // Desplaza la vista al norte del origen: el pin verde queda abajo y
-      // queda espacio libre arriba para elegir el punto de entrega.
-      setMapCenter({ lat: origin.lat + 0.004, lng: origin.lng });
-      setMapZoom(15);
-    } else if (point) {
-      // Al editar un punto ya elegido, el pin reaparece en su posición.
+    if (point) {
+      // Al editar un punto ya elegido, el pin se mantiene visible y la vista
+      // se centra en él (no hay que volver a buscarlo en el mapa).
       setDraftAddress(point);
       setSearchInput(point.label);
       skipPrediction.current = true; // evita disparar el autocompletado con la etiqueta
-      setMapCenter(point);
-      setMapZoom(16);
+      panMap(point, 16);
+    } else if (target === "destination" && origin) {
+      // Vista lejana centrada al norte del origen (primer marcador 2): deja
+      // claro que el marcador 1 ya quedó colocado y ahora toca el marcador 2.
+      panMap({ lat: origin.lat + 0.006, lng: origin.lng }, 13);
     } else {
-      setMapCenter(defaultCenter);
-      setMapZoom(14);
+      panMap(defaultCenter, 14);
     }
-  }, [origin, destination]);
+  }, [origin, destination, panMap]);
 
   const cancelPicking = useCallback(() => {
     setView("main");
@@ -384,15 +432,24 @@ export default function MandadoMapFlow() {
 
   const confirmPick = useCallback(() => {
     if (!draftAddress) return;
-    if (pickingFor === "origin") setOrigin(draftAddress);
-    else setDestination(draftAddress);
+    if (pickingFor === "origin") {
+      setOrigin(draftAddress);
+      // Solo al colocar el origen por primera vez (sin destino aún) se aleja
+      // la vista para que el cliente note que sigue el marcador 2. Al re-editar
+      // el origen el mapa no se mueve para no confundir.
+      if (!destination && !origin) {
+        panMap({ lat: draftAddress.lat + 0.006, lng: draftAddress.lng }, 13);
+      }
+    } else {
+      setDestination(draftAddress);
+    }
     fittedRouteKey.current = null; // recalcula el encuadre al volver
     setModeCompact(true);
     setDraftAddress(null);
     setSearchInput("");
     setLocationDetected(false);
     setView("main");
-  }, [draftAddress, pickingFor]);
+  }, [draftAddress, pickingFor, origin, destination, panMap]);
 
   const selectMode = useCallback((nextMode: Mode) => {
     if (nextMode === mode) return;
@@ -454,6 +511,21 @@ export default function MandadoMapFlow() {
             ? "No pudimos calcular el costo"
             : "Completa los datos de tu mandado";
 
+  // Opciones dinámicas del mapa: cuando el panel de confirmación está abierto
+  // se bloquea el arrastre y el zoom para que el mapa no se mueva (haga scroll)
+  // mientras el cliente baja a las tarjetas del paso 3. La vista de ruta vuelve
+  // a ser interactiva.
+  const mapOptionsDynamic = useMemo(() => {
+    const lockMap = view === "main" && progress === "confirm" && !routeOpen;
+    return {
+      ...mapOptions,
+      draggable: !lockMap,
+      scrollwheel: !lockMap,
+      disableDoubleClickZoom: lockMap,
+      gestureHandling: view === "picking" ? "greedy" : lockMap ? "cooperative" : "greedy",
+    };
+  }, [view, progress, routeOpen]);
+
   if (loadError || !apiKey) {
     return (
       <div className="flex h-screen items-center justify-center bg-gray-50">
@@ -463,7 +535,7 @@ export default function MandadoMapFlow() {
   }
 
   return (
-    <div className="fixed inset-0 overflow-hidden bg-slate-100">
+    <div className="fixed inset-0 overflow-hidden overscroll-none bg-slate-100">
       {/* ── Mapa de fondo (siempre fijo) ── */}
       <div className="absolute inset-0 z-0">
         {isLoaded ? (
@@ -475,17 +547,25 @@ export default function MandadoMapFlow() {
               mapRef.current = map;
             }}
             onClick={(event) => {
-              if (view !== "picking") return;
-              const lat = event.latLng?.lat();
-              const lng = event.latLng?.lng();
-              if (lat != null && lng != null) choosePoint({ lat, lng });
+              if (view === "picking") {
+                const lat = event.latLng?.lat();
+                const lng = event.latLng?.lng();
+                if (lat != null && lng != null) choosePoint({ lat, lng });
+              } else if (view === "main" && progress === "confirm" && origin && destination) {
+                // Al tocar el mapa se alterna entre ver la ruta y volver a las direcciones
+                setRouteOpen((open) => !open);
+              }
             }}
-            options={mapOptions}
+            options={mapOptionsDynamic}
           >
-            {origin && !(view === "picking" && pickingFor === "origin") && (
+            {origin && (
               <Marker
                 position={origin}
-                draggable
+                // Durante la elección de un punto, los marcadores ya colocados
+                // no se pueden arrastrar para evitar confusiones (ej. arrastrar
+                // el marcador 1 mientras se coloca el 2). En la vista de ruta
+                // tampoco, para que la animación no se interrumpa.
+                draggable={view !== "picking" && !routeOpen}
                 zIndex={10}
                 onDragStart={() => {
                   suppressPinHint.current = true;
@@ -509,10 +589,10 @@ export default function MandadoMapFlow() {
                 icon={{ url: pinIcon("1"), scaledSize: new google.maps.Size(42, 42), anchor: new google.maps.Point(21, 42) }}
               />
             )}
-            {destination && !(view === "picking" && pickingFor === "destination") && (
+            {destination && (
               <Marker
                 position={destination}
-                draggable
+                draggable={view !== "picking" && !routeOpen}
                 zIndex={10}
                 onDragEnd={(event) => {
                   const lat = event.latLng?.lat();
@@ -536,18 +616,52 @@ export default function MandadoMapFlow() {
               />
             )}
             {origin && destination && view === "main" && (
-              <Polyline
-                path={[
-                  { lat: origin.lat, lng: origin.lng },
-                  { lat: destination.lat, lng: destination.lng },
-                ]}
-                options={{
-                  strokeColor: "#EB1901",
-                  strokeOpacity: 0.95,
-                  strokeWeight: 4,
-                  geodesic: true,
-                }}
-              />
+              <>
+                <Polyline
+                  path={[
+                    { lat: origin.lat, lng: origin.lng },
+                    { lat: destination.lat, lng: destination.lng },
+                  ]}
+                  options={{
+                    strokeColor: "#EB1901",
+                    strokeOpacity: 0.95,
+                    strokeWeight: 4,
+                    geodesic: true,
+                  }}
+                />
+                {routeOpen && (
+                  <Polyline
+                    onLoad={(line) => {
+                      routeLineRef.current = line;
+                    }}
+                    onUnmount={() => {
+                      routeLineRef.current = null;
+                    }}
+                    path={[
+                      { lat: origin.lat, lng: origin.lng },
+                      { lat: destination.lat, lng: destination.lng },
+                    ]}
+                    options={{
+                      strokeOpacity: 0,
+                      geodesic: true,
+                      icons: [
+                        {
+                          icon: {
+                            path: google.maps.SymbolPath.CIRCLE,
+                            scale: 3.5,
+                            fillColor: "#ffffff",
+                            fillOpacity: 1,
+                            strokeColor: "#EB1901",
+                            strokeWeight: 1.5,
+                          },
+                          offset: `${dotOffsetRef.current}%`,
+                          repeat: "16px",
+                        },
+                      ],
+                    }}
+                  />
+                )}
+              </>
             )}
           </GoogleMap>
         ) : (
@@ -572,7 +686,44 @@ export default function MandadoMapFlow() {
             </div>
           </div>
         )}
+
+        {view === "main" && progress === "confirm" && routeOpen && (
+          <div className="pointer-events-none absolute left-1/2 top-4 z-30 -translate-x-1/2">
+            <div className="flex items-center gap-2 whitespace-nowrap rounded-full bg-[#09193B]/90 px-4 py-2 text-sm font-medium text-white shadow-xl">
+              {isPickup ? <Bike className="h-4 w-4" /> : <ShoppingBasket className="h-4 w-4" />}
+              <span className="flex items-center gap-1.5">
+                {isPickup ? "Enviando tu mandado" : "Comprando por ti"}
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[#d4e400] opacity-75" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-[#d4e400]" />
+                </span>
+              </span>
+            </div>
+          </div>
+        )}
       </div>
+
+      {/* Botón flotante: salir en la pantalla de confirmación */}
+      {view === "main" && progress === "confirm" && !routeOpen && (
+        <button
+          onClick={() => router.push("/")}
+          className="absolute left-4 top-4 z-40 flex h-9 w-9 items-center justify-center rounded-full bg-white/85 text-[#09193B] shadow-lg backdrop-blur-xl transition hover:bg-white"
+          aria-label="Salir de mandados"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+      )}
+
+      {/* Botón flotante: cerrar la vista de ruta */}
+      {view === "main" && progress === "confirm" && routeOpen && (
+        <button
+          onClick={() => setRouteOpen(false)}
+          className="absolute left-4 top-4 z-50 flex h-9 w-9 items-center justify-center rounded-full bg-white/85 text-[#09193B] shadow-lg backdrop-blur-xl transition hover:bg-white"
+          aria-label="Volver a las direcciones"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      )}
 
       {/* ═══════════ VISTA: ELECCIÓN DE PUNTO EN EL MAPA ═══════════ */}
       <AnimatePresence>
@@ -738,12 +889,14 @@ export default function MandadoMapFlow() {
 
       {/* ═══════════ VISTA PRINCIPAL: TARJETAS SOBRE EL MAPA ═══════════ */}
       <AnimatePresence>
-        {view === "main" && (
+        {view === "main" && !(progress === "confirm" && routeOpen) && (
           <>
             {/* Control superior: atrás + selector Enviar/Recibir.
                 Tras la primera elección se compacta para no tapar el mapa;
                 el selector compacto sigue permitiendo cambiar de Enviar a
-                Recibir y viceversa. */}
+                Recibir y viceversa. En la confirmación se oculta para dejar
+                más espacio al mapa. */}
+            {progress !== "confirm" && (
             <motion.div
               key="main-top"
               initial={{ y: -24, opacity: 0 }}
@@ -763,7 +916,7 @@ export default function MandadoMapFlow() {
                       <ArrowLeft className="h-4 w-4" />
                     </button>
                     <div className="min-w-0 flex-1">
-                      <ModeTabs value={mode} onChange={selectMode} compact />
+                      <SegmentedTabs value={mode} onChange={selectMode} options={MODE_OPTIONS} compact layoutId="mode-pill" />
                     </div>
                   </div>
                 ) : (
@@ -783,7 +936,7 @@ export default function MandadoMapFlow() {
                     </div>
 
                     <div className="px-3 pb-3 pt-2.5">
-                      <ModeTabs value={mode} onChange={selectMode} />
+                      <SegmentedTabs value={mode} onChange={selectMode} options={MODE_OPTIONS} layoutId="mode-pill" />
                       <p className="mt-2 text-center text-xs leading-4 text-slate-500">
                         {isPickup
                           ? "Pasamos por un artículo y lo entregamos donde indiques."
@@ -794,6 +947,7 @@ export default function MandadoMapFlow() {
                 )}
               </div>
             </motion.div>
+            )}
 
             {/* Panel de tarjetas + CTA fijo */}
             <motion.div
@@ -806,14 +960,27 @@ export default function MandadoMapFlow() {
             >
               <div className="flex flex-col overflow-hidden rounded-t-3xl border-t border-slate-200 bg-[#F7F8FA]/80 shadow-2xl backdrop-blur-2xl">
                 {/* Altura inteligente según el progreso del flujo (sin flechas) */}
-                <div className={`transition-[height] duration-500 ease-in-out ${progress === "confirm" ? "h-[calc(100dvh-76px)]" : progress === "step2" ? "h-[44dvh]" : "h-[38dvh]"}`}>
+                <div className={`transition-[height] duration-500 ease-in-out ${progress === "confirm" ? "h-[68dvh]" : progress === "step2" ? "h-[44dvh]" : "h-[38dvh]"}`}>
                   <div className="flex h-full flex-col">
                     <div className="flex justify-center pb-1 pt-3">
                       <div className="h-1.5 w-10 rounded-full bg-slate-300" />
                     </div>
 
+                    {/* Acceso a la vista de ruta a pantalla completa */}
+                    {progress === "confirm" && (
+                      <div className="shrink-0 px-4 pb-2">
+                        <button
+                          onClick={() => setRouteOpen(true)}
+                          className="flex w-full items-center justify-center gap-2 rounded-full border border-slate-200 bg-white py-2 text-sm font-bold text-[#09193B] shadow-sm transition hover:border-[#eb1901]/40 hover:bg-rose-50"
+                        >
+                          <Route className="h-4 w-4 text-[#eb1901]" /> Ver ruta en el mapa
+                          <ChevronDown className="h-4 w-4 text-slate-400" />
+                        </button>
+                      </div>
+                    )}
+
                     {/* ── Tarjetas según el paso (fade al cambiar de paso) ── */}
-                    <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4 pt-1">
+                    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4 pt-1">
                       <motion.div
                         key={progress}
                         initial={{ opacity: 0, y: 10 }}
@@ -1116,6 +1283,46 @@ export default function MandadoMapFlow() {
             </motion.div>
           </>
         )}
+
+        {/* ── Vista de ruta a pantalla completa (barra delgada + mapa) ── */}
+        {view === "main" && progress === "confirm" && routeOpen && (
+          <motion.div
+            key="route-bar"
+            initial={{ y: "100%" }}
+            animate={{ y: 0 }}
+            exit={{ y: "100%" }}
+            transition={{ type: "spring", damping: 30, stiffness: 280 }}
+            className="absolute inset-x-0 bottom-0 z-40 mx-auto w-full max-w-md"
+          >
+            <div
+              className="rounded-t-3xl border-t border-slate-200 bg-[#F7F8FA]/85 px-4 pt-3 shadow-2xl backdrop-blur-2xl"
+              style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 14px)" }}
+            >
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                  {isPickup ? "Enviando tu mandado" : "Comprando por ti"}
+                </p>
+                <button
+                  onClick={() => setRouteOpen(false)}
+                  className="flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-[#09193B] transition hover:bg-slate-200"
+                >
+                  <ChevronDown className="h-3.5 w-3.5" /> Ver direcciones
+                </button>
+              </div>
+              <Button
+                onClick={goToCheckout}
+                disabled={!canConfirm}
+                className={`h-14 w-full rounded-full text-base font-bold shadow-lg transition-all duration-200 active:scale-[0.98] disabled:shadow-none ${
+                  canConfirm
+                    ? "bg-[#eb1901] text-white hover:bg-[#c91602]"
+                    : "bg-slate-300 text-slate-500"
+                }`}
+              >
+                {ctaLabel}
+              </Button>
+            </div>
+          </motion.div>
+        )}
       </AnimatePresence>
     </div>
   );
@@ -1215,40 +1422,3 @@ function AddressSummaryRow({
   );
 }
 
-function ModeTabs({
-  value,
-  onChange,
-  compact = false,
-}: {
-  value: Mode;
-  onChange: (next: Mode) => void;
-  compact?: boolean;
-}) {
-  return (
-    <div className={`relative flex rounded-full bg-slate-100 p-1 ${compact ? "w-full max-w-[11rem]" : "w-full"}`}>
-      {MODE_OPTIONS.map((option) => {
-        const active = value === option.value;
-        return (
-          <button
-            key={option.value}
-            type="button"
-            onClick={() => onChange(option.value)}
-            className={`relative flex-1 rounded-full ${compact ? "py-1.5" : "py-2.5"}`}
-            aria-pressed={active}
-          >
-            {active && (
-              <motion.span
-                layoutId="mode-pill"
-                className="absolute inset-0 rounded-full bg-white shadow-sm"
-                transition={{ type: "spring", stiffness: 500, damping: 35 }}
-              />
-            )}
-            <span className={`relative z-10 text-sm font-bold transition-colors duration-200 ${active ? "text-[#09193B]" : "text-slate-500"}`}>
-              {option.label}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}

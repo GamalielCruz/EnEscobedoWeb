@@ -2,11 +2,18 @@
 
 import { SignInButton, useAuth, useUser } from "@clerk/nextjs";
 import { ArrowLeft, Banknote, CheckCircle, CreditCard, Loader2, MapPin, PackageCheck } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { SegmentedTabs } from "./SegmentedTabs";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import type { MandadoDraft } from "@/lib/mandado";
+
+const PAYMENT_METHODS: Array<{ value: "card" | "cash"; label: string; icon: LucideIcon }> = [
+  { value: "card", label: "Tarjeta", icon: CreditCard },
+  { value: "cash", label: "Efectivo", icon: Banknote },
+];
 
 export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null }) {
   const router = useRouter();
@@ -16,7 +23,6 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
   const [phone, setPhone] = useState("");
   const [recipientName, setRecipientName] = useState("");
   const [recipientPhone, setRecipientPhone] = useState("");
-  const [legalAccepted, setLegalAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [clientSecret, setClientSecret] = useState<string | null>(null);
@@ -77,7 +83,7 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
   const recipientDigits = recipientPhone.replace(/\D/g, "").slice(0, 10);
   const recipientInfoValid =
     !pinRecipientMode || (recipientName.trim().length > 0 && recipientDigits.length === 10);
-  const ready = digits.length === 10 && legalAccepted && method && recipientInfoValid;
+  const ready = digits.length === 10 && method && recipientInfoValid;
   const leaveCheckout = () => {
     sessionStorage.removeItem("mandadoCheckoutDraft");
     router.push("/?service=mandado");
@@ -107,7 +113,8 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
           originReference: draft.originReference || "",
           destinationReference: draft.destinationReference || "",
           destinationPerson: draft.destinationPerson || "",
-          legalAccepted,
+          // Al continuar se aceptan de forma implícita los documentos legales.
+          legalAccepted: true,
         }),
       });
       const result = await response.json();
@@ -247,12 +254,19 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                           <span className="w-6 h-6 bg-[#eb1902] text-white rounded-full flex items-center justify-center text-sm">2</span>
                           Método de pago
                         </h4>
-                        <button type="button" onClick={() => setMethod("card")} className={`w-full px-4 py-3.5 rounded-xl flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm ${method === "card" ? "bg-[#eb1902] text-white hover:bg-[#c11300]" : "bg-white text-[#eb1902] border-2 border-[#eb1902] hover:bg-rose-50"}`}>
-                          <CreditCard className="w-5 h-5" /> Pagar con tarjeta
-                        </button>
-                        <button type="button" onClick={() => setMethod("cash")} className={`w-full px-4 py-3.5 rounded-xl flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm ${method === "cash" ? "bg-[#eb1902] text-white hover:bg-[#c11300]" : "bg-white text-[#eb1902] border-2 border-[#eb1902] hover:bg-rose-50"}`}>
-                          <Banknote className="w-5 h-5" /> Pagar al recibir (Efectivo)
-                        </button>
+                        <SegmentedTabs
+                          value={method}
+                          onChange={setMethod}
+                          options={PAYMENT_METHODS}
+                          layoutId="mandado-payment-pill"
+                        />
+                        <p className="text-xs text-gray-500">
+                          {method === "card"
+                            ? "Pago seguro en línea con tu tarjeta."
+                            : method === "cash"
+                              ? "Paga en efectivo al momento de la entrega."
+                              : "Elige cómo quieres pagar."}
+                        </p>
                       </div>
 
                       <div className="mb-4 p-4 border border-rose-200 rounded-lg">
@@ -270,17 +284,19 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                         </div>
                       </div>
 
-                      <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-700">
-                        <input type="checkbox" checked={legalAccepted} onChange={(event) => setLegalAccepted(event.target.checked)} className="mt-0.5 h-4 w-4 accent-[#eb1902]" />
-                        <span>Confirmo que revisé y acepto los <Link className="underline" href="/legal/terminos-clientes" target="_blank">Términos</Link>, el <Link className="underline" href="/legal/privacidad" target="_blank">Aviso de Privacidad</Link> y la <Link className="underline" href="/legal/cancelaciones-reembolsos" target="_blank">Política de Cancelaciones</Link>.</span>
-                      </label>
-
                       {error && <div className="flex items-start gap-2 text-sm text-[#eb1902] font-medium bg-rose-50 border border-rose-200 rounded-xl p-3">{error}</div>}
 
                       <button onClick={submit} disabled={!ready || loading} className="w-full bg-[#eb1902] text-white px-4 py-3.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm">
                         {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : method === "cash" ? <Banknote className="w-5 h-5" /> : <CreditCard className="w-5 h-5" />}
                         {loading ? "Procesando..." : method === "card" ? "Pagar con tarjeta" : method === "cash" ? "Pagar al recibir (Efectivo)" : "Elige un método de pago"}
                       </button>
+
+                      <p className="mt-3 text-center text-xs leading-5 text-gray-500">
+                        Al continuar aceptas los{" "}
+                        <Link className="font-medium text-gray-600 underline underline-offset-2 transition-colors hover:text-[#eb1902]" href="/legal/terminos-clientes" target="_blank">Términos y Condiciones</Link>, el{" "}
+                        <Link className="font-medium text-gray-600 underline underline-offset-2 transition-colors hover:text-[#eb1902]" href="/legal/privacidad" target="_blank">Aviso de Privacidad</Link> y la{" "}
+                        <Link className="font-medium text-gray-600 underline underline-offset-2 transition-colors hover:text-[#eb1902]" href="/legal/cancelaciones-reembolsos" target="_blank">Política de Cancelaciones</Link>.
+                      </p>
                     </>
                   ) : (
                     <div className="space-y-3">
