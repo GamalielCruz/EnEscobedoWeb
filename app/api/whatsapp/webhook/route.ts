@@ -1029,9 +1029,13 @@ export async function POST(req: NextRequest) {
     let buttonPayloadRaw: string | null = null
     let buttonTitleRaw: string | null = null
     let buttonOrderId: string | null = null
+    // Texto ORIGINAL del mensaje (sin normalizar) para la bandeja de soporte.
+    let rawIncomingText: string | null = null
 
     if (message.type === 'text') {
-      textBody = normalizeText((message.text as Record<string, unknown>)?.body as string ?? '')
+      const rawBody = (message.text as Record<string, unknown>)?.body as string ?? ''
+      rawIncomingText = String(rawBody)
+      textBody = normalizeText(rawBody)
     } else if (message.type === 'interactive') {
       const interactive = message.interactive as Record<string, unknown>
       const buttonReply = interactive?.button_reply as Record<string, unknown>
@@ -1785,6 +1789,9 @@ Te avisaremos 10 minutos antes de finalizar.`
               _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
               phone: customerPhone,
               orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
+              // El NIP ya se reveló arriba; viaja en la variable de cuerpo de
+              // orden_repartidor para que el cliente lo comparta con el repartidor.
+              deliveryPin,
             }))
           }
         }
@@ -1934,9 +1941,32 @@ Te avisaremos 10 minutos antes de finalizar.`
         return NextResponse.json({ status: 'ok' })
       }
 // --- Cualquier otro mensaje de un repartidor registrado ---
+      // Se captura en la bandeja de mensajes del Dispatch Center (soporteChat)
+      // para que el operador pueda verlo y responderle por WhatsApp. Nunca se
+      // descarta ni se oculta: es información real del repartidor.
+      await backendClient
+        .patch(repartidor._id)
+        .setIfMissing({ soporteChat: [] })
+        .append('soporteChat', [
+          {
+            _key: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            role: 'driver',
+            body: String(rawIncomingText ?? textBody ?? '').trim().substring(0, 2000),
+            createdAt: now,
+            readAt: null,
+          },
+        ])
+        .commit()
+        .catch((error: unknown) => {
+          console.error('[webhook soporte] error guardando mensaje del repartidor:', error)
+        })
+
+      const isHelpRequest = /^(ayuda|ayudame|help|soporte|apoyo)/.test(String(textBody ?? '').trim())
       void sendBotMessage(
         fromPhone,
-        `Comandos disponibles: INICIO, FIN, OFERTAS, ORDENES, ACEPTO, RECHAZAR, PEDIDO EN DIRECCION AL DOMICILIO, EN PUERTA, ENTREGADO.`
+        isHelpRequest
+          ? 'Recibimos tu solicitud de ayuda. El equipo de soporte la revisará y te responderá por este chat. Mientras tanto puedes seguir usando tus comandos.'
+          : 'Tu mensaje fue enviado al equipo de soporte; te responderán por este chat. Comandos disponibles: INICIO, FIN, OFERTAS, ORDENES, ACEPTO, RECHAZAR, PEDIDO EN DIRECCION AL DOMICILIO, EN PUERTA, ENTREGADO.'
       ).catch(() => null)
 
   } catch (error) {

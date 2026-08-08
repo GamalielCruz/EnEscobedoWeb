@@ -3,7 +3,7 @@ import { isAdminUser } from "@/lib/admin";
 import { appendOrderEvent } from "@/lib/order-events";
 import { buildLegacyStatus, isOrderDispatchable } from "@/lib/order-state";
 import { releaseOrdersForDriver } from "@/lib/delivery-dispatch";
-import { sendBotMessage } from "@/lib/whatsapp";
+import { sendBotMessage, sendDriverConfirmation } from "@/lib/whatsapp";
 import {
   getDispatchConfig,
   saveDispatchConfig,
@@ -51,6 +51,13 @@ export type DispatchOrderCard = {
   recommendedScore?: number | null;
 };
 
+export type SupportChatMessage = {
+  role: "driver" | "admin";
+  body: string;
+  createdAt?: string;
+  readAt?: string | null;
+};
+
 export type DispatchDriverCard = {
   _id: string;
   name: string;
@@ -73,6 +80,9 @@ export type DispatchDriverCard = {
   pendingCash: number;
   motivoDesconexion?: string | null;
   ofertaExpiraAt?: string | null;
+  // Conversación de soporte entre el repartidor y el Dispatch Center
+  // (mensajes reales del repartidor vía WhatsApp + respuestas del operador).
+  supportChat: SupportChatMessage[];
 };
 
 export type DispatchKpis = {
@@ -222,6 +232,7 @@ const DRIVERS_QUERY = `*[_type == "repartidor"] | order(prioridad desc, nombre a
   "fotoUrl": foto.asset->url,
   "storeId": tiendaAsignada._ref,
   "storeName": tiendaAsignada->name,
+  "supportChat": coalesce(soporteChat[-15:]{ role, body, createdAt, readAt }, []),
   "activeOrders": *[
     _type == "order" &&
     repartidorAsignado._ref == ^._id &&
@@ -301,6 +312,13 @@ function paymentLabel(paymentMethod?: string) {
   return paymentMethod === "cash_on_delivery" || paymentMethod === "cash_on_pickup" ? "Efectivo" : "Pagado";
 }
 
+/** URL de Google Maps desde coordenadas, con búsqueda de texto como respaldo. */
+function buildMapsUrl(lat?: number, lng?: number, fallback?: string): string {
+  return Number.isFinite(lat) && Number.isFinite(lng)
+    ? `https://www.google.com/maps?q=${lat},${lng}`
+    : `https://maps.google.com/maps?q=${encodeURIComponent(String(fallback ?? ""))}`;
+}
+
 // ────────────────────────────────────────────────────────────────────
 // Derivación de estado de repartidor (una sola fuente para snapshot y
 // recomendaciones, alineada con lib/delivery-dispatch.ts)
@@ -346,6 +364,7 @@ function buildDriverCardFromRaw(driver: any, now: number): DispatchDriverCard {
     pendingCash: Math.round(pendingCash * 100) / 100,
     motivoDesconexion: driver.motivoDesconexion ?? null,
     ofertaExpiraAt: driver.ofertaExpiraAt ?? null,
+    supportChat: Array.isArray(driver.supportChat) ? driver.supportChat : [],
   };
 }
 
@@ -642,6 +661,18 @@ function buildOperationalAlerts(
   for (const driver of drivers) {
     const activeCount = driver.activeOrders.length;
 
+    // Mensajes de soporte sin leer del repartidor
+    const unreadSupport = (driver.supportChat ?? []).filter((m) => m.role === "driver" && !m.readAt).length;
+    if (unreadSupport > 0) {
+      alerts.push({
+        id: `support-${driver._id}`,
+        severity: "info",
+        title: `${driver.name} escribió un mensaje`,
+        detail: `${unreadSupport} mensaje(s) sin leer. Revisa la bandeja de Mensajes del Dispatch Center.`,
+        driverId: driver._id,
+      });
+    }
+
     // Repartidor con demasiadas órdenes
     if (activeCount >= config.maxOrdersPerDriver) {
       alerts.push({
@@ -840,11 +871,34 @@ export async function assignOrderToDriver(opts: AssignOptions): Promise<
   }
 
   if (opts.notifyDriver) {
-    const paymentLabelText = order.paymentMethod === "cash_on_delivery" ? "COBRAR EN EFECTIVO" : "YA PAGADO";
-    await sendBotMessage(
-      driver.telefono,
-      `Pedido #${order.orderNumber} asignado. Recoge en ${order.storeName ?? "la tienda"} y entrega en ${order.destLabel ?? "el domicilio"}. Pago: ${paymentLabelText}. Usa los comandos PEDIDO EN DIRECCION AL DOMICILIO, EN PUERTA y ENTREGADO para actualizar.`
-    ).catch(() => null);
+    const paymentLabelText =
+      order.paymentMethod === "cash_on_delivery" || order.paymentMethod === "cash_on_pickup" ? "COBRAR EN EFECTIVO" : "YA PAGADO";
+    const restaurantMapsUrl = buildMapsUrl(order.storeLat, order.storeLng, order.storeName);
+    const clientMapsUrl = buildMapsUrl(order.destLat, order.destLng, order.destLabel);
+    try {
+      // Plantilla existente (confirmacion_repartidor) con botones de mapa:
+      // la misma que recibe el repartidor al aceptar una oferta en el webhook.
+      await sendDriverConfirmation(
+        driver.telefono,
+        String(order.orderNumber),
+        String(order.storeName ?? "La Tienda"),
+        String(order.destLabel ?? "el domicilio del cliente"),
+        paymentLabelText,
+        restaurantMapsUrl,
+        clientMapsUrl
+      );
+    } catch (error) {
+      // Fallback a texto libre si la plantilla no está aprobada / falla.
+      console.warn("[dispatch] plantilla confirmacion_repartidor falló; usando texto libre", {
+        orderId: order._id,
+        driverId: opts.driverId,
+        error,
+      });
+      await sendBotMessage(
+        driver.telefono,
+        `Pedido #${order.orderNumber} asignado. Recoge en ${order.storeName ?? "la tienda"} y entrega en ${order.destLabel ?? "el domicilio"}. Pago: ${paymentLabelText}. Usa los comandos PEDIDO EN DIRECCION AL DOMICILIO, EN PUERTA y ENTREGADO para actualizar.`
+      ).catch(() => null);
+    }
   }
 
   return { ok: true, order, driver };

@@ -176,6 +176,34 @@ export const repartidorType = defineType({
       description: "Notas internas sobre el repartidor",
     }),
     defineField({
+      name: "soporteChat",
+      title: "Mensajes de soporte (Dispatch Center)",
+      type: "array",
+      of: [
+        {
+          type: "object",
+          name: "mensajeSoporte",
+          fields: [
+            {
+              name: "role",
+              title: "Rol",
+              type: "string",
+              options: {
+                list: [
+                  { title: "Repartidor", value: "driver" },
+                  { title: "Admin", value: "admin" },
+                ],
+              },
+            },
+            { name: "body", title: "Mensaje", type: "text" },
+            { name: "createdAt", title: "Creado", type: "datetime" },
+            { name: "readAt", title: "Leído por el operador", type: "datetime" },
+          ],
+        },
+      ],
+      description: "Conversación de soporte entre el repartidor (WhatsApp) y el Dispatch Center",
+    }),
+    defineField({
       name: "bloqueado",
       title: "Bloqueado",
       type: "boolean",

@@ -62,9 +62,12 @@ const pinIcon = (label?: string) => {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 };
 
+// El mapa llena exactamente su contenedor absoluto (inset-0 del overlay fijo).
+// Usar 100vw/100vh fijos puede desbordarlo en móvil cuando la barra del
+// navegador cambia de tamaño (la hoja del panel se traba al scrollear).
 const containerStyle = {
-  width: "100vw",
-  height: "100vh",
+  width: "100%",
+  height: "100%",
 };
 
 const mapOptions = {
@@ -244,7 +247,7 @@ export default function MandadoMapFlow() {
     bounds.extend(destination);
     const height = window.innerHeight || 0;
     // El padding de fitBounds se mide desde los bordes del mapa. Con el panel
-    // de direcciones abierto (68dvh) la ruta debe quedar centrada en la franja
+    // de direcciones abierto (68svh) la ruta debe quedar centrada en la franja
     // libre de arriba, así que el padding inferior equivale a la altura del
     // panel (+ margen para el pin). Con la vista de ruta ocupa el mapa entero.
     mapRef.current.fitBounds(
@@ -531,7 +534,7 @@ export default function MandadoMapFlow() {
   }
 
   return (
-    <div className="fixed inset-0 overflow-hidden overscroll-none bg-slate-100">
+    <div className="fixed inset-0 overflow-hidden bg-slate-100">
       {/* ── Mapa de fondo (siempre fijo) ── */}
       <div className="absolute inset-0 z-0">
         {isLoaded ? (
@@ -955,8 +958,13 @@ export default function MandadoMapFlow() {
               className="absolute inset-x-0 bottom-0 z-40 mx-auto w-full max-w-md"
             >
               <div className="flex flex-col overflow-hidden rounded-t-3xl border-t border-slate-200 bg-[#F7F8FA]/80 shadow-2xl backdrop-blur-2xl">
-                {/* Altura inteligente según el progreso del flujo (sin flechas) */}
-                <div className={`transition-[height] duration-500 ease-in-out ${progress === "confirm" ? "h-[68dvh]" : progress === "step2" ? "h-[44dvh]" : "h-[38dvh]"}`}>
+                {/* Altura inteligente según el progreso del flujo (sin flechas).
+                    Se usa svh (viewport mínimo estable) en lugar de dvh: en móvil,
+                    cuando la barra del navegador se oculta, dvh cambia y la
+                    transición de altura anima el panel durante el scroll (se traba).
+                    Con svh la altura es estable y la transición solo anima al
+                    cambiar de paso. */}
+                <div className={`transition-[height] duration-500 ease-in-out ${progress === "confirm" ? "h-[68svh]" : progress === "step2" ? "h-[44svh]" : "h-[38svh]"}`}>
                   <div className="flex h-full flex-col">
                     <div className="flex justify-center pb-1 pt-3">
                       <div className="h-1.5 w-10 rounded-full bg-slate-300" />
@@ -976,7 +984,10 @@ export default function MandadoMapFlow() {
                     )}
 
                     {/* ── Tarjetas según el paso (fade al cambiar de paso) ── */}
-                    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4 pt-1">
+                    {/* touch-pan-y: en iOS/Android el gesto vertical se atribuye
+                        explícitamente a este contenedor (scroll del panel) y no se
+                        traba ni lo toma el mapa de fondo. */}
+                    <div className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain px-4 pb-4 pt-1">
                       <motion.div
                         key={progress}
                         initial={{ opacity: 0, y: 10 }}

@@ -22,6 +22,7 @@ type MandadoNotification = MandadoWhatsAppOrder & {
   recipientPhone?: string | null;
   deliveryAddress?: string;
   orderStatus?: string;
+  deliveryPin?: string | null;
 };
 
 async function claimDelivery(input: {
@@ -176,15 +177,16 @@ export function sendMandadoDestinatarioEnCamino(order: MandadoNotification) {
  * IMPORTANTE: el nombre de la plantilla (`orden_repartidor`) es heredado de
  * Meta y es engañoso, pero NO se envía al repartidor: SIEMPRE se envía al
  * cliente. No renombrar la plantilla; solo se envía a `order.phone`.
+ *
+ * La variable de cuerpo es el NIP de la entrega: llega al cliente (remitente)
+ * para que él lo comparta con el repartidor. El sistema NUNCA envía el NIP al
+ * destinatario ni al repartidor automáticamente.
  */
 export function sendMandadoOrdenPorCompletar(order: MandadoNotification) {
   return sendMandadoWhatsAppTemplate({
     order,
     templateName: WHATSAPP_TEMPLATES.ordenRepartidor,
-    bodyParameters: [
-      `#${order.orderNumber || ""}`,
-      order.orderStatus || "por completarse",
-    ],
+    bodyParameters: [String(order.deliveryPin ?? order.orderNumber ?? "")],
     // Nota: el action se normaliza en el webhook (los _ se convierten en espacios),
     // por eso el payload usa "MANDADO AYUDA" igual que los botones "SCHEDULE *".
     buttonParameters: [`MANDADO AYUDA|${order._id}`],

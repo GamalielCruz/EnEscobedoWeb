@@ -17,7 +17,9 @@
  *                                               NO solicita NIP (el NIP solo lo recibe el remitente).
  *  - `orden_repartidor`                       → nombre heredado de Meta (engañoso): se envía
  *                                               SIEMPRE al CLIENTE (remitente), avisa que la orden
- *                                               está por completarse y ofrece el botón Ayuda.
+ *                                               está por completarse, lleva el NIP de la entrega
+ *                                               (para que el cliente lo comparta con el repartidor)
+ *                                               y ofrece el botón Ayuda.
  *  - `cliente_entrega_programada_sin_repartidor` → cliente: sin repartidor; 3 botones de contingencia.
  *  - `cliente_repartidor_en_puerta`           → cliente/remitente: repartidor en la puerta y NIP
  *                                               para validar la entrega. Nunca se envía al destinatario.

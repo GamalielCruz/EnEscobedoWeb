@@ -6,6 +6,7 @@ import {
   Banknote,
   Clock,
   GripVertical,
+  History,
   MapPin,
   Package,
   RefreshCw,
@@ -33,6 +34,13 @@ type Props = {
   onDetails: (order: DispatchOrderCard) => void;
   mode: DispatchMode;
 };
+
+/**
+ * A partir de 24 h de espera (tiempo derivado del timestamp real de la orden),
+ * el pedido se considera histórico: se muestra con contexto visual, pero sus
+ * datos originales jamás se modifican ni se ocultan.
+ */
+const HISTORICAL_THRESHOLD_MINUTES = 24 * 60;
 
 const priorityStyles: Record<DispatchOrderCard["priority"], { ring: string; chip: string; label: string }> = {
   urgent: {
@@ -95,7 +103,7 @@ function OrderCard({
         dragging && "opacity-40"
       )}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         {!dragDisabled && (
           <GripVertical className="h-4 w-4 shrink-0 text-slate-300 dark:text-slate-600" />
         )}
@@ -112,6 +120,16 @@ function OrderCard({
           {order.serviceKind === "mandado" ? "Mandado" : "Restaurante"}
         </span>
         <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-bold", style.chip)}>{style.label}</span>
+        {order.waitingMinutes >= HISTORICAL_THRESHOLD_MINUTES && (
+          <span
+            aria-label={`Pedido histórico: lleva más de ${formatWaitingTime(HISTORICAL_THRESHOLD_MINUTES)} en el sistema. Sus datos y tiempos originales se conservan tal cual y no se modifican.`}
+            title={`Pedido histórico: lleva más de ${formatWaitingTime(HISTORICAL_THRESHOLD_MINUTES)} en el sistema. Sus datos y tiempos originales se conservan tal cual y no se modifican.`}
+            className="flex shrink-0 items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-500 dark:border-white/10 dark:text-slate-400"
+          >
+            <History className="h-3 w-3" aria-hidden="true" />
+            Histórico
+          </span>
+        )}
       </div>
 
       <div className="mt-2 space-y-1.5 pl-6 text-xs text-slate-600 dark:text-slate-400">

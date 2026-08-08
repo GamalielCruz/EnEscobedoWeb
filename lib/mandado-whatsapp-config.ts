@@ -13,15 +13,16 @@
  *     destinatario deberá proporcionar el NIP para recibir el paquete.
  *  5. Se envía `mandado__destinatario` → destinatario: le enviaron un mandado.
  *     NO incluye NIP (el destinatario simplemente espera la llegada del repartidor).
- *  6. El repartidor llega al destino → `cliente_repartidor_en_puerta` (definida en
- *     lib/whatsapp.ts) envía el NIP al CLIENTE (remitente) para validar la entrega.
- *     Además se envía `orden_repartidor` (nombre heredado de Meta; va al CLIENTE,
- *     no al repartidor) con el botón Ayuda.
+ *  6. El repartidor llega al destino → se envía al CLIENTE (remitente):
+ *     `cliente_repartidor_en_puerta` (definida en lib/whatsapp.ts) con el NIP para
+ *     validar la entrega, y `orden_repartidor` (nombre heredado de Meta; va al CLIENTE,
+ *     no al repartidor) que también lleva el NIP en su variable de cuerpo y ofrece el
+ *     botón Ayuda.
  *  7. El remitente comparte el NIP con el destinatario por el medio que prefiera.
  *  8. El repartidor valida el NIP y se completa la orden.
  *
  * El NIP solo lo recibe el cliente (remitente). El sistema NUNCA envía el NIP al
- * destinatario automáticamente.
+ * destinatario ni al repartidor automáticamente.
  */
 import { WHATSAPP_TEMPLATES } from "./whatsapp/templates.ts";
 
@@ -46,12 +47,15 @@ export const MANDADO_WHATSAPP_TEMPLATES = {
    * Cliente (remitente): la orden está por completarse, botón Ayuda.
    * El nombre `orden_repartidor` es heredado de Meta y es engañoso: esta
    * plantilla NO se envía al repartidor, SIEMPRE se envía al cliente.
+   * La única variable de cuerpo es el NIP de la entrega: llega al cliente
+   * (remitente) para que él lo comparta con el repartidor. El sistema nunca
+   * envía el NIP al destinatario ni al repartidor automáticamente.
    */
   orderAboutToComplete: {
     name: WHATSAPP_TEMPLATES.ordenRepartidor,
     language: "es_MX",
     hasButtons: true,
-    bodyVariables: ["orderNumber", "orderStatus"],
+    bodyVariables: ["deliveryPin"],
     buttons: [{ index: 0, type: "quick_reply", text: "Ayuda", dynamicParameters: 1 }],
   },
   /** Cliente: no hay repartidor disponible; 3 botones de contingencia. */

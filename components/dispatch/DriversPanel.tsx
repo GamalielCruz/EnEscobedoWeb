@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import {
   Award,
@@ -8,6 +9,7 @@ import {
   CircleDollarSign,
   Clock,
   Hand,
+  Info,
   MapPin,
   Package,
   PauseCircle,
@@ -479,9 +481,39 @@ export function DriversPanel({
 
       <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-2.5">
         {sorted.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 py-14 text-center">
-            <Truck className="h-8 w-8 text-slate-300 dark:text-slate-600" />
-            <p className="text-xs font-medium text-slate-400 dark:text-slate-500">No hay repartidores registrados.</p>
+          /* 0 repartidores reales: se comunica con claridad y se explica qué
+             puede hacer el administrador. Nunca se inventan repartidores. */
+          <div className="flex h-full flex-col items-center justify-center gap-3 px-4 py-10 text-center">
+            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 dark:bg-white/5">
+              <Truck className="h-6 w-6 text-slate-400 dark:text-slate-500" />
+            </div>
+            <div>
+              <p className="text-sm font-bold text-[#09193B] dark:text-white">No hay repartidores registrados</p>
+              <p className="mx-auto mt-1 max-w-[270px] text-[11px] leading-relaxed text-slate-400 dark:text-slate-500">
+                Los pedidos por asignar permanecen en la cola. Cuando un repartidor real se registre y se
+                conecte, aparecerá aquí automáticamente con sus datos reales.
+              </p>
+            </div>
+            <div className="w-full max-w-[290px] rounded-xl border border-slate-100 bg-slate-50/70 p-3 text-left dark:border-white/10 dark:bg-white/5">
+              <p className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-slate-400 dark:text-slate-500">
+                <Info className="h-3 w-3" />
+                Qué puede hacer el administrador
+              </p>
+              <ul className="mt-2 space-y-2 text-left text-[11px] leading-snug text-slate-500 dark:text-slate-400">
+                <li>
+                  Registrar un repartidor (nombre y teléfono con código de país) en el{" "}
+                  <Link
+                    href="/admin/repartidores"
+                    className="font-bold text-[#EB1902] underline-offset-2 transition hover:underline dark:text-red-400"
+                  >
+                    panel de Repartidores
+                  </Link>{" "}
+                  o en el Sanity Studio.
+                </li>
+                <li>El repartidor se conecta por WhatsApp y su disponibilidad se refleja aquí.</li>
+                <li>Con repartidores disponibles podrás asignar pedidos de forma manual, asistida o automática.</li>
+              </ul>
+            </div>
           </div>
         ) : (
           sorted.map((driver) => (

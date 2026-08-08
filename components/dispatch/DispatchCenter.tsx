@@ -9,6 +9,7 @@ import {
   ClipboardList,
   Clock,
   History,
+  MessagesSquare,
   Moon,
   RefreshCw,
   Settings2,
@@ -32,6 +33,7 @@ import { DriversPanel } from "@/components/dispatch/DriversPanel";
 import { DispatchMap } from "@/components/dispatch/DispatchMap";
 import { ConfigPanel } from "@/components/dispatch/ConfigPanel";
 import { HistoryPanel } from "@/components/dispatch/HistoryPanel";
+import { DriverSupportPanel } from "@/components/dispatch/DriverSupportPanel";
 import { AssignModal } from "@/components/dispatch/AssignModal";
 import { OrderDetailsModal } from "@/components/dispatch/OrderDetailsModal";
 import { shortOrderCode } from "@/lib/dispatch/dispatch-format";
@@ -105,7 +107,7 @@ export function DispatchCenter() {
   const [snapshot, setSnapshot] = useState<DispatchSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"ops" | "config" | "history">("ops");
+  const [activeTab, setActiveTab] = useState<"ops" | "config" | "history" | "support">("ops");
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [recommendations, setRecommendations] = useState<DriverRecommendation[]>([]);
@@ -123,6 +125,11 @@ export function DispatchCenter() {
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const config = snapshot?.config ?? null;
+  const unreadSupportTotal = (snapshot?.drivers ?? []).reduce(
+    (total, driver) =>
+      total + (driver.supportChat ?? []).filter((m) => m.role === "driver" && !m.readAt).length,
+    0
+  );
 
   const notify = useCallback((kind: "success" | "error", message: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
@@ -424,7 +431,10 @@ export function DispatchCenter() {
                     key={alert.id}
                     type="button"
                     onClick={() => {
-                      if (alert.orderId) {
+                      if (alert.id.startsWith("support-")) {
+                        setActiveTab("support");
+                        setAlertsOpen(false);
+                      } else if (alert.orderId) {
                         setSelectedOrderId(alert.orderId);
                         setAlertsOpen(false);
                       } else if (alert.driverId) {
@@ -460,7 +470,7 @@ export function DispatchCenter() {
       {/* ── Pestañas ─────────────────────────────────────────── */}
       <Tabs
         value={activeTab}
-        onValueChange={(value) => setActiveTab(value as "ops" | "config" | "history")}
+        onValueChange={(value) => setActiveTab(value as "ops" | "config" | "history" | "support")}
         className="flex min-h-0 flex-1 flex-col"
       >
         <TabsList className="h-9 w-fit gap-1 bg-slate-100/80 px-1 dark:bg-white/5">
@@ -475,6 +485,15 @@ export function DispatchCenter() {
           <TabsTrigger value="history" className="gap-1.5 text-xs data-[state=active]:bg-white dark:data-[state=active]:bg-[#0d1526] dark:data-[state=active]:text-white">
             <History className="h-3.5 w-3.5" />
             Historial
+          </TabsTrigger>
+          <TabsTrigger value="support" className="relative gap-1.5 text-xs data-[state=active]:bg-white dark:data-[state=active]:bg-[#0d1526] dark:data-[state=active]:text-white">
+            <MessagesSquare className="h-3.5 w-3.5" />
+            Mensajes
+            {unreadSupportTotal > 0 && (
+              <span className="ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#EB1902] px-1 text-[9px] font-black text-white">
+                {unreadSupportTotal}
+              </span>
+            )}
           </TabsTrigger>
         </TabsList>
 
@@ -552,6 +571,15 @@ export function DispatchCenter() {
 
         <TabsContent value="history" className="mt-2 flex min-h-0 flex-1">
           <HistoryPanel />
+        </TabsContent>
+
+        <TabsContent value="support" className="mt-2 flex min-h-0 flex-1">
+          <DriverSupportPanel
+            drivers={snapshot?.drivers ?? []}
+            busy={busy}
+            onChanged={fetchSnapshot}
+            notify={notify}
+          />
         </TabsContent>
       </Tabs>
 
