@@ -212,6 +212,8 @@ const ACTIVE_ORDERS_QUERY = `*[
   repartidorAsignadoAt
 }`;
 
+// GROQ no soporta slices con ":" (ni abiertos): se usan índices negativos
+// constantes con el operador de rango para tomar los últimos 15 mensajes.
 const DRIVERS_QUERY = `*[_type == "repartidor"] | order(prioridad desc, nombre asc){
   _id,
   nombre,
@@ -232,7 +234,7 @@ const DRIVERS_QUERY = `*[_type == "repartidor"] | order(prioridad desc, nombre a
   "fotoUrl": foto.asset->url,
   "storeId": tiendaAsignada._ref,
   "storeName": tiendaAsignada->name,
-  "supportChat": coalesce(soporteChat[-15:][]{ role, body, createdAt, readAt }, []),
+  "supportChat": coalesce(soporteChat[-15..-1]{ role, body, createdAt, readAt }, []),
   "activeOrders": *[
     _type == "order" &&
     repartidorAsignado._ref == ^._id &&
