@@ -232,7 +232,7 @@ const DRIVERS_QUERY = `*[_type == "repartidor"] | order(prioridad desc, nombre a
   "fotoUrl": foto.asset->url,
   "storeId": tiendaAsignada._ref,
   "storeName": tiendaAsignada->name,
-  "supportChat": coalesce(soporteChat[-15:]{ role, body, createdAt, readAt }, []),
+  "supportChat": coalesce(soporteChat[-15:][]{ role, body, createdAt, readAt }, []),
   "activeOrders": *[
     _type == "order" &&
     repartidorAsignado._ref == ^._id &&
