@@ -12,7 +12,13 @@ import {
 } from "@/lib/dispatch/dispatch-config";
 import { normalizeDeliveryConfig } from "@/lib/delivery-zones";
 import { estimateEtaMinutes, formatWaitingTime, shortOrderCode } from "@/lib/dispatch/dispatch-format";
-import { validateAssignment } from "@/lib/dispatch/dispatch-validation";
+import {
+  classifyAssignmentOutcome,
+  extractRevisionInfo,
+  isRevisionConflict,
+  validateAssignment,
+} from "@/lib/dispatch/dispatch-validation";
+import { releaseOrderFromDriverCore } from "./dispatch-release";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { NextResponse } from "next/server";
 
@@ -279,6 +285,8 @@ const ORDER_FOR_ASSIGN_QUERY = `*[_type == "order" && _id == $orderId][0]{
   orderDate,
   fulfillmentTiming,
   dispatchStatus,
+  deliveryOfertaExpiresAt,
+  "offeredToRef": offeredTo._ref,
   "driverId": repartidorAsignado._ref,
   "storeId": affiliateStore._ref,
   "storeHasOwnDelivery": affiliateStore->hasOwnDelivery,
@@ -806,52 +814,167 @@ type AssignOptions = {
   skipEvents?: boolean;
 };
 
-export async function assignOrderToDriver(opts: AssignOptions): Promise<
-  | { ok: true; order: any; driver: any }
-  | { ok: false; error: string }
-> {
-  const [order, driver, config] = await Promise.all([
-    backendClient.fetch(ORDER_FOR_ASSIGN_QUERY, { orderId: opts.orderId }),
-    backendClient.fetch(DRIVER_FOR_ASSIGN_QUERY, { driverId: opts.driverId }),
-    getDispatchConfig(),
-  ]);
-  const error = validateAssignment(order, driver, config, opts.mode);
-  if (error) return { ok: false, error };
+export type AssignResult =
+  | { ok: true; order: any; driver: any; idempotent?: boolean }
+  | { ok: false; error: string; code?: "validation" | "conflict" | "already_assigned_other"; order?: any; driver?: any };
 
-  const now = new Date().toISOString();
+const MAX_ASSIGN_CONFLICT_RETRIES = 3;
+
+/**
+ * Asignación (servicio único por el que pasan TODAS las asignaciones).
+ *
+ * Seguridad ante concurrencia e idempotencia:
+ *  - La transacción usa `ifRevisionId` en pedido y repartidor; si el documento
+ *    cambió entre el fetch y el commit (webhook concurrente, cron, acciones del
+ *    admin), Sanity responde 409 y NO se muta nada.
+ *  - Ante un 409 se RELEE el estado real de Sanity y se reintenta (máx. 3 veces)
+ *    con revisiones frescas; NUNCA se reusa la revisión obsoleta.
+ *  - Si al releer el pedido YA está asignado a este repartidor, el resultado es
+ *    éxito IDEMPOTENTE: no se re-ejecutan eventos, auditoría ni notificaciones.
+ *  - Si otro repartidor ganó, se informa que el pedido ya no está disponible.
+ */
+export async function assignOrderToDriver(opts: AssignOptions): Promise<AssignResult> {
+  const traceId = crypto.randomUUID().slice(0, 8);
   const markShipped = opts.markShipped ?? true;
-  const activeCount = Array.isArray(driver.activeOrders) ? driver.activeOrders.length : 0;
+  let order: any = null;
+  let driver: any = null;
+  let successfulAttempt = 0;
 
-  try {
-    await backendClient
-      .transaction()
-      .patch(order._id, (patch) =>
-        patch
-          .ifRevisionId(order._rev)
-          .set({
-            repartidorAsignado: { _type: "reference", _ref: opts.driverId },
-            repartidorAsignadoAt: now,
-            dispatchStatus: "accepted",
-            ...(markShipped ? { status: "shipped", orderStatus: "shipped" } : {}),
-            ...(order.fulfillmentTiming === "scheduled"
-              ? { scheduleStatus: "dispatching", scheduledDispatchStartedAt: now }
-              : {}),
-            deliveryOfertaEnviada: false,
-            updatedAt: now,
-          })
-          .unset(["offeredTo", "deliveryOfertaExpiresAt"])
-      )
-      .patch(opts.driverId, (patch) =>
-        patch
-          .ifRevisionId(driver._rev)
-          .set({ estadoDisponibilidad: "busy", ultimaActividad: now })
-          .unset(["ultimoPedidoOfertado", "pedidosOfertados", "restauranteOferta", "ofertaTipo", "ofertaEnviadaAt", "ofertaExpiraAt"])
-      )
-      .commit();
-  } catch (patchError) {
-    console.error("[dispatch] error asignando pedido", { orderId: opts.orderId, driverId: opts.driverId, patchError });
-    return { ok: false, error: "No se pudo asignar el pedido (el estado cambió en el servidor)." };
+  for (let attempt = 1; attempt <= MAX_ASSIGN_CONFLICT_RETRIES; attempt++) {
+    const [freshOrder, freshDriver, config] = await Promise.all([
+      backendClient.fetch(ORDER_FOR_ASSIGN_QUERY, { orderId: opts.orderId }),
+      backendClient.fetch(DRIVER_FOR_ASSIGN_QUERY, { driverId: opts.driverId }),
+      getDispatchConfig(),
+    ]);
+    order = freshOrder;
+    driver = freshDriver;
+
+    // Idempotencia: el pedido ya quedó asignado a este repartidor (doble
+    // "Acepto", doble clic, o reintento tras conflicto donde otro proceso
+    // ganó). Éxito sin efectos secundarios.
+    if (order && order.driverId && order.driverId === opts.driverId) {
+      const outcome = classifyAssignmentOutcome(order, opts.driverId);
+      if (outcome.kind === "assigned_to_me") {
+        console.log("[dispatch] ASSIGNMENT_IDEMPOTENT", {
+          traceId,
+          orderId: opts.orderId,
+          repartidorId: opts.driverId,
+          mode: opts.mode,
+        });
+        return { ok: true, order, driver, idempotent: true };
+      }
+    }
+
+    const error = validateAssignment(order, driver, config, opts.mode);
+    if (error) {
+      return { ok: false, error, code: "validation", order, driver };
+    }
+
+    console.log("[dispatch] ASSIGNMENT_ATTEMPT", {
+      traceId,
+      orderId: opts.orderId,
+      orderNumber: order.orderNumber,
+      repartidorId: opts.driverId,
+      mode: opts.mode,
+      attempt,
+    });
+
+    try {
+      const now = new Date().toISOString();
+      await backendClient
+        .transaction()
+        .patch(order._id, (patch) =>
+          patch
+            .ifRevisionId(order._rev)
+            .set({
+              repartidorAsignado: { _type: "reference", _ref: opts.driverId },
+              repartidorAsignadoAt: now,
+              dispatchStatus: "accepted",
+              ...(markShipped ? { status: "shipped", orderStatus: "shipped" } : {}),
+              ...(order.fulfillmentTiming === "scheduled"
+                ? { scheduleStatus: "dispatching", scheduledDispatchStartedAt: now }
+                : {}),
+              deliveryOfertaEnviada: false,
+              updatedAt: now,
+            })
+            .unset(["offeredTo", "deliveryOfertaExpiresAt"])
+        )
+        .patch(opts.driverId, (patch) =>
+          patch
+            .ifRevisionId(driver._rev)
+            .set({ estadoDisponibilidad: "busy", ultimaActividad: now })
+            .unset(["ultimoPedidoOfertado", "pedidosOfertados", "restauranteOferta", "ofertaTipo", "ofertaEnviadaAt", "ofertaExpiraAt"])
+        )
+        .commit();
+      successfulAttempt = attempt;
+      break;
+    } catch (patchError) {
+      if (!isRevisionConflict(patchError)) {
+        console.error("[dispatch] ASSIGNMENT_ERROR", {
+          traceId,
+          orderId: opts.orderId,
+          repartidorId: opts.driverId,
+          mode: opts.mode,
+          patchError,
+        });
+        return { ok: false, error: "No se pudo asignar el pedido.", code: "validation", order, driver };
+      }
+
+      const revision = extractRevisionInfo(patchError);
+      console.warn("[dispatch] ASSIGNMENT_CONFLICT", {
+        traceId,
+        offerId: `${opts.orderId}::${opts.driverId}`,
+        orderId: opts.orderId,
+        repartidorId: opts.driverId,
+        attempt,
+        ...revision,
+      });
+
+      if (attempt >= MAX_ASSIGN_CONFLICT_RETRIES) {
+        // Último intento: se decide por el estado REAL actual de Sanity, no por
+        // la revisión obsoleta ni por la opinión de este proceso.
+        const [finalOrder, finalDriver] = await Promise.all([
+          backendClient.fetch(ORDER_FOR_ASSIGN_QUERY, { orderId: opts.orderId }),
+          backendClient.fetch(DRIVER_FOR_ASSIGN_QUERY, { driverId: opts.driverId }),
+        ]);
+        const outcome = classifyAssignmentOutcome(finalOrder, opts.driverId);
+        if (outcome.kind === "assigned_to_me") {
+          console.log("[dispatch] ASSIGNMENT_RECOVERED_IDEMPOTENT", {
+            traceId,
+            orderId: opts.orderId,
+            repartidorId: opts.driverId,
+          });
+          return { ok: true, order: finalOrder, driver: finalDriver, idempotent: true };
+        }
+        if (outcome.kind === "assigned_to_other") {
+          return {
+            ok: false,
+            error: "El pedido ya fue asignado a otro repartidor; refresca la vista.",
+            code: "already_assigned_other",
+            order: finalOrder,
+            driver: finalDriver,
+          };
+        }
+        return {
+          ok: false,
+          error: "Conflicto de concurrencia al asignar; el estado cambió repetidamente. Reintenta.",
+          code: "conflict",
+          order: finalOrder,
+          driver: finalDriver,
+        };
+      }
+    }
   }
+
+  // ── Éxito: efectos secundarios exactamente una vez ─────────────────
+  console.log("[dispatch] ASSIGNMENT_SUCCESS", {
+    traceId,
+    orderId: opts.orderId,
+    orderNumber: order.orderNumber,
+    repartidorId: opts.driverId,
+    mode: opts.mode,
+    attempt: successfulAttempt,
+  });
 
   if (!opts.skipEvents) {
     await appendOrderEvent(order._id, {
@@ -934,97 +1057,105 @@ type ReleaseOptions = {
 };
 
 export async function releaseOrderFromDriver(opts: ReleaseOptions) {
-  const order = await backendClient.fetch<any>(
-    `*[_type == "order" && _id == $orderId][0]{
-      _id,
-      _rev,
-      orderNumber,
-      orderType,
-      orderStatus,
-      paymentStatus,
-      paymentMethod,
-      "driverId": repartidorAsignado._ref
-    }`,
-    { orderId: opts.orderId }
+  // Delegación al núcleo testeable (lib/dispatch/dispatch-release.ts) con las
+  // dependencias reales de Sanity. El núcleo reintenta ante 409 con revisiones
+  // frescas, decide por el estado real y es idempotente: si el pedido ya fue
+  // liberado (doble clic / proceso concurrente), devuelve éxito sin repetir
+  // eventos ni notificaciones.
+  return releaseOrderFromDriverCore(
+    { orderId: opts.orderId, driverId: opts.driverId },
+    {
+      fetchOrder: async (orderId) =>
+        (await backendClient.fetch<any>(
+          `*[_type == "order" && _id == $orderId][0]{
+            _id,
+            _rev,
+            orderNumber,
+            orderType,
+            orderStatus,
+            paymentStatus,
+            paymentMethod,
+            "driverId": repartidorAsignado._ref
+          }`,
+          { orderId }
+        )) ?? null,
+      fetchDriver: async (driverId) =>
+        (await backendClient.fetch<any>(
+          `*[_type == "repartidor" && _id == $driverId][0]{ _id, telefono }`,
+          { driverId }
+        )) ?? null,
+      fetchRemainingCount: async (driverId, excludeOrderId) => {
+        const remaining = await backendClient.fetch<any[]>(
+          `*[_type == "order" && repartidorAsignado._ref == $driverId && _id != $orderId && status == "shipped" && orderStatus != "delivered" && orderStatus != "cancelled"]{ _id }`,
+          { driverId, orderId: excludeOrderId }
+        );
+        return Array.isArray(remaining) ? remaining.length : 0;
+      },
+      commitRelease: async ({ order, remainingCount, now }) => {
+        await backendClient
+          .transaction()
+          .patch(order._id, (patch) =>
+            patch
+              .ifRevisionId(order._rev)
+              .set({
+                orderStatus: "pending",
+                dispatchStatus: "waiting_for_driver",
+                status: buildLegacyStatus({
+                  orderType: order.orderType,
+                  orderStatus: "pending",
+                  paymentStatus: order.paymentStatus,
+                  paymentMethod: order.paymentMethod,
+                }),
+                deliveryOfertaEnviada: false,
+                updatedAt: now,
+              })
+              .unset(["repartidorAsignado", "repartidorAsignadoAt"])
+          )
+          .patch(opts.driverId, (patch) =>
+            patch.set({
+              estadoDisponibilidad: remainingCount > 0 ? "busy" : "available",
+              ultimaActividad: now,
+            })
+          )
+          .commit();
+      },
+      afterCommit: async ({ order, driver, driverId }) => {
+        await appendOrderEvent(order._id, {
+          type: "manual_admin_action",
+          source: "dispatch-center",
+          actor: opts.actorUserId ?? driverId,
+          reason: "driver_assignment_released",
+          payload: { driverId, reason: opts.reason },
+        }).catch(() => null);
+
+        if (!opts.skipAudit) {
+          await appendAudit({
+            action: "unassign",
+            mode: undefined,
+            actorUserId: opts.actorUserId,
+            actorName: opts.actorName,
+            orderId: order._id,
+            orderNumber: order.orderNumber,
+            driverId,
+            reason: opts.reason ?? "liberado manualmente",
+            details: "Pedido liberado y devuelto a la cola de asignación.",
+          });
+        }
+
+        if (opts.notifyDriver && driver?.telefono) {
+          await sendBotMessage(
+            driver.telefono,
+            `El pedido #${order.orderNumber} ya no está a tu cargo. Revisa el Dispatch Center.`
+          ).catch(() => null);
+        }
+      },
+      log: (tag, payload) => {
+        const message = `[dispatch] ${tag}`;
+        if (tag === "RELEASE_CONFLICT" || tag === "RELEASE_ERROR") console.warn(message, payload);
+        else console.log(message, payload);
+      },
+    }
   );
-  if (!order) return { ok: false as const, error: "El pedido no existe." };
-  if (!order.driverId || order.driverId !== opts.driverId) {
-    return { ok: false as const, error: "El pedido no está asignado a ese repartidor." };
-  }
-  if (order.orderStatus === "delivered" || order.orderStatus === "completed" || order.orderStatus === "cancelled") {
-    return { ok: false as const, error: "El pedido ya está terminado." };
-  }
-
-  const now = new Date().toISOString();
-  const [remainingOrders, driver] = await Promise.all([
-    backendClient.fetch(
-      `*[_type == "order" && repartidorAsignado._ref == $driverId && _id != $orderId && status == "shipped" && orderStatus != "delivered" && orderStatus != "cancelled"]{ _id }`,
-      { driverId: opts.driverId, orderId: opts.orderId }
-    ),
-    backendClient.fetch(
-      `*[_type == "repartidor" && _id == $driverId][0]{ _id, telefono }`,
-      { driverId: opts.driverId }
-    ),
-  ]);
-
-  await backendClient
-    .transaction()
-    .patch(order._id, (patch) =>
-      patch
-        .ifRevisionId(order._rev)
-        .set({
-          orderStatus: "pending",
-          dispatchStatus: "waiting_for_driver",
-          status: buildLegacyStatus({
-            orderType: order.orderType,
-            orderStatus: "pending",
-            paymentStatus: order.paymentStatus,
-            paymentMethod: order.paymentMethod,
-          }),
-          deliveryOfertaEnviada: false,
-          updatedAt: now,
-        })
-        .unset(["repartidorAsignado", "repartidorAsignadoAt"])
-    )
-    .patch(opts.driverId, (patch) =>
-      patch
-        .set({
-          estadoDisponibilidad: remainingOrders.length > 0 ? "busy" : "available",
-          ultimaActividad: now,
-        })
-    )
-    .commit();
-
-  await appendOrderEvent(order._id, {
-    type: "manual_admin_action",
-    source: "dispatch-center",
-    actor: opts.actorUserId ?? opts.driverId,
-    reason: "driver_assignment_released",
-    payload: { driverId: opts.driverId, reason: opts.reason },
-  }).catch(() => null);
-
-  if (!opts.skipAudit) {
-    await appendAudit({
-      action: "unassign",
-      mode: undefined,
-      actorUserId: opts.actorUserId,
-      actorName: opts.actorName,
-      orderId: order._id,
-      orderNumber: order.orderNumber,
-      driverId: opts.driverId,
-      reason: opts.reason ?? "liberado manualmente",
-      details: "Pedido liberado y devuelto a la cola de asignación.",
-    });
-  }
-
-  if (opts.notifyDriver && driver?.telefono) {
-    await sendBotMessage(
-      driver.telefono,
-      `El pedido #${order.orderNumber} ya no está a tu cargo. Revisa el Dispatch Center.`
-    ).catch(() => null);
-  }
-
-  return { ok: true as const };
 }
 
 // ────────────────────────────────────────────────────────────────────

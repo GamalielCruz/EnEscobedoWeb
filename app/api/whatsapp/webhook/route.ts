@@ -21,6 +21,7 @@ import {
 } from '@/lib/mandado-whatsapp'
 import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
 import { assignOrderToDriver } from '@/lib/dispatch/dispatch-core'
+import { classifyAssignmentOutcome } from '@/lib/dispatch/dispatch-validation'
 import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
 import { appendOrderEvent } from '@/lib/order-events'
 import { resolveSettlementStatusOnDelivery } from '@/lib/order-state'
@@ -237,6 +238,19 @@ const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._r
   "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
   "shippingAddress": shippingAddress,
   deliveryNotes
+}`
+
+// Consulta ligera del estado REAL de un pedido para reconciliar una
+// aceptación fallida/conflictiva (idempotencia): se decide por Sanity, no por
+// la revisión obsoleta de este intento.
+const RECONCILE_ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
+  _id,
+  orderNumber,
+  orderStatus,
+  dispatchStatus,
+  deliveryOfertaExpiresAt,
+  "driverId": repartidorAsignado._ref,
+  "offeredToRef": offeredTo._ref
 }`
 
 // Busca repartidor probando telefono normalizado y luego raw
@@ -1490,11 +1504,26 @@ Te avisaremos 10 minutos antes de finalizar.`
 
     // --- ACEPTO ---
     if (textBody === 'ACEPTO' || textBody === 'ACEPTAR' || textBody.startsWith('ACEPTO ') || textBody.startsWith('ACEPTAR ')) {
+      const traceId = crypto.randomUUID().slice(0, 8)
       const orderToken = extractOrderToken(textBody, textBody.startsWith('ACEPTAR') ? 'ACEPTAR' : 'ACEPTO')
+      console.log('[webhook ACEPTO] OFFER_ACCEPT_RECEIVED', {
+        traceId,
+        repartidorId: repartidor._id,
+        repartidorNombre: repartidor.nombre,
+        orderToken,
+      })
       const offerOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, nowDate, orderToken)
+      console.log('[webhook ACEPTO] OFFER_ACCEPT_VALIDATED', {
+        traceId,
+        repartidorId: repartidor._id,
+        orderIds: offerOrders.map((order: Record<string, unknown>) => String(order._id)),
+      })
 
-      void backendClient.patch(repartidor._id).set({ ultimaActividad: now }).commit().catch(() => null)
-
+      // NOTA: ya no se lanza un patch fire-and-forget de ultimaActividad aquí.
+      // Ese patch asíncrono cambiaba la revisión del repartidor justo entre el
+      // fetch y el commit de assignOrderToDriver, causando el 409 real en
+      // producción (documentRevisionIDDoesNotMatchError sobre el repartidor).
+      // assignOrderToDriver actualiza ultimaActividad dentro de su transacción.
       if (offerOrders.length === 0) {
         const nextState = getDriverNextState(repartidor, nowDate)
         const pendingOrderIds = getPendingOfferOrderIds(repartidor)
@@ -1530,93 +1559,186 @@ Te avisaremos 10 minutos antes de finalizar.`
         return NextResponse.json({ status: 'ok' })
       }
 
+      // Cada pedido se asigna a través del servicio único del Dispatch Center
+      // (lib/dispatch/dispatch-core.ts). El servicio resuelve internamente los
+      // conflictos de revisión (409) releendo el estado real de Sanity y
+      // reintentando con revisiones frescas; un fallo devuelto aquí ya está
+      // clasificado (validation | conflict | already_assigned_other) y nunca
+      // significa "reintenta con la misma revisión".
+      const assignedOutcomes: Array<{
+        order: Record<string, unknown>
+        ok: boolean
+        idempotent?: boolean
+        code?: string
+      }> = []
       try {
-        for (const order of offerOrders as Array<Record<string, unknown>>) {
-          // Toda asignación pasa por el servicio único del Dispatch Center
-          // (lib/dispatch/dispatch-core.ts) para mantener una sola fuente de
-          // verdad en validaciones, eventos y auditoría.
-          const assigned = await assignOrderToDriver({
-            orderId: String(order._id),
-            driverId: repartidor._id,
-            mode: 'auto',
-            actorName: String(repartidor.nombre ?? ''),
-            notifyDriver: false,
-            skipEvents: true,
-          })
-          if (!assigned.ok) {
-            throw new Error(assigned.error)
-          }
-
-          after(() => syncBaserowOrderById(String(order._id)))
-          await appendOrderEvent(String(order._id), { type: 'offer_accepted', source: 'whatsapp/webhook', actor: repartidor._id })
-          await appendOrderEvent(String(order._id), { type: 'driver_assigned', source: 'whatsapp/webhook', actor: repartidor._id, payload: { driverId: repartidor._id } })
-          if (order.fulfillmentTiming === 'scheduled') {
-            await appendOrderEvent(String(order._id), { type: 'scheduled_order_driver_assigned', source: 'whatsapp/webhook', actor: repartidor._id, payload: { driverId: repartidor._id } })
-          }
-
-          void notifyRestaurantDriverEnRoute(
-            String(order._id),
-            String(repartidor.nombre),
-            String(order.orderNumber)
-          ).catch(() => null)
-
-          console.log('[whatsapp webhook] oferta aceptada con orderId', {
-            repartidorId: repartidor._id,
-            orderId: order._id,
-            orderNumber: order.orderNumber,
-          })
-        }
-
-        await clearPendingOfferForDriver(repartidor._id, now, 'busy')
-      } catch (patchError) {
-        const remainingOfferOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, new Date(), orderToken).catch(() => [])
-        if (remainingOfferOrders.length === 0) {
-          await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
-          await sendBotMessage(fromPhone, 'La oferta ya no esta disponible o ya fue tomada.').catch(() => null)
-        } else {
-          // La oferta sigue vigente pero no se pudo completar la asignación
-          // (p. ej. validación de capacidad al aceptar un bundle). Liberamos
-          // las ofertas restantes para que vuelvan a la cola de asignación.
-          const releasedOrderIds = await releaseOrdersForDriver(
-            remainingOfferOrders.map((order) => String(order._id)),
-            repartidor._id,
-            'assign_failed_after_validation'
-          ).catch(() => [])
-          await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
-          if (releasedOrderIds.length > 0) {
-            await redispatchOrders(releasedOrderIds, [repartidor._id]).catch(() => null)
-          }
-          await sendBotMessage(
-            fromPhone,
-            'No se pudo completar la asignacion por una restriccion de capacidad. Las ofertas se liberaron y se buscara otro repartidor.'
-          ).catch(() => null)
-        }
-        console.error('[whatsapp webhook] error asignando oferta', {
-          repartidorId: repartidor._id,
-          orderIds: offerOrders.map((order: Record<string, unknown>) => order._id),
-          remainingOfferOrderIds: Array.isArray(remainingOfferOrders) ? remainingOfferOrders.map((order: Record<string, unknown>) => order._id) : [],
-          patchError,
+      for (const order of offerOrders as Array<Record<string, unknown>>) {
+        const assigned = await assignOrderToDriver({
+          orderId: String(order._id),
+          driverId: repartidor._id,
+          mode: 'auto',
+          actorName: String(repartidor.nombre ?? ''),
+          notifyDriver: false,
+          skipEvents: true,
         })
-        return NextResponse.json({ status: 'ok' })
+
+        if (!assigned.ok) {
+          console.warn('[webhook ACEPTO] ASSIGNMENT_FAILED', {
+            traceId,
+            orderId: String(order._id),
+            repartidorId: repartidor._id,
+            code: assigned.code,
+            error: assigned.error,
+          })
+          assignedOutcomes.push({ order, ok: false, code: assigned.code })
+          continue
+        }
+
+        if (assigned.idempotent) {
+          // Doble "Acepto" / reintento concurrente: el pedido ya quedó asignado
+          // a este repartidor. Éxito idempotente: NO se re-ejecutan eventos ni
+          // notificaciones (el ganador ya los emitió) para no duplicar.
+          console.log('[webhook ACEPTO] ASSIGNMENT_IDEMPOTENT', {
+            traceId,
+            orderId: String(order._id),
+            repartidorId: repartidor._id,
+          })
+          assignedOutcomes.push({ order, ok: true, idempotent: true })
+          continue
+        }
+
+        assignedOutcomes.push({ order, ok: true })
+        after(() => syncBaserowOrderById(String(order._id)))
+        await appendOrderEvent(String(order._id), { type: 'offer_accepted', source: 'whatsapp/webhook', actor: repartidor._id })
+        await appendOrderEvent(String(order._id), { type: 'driver_assigned', source: 'whatsapp/webhook', actor: repartidor._id, payload: { driverId: repartidor._id } })
+        if (order.fulfillmentTiming === 'scheduled') {
+          await appendOrderEvent(String(order._id), { type: 'scheduled_order_driver_assigned', source: 'whatsapp/webhook', actor: repartidor._id, payload: { driverId: repartidor._id } })
+        }
+
+        void notifyRestaurantDriverEnRoute(
+          String(order._id),
+          String(repartidor.nombre),
+          String(order.orderNumber)
+        ).catch(() => null)
+
+        console.log('[whatsapp webhook] oferta aceptada con orderId', {
+          repartidorId: repartidor._id,
+          orderId: order._id,
+          orderNumber: order.orderNumber,
+        })
+      }
+      } catch (loopError) {
+        // Error inesperado (p. ej. fallo de red a Sanity en el fetch): se
+        // registra y se continúa con la reconciliación por estado real para no
+        // dejar el pedido incoherente ni responder 500 a Meta (que reintentaría).
+        console.error('[webhook ACEPTO] error inesperado al asignar', {
+          traceId,
+          repartidorId: repartidor._id,
+          orderIds: offerOrders.map((order: Record<string, unknown>) => String(order._id)),
+          loopError,
+        })
       }
 
-      const orderNumbersLabel = offerOrders.map((order: Record<string, unknown>) => `#${order.orderNumber}`).join(', ')
+      // ── Reconciliación de fallos por el estado REAL de Sanity ─────────
+      // Nunca se libera un pedido que en realidad quedó asignado (a este u
+      // otro repartidor): se relee el documento y se decide según la verdad
+      // actual, no según la opinión de este intento.
+      const failures = assignedOutcomes.filter((outcome) => !outcome.ok)
+      const successes = assignedOutcomes.filter((outcome) => outcome.ok)
+      const releasedOrderIds: string[] = []
+
+      for (const failure of failures) {
+        const freshOrder = await backendClient.fetch(RECONCILE_ORDER_QUERY, { orderId: String(failure.order._id) }) as Record<string, unknown> | null
+        const outcome = classifyAssignmentOutcome(freshOrder as Parameters<typeof classifyAssignmentOutcome>[0], repartidor._id, nowDate.getTime())
+        console.warn('[webhook ACEPTO] ASSIGNMENT_RECONCILE', {
+          traceId,
+          orderId: String(failure.order._id),
+          orderNumber: failure.order.orderNumber,
+          kind: outcome.kind,
+          code: failure.code,
+        })
+        switch (outcome.kind) {
+          case 'assigned_to_me': {
+            // Un intento concurrente ganó y ya asignó a este repartidor:
+            // éxito idempotente sin re-notificar (el ganador ya notificó).
+            break
+          }
+          case 'assigned_to_other': {
+            if (successes.length === 0) {
+              await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
+            }
+            void sendBotMessage(fromPhone, `El pedido #${failure.order.orderNumber} ya fue tomado por otro repartidor.`).catch(() => null)
+            break
+          }
+          case 'still_offered': {
+            if (failure.code === 'validation') {
+              // Falla de validación real (p. ej. capacidad máxima en un
+              // bundle): se libera para que el pedido vuelva a la cola.
+              releasedOrderIds.push(String(failure.order._id))
+            } else {
+              // Conflicto persistente de revisión: la oferta sigue vigente.
+              // NO se libera ni se toca al repartidor; puede reintentar.
+              void sendBotMessage(fromPhone, 'Hubo un error al confirmar tu aceptación. Inténtalo de nuevo en unos segundos.').catch(() => null)
+            }
+            break
+          }
+          case 'offer_released':
+          case 'order_missing': {
+            if (successes.length === 0) {
+              await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
+            }
+            void sendBotMessage(fromPhone, `La oferta del pedido #${failure.order.orderNumber} ya no está vigente.`).catch(() => null)
+            break
+          }
+        }
+      }
+
+      if (releasedOrderIds.length > 0) {
+        const released = await releaseOrdersForDriver(releasedOrderIds, repartidor._id, 'assign_failed_after_validation').catch(() => [])
+        if (released.length > 0) {
+          console.log('[webhook ACEPTO] OFFER_RELEASED', {
+            traceId,
+            orderIds: released,
+            repartidorId: repartidor._id,
+          })
+          await redispatchOrders(released, [repartidor._id]).catch(() => null)
+        }
+        if (successes.length === 0) {
+          await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
+        }
+        void sendBotMessage(
+          fromPhone,
+          'No se pudo completar la asignacion por una restriccion de capacidad. Las ofertas se liberaron y se buscara otro repartidor.'
+        ).catch(() => null)
+      }
+
+      // Solo las asignaciones NUEVAS reciben mensajería de confirmación. Las
+      // aceptaciones idempotentes (doble "Acepto" donde otro intento ganó) ya
+      // fueron notificadas por el ganador: NO se vuelven a enviar plantillas
+      // ni se vuelve a avisar a repartidores competidores (evita duplicados).
+      const newAssignments = successes.filter((outcome) => !outcome.idempotent)
+      if (newAssignments.length === 0) {
+        return NextResponse.json({ status: 'ok' })
+      }
+      const successOrders = newAssignments.map((outcome) => outcome.order)
+
+      const orderNumbersLabel = successOrders.map((order: Record<string, unknown>) => `#${order.orderNumber}`).join(', ')
       void clearCompetingOffers(
-        offerOrders.map((order: Record<string, unknown>) => String(order._id)),
+        successOrders.map((order: Record<string, unknown>) => String(order._id)),
         repartidor._id,
         orderNumbersLabel,
         now
       ).catch((error) => console.error('[webhook ACEPTO] Error limpiando ofertas competidoras:', error))
 
-      if (offerOrders.length > 1) {
-        const restaurantName = String(offerOrders[0].storeName ?? 'La Tienda')
-        const totalBundle = offerOrders.reduce((sum: number, order: Record<string, unknown>) => sum + Number(order.totalPrice ?? 0), 0)
+      if (successOrders.length > 1) {
+        const restaurantName = String(successOrders[0].storeName ?? 'La Tienda')
+        const totalBundle = successOrders.reduce((sum: number, order: Record<string, unknown>) => sum + Number(order.totalPrice ?? 0), 0)
         await sendBotMessage(
           fromPhone,
           `Bundle aceptado.\n\nRestaurante: ${restaurantName}\nPedidos: ${orderNumbersLabel}\nPago total estimado: ${totalBundle.toFixed(2)} MXN\n\nPara evitar errores, usa el folio al actualizar cada pedido:\nPEDIDO EN DIRECCION AL DOMICILIO <FOLIO>\nEN PUERTA <FOLIO>\nENTREGADO <FOLIO>`
         ).catch(() => null)
       } else {
-        const order = offerOrders[0] as Record<string, unknown>
+        const order = successOrders[0] as Record<string, unknown>
         const storeAddress = String(order.storeAddress ?? order.storeName ?? 'la tienda')
         const paymentMethodDisplay =
           order.paymentMethod === 'cash_on_delivery' || order.paymentMethod === 'cash_on_pickup'
@@ -1676,6 +1798,7 @@ Te avisaremos 10 minutos antes de finalizar.`
     }
 // --- RECHAZAR ---
     if (textBody === 'RECHAZAR' || textBody.startsWith('RECHAZAR ')) {
+      const traceId = crypto.randomUUID().slice(0, 8)
       const orderToken = extractOrderToken(textBody, 'RECHAZAR')
       const offerOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, nowDate, orderToken)
       const nextState = getDriverNextState(repartidor, nowDate)
@@ -1695,9 +1818,11 @@ Te avisaremos 10 minutos antes de finalizar.`
           })
         }
 
-        console.log('[whatsapp webhook] oferta rechazada con orderIds', {
+        console.log('[webhook RECHAZAR] OFFER_REJECTED', {
+          traceId,
           repartidorId: repartidor._id,
           orderIds: releasedOrderIds,
+          orderNumbers: offerOrders.map((order: Record<string, unknown>) => String(order.orderNumber)),
         })
       }
 
@@ -1984,8 +2109,12 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
+        // Regla única de NIP (lib/delivery-pin.ts): la validación depende de
+        // orderRequiresDeliveryPin, la misma fuente que el resto del sistema.
+        // Un mandado SIN Entrega segura o un pedido sin método pin pendiente
+        // NUNCA valida un NIP aquí (aunque exista uno almacenado).
         if (
-          targetOrder.deliveryVerificationMethod !== 'pin' ||
+          !orderRequiresDeliveryPin(targetOrder as Record<string, unknown>) ||
           !isDeliveryPinValid(String(targetOrder.orderNumber), deliveryPinCommand.pin, String(targetOrder.deliveryPinHash ?? ''))
         ) {
           const attempts = Number(targetOrder.deliveryPinAttemptCount ?? 0) + 1

@@ -27,6 +27,126 @@ export type AssignmentDriverLike = {
 };
 
 /**
+ * Estado real mínimo de un pedido para decidir el resultado de una asignación
+ * tras un conflicto/fallo (idempotencia). Lo usan tanto assignOrderToDriver
+ * (lib/dispatch/dispatch-core.ts) como el webhook de WhatsApp: es la ÚNICA
+ * fuente de verdad para interpretar "qué ocurrió realmente" en Sanity.
+ */
+export type FreshOrderForAssignment = {
+  _id?: string;
+  orderNumber?: string;
+  orderStatus?: string;
+  dispatchStatus?: string;
+  deliveryOfertaExpiresAt?: string;
+  driverId?: string | null;
+  offeredToRef?: string;
+};
+
+export type AssignmentOutcome =
+  | { kind: "order_missing" }
+  | { kind: "assigned_to_me"; order: FreshOrderForAssignment }
+  | { kind: "assigned_to_other"; order: FreshOrderForAssignment; otherDriverId: string }
+  | { kind: "still_offered"; order: FreshOrderForAssignment }
+  | { kind: "offer_released"; order: FreshOrderForAssignment };
+
+/**
+ * Clasifica el estado real de un pedido después de un intento de asignación
+ * fallido/conflictivo, dado el repartidor que intentó aceptar.
+ *
+ * - assigned_to_me: el pedido quedó asignado a ESTE repartidor (éxito idempotente).
+ * - assigned_to_other: otro repartidor ganó (no asignar, no liberar).
+ * - still_offered: la oferta sigue vigente para este repartidor (se puede
+ *   reintentar o liberar solo si hubo una falla de validación real).
+ * - offer_released: la oferta ya no existe (rechazada, expirada o cancelada).
+ */
+export function classifyAssignmentOutcome(
+  order: FreshOrderForAssignment | null | undefined,
+  driverId: string,
+  now = Date.now()
+): AssignmentOutcome {
+  if (!order) return { kind: "order_missing" };
+  if (order.driverId && order.driverId === driverId) return { kind: "assigned_to_me", order };
+  if (order.driverId) return { kind: "assigned_to_other", order, otherDriverId: order.driverId };
+  if (order.dispatchStatus === "offered" && order.offeredToRef === driverId) {
+    // Oferta vencida: no se asigna ni se conserva como vigente (regla
+    // "Si la oferta expiró: no asignar").
+    if (order.deliveryOfertaExpiresAt && new Date(order.deliveryOfertaExpiresAt).getTime() <= now) {
+      return { kind: "offer_released", order };
+    }
+    return { kind: "still_offered", order };
+  }
+  return { kind: "offer_released", order };
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Conflictos de revisión de Sanity (409) — helpers compartidos por
+// assignOrderToDriver y releaseOrderFromDriverCore (patrón único).
+// ──────────────────────────────────────────────────────────────────────
+
+/**
+ * Detecta un conflicto de revisión de Sanity (documentRevisionIDDoesNotMatchError,
+ * status 409): el documento cambió entre el fetch y el commit. NO es un error de
+ * negocio: el estado real debe releerse antes de decidir.
+ */
+export function isRevisionConflict(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "statusCode" in error &&
+    (error as { statusCode?: number }).statusCode === 409
+  );
+}
+
+/** Extrae del mensaje del error 409 los ids de revisión para trazabilidad. */
+export function extractRevisionInfo(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return {
+    documentId: message.match(/Document "([^"]+)"/)?.[1],
+    currentRevision: message.match(/currentRevisionID:\s*([A-Za-z0-9_-]+)/)?.[1],
+    expectedRevision: message.match(/expectedRevisionID:\s*([A-Za-z0-9_-]+)/)?.[1],
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────
+// Liberación (unassign): clasificador puro del estado real de un pedido al
+// intentar liberarlo de un repartidor. Lo usa releaseOrderFromDriverCore
+// (lib/dispatch/dispatch-release.ts) y sus tests.
+// ──────────────────────────────────────────────────────────────────────
+
+export type ReleaseStateOutcome =
+  | { kind: "order_missing" }
+  | { kind: "already_released"; order: FreshOrderForAssignment }
+  | { kind: "assigned_to_other"; order: FreshOrderForAssignment }
+  | { kind: "terminal"; order: FreshOrderForAssignment }
+  | { kind: "assigned_to_me"; order: FreshOrderForAssignment };
+
+/**
+ * Clasifica el estado real de un pedido para una operación de LIBERACIÓN
+ * (unassign), dado el repartidor del que se quiere liberar.
+ *
+ * - already_released: el pedido ya no tiene repartidor → éxito idempotente
+ *   (la liberación ya ocurrió; NO se re-ejecutan eventos ni notificaciones).
+ * - assigned_to_other: otro repartidor tiene el pedido (no liberar).
+ * - terminal: pedido entregado/completado/cancelado (no liberar).
+ * - assigned_to_me: el pedido sigue asignado a este repartidor (liberar).
+ *
+ * Precedencia idéntica a la validación original: pedido inexistente → no
+ * asignado a este repartidor → terminado → asignado a mí.
+ */
+export function classifyReleaseState(
+  order: FreshOrderForAssignment | null | undefined,
+  driverId: string
+): ReleaseStateOutcome {
+  if (!order) return { kind: "order_missing" };
+  if (!order.driverId) return { kind: "already_released", order };
+  if (order.driverId !== driverId) return { kind: "assigned_to_other", order };
+  if (["delivered", "completed", "cancelled"].includes(order.orderStatus ?? "")) {
+    return { kind: "terminal", order };
+  }
+  return { kind: "assigned_to_me", order };
+}
+
+/**
  * Valida que una asignación siga siendo correcta en el momento exacto en que
  * se intenta aplicar (seguridad frente a concurrencia entre operadores y a
  * cambios de estado del repartidor).
