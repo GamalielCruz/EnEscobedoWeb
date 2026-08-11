@@ -16,6 +16,7 @@ import {
 import {
   sendMandadoClienteRecogido,
   sendMandadoDestinatarioEnCamino,
+  sendMandadoDestinoEnPuerta,
   sendMandadoOrdenPorCompletar,
 } from '@/lib/mandado-whatsapp'
 import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
@@ -26,7 +27,8 @@ import { resolveSettlementStatusOnDelivery } from '@/lib/order-state'
 import { buildAddressMapsUrl } from '@/lib/order-maps'
 import { buildStoreMapsUrl } from '@/lib/order-pricing'
 import { syncBaserowOrderById } from '@/lib/baserow'
-import { isDeliveryPinValid, revealDeliveryPin } from '@/lib/delivery-pin'
+import { isDeliveryPinValid, orderRequiresDeliveryPin, revealDeliveryPin } from '@/lib/delivery-pin'
+import { planMandadoArrival } from '@/lib/mandado-arrival'
 import { parseDeliveryPinCommand } from '@/lib/delivery-pin-command'
 import { verifyWhatsAppSignature } from '@/lib/whatsapp-webhook'
 import { getDeliveryScheduleConfig } from '@/lib/delivery-schedule-config'
@@ -134,6 +136,7 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   "repartidorAsignadoRef": repartidorAsignado._ref,
   "offeredToRef": offeredTo._ref,
   serviceKind,
+  mandadoEntregaSegura,
   mandadoOrigin,
   mandadoDestination,
   mandadoRecipientPhone,
@@ -174,6 +177,7 @@ const ACTIVE_OFFER_ORDERS_BY_DRIVER_QUERY = `*[
   "repartidorAsignadoRef": repartidorAsignado._ref,
   "offeredToRef": offeredTo._ref,
   serviceKind,
+  mandadoEntregaSegura,
   mandadoOrigin,
   mandadoDestination,
   mandadoRecipientPhone,
@@ -225,6 +229,7 @@ const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._r
   deliveryVerificationMethod,
   deliveryVerificationStatus,
   serviceKind,
+  mandadoEntregaSegura,
   mandadoOrigin,
   mandadoDestination,
   mandadoRecipientPhone,
@@ -526,6 +531,61 @@ function resolveDeliveredSettlement(order: Record<string, unknown>) {
     settlementStatus: String(order.settlementStatus ?? ''),
     orderStatus: 'delivered',
   })
+}
+
+/**
+ * Completa una entrega en puerta (paso final ENTREGADO / NIP válido).
+ * Compartido por el flujo con NIP (validado) y el flujo sin NIP (Entrega
+ * segura desactivada), donde `verifiedByDriver` solo se marca si hubo NIP.
+ */
+async function completeDeliveredOrder(
+  targetOrder: Record<string, unknown>,
+  repartidor: { _id: string; disponible?: boolean; disponibleHasta?: string },
+  nowDate: Date,
+  now: string,
+  opts: { verifiedByDriver?: boolean } = {}
+) {
+  const verifiedAt = now
+  await backendClient.patch(String(targetOrder._id)).ifRevisionId(String(targetOrder._rev)).set({
+    status: 'delivered',
+    orderStatus: 'delivered',
+    dispatchStatus: 'completed',
+    deliveredAt: verifiedAt,
+    settlementStatus: resolveDeliveredSettlement(targetOrder),
+    ...(opts.verifiedByDriver
+      ? {
+          deliveryPinVerifiedAt: verifiedAt,
+          deliveryPinVerifiedBy: repartidor._id,
+          deliveryVerificationStatus: 'verified',
+        }
+      : {}),
+    ...(targetOrder.fulfillmentTiming === 'scheduled' ? { scheduleStatus: 'completed' } : {}),
+    updatedAt: verifiedAt,
+  }).commit()
+
+  after(() => syncBaserowOrderById(String(targetOrder._id)))
+  if (opts.verifiedByDriver) {
+    await appendOrderEvent(String(targetOrder._id), { type: 'delivery_pin_verified', source: 'whatsapp/webhook', actor: repartidor._id })
+  }
+  await appendOrderEvent(String(targetOrder._id), { type: 'delivered', source: 'whatsapp/webhook', actor: repartidor._id })
+
+  const remainingOrders = ((await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>))
+    .filter((order) => String(order._id) !== String(targetOrder._id))
+  const nextState = remainingOrders.length > 0 ? 'busy' : getDriverNextState(repartidor, nowDate)
+  await backendClient.patch(repartidor._id).set({
+    disponible: nextState !== 'offline',
+    estadoDisponibilidad: nextState,
+    ultimaActividad: now,
+  }).commit()
+  if (nextState === 'available') {
+    await dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => console.error('[webhook NIP] Error redisparando pedidos:', error))
+  }
+
+  const customerPhone = normalizeWhatsAppPhone(String(targetOrder.phone ?? ''))
+  if (customerPhone && targetOrder.customerName) {
+    await sendOrderDelivered(customerPhone, String(targetOrder.customerName), String(targetOrder.orderNumber)).catch(() => null)
+  }
+  return { nextState }
 }
 
 async function clearCompetingOffers(orderIds: string[], acceptedDriverId: string, orderNumberLabel: string, now: string) {
@@ -1669,6 +1729,11 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
+        // Para MANDADOS, el comando PEDIDO EN DIRECCION AL DOMICILIO significa
+        // "el repartidor YA recogió el paquete y va en camino al destino" (no
+        // existe un comando separado RECOGÍ). Dispara:
+        //  - mandado__cliente → remitente (recogido y en camino)
+        //  - mandado__destinatario → destinatario, SOLO si existe teléfono
         const isMandadoOrder = String((targetOrder as Record<string, unknown>).serviceKind ?? '') === 'mandado'
         const notifications: Promise<unknown>[] = [
           sendRepartidorEnCamino(fromPhone, String((targetOrder as Record<string, unknown>).orderNumber), String((targetOrder as Record<string, unknown>)._id)),
@@ -1689,8 +1754,18 @@ Te avisaremos 10 minutos antes de finalizar.`
               deliveryAddress: destination,
             }))
 
-            // Si el cliente proporcionó teléfono del destinatario, avisarle también
-            // con la plantilla mandado__destinatario (sin NIP).
+            // TODO (decisión de producto pendiente, NO implementar): en modo "enviar"
+            // (mandado saliente) el remitente no tiene forma de saber si el repartidor
+            // ya llegó a SU domicilio para recoger el paquete; solo existe la
+            // notificación de "ya recogido" (mandado__cliente). Aquí correspondería
+            // una notificación de "repartidor en tu domicilio para recoger" cuando
+            // exista una plantilla aprobada para ello.
+
+            // Si el cliente proporcionó teléfono del destinatario, avisarle con la
+            // plantilla mandado__destinatario. Su variable {{1}} SIEMPRE indica que
+            // no se requiere código: el NIP solo lo recibe el remitente (EN PUERTA
+            // vía orden_repartidor). Si no hay teléfono del destinatario, no se envía
+            // y el pedido se completa igual.
             const recipientPhone = normalizeWhatsAppPhone(String(mandado.mandadoRecipientPhone ?? '').replace(/\D/g, ''))
             if (recipientPhone) {
               notifications.push(sendMandadoDestinatarioEnCamino({
@@ -1760,39 +1835,59 @@ Te avisaremos 10 minutos antes de finalizar.`
         const customerPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).phone ?? ''))
         if (customerPhone && (resolvedTargetOrder as Record<string, unknown>).customerName) {
           let deliveryPin: string | undefined
-          try {
-            const ciphertext = String((resolvedTargetOrder as Record<string, unknown>).deliveryPinCiphertext ?? '')
-            if (ciphertext && (resolvedTargetOrder as Record<string, unknown>).deliveryVerificationStatus === 'pending') {
-              deliveryPin = revealDeliveryPin(ciphertext)
+          // Regla única de NIP: solo se revela/comunica si la orden REALMENTE lo
+          // requiere (mandados: Entrega segura activa; restaurantes: método pin
+          // pendiente). La existencia de un NIP almacenado NO implica requisito.
+          if (orderRequiresDeliveryPin(resolvedTargetOrder as Record<string, unknown>)) {
+            try {
+              const ciphertext = String((resolvedTargetOrder as Record<string, unknown>).deliveryPinCiphertext ?? '')
+              if (ciphertext) {
+                deliveryPin = revealDeliveryPin(ciphertext)
+              }
+            } catch (error) {
+              console.error('[webhook EN PUERTA] No se pudo revelar el NIP del pedido', {
+                orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+                error,
+              })
             }
-          } catch (error) {
-            console.error('[webhook EN PUERTA] No se pudo revelar el NIP del pedido', {
-              orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
-              error,
-            })
           }
 
-          notifications.push(sendClienteRepartidorEnPuerta(
-            customerPhone,
-            String((resolvedTargetOrder as Record<string, unknown>).customerName),
-            String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
-            deliveryPin
-          ))
-
-          // En mandados, además se envía la plantilla orden_repartidor (nombre heredado
-          // de Meta; va al CLIENTE, no al repartidor): la orden está por completarse
-          // y ofrece el botón Ayuda. El NIP ya llegó al cliente con
-          // cliente_repartidor_en_puerta (sendClienteRepartidorEnPuerta) y él decide
-          // si lo comparte con el destinatario.
-          if (String((resolvedTargetOrder as Record<string, unknown>).serviceKind ?? '') === 'mandado') {
-            notifications.push(sendMandadoOrdenPorCompletar({
+          // Regla central (lib/mandado-arrival.ts): decide QUÉ plantillas recibe
+          // el remitente en EN PUERTA según el valor real de la orden (Entrega
+          // segura). NO reutilizar `cliente_repartidor_en_puerta` para mandados.
+          const arrivalPlan = planMandadoArrival(resolvedTargetOrder as Record<string, unknown>)
+          if (arrivalPlan.sendDestinoEnPuerta) {
+            // 1) `mandado_destino_en_puerta` (APROBADA en Meta): repartidor llegó
+            //    al destino. Siempre para mandados (variables: dirección + acción,
+            //    sin NIP).
+            const destination =
+              (resolvedTargetOrder.mandadoDestination as { label?: string } | undefined)?.label
+              ?? (String((resolvedTargetOrder.shippingAddress as { line1?: string } | undefined)?.line1 ?? '') || 'la dirección indicada')
+            notifications.push(sendMandadoDestinoEnPuerta({
               _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
               phone: customerPhone,
               orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
-              // El NIP ya se reveló arriba; viaja en la variable de cuerpo de
-              // orden_repartidor para que el cliente lo comparta con el repartidor.
-              deliveryPin,
+              deliveryAddress: destination,
             }))
+            // 2) `orden_repartidor` (nombre heredado de Meta; va al CLIENTE, no al
+            //    repartidor): lleva el NIP y ofrece el botón Ayuda. SOLO cuando la
+            //    orden requiere NIP (Entrega segura activa). Un mandado sin
+            //    Entrega segura NUNCA recibe instrucciones ni códigos de NIP.
+            if (arrivalPlan.sendOrdenPorCompletar) {
+              notifications.push(sendMandadoOrdenPorCompletar({
+                _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
+                phone: customerPhone,
+                orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
+                deliveryPin,
+              }))
+            }
+          } else {
+            notifications.push(sendClienteRepartidorEnPuerta(
+              customerPhone,
+              String((resolvedTargetOrder as Record<string, unknown>).customerName),
+              String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+              deliveryPin
+            ))
           }
         }
 
@@ -1838,11 +1933,30 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
+        // Regla única de NIP: SOLO se pide al repartidor si la orden realmente lo
+        // requiere (mandados: Entrega segura activa; restaurantes: método pin).
+        if (orderRequiresDeliveryPin(resolvedTargetOrder as Record<string, unknown>)) {
+          await sendBotMessage(
+            fromPhone,
+            `Solicita al cliente el NIP de 6 digitos del pedido #${String((resolvedTargetOrder as Record<string, unknown>).orderNumber)} y respondelo aqui.`
+          ).catch(() => null)
+          return NextResponse.json({ status: 'ok' })
+        }
+
+        // Entrega segura desactivada (o verificación no requerida): la entrega se
+        // completa directamente, sin solicitar ni validar NIP.
+        const { nextState: noPinNextState } = await completeDeliveredOrder(
+          resolvedTargetOrder as Record<string, unknown>,
+          repartidor,
+          nowDate,
+          now
+        )
         await sendBotMessage(
           fromPhone,
-          `Solicita al cliente el NIP de 6 digitos del pedido #${String((resolvedTargetOrder as Record<string, unknown>).orderNumber)} y respondelo aqui.`
+          noPinNextState === 'offline'
+            ? 'Pedido entregado correctamente. Tu sesion de disponibilidad ya termino; responde INICIO para volver a conectarte.'
+            : 'Pedido entregado correctamente. Gracias!'
         ).catch(() => null)
-
         return NextResponse.json({ status: 'ok' })
       }
 
@@ -1898,40 +2012,7 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
-        const verifiedAt = now
-        await backendClient.patch(String(targetOrder._id)).ifRevisionId(String(targetOrder._rev)).set({
-          status: 'delivered',
-          orderStatus: 'delivered',
-          dispatchStatus: 'completed',
-          deliveredAt: verifiedAt,
-          settlementStatus: resolveDeliveredSettlement(targetOrder),
-          deliveryPinVerifiedAt: verifiedAt,
-          deliveryPinVerifiedBy: repartidor._id,
-          deliveryVerificationStatus: 'verified',
-          ...(targetOrder.fulfillmentTiming === 'scheduled' ? { scheduleStatus: 'completed' } : {}),
-          updatedAt: verifiedAt,
-        }).commit()
-
-        after(() => syncBaserowOrderById(String(targetOrder._id)))
-        await appendOrderEvent(String(targetOrder._id), { type: 'delivery_pin_verified', source: 'whatsapp/webhook', actor: repartidor._id })
-        await appendOrderEvent(String(targetOrder._id), { type: 'delivered', source: 'whatsapp/webhook', actor: repartidor._id })
-
-        const remainingOrders = (await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>)
-          .filter((order) => String(order._id) !== String(targetOrder._id))
-        const nextState = remainingOrders.length > 0 ? 'busy' : getDriverNextState(repartidor, nowDate)
-        await backendClient.patch(repartidor._id).set({
-          disponible: nextState !== 'offline',
-          estadoDisponibilidad: nextState,
-          ultimaActividad: now,
-        }).commit()
-        if (nextState === 'available') {
-          await dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => console.error('[webhook NIP] Error redisparando pedidos:', error))
-        }
-
-        const customerPhone = normalizeWhatsAppPhone(String(targetOrder.phone ?? ''))
-        if (customerPhone && targetOrder.customerName) {
-          await sendOrderDelivered(customerPhone, String(targetOrder.customerName), String(targetOrder.orderNumber)).catch(() => null)
-        }
+        const { nextState } = await completeDeliveredOrder(targetOrder, repartidor, nowDate, now, { verifiedByDriver: true })
         await sendBotMessage(
           fromPhone,
           nextState === 'offline'

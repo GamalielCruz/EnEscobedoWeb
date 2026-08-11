@@ -21,6 +21,9 @@ type Props = {
 };
 
 export function AssignModal({ draft, busy, onConfirm, onCancel }: Props) {
+  // Mandados: seleccionar repartidor = enviar OFERTA (plantilla oferta_reparto).
+  // La asignación real ocurre solo cuando el repartidor ACEPTA por WhatsApp.
+  const isMandado = draft?.order.serviceKind === "mandado";
   return (
     <Dialog open={Boolean(draft)} onOpenChange={(open) => !open && onCancel()}>
       <DialogContent className="dark:border-white/10 dark:bg-[#0d1526]">
@@ -28,12 +31,14 @@ export function AssignModal({ draft, busy, onConfirm, onCancel }: Props) {
           <>
             <DialogHeader>
               <DialogTitle className="dark:text-white">
-                {draft.isReassign ? "Reasignar pedido" : "¿Deseas asignar esta orden?"}
+                {draft.isReassign ? "Reasignar pedido" : isMandado ? "Enviar oferta al repartidor" : "¿Deseas asignar esta orden?"}
               </DialogTitle>
               <DialogDescription className="dark:text-slate-400">
                 {draft.isReassign
                   ? "El pedido pasará del repartidor actual al nuevo repartidor. Se notificará a ambos por WhatsApp."
-                  : "Se confirmará la asignación y se notificará al repartidor por WhatsApp."}
+                  : isMandado
+                    ? "Se enviará una oferta de reparto por WhatsApp (plantilla oferta_reparto). El repartidor debe ACEPTARLA para que el mandado quede asignado; si la rechaza o expira, podrás ofertarlo a otro repartidor."
+                    : "Se confirmará la asignación y se notificará al repartidor por WhatsApp."}
               </DialogDescription>
             </DialogHeader>
 
@@ -89,7 +94,7 @@ export function AssignModal({ draft, busy, onConfirm, onCancel }: Props) {
                 className="bg-[#EB1902] text-white shadow-sm transition hover:bg-[#c81502]"
               >
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                {draft.isReassign ? "Confirmar reasignación" : "Confirmar asignación"}
+                {draft.isReassign ? "Confirmar reasignación" : isMandado ? "Enviar oferta" : "Confirmar asignación"}
               </Button>
             </DialogFooter>
           </>

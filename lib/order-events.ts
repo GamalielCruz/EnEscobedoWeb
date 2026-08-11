@@ -12,6 +12,7 @@ export type OrderEventType =
   | "offer_accepted"
   | "offer_rejected"
   | "offer_expired"
+  | "offer_cancelled"
   | "driver_assigned"
   | "at_door"
   | "delivery_pin_failed"

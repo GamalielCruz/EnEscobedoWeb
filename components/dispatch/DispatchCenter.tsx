@@ -228,6 +228,9 @@ export function DispatchCenter() {
   async function confirmAssignment() {
     if (!assignDraft) return;
     const { order, driver, isReassign } = assignDraft;
+    // Mandados: seleccionar repartidor = crear OFERTA (la asignación real ocurre
+    // cuando el repartidor acepta por WhatsApp). Restaurantes: asignación directa.
+    const isMandado = order.serviceKind === "mandado";
     setBusy(true);
     try {
       const res = await fetch("/api/admin/dispatch/assign", {
@@ -242,16 +245,26 @@ export function DispatchCenter() {
                 toDriverId: driver._id,
                 reason: "reasignación manual",
               }
-            : { action: "assign", orderId: order._id, driverId: driver._id, reason: "asignación manual" }
+            : {
+                action: isMandado ? "offer" : "assign",
+                orderId: order._id,
+                driverId: driver._id,
+                reason: isMandado ? "oferta manual" : "asignación manual",
+              }
         ),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "No se pudo asignar");
+      if (!res.ok) throw new Error(data.error ?? "No se pudo completar la acción");
       setAssignDraft(null);
-      notify("success", `Pedido #${shortOrderCode(order.orderNumber)} asignado a ${driver.name}.`);
+      notify(
+        "success",
+        isMandado
+          ? `Oferta enviada a ${driver.name} para el pedido #${shortOrderCode(order.orderNumber)}. Esperando su confirmación.`
+          : `Pedido #${shortOrderCode(order.orderNumber)} asignado a ${driver.name}.`
+      );
       await fetchSnapshot();
     } catch (err) {
-      notify("error", err instanceof Error ? err.message : "No se pudo asignar.");
+      notify("error", err instanceof Error ? err.message : "No se pudo completar la acción.");
       // Concurrencia: si otro operador asignó el pedido o el repartidor cambió
       // de estado, el servidor rechazó (409). Refresca para reflejar el estado real.
       await fetchSnapshot().catch(() => null);
@@ -275,6 +288,32 @@ export function DispatchCenter() {
       await fetchSnapshot();
     } catch (err) {
       notify("error", err instanceof Error ? err.message : "No se pudo liberar.");
+      await fetchSnapshot().catch(() => null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelOffer(order: DispatchOrderCard) {
+    if (!order.offerDriverId) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/dispatch/assign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "cancel_offer",
+          orderId: order._id,
+          driverId: order.offerDriverId,
+          reason: "cancelación de oferta desde el Dispatch Center",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "No se pudo cancelar la oferta");
+      notify("success", `Oferta del pedido #${shortOrderCode(order.orderNumber)} cancelada. Vuelve a la cola.`);
+      await fetchSnapshot();
+    } catch (err) {
+      notify("error", err instanceof Error ? err.message : "No se pudo cancelar la oferta.");
       await fetchSnapshot().catch(() => null);
     } finally {
       setBusy(false);
@@ -523,6 +562,7 @@ export function DispatchCenter() {
                 onSelectOrder={(order) => setSelectedOrderId(order._id)}
                 onUnassign={unassign}
                 onRedispatch={redispatch}
+                onCancelOffer={cancelOffer}
                 onDetails={(order) => setDetailsOrder(order)}
                 mode={mode}
               />

@@ -14,7 +14,12 @@
  * ── Flujo de Mandados (plantillas oficiales aprobadas) ──
  *  - `mandado_cliente`                        → remitente: paquete recogido y en camino.
  *  - `mandado__destinatario`                  → destinatario: le enviaron un mandado.
+ *                                               0 variables (texto 100% estático en Meta):
+ *                                               comunica que no necesita proporcionar código.
  *                                               NO solicita NIP (el NIP solo lo recibe el remitente).
+ *  - `pedido_entregado` (compartida)          → remitente: mandado entregado. Se reutiliza la
+ *                                               plantilla de restaurantes con {{1}} nombre y
+ *                                               {{2}} folio; sin NIP.
  *  - `orden_repartidor`                       → nombre heredado de Meta (engañoso): se envía
  *                                               SIEMPRE al CLIENTE (remitente), avisa que la orden
  *                                               está por completarse, lleva el NIP de la entrega
@@ -23,11 +28,18 @@
  *  - `cliente_entrega_programada_sin_repartidor` → cliente: sin repartidor; 3 botones de contingencia.
  *  - `cliente_repartidor_en_puerta`           → cliente/remitente: repartidor en la puerta y NIP
  *                                               para validar la entrega. Nunca se envía al destinatario.
+ *                                               NO reutilizar para mandados (semántica de restaurantes).
+ *  - `mandado_destino_en_puerta` (APROBADA)   → remitente: repartidor llegó al destino del mandado.
+ *                                               Dos variables de cuerpo: {{1}} dirección de destino y
+ *                                               {{2}} acción ("la entrega de tu mandado"). NO lleva NIP:
+ *                                               el NIP viaja solo en `orden_repartidor` (remitente).
  */
 export const WHATSAPP_TEMPLATES = {
   // ── Mandados ──
   mandadoCliente: "mandado_cliente",
   mandadoDestinatario: "mandado__destinatario",
+  // Aprobada en Meta: remitente avisado de que el repartidor llegó al destino.
+  mandadoDestinoEnPuerta: "mandado_destino_en_puerta",
   ordenRepartidor: "orden_repartidor",
   clienteEntregaProgramadaSinRepartidor: "cliente_entrega_programada_sin_repartidor",
   clienteRepartidorEnPuerta: "cliente_repartidor_en_puerta",
@@ -60,3 +72,13 @@ export const WHATSAPP_TEMPLATES = {
 
 export type WhatsAppTemplateName =
   (typeof WHATSAPP_TEMPLATES)[keyof typeof WHATSAPP_TEMPLATES];
+
+/**
+ * Plantilla APROBADA en Meta para "repartidor llegó al destino del mandado"
+ * (enviada al remitente). Dos variables de cuerpo: {{1}} dirección de destino
+ * y {{2}} acción ("la entrega de tu mandado"). NO lleva NIP: el NIP viaja solo
+ * en `orden_repartidor` (remitente). NO reutilizar `cliente_repartidor_en_puerta`
+ * (semántica de restaurantes).
+ */
+export const MANDADO_DESTINO_EN_PUERTA_TEMPLATE =
+  WHATSAPP_TEMPLATES.mandadoDestinoEnPuerta;

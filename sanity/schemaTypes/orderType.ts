@@ -26,6 +26,7 @@ export const orderType = defineType({
       options: { list: [{ title: "Pedido de restaurante", value: "restaurant" }, { title: "Mandado", value: "mandado" }] },
     }),
     defineField({ name: "mandadoMode", title: "Tipo de mandado", type: "string", options: { list: [{ title: "Recoger y entregar", value: "pickup" }, { title: "Comprar y entregar", value: "purchase" }] }, hidden: ({ document }) => document?.serviceKind !== "mandado" }),
+    defineField({ name: "mandadoEntregaSegura", title: "Entrega segura (NIP)", type: "boolean", initialValue: false, description: "Si está activa, la entrega del mandado requiere NIP: se genera, se comunica al remitente y el repartidor debe validarlo. Si está desactivada, NUNCA se solicita ni valida NIP, aunque exista un NIP almacenado en la orden.", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
     defineField({ name: "mandadoOrigin", title: "Punto de inicio", type: "object", fields: [
       defineField({ name: "label", title: "Dirección", type: "string" }),
       defineField({ name: "lat", title: "Latitud", type: "number" }),
@@ -37,7 +38,7 @@ export const orderType = defineType({
       defineField({ name: "lng", title: "Longitud", type: "number" }),
     ], hidden: ({ document }) => document?.serviceKind !== "mandado" }),
     defineField({ name: "mandadoDetails", title: "Solicitud del mandado", type: "text", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
-    defineField({ name: "mandadoRecipientPhone", title: "Teléfono del destinatario (opcional)", description: "Si se captura, el destinatario recibe la notificación del mandado en camino (plantilla mandado__destinatario, sin NIP).", type: "string", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
+    defineField({ name: "mandadoRecipientPhone", title: "Teléfono del destinatario (opcional)", description: "Si se captura, el destinatario recibe la notificación del mandado en camino (plantilla mandado__destinatario), que siempre indica que no se requiere código. El NIP (si Entrega segura está activa) solo lo recibe el remitente, quien lo comparte con el repartidor.", type: "string", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
     defineField({ name: "mandadoRecipientName", title: "Nombre del destinatario", description: "Nombre del destinatario que recibe la notificación de que el mandado va en camino. El NIP solo llega al WhatsApp del remitente.", type: "string", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
     defineField({ name: "mandadoBusinessName", title: "Nombre del negocio / tienda", description: "Nombre del negocio o tienda del punto de recolección.", type: "string", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
     defineField({ name: "mandadoOriginReference", title: "Referencias de recolección", type: "string", hidden: ({ document }) => document?.serviceKind !== "mandado" }),

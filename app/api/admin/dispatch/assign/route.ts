@@ -6,7 +6,7 @@ import {
   requireAdmin,
 } from "@/lib/dispatch/dispatch-core";
 import { getDispatchConfig } from "@/lib/dispatch/dispatch-config";
-import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
+import { cancelOrderOffer, dispatchDeliveryOffer, offerOrderToDriver } from "@/lib/delivery-dispatch";
 import { backendClient } from "@/sanity/lib/backendClient";
 
 export async function POST(request: NextRequest) {
@@ -18,10 +18,50 @@ export async function POST(request: NextRequest) {
 
     const actor = { actorUserId: admin.userId, actorName: "Operador admin" };
 
-    if (action === "assign") {
+    if (action === "assign" || action === "offer") {
       if (!orderId || !driverId) {
         return NextResponse.json({ error: "Faltan pedido o repartidor." }, { status: 400 });
       }
+      const order = await backendClient.fetch<{ serviceKind?: string; orderNumber?: string }>(
+        `*[_type == "order" && _id == $orderId][0]{ serviceKind, orderNumber }`,
+        { orderId }
+      );
+      if (!order) return NextResponse.json({ error: "El pedido no existe." }, { status: 404 });
+
+      // Flujo de oferta (SOLO mandados): en los 3 modos del Dispatch Center,
+      // "seleccionar repartidor" para un mandado crea una OFERTA, no una
+      // asignación. La asignación definitiva ocurre solo cuando el repartidor
+      // ACEPTA por WhatsApp. Los restaurantes conservan la asignación directa.
+      // La regla vive aquí (servidor) para que ningún cliente/UI la pueda omitir.
+      if (order.serviceKind === "mandado") {
+        const result = await offerOrderToDriver(orderId, driverId, {
+          reason: reason ?? "oferta manual desde el Dispatch Center",
+        });
+        if (!result.ok) return NextResponse.json({ error: result.error }, { status: 409 });
+        const config = await getDispatchConfig().catch(() => null);
+        await backendClient
+          .create({
+            _type: "dispatchAudit",
+            action: "offer",
+            mode: config?.mode ?? "manual",
+            actorUserId: admin.userId,
+            actorName: "Operador admin",
+            order: { _type: "reference", _ref: orderId },
+            orderNumber: order.orderNumber,
+            driver: { _type: "reference", _ref: driverId },
+            reason: reason ?? "oferta manual",
+            details: "Oferta de reparto enviada por WhatsApp; el mandado queda asignado solo cuando el repartidor acepta.",
+            createdAt: new Date().toISOString(),
+          })
+          .catch(() => null);
+        return NextResponse.json({ success: true, offer: true });
+      }
+
+      // Restaurante: el flujo de oferta no aplica; si se pidió explícitamente, se rechaza.
+      if (action === "offer") {
+        return NextResponse.json({ error: "El flujo de oferta solo aplica a mandados." }, { status: 409 });
+      }
+
       const result = await assignOrderToDriver({
         orderId,
         driverId,
@@ -38,6 +78,10 @@ export async function POST(request: NextRequest) {
       if (!orderId || !fromDriverId || !toDriverId) {
         return NextResponse.json({ error: "Faltan datos para reasignar." }, { status: 400 });
       }
+      // Nota: la reasignación es un override admin directo sobre un pedido YA
+      // asignado (no aplica el flujo de oferta). La regla "seleccionar =
+      // oferta" rige solo para pedidos SIN repartidor; reasignar mueve una
+      // asignación existente de un repartidor a otro de forma inmediata.
       const result = await reassignOrder({
         orderId,
         fromDriverId,
@@ -46,6 +90,38 @@ export async function POST(request: NextRequest) {
         reason: reason ?? "reasignación manual",
       });
       if (!result.ok) return NextResponse.json({ error: result.error }, { status: 409 });
+      return NextResponse.json({ success: true });
+    }
+
+    if (action === "cancel_offer") {
+      if (!orderId || !driverId) {
+        return NextResponse.json({ error: "Faltan pedido o repartidor." }, { status: 400 });
+      }
+      const order = await backendClient.fetch<{ orderNumber?: string }>(
+        `*[_type == "order" && _id == $orderId][0]{ orderNumber }`,
+        { orderId }
+      );
+      if (!order) return NextResponse.json({ error: "El pedido no existe." }, { status: 404 });
+      // El código interno "offer_cancelled" activa el evento offer_cancelled en
+      // setOrdersWaiting; el texto legible para humanos va en el audit details.
+      const result = await cancelOrderOffer(orderId, driverId, "offer_cancelled");
+      if (!result.ok) return NextResponse.json({ error: result.error }, { status: 409 });
+      const config = await getDispatchConfig().catch(() => null);
+      await backendClient
+        .create({
+          _type: "dispatchAudit",
+          action: "cancel_offer",
+          mode: config?.mode ?? "manual",
+          actorUserId: admin.userId,
+          actorName: "Operador admin",
+          order: { _type: "reference", _ref: orderId },
+          orderNumber: order.orderNumber,
+          driver: { _type: "reference", _ref: driverId },
+          reason: reason ?? "cancelación de oferta",
+          details: "Oferta cancelada por el operador; el pedido vuelve a la cola de asignación.",
+          createdAt: new Date().toISOString(),
+        })
+        .catch(() => null);
       return NextResponse.json({ success: true });
     }
 

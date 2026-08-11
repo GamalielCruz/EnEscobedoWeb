@@ -24,7 +24,7 @@ export function normalizeMandadoDraft(value: unknown): Omit<MandadoDraft, "price
   const details = String(input?.details || "").trim().slice(0, 800);
   if (mode !== "pickup" && mode !== "purchase") throw new Error("Selecciona el tipo de mandado.");
   if (!details) throw new Error("Describe qué debemos recoger o comprar.");
-  return { mode, origin: point(input?.origin, "El punto de inicio"), destination: point(input?.destination, "El punto de entrega"), details };
+  return { mode, origin: point(input?.origin, "El punto de inicio"), destination: point(input?.destination, "El punto de entrega"), details, pinEnabled: input?.pinEnabled === true };
 }
 
 export async function quoteMandado(value: unknown): Promise<MandadoDraft> {
@@ -88,6 +88,9 @@ export function buildMandadoOrderDocument(input: {
     phone: input.phone.replace(/\D/g, "").slice(-12),
     serviceKind: "mandado",
     mandadoMode: input.draft.mode,
+    // Campo real de "Entrega segura": SOLO esta bandera decide si la entrega
+    // requiere NIP. La existencia de un NIP almacenado NO implica requisito.
+    mandadoEntregaSegura: input.draft.pinEnabled === true,
     mandadoOrigin: input.draft.origin,
     mandadoDestination: input.draft.destination,
     mandadoDetails: input.draft.details,
@@ -157,6 +160,11 @@ export function buildMandadoOrderDocument(input: {
     paidAt: input.paymentStatus === "paid" ? now : undefined,
     ...states,
     settlementStatus: paidOnline && input.paymentStatus === "paid" ? "ready" : "pending",
-    ...createDeliveryPin(input.orderNumber, new Date(now)),
+    // NIP condicional: solo se genera cuando Entrega segura está activa. Si está
+    // desactivada, no se genera ni se almacena NIP y la verificación queda en
+    // not_required para que ningún flujo lo solicite.
+    ...(input.draft.pinEnabled === true
+      ? createDeliveryPin(input.orderNumber, new Date(now))
+      : { deliveryVerificationMethod: "not_required", deliveryVerificationStatus: "not_required" } as const),
   };
 }

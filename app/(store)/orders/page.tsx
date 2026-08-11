@@ -20,7 +20,7 @@ import { OrdersStatusNotifications } from "@/components/OrdersStatusNotification
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { DeliveryPinCard } from "@/components/DeliveryPinCard";
-import { revealDeliveryPin } from "@/lib/delivery-pin";
+import { orderRequiresDeliveryPin, revealDeliveryPin } from "@/lib/delivery-pin";
 
 const BRAND_COLOR = "#eb1902";
 
@@ -58,6 +58,7 @@ interface ExtendedOrder {
   mandadoOrigin?: { label?: string };
   mandadoDestination?: { label?: string };
   mandadoDetails?: string;
+  mandadoEntregaSegura?: boolean;
   deliveryPinCiphertext?: string;
   deliveryVerificationStatus?: string;
 }
@@ -164,9 +165,15 @@ const OrderStepper = ({
 
 const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
   const createdAt = order.orderDate ?? order.createdAt;
-  const deliveryPin = order.orderType === "delivery" && order.deliveryPinCiphertext && order.deliveryVerificationStatus === "pending"
-    ? revealDeliveryPin(order.deliveryPinCiphertext)
-    : null;
+  // Regla única de NIP: se muestra solo si la orden REALMENTE lo requiere
+  // (mandados: Entrega segura activa; restaurantes: método pin pendiente).
+  // La existencia de un NIP almacenado NO implica requisito.
+  const deliveryPin =
+    order.orderType === "delivery" &&
+    order.deliveryPinCiphertext &&
+    orderRequiresDeliveryPin(order as ExtendedOrder)
+      ? revealDeliveryPin(order.deliveryPinCiphertext)
+      : null;
 
   return (
     <Card className="overflow-hidden border border-gray-200 shadow-sm">

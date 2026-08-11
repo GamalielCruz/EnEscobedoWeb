@@ -270,7 +270,9 @@ function DriverCard({
           className="flex items-center gap-1 rounded-md bg-[#EB1902] px-2.5 py-1 text-[10px] font-bold text-white transition hover:bg-[#c81502] disabled:cursor-not-allowed disabled:opacity-40"
         >
           <Hand className="h-3 w-3" />
-          Asignar
+          {/* Mandados: seleccionar repartidor = enviar oferta; la asignación
+              real ocurre cuando el repartidor acepta por WhatsApp. */}
+          {selectedOrder?.serviceKind === "mandado" ? "Ofertar" : "Asignar"}
         </button>
         {driver.bloqueado ? (
           <button
@@ -473,7 +475,7 @@ export function DriversPanel({
               }}
               className="shrink-0 rounded-md bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-sm transition hover:bg-emerald-700"
             >
-              Asignar
+              {selectedOrder.serviceKind === "mandado" ? "Ofertar" : "Asignar"}
             </button>
           </div>
         </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   Banknote,
@@ -31,6 +31,7 @@ type Props = {
   onSelectOrder: (order: DispatchOrderCard) => void;
   onUnassign: (order: DispatchOrderCard) => void;
   onRedispatch: (order: DispatchOrderCard) => void;
+  onCancelOffer: (order: DispatchOrderCard) => void;
   onDetails: (order: DispatchOrderCard) => void;
   mode: DispatchMode;
 };
@@ -41,6 +42,26 @@ type Props = {
  * datos originales jamás se modifican ni se ocultan.
  */
 const HISTORICAL_THRESHOLD_MINUTES = 24 * 60;
+
+/**
+ * Countdown mm:ss hasta la expiración de una oferta por WhatsApp.
+ * Si ya venció (o no hay fecha), devuelve 00:00.
+ */
+function formatOfferCountdown(expiresAt: string | null | undefined, nowMs: number) {
+  if (!expiresAt) return "00:00";
+  const remainingSeconds = Math.max(
+    0,
+    Math.floor((new Date(expiresAt).getTime() - nowMs) / 1000)
+  );
+  const mm = String(Math.floor(remainingSeconds / 60)).padStart(2, "0");
+  const ss = String(remainingSeconds % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+function isOfferExpired(expiresAt: string | null | undefined, nowMs: number) {
+  if (!expiresAt) return false;
+  return new Date(expiresAt).getTime() <= nowMs;
+}
 
 const priorityStyles: Record<DispatchOrderCard["priority"], { ring: string; chip: string; label: string }> = {
   urgent: {
@@ -74,7 +95,7 @@ function OrderCard({
   order: DispatchOrderCard;
   selected: boolean;
   onSelect: (order: DispatchOrderCard) => void;
-  onAction?: (action: "assign" | "unassign" | "redispatch", order: DispatchOrderCard) => void;
+  onAction?: (action: "assign" | "unassign" | "redispatch" | "cancel_offer", order: DispatchOrderCard) => void;
   onDetails?: (order: DispatchOrderCard) => void;
   mode: DispatchMode;
   dragDisabled?: boolean;
@@ -82,6 +103,14 @@ function OrderCard({
   registeredDrivers?: number;
 }) {
   const [dragging, setDragging] = useState(false);
+  // Tick por segundo para el countdown de la oferta pendiente.
+  const [now, setNow] = useState(Date.now());
+  const isOffered = order.dispatchStatus === "offered";
+  useEffect(() => {
+    if (!isOffered) return;
+    const tick = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(tick);
+  }, [isOffered, order.offerExpiresAt]);
   const style = priorityStyles[order.priority];
 
   function handleDragStart(e: React.DragEvent) {
@@ -183,6 +212,39 @@ function OrderCard({
                 : "No hay recomendación disponible"}
           </p>
         )}
+        {/* Oferta pendiente por WhatsApp: repartidor, countdown y cancelación */}
+        {isOffered && (
+          <div
+            className={cn(
+              "mt-1 rounded-lg border px-2.5 py-2",
+              isOfferExpired(order.offerExpiresAt, now)
+                ? "border-red-300/70 bg-red-50 dark:border-red-500/30 dark:bg-red-500/10"
+                : "border-amber-300/70 bg-amber-50 dark:border-amber-500/30 dark:bg-amber-500/10"
+            )}
+          >
+            <div className="flex items-center gap-1.5">
+              <Clock className={cn("h-3.5 w-3.5", isOfferExpired(order.offerExpiresAt, now) ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400")} />
+              <span className={cn("text-[10px] font-black uppercase tracking-wide", isOfferExpired(order.offerExpiresAt, now) ? "text-red-700 dark:text-red-300" : "text-amber-700 dark:text-amber-300")}>
+                {isOfferExpired(order.offerExpiresAt, now) ? "Oferta vencida" : "Oferta enviada"}
+              </span>
+              <span
+                className={cn(
+                  "ml-auto rounded-md px-1.5 py-0.5 font-mono text-[11px] font-bold",
+                  isOfferExpired(order.offerExpiresAt, now)
+                    ? "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300"
+                    : "bg-white/70 text-amber-800 dark:bg-white/10 dark:text-amber-200"
+                )}
+                title={order.offerExpiresAt ? new Date(order.offerExpiresAt).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit", hour12: false }) : undefined}
+              >
+                {formatOfferCountdown(order.offerExpiresAt, now)}
+              </span>
+            </div>
+            <p className="mt-1 flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 dark:text-amber-200">
+              <Truck className="h-3 w-3 shrink-0" />
+              {order.offerDriverName ?? "Repartidor"} — esperando su confirmación
+            </p>
+          </div>
+        )}
         {order.fulfillmentTiming === "scheduled" && order.scheduledSlot?.startAt && (
           <p className="flex items-center gap-1.5 text-[11px] text-violet-600 dark:text-violet-400">
             <Clock className="h-3 w-3" />
@@ -194,7 +256,7 @@ function OrderCard({
 
       {onAction && (
         <div className="mt-2.5 flex items-center gap-1.5 pl-6">
-          {mode !== "auto" && (
+          {mode !== "auto" && !isOffered && (
             <button
               type="button"
               onClick={(e) => {
@@ -204,20 +266,37 @@ function OrderCard({
               className="flex items-center gap-1 rounded-md bg-[#EB1902] px-2 py-1 text-[10px] font-bold text-white transition hover:bg-[#c81502]"
             >
               <ArrowRight className="h-3 w-3" />
-              Asignar
+              {/* Mandados: seleccionar repartidor = enviar oferta; la asignación
+                  real ocurre cuando el repartidor acepta por WhatsApp. */}
+              {order.serviceKind === "mandado" ? "Ofertar" : "Asignar"}
             </button>
           )}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onAction("redispatch", order);
-            }}
-            className="flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-600 transition hover:bg-slate-50 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/5"
-          >
-            <RefreshCw className="h-3 w-3" />
-            Reintentar algoritmo
-          </button>
+          {isOffered && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAction("cancel_offer", order);
+              }}
+              className="flex items-center gap-1 rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-bold text-amber-700 transition hover:bg-amber-100 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-300 dark:hover:bg-amber-500/20"
+            >
+              <XCircle className="h-3 w-3" />
+              Cancelar oferta
+            </button>
+          )}
+          {!isOffered && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onAction("redispatch", order);
+              }}
+              className="flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[10px] font-semibold text-slate-600 transition hover:bg-slate-50 dark:border-white/10 dark:text-slate-300 dark:hover:bg-white/5"
+            >
+              <RefreshCw className="h-3 w-3" />
+              Reintentar algoritmo
+            </button>
+          )}
           {order.driverId && (
             <button
               type="button"
@@ -256,22 +335,33 @@ export function OrdersPanel({
   onSelectOrder,
   onUnassign,
   onRedispatch,
+  onCancelOffer,
   onDetails,
   mode,
 }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [tab, setTab] = useState<"pendientes" | "asignados">("pendientes");
+  const [tab, setTab] = useState<"pendientes" | "ofertas" | "asignados">("pendientes");
 
-  const unassignedSorted = useMemo(
-    () => [...unassigned].sort((a, b) => b.waitingMinutes - a.waitingMinutes),
+  // Un pedido "sin asignar" puede estar esperando repartidor (waiting_for_driver)
+  // o tener una oferta por WhatsApp pendiente (offered). Son estados distintos.
+  const offered = useMemo(
+    () => unassigned.filter((o) => o.dispatchStatus === "offered"),
     [unassigned]
+  );
+  const waiting = useMemo(
+    () => unassigned.filter((o) => o.dispatchStatus !== "offered"),
+    [unassigned]
+  );
+  const waitingSorted = useMemo(
+    () => [...waiting].sort((a, b) => b.waitingMinutes - a.waitingMinutes),
+    [waiting]
   );
 
   return (
     <div className="flex min-h-0 flex-col rounded-xl border border-black/6 bg-white shadow-[0_1px_3px_rgba(9,25,59,0.06)] dark:border-white/10 dark:bg-[#0d1526]">
       <div className="flex items-center gap-1 border-b border-black/6 px-3 py-2 dark:border-white/10">
         <div className="flex items-center gap-1 rounded-lg bg-slate-100 p-0.5 dark:bg-white/5">
-          {(["pendientes", "asignados"] as const).map((t) => (
+          {(["pendientes", "ofertas", "asignados"] as const).map((t) => (
             <button
               key={t}
               type="button"
@@ -281,7 +371,11 @@ export function OrdersPanel({
                 tab === t ? "bg-white text-[#09193B] shadow-sm dark:bg-[#EB1902] dark:text-white" : "text-slate-500 dark:text-slate-400"
               )}
             >
-              {t === "pendientes" ? `Sin asignar · ${unassigned.length}` : `Asignados · ${assigned.length}`}
+              {t === "pendientes"
+                ? `Sin asignar · ${waiting.length}`
+                : t === "ofertas"
+                  ? `Ofertas · ${offered.length}`
+                  : `Asignados · ${assigned.length}`}
             </button>
           ))}
         </div>
@@ -291,31 +385,46 @@ export function OrdersPanel({
       </div>
 
       <div ref={scrollRef} className="min-h-0 flex-1 space-y-2.5 overflow-y-auto p-2.5">
-        {(tab === "pendientes" ? unassignedSorted : assigned).length === 0 ? (
+        {(tab === "pendientes"
+          ? waitingSorted
+          : tab === "ofertas"
+            ? offered
+            : assigned).length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 py-14 text-center">
             <Package className="h-8 w-8 text-slate-300 dark:text-slate-600" />
             <p className="text-xs font-medium text-slate-400 dark:text-slate-500">
-              {tab === "pendientes" ? "No hay pedidos sin asignar." : "No hay pedidos asignados."}
+              {tab === "pendientes"
+                ? "No hay pedidos sin asignar."
+                : tab === "ofertas"
+                  ? "No hay ofertas enviadas."
+                  : "No hay pedidos asignados."}
             </p>
             <p className="max-w-[220px] text-[11px] text-slate-400/80 dark:text-slate-600">
-              Los nuevos pedidos aparecerán aquí en tiempo real.
+              {tab === "ofertas"
+                ? "Las ofertas enviadas por WhatsApp aparecerán aquí con su countdown."
+                : "Los nuevos pedidos aparecerán aquí en tiempo real."}
             </p>
           </div>
         ) : (
-          (tab === "pendientes" ? unassignedSorted : assigned).map((order) => (
+          (tab === "pendientes"
+            ? waitingSorted
+            : tab === "ofertas"
+              ? offered
+              : assigned).map((order) => (
             <OrderCard
               key={order._id}
               order={order}
               selected={selectedOrderId === order._id}
               onSelect={onSelectOrder}
               mode={mode}
-              dragDisabled={tab === "asignados"}
+              dragDisabled={tab === "asignados" || order.dispatchStatus === "offered"}
               onDetails={onDetails}
               availableDrivers={availableDrivers}
               registeredDrivers={registeredDrivers}
               onAction={(action, o) => {
                 if (action === "unassign") onUnassign(o);
                 else if (action === "redispatch") onRedispatch(o);
+                else if (action === "cancel_offer") onCancelOffer(o);
                 else if (action === "assign") {
                   // Asignar: se selecciona el pedido; el operador elige repartidor
                   onSelectOrder(o);

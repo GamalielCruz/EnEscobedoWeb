@@ -44,6 +44,11 @@ export type DispatchOrderCard = {
   storeId?: string | null;
   storeHasOwnDelivery?: boolean;
   offerExpiresAt?: string | null;
+  // Oferta pendiente por WhatsApp (mandados en modo manual/asistido y cualquier
+  // pedido en modo auto): el pedido NO está asignado, pero un repartidor tiene
+  // una oferta vigente (dispatchStatus == "offered").
+  offerDriverId?: string | null;
+  offerDriverName?: string | null;
   customerHelpRequested?: boolean;
   // Mejor candidato calculado con la MISMA lógica de dispatch (top-1).
   recommendedDriverId?: string | null;
@@ -207,6 +212,8 @@ const ACTIVE_ORDERS_QUERY = `*[
   "destLng": coalesce(shippingAddress.longitude, mandadoDestination.lng),
   "destLabel": coalesce(shippingAddress.line1, mandadoDestination.label),
   deliveryOfertaExpiresAt,
+  "offerDriverId": offeredTo._ref,
+  "offerDriverName": offeredTo->nombre,
   customerHelpRequested,
   scheduledDispatchStartedAt,
   repartidorAsignadoAt
@@ -529,6 +536,8 @@ export async function fetchDispatchSnapshot(): Promise<DispatchSnapshot> {
         storeId: order.storeId ?? null,
         storeHasOwnDelivery: Boolean(order.storeHasOwnDelivery),
         offerExpiresAt: order.deliveryOfertaExpiresAt ?? null,
+        offerDriverId: order.offerDriverId ?? null,
+        offerDriverName: order.offerDriverName ?? null,
         customerHelpRequested: Boolean(order.customerHelpRequested),
         recommendedDriverId: topRec?.driver._id ?? null,
         recommendedDriverName: topRec?.driver.name ?? null,

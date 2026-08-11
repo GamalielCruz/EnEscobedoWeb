@@ -258,7 +258,12 @@ async function setOrdersWaiting(orderIds: string[], reason: string) {
       .filter((order) => !order.repartidorAsignado)
       .map((order) =>
         appendOrderEvent(order._id, {
-          type: reason === "offer_expired" ? "offer_expired" : "offer_rejected",
+          type:
+            reason === "offer_expired"
+              ? "offer_expired"
+              : reason === "offer_cancelled"
+                ? "offer_cancelled"
+                : "offer_rejected",
           source: "delivery-dispatch",
           reason,
         })
@@ -406,6 +411,112 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
   return true;
 }
 
+/**
+ * Oferta manual desde el Dispatch Center (SOLO mandados).
+ *
+ * En los 3 modos (auto/manual/asistido), "seleccionar repartidor" para un
+ * mandado NUNCA asigna: crea una oferta por WhatsApp (plantilla `oferta_reparto`).
+ * La asignación real ocurre únicamente cuando el repartidor ACEPTA en el webhook
+ * (assignOrderToDriver, atómico con ifRevisionId). Los restaurantes conservan la
+ * asignación directa (assignOrderToDriver desde la ruta).
+ *
+ * Protección de concurrencia:
+ *  - `markOrdersAsOffered` usa ifRevisionId: si la orden cambió (otro operador
+ *    la ofertó/asignó en paralelo), el patch falla y NO se envía la oferta.
+ *  - Una orden solo puede tener UNA oferta pendiente (`offeredTo`). Tras un
+ *    rechazo/expiración, setOrdersWaiting limpia `offeredTo` y se puede re-ofertar
+ *    a otro repartidor; nunca hay dos ofertas simultáneas sobre el mismo mandado.
+ *  - Al aceptar, assignOrderToDriver vuelve a validar con ifRevisionId: si dos
+ *    repartidores aceptaran en paralelo, solo el primero gana.
+ */
+export async function offerOrderToDriver(
+  orderId: string,
+  driverId: string,
+  options: { reason?: string } = {}
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const order = (await backendClient.fetch(ORDER_QUERY, { orderId })) as DispatchOrder | null;
+  if (!order) return { ok: false, error: "El pedido no existe." };
+
+  // El flujo de oferta aplica SOLO a mandados.
+  if (order.serviceKind !== "mandado") {
+    return { ok: false, error: "El flujo de oferta solo aplica a mandados." };
+  }
+  if (!isDriverDispatchEnabled(order.storeHasOwnDelivery)) {
+    return { ok: false, error: "El reparto no está habilitado para este pedido." };
+  }
+  if (!isOrderDispatchable(order)) {
+    return { ok: false, error: "El pedido no está en estado despachable." };
+  }
+  if (order.repartidorAsignado) {
+    return { ok: false, error: "El mandado ya tiene repartidor asignado." };
+  }
+  if (order.deliveryOfertaEnviada && order.offeredToRef) {
+    return { ok: false, error: "El mandado ya tiene una oferta pendiente con otro repartidor." };
+  }
+
+  const driver = (await backendClient.fetch(DRIVER_BY_ID_QUERY, { driverId })) as DispatchDriver | null;
+  if (!driver) return { ok: false, error: "El repartidor no existe." };
+  if (!driver.disponible || driver.estadoDisponibilidad !== "available") {
+    return { ok: false, error: "El repartidor no está disponible en este momento." };
+  }
+  if (driver.disponibleHasta && new Date(driver.disponibleHasta).getTime() <= Date.now()) {
+    return { ok: false, error: "La sesión de disponibilidad del repartidor terminó; reanúdalo antes de ofertar." };
+  }
+
+  const { nowIso, expiresAtIso } = buildOfferWindow();
+
+  try {
+    await markOrdersAsOffered([order._id], driver._id, expiresAtIso);
+    await prepareDriverForOffer(driver, [order._id], order.storeId ?? null, "single", nowIso, expiresAtIso);
+  } catch (error) {
+    // Limpieza ante fallo parcial: si markOrdersAsOffered ya mutó la orden (o
+    // prepareDriverForOffer al repartidor), se revierte el estado de oferta.
+    // Ambas llamadas son seguras de ejecutar incluso si una no llegó a mutar.
+    await setOrdersWaiting([order._id], "offer_prepare_failed").catch(() => null);
+    await rollbackDriverOffer(driver._id).catch(() => null);
+    console.error("[delivery-dispatch] error marcando oferta manual", { orderId, driverId, error });
+    return { ok: false, error: "No se pudo crear la oferta (el pedido cambió de estado en el servidor)." };
+  }
+
+  const address = buildAddress(order);
+  const totalLabel = buildTotalLabel(order.totalPrice);
+  const paymentMethodLabel = buildPaymentMethodLabel(order.paymentMethod);
+  const mapsUrl = buildAddressMapsUrl(order.shippingAddress, address);
+  const restaurantAmount = (order.totalPrice ?? 0) - (order.driverPayout ?? 0);
+  const restaurantLabel = buildTotalLabel(restaurantAmount);
+  const driverLabel = buildTotalLabel(order.driverPayout ?? 0);
+
+  try {
+    await sendDeliveryOffer(
+      driver.telefono,
+      order.orderNumber,
+      order.customerName ?? "Cliente",
+      order.storeName ?? "Punto de inicio",
+      address,
+      totalLabel,
+      paymentMethodLabel,
+      mapsUrl,
+      restaurantLabel,
+      driverLabel
+    );
+  } catch (error) {
+    await rollbackDriverOffer(driver._id);
+    await setOrdersWaiting([order._id], "send_offer_failed");
+    console.error("[delivery-dispatch] error enviando oferta manual", { orderId, driverId, error });
+    return { ok: false, error: "No se pudo enviar la oferta por WhatsApp." };
+  }
+
+  console.log("[delivery-dispatch] oferta manual enviada", {
+    orderId: order._id,
+    orderNumber: order.orderNumber,
+    repartidorId: driver._id,
+    repartidorNombre: driver.nombre,
+    expiraAt: expiresAtIso,
+    reason: options.reason,
+  });
+  return { ok: true };
+}
+
 export async function dispatchDeliveryBundle(orderIds: string[], options: DispatchOptions = {}): Promise<boolean> {
   const uniqueOrderIds = [...new Set(orderIds.filter(Boolean))].slice(0, 2);
   if (uniqueOrderIds.length <= 1) return uniqueOrderIds[0] ? dispatchDeliveryOffer(uniqueOrderIds[0], options) : false;
@@ -487,6 +598,64 @@ export async function dispatchDeliveryBundle(orderIds: string[], options: Dispat
     expiraAt: expiresAtIso,
   });
   return true;
+}
+
+/**
+ * Cancelación manual de una oferta pendiente desde el Dispatch Center.
+ *
+ * Solo aplica a pedidos en estado `offered` con una oferta vigente (`offeredTo`).
+ * Devuelve el pedido a la cola (waiting_for_driver), registra el evento
+ * `offer_cancelled` (vía el código interno `reason === "offer_cancelled"`) y
+ * libera al repartidor (vuelve a available, sin ofertas) SOLO si la orden se
+ * liberó realmente.
+ *
+ * Protección de concurrencia:
+ *  - La validación del estado se hace con datos frescos; si la oferta ya no está
+ *    vigente, se rechaza sin mutar nada.
+ *  - releaseOrdersForDriver re-fetcha y filtra con ifRevisionId: si en paralelo
+ *    el repartidor ACEPTÓ (assignOrderToDriver ya lo puso en busy con pedidos
+ *    activos), `released.length === 0` y NO se toca al repartidor (clobberearlo
+ *    a available corrompería la máquina de estados).
+ */
+export async function cancelOrderOffer(
+  orderId: string,
+  driverId: string,
+  reason = "offer_cancelled"
+): Promise<{ ok: true; released: boolean } | { ok: false; error: string }> {
+  const order = (await backendClient.fetch(
+    `*[_type == "order" && _id == $orderId][0]{
+      _id,
+      dispatchStatus,
+      "offeredToRef": offeredTo._ref
+    }`,
+    { orderId }
+  )) as { _id: string; dispatchStatus?: string; offeredToRef?: string } | null;
+  if (!order) return { ok: false, error: "El pedido no existe." };
+  if (String(order.dispatchStatus ?? "") !== "offered" || String(order.offeredToRef ?? "") !== driverId) {
+    return { ok: false, error: "El pedido no tiene una oferta pendiente con ese repartidor." };
+  }
+
+  const released = await releaseOrdersForDriver([orderId], driverId, reason);
+
+  if (released.length > 0) {
+    // Limpiar el estado de oferta del repartidor: vuelve a available para poder
+    // recibir nuevas ofertas (mismo efecto que clearPendingOfferForDriver del webhook).
+    await backendClient
+      .patch(driverId)
+      .set({ estadoDisponibilidad: "available", ultimaActividad: new Date().toISOString() })
+      .unset([
+        "ultimoPedidoOfertado",
+        "pedidosOfertados",
+        "restauranteOferta",
+        "ofertaTipo",
+        "ofertaEnviadaAt",
+        "ofertaExpiraAt",
+      ])
+      .commit()
+      .catch(() => null);
+  }
+
+  return { ok: true, released: released.length > 0 };
 }
 
 export async function releaseOrdersForDriver(orderIds: string[], driverId: string, reason: string): Promise<string[]> {

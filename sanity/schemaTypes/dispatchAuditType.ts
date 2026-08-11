@@ -11,6 +11,7 @@ export const dispatchAuditType = defineType({
       type: "string",
       options: {
         list: [
+          { title: "Oferta enviada", value: "offer" },
           { title: "Asignación", value: "assign" },
           { title: "Reasignación", value: "reassign" },
           { title: "Liberar pedido", value: "unassign" },

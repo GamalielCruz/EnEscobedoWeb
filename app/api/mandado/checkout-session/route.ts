@@ -36,6 +36,7 @@ export async function POST(request: NextRequest) {
         customerEmail,
         phone,
         mandadoMode: draft.mode,
+        mandadoPinEnabled: draft.pinEnabled ? "true" : "false",
         mandadoOriginLabel: draft.origin.label,
         mandadoOriginLat: String(draft.origin.lat),
         mandadoOriginLng: String(draft.origin.lng),

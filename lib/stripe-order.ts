@@ -55,6 +55,7 @@ type StripeSessionMetadata = {
   scheduledTimezone?: string;
   orderItems?: string;
   mandadoMode?: string;
+  mandadoPinEnabled?: string;
   mandadoOriginLabel?: string;
   mandadoOriginLat?: string;
   mandadoOriginLng?: string;
@@ -231,6 +232,7 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
       origin: { label: metadata.mandadoOriginLabel, lat: metadata.mandadoOriginLat, lng: metadata.mandadoOriginLng },
       destination: { label: metadata.mandadoDestinationLabel, lat: metadata.mandadoDestinationLat, lng: metadata.mandadoDestinationLng },
       details: `${metadata.mandadoDetails0 || ""}${metadata.mandadoDetails1 || ""}`,
+      pinEnabled: metadata.mandadoPinEnabled === "true",
     });
     const stripeFees = await resolveStripeFee(stripe, session);
   
