@@ -18,12 +18,20 @@ export type MandadoDraft = {
   originReference?: string;
   destinationReference?: string;
   destinationPerson?: string;
-  // Entrega segura con NIP: el NIP se envía únicamente al WhatsApp del cliente
-  // (remitente), quien decide si lo comparte con el destinatario.
+  // Entrega segura con NIP: el código se envía al canal configurado
+  // (`nipRecipient`: destinatario o remitente) según lib/mandado-nip-channel.ts.
   pinEnabled?: boolean;
   // Notificación al destinatario (plantilla `mandado__destinatario`, sin NIP).
   recipientName?: string;
   recipientPhone?: string;
+  // Declaración del remitente sobre si el destinatario usa WhatsApp (AJUSTE 2:
+  // es una declaración del usuario, NO una verdad verificada por Meta).
+  recipientWhatsAppDeclared?: boolean;
+  // Confirmación explícita del remitente de ser el canal fallback del NIP cuando
+  // el destinatario no tiene WhatsApp (AJUSTE 1). Se persiste en la orden.
+  senderNipFallbackAccepted?: boolean;
+  // Quién recibe el código de entrega (sender | recipient) (PASO 3).
+  nipRecipient?: "sender" | "recipient";
 };
 
 export const MANDADO_SERVICE_FEE = 14;

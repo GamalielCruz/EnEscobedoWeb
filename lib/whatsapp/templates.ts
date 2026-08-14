@@ -33,6 +33,11 @@
  *                                               Dos variables de cuerpo: {{1}} dirección de destino y
  *                                               {{2}} acción ("la entrega de tu mandado"). NO lleva NIP:
  *                                               el NIP viaja solo en `orden_repartidor` (remitente).
+ *  - `mandado_nip_destinatario` (PENDIENTE)    → DESTINATARIO: lleva el NIP de la entrega (PASO 4).
+ *                                               NO está aprobada en Meta; el código queda preparado y,
+ *                                               si no existe, el envío falla sin romper otros flujos
+ *                                               (el gate mantiene la entrega bloqueada). Cuando Meta la
+ *                                               apruebe, solo hay que ajustar el nombre aquí.
  */
 export const WHATSAPP_TEMPLATES = {
   // ── Mandados ──
@@ -40,6 +45,8 @@ export const WHATSAPP_TEMPLATES = {
   mandadoDestinatario: "mandado__destinatario",
   // Aprobada en Meta: remitente avisado de que el repartidor llegó al destino.
   mandadoDestinoEnPuerta: "mandado_destino_en_puerta",
+  // PENDIENTE de aprobación en Meta: NIP al DESTINATARIO (canal recipient, PASO 4).
+  mandadoNipDestinatario: "mandado_nip_destinatario",
   ordenRepartidor: "orden_repartidor",
   clienteEntregaProgramadaSinRepartidor: "cliente_entrega_programada_sin_repartidor",
   clienteRepartidorEnPuerta: "cliente_repartidor_en_puerta",

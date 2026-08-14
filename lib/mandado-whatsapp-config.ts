@@ -16,20 +16,30 @@
  *     0 variables (texto estático en Meta: no necesita proporcionar código).
  *     El NIP solo lo recibe el remitente. Solo se envía si el cliente
  *     proporcionó el teléfono del destinatario.
- *  6. El repartidor llega al destino → se envía al CLIENTE (remitente):
- *     `mandado_destino_en_puerta` (APROBADA en Meta: dirección de destino +
- *     acción, sin NIP), SIEMPRE para mandados. Si la entrega es SEGURA
- *     (requiere NIP), además se envía `orden_repartidor` (nombre heredado de
- *     Meta; va al CLIENTE, no al repartidor) que lleva el NIP y ofrece el botón
- *     Ayuda. Un mandado SIN Entrega segura nunca recibe instrucciones de NIP.
- *     NO se reutiliza `cliente_repartidor_en_puerta` (semántica de restaurantes).
- *  7. El remitente comparte el NIP con el destinatario por el medio que prefiera.
- *  8. El repartidor valida el NIP y se completa la orden.
- *  9. Al completarse, el remitente recibe `pedido_entregado` (plantilla compartida
+ *  6. El repartidor llega al destino → se envía al remitente `mandado_destino_en_puerta`
+ *     (APROBADA: dirección de destino + acción, sin NIP), SIEMPRE para mandados.
+ *     El NIP se envía SOLO al canal configurado en la creación (`mandadoNipRecipient`):
+ *       - canal "sender"    → `orden_repartidor` (nombre heredado de Meta; va al
+ *         CLIENTE/remitente), lleva el NIP y ofrece el botón Ayuda.
+ *       - canal "recipient" → `mandado_nip_destinatario` (PENDIENTE de aprobación),
+ *         lleva el NIP al DESTINATARIO y ofrece el botón Ayuda.
+ *     Un mandado SIN Entrega segura nunca recibe instrucciones de NIP. NO se
+ *     reutiliza `cliente_repartidor_en_puerta` (semántica de restaurantes) ni
+ *     `mandado__destinatario` (su texto aprobado dice que NO se necesita código).
+ *  7. El repartidor valida el NIP y se completa la orden.
+ *  8. Al completarse, el remitente recibe `pedido_entregado` (plantilla compartida
  *     con restaurantes): {{1}} nombre del remitente, {{2}} folio, sin NIP.
  *
- * El NIP solo lo recibe el cliente (remitente). El sistema NUNCA envía el NIP al
- * destinatario ni al repartidor automáticamente.
+ * El NIP se envía únicamente al canal configurado (destinatario o remitente). El
+ * sistema NUNCA lo envía al repartidor automáticamente.
+ *
+ * ── PLANTILLA FUTURA (PASO 6, no cableada) ──
+ * 3) Aviso de entrega SIN NIP (`mandado_sin_nip_aviso`, PENDIENTE, solo si resulta
+ *    necesario): se usaría cuando el cliente elija deliberadamente NO usar NIP, para
+ *    que el destinatario sepa que recibirá el paquete sin código. Contenido: texto
+ *    estático o con {{1}} folio; destinatario: destinatario; evento: EN PUERTA cuando
+ *    `mandadoEntregaSegura == false`. NO se implementa porque el flujo de entrega sin
+ *    NIP ya existe y el aviso no es requerido; PASO 7 bloquea cualquier bypass del NIP.
  */
 import { WHATSAPP_TEMPLATES } from "./whatsapp/templates.ts";
 
@@ -60,14 +70,34 @@ export const MANDADO_WHATSAPP_TEMPLATES = {
     buttons: [],
   },
   /**
+   * Destinatario: el código de entrega de su mandado (PASO 4).
+   * PENDIENTE de aprobación en Meta: si no existe, el envío falla y el gate
+   * mantiene la entrega bloqueada (escalando a soporte), sin romper otros flujos.
+   * Cuando Meta apruebe la plantilla, ajustar el nombre en lib/whatsapp/templates.ts
+   * (única fuente de verdad). 1 variable de cuerpo (el NIP) + botón Ayuda.
+   * NO reutilizar `mandado__destinatario`: su texto aprobado dice que NO se
+   * necesita código.
+   */
+  recipientNip: {
+    name: WHATSAPP_TEMPLATES.mandadoNipDestinatario,
+    language: "es_MX",
+    hasButtons: true,
+    bodyVariables: ["deliveryPin"],
+    buttons: [{ index: 0, type: "quick_reply", text: "Ayuda", dynamicParameters: 1 }],
+    // PENDIENTE de aprobación en Meta: el envío se intenta igual (Meta es la
+    // fuente de verdad); si no existe, falla sin romper otros flujos y el gate
+    // mantiene la entrega bloqueada. Los tests del set aprobado la excluyen.
+    pendingApproval: true,
+  },
+  /**
    * Cliente (remitente): la orden está por completarse, botón Ayuda.
-   * SOLO se envía cuando la orden requiere NIP (mandados con Entrega segura
-   * activa); si no, el remitente recibe únicamente `mandado_destino_en_puerta`.
+   * SOLO se envía cuando la orden requiere NIP Y el canal es el remitente
+   * (`mandadoNipRecipient == "sender"`); si no, el remitente recibe únicamente
+   * `mandado_destino_en_puerta`.
    * El nombre `orden_repartidor` es heredado de Meta y es engañoso: esta
    * plantilla NO se envía al repartidor, SIEMPRE se envía al cliente.
-   * La única variable de cuerpo es el NIP de la entrega: llega al cliente
-   * (remitente) para que él lo comparta con el repartidor. El sistema nunca
-   * envía el NIP al destinatario ni al repartidor automáticamente.
+   * La única variable de cuerpo es el NIP de la entrega. El sistema nunca
+   * envía el NIP al repartidor automáticamente.
    */
   orderAboutToComplete: {
     name: WHATSAPP_TEMPLATES.ordenRepartidor,

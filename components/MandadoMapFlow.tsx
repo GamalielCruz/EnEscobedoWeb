@@ -134,13 +134,22 @@ export default function MandadoMapFlow() {
   const [destinationReference, setDestinationReference] = useState("");
   const [destinationPerson, setDestinationPerson] = useState("");
 
-  // Entrega segura (NIP): el NIP se envía únicamente al WhatsApp del cliente
-  // (remitente). El sistema NO lo envía automáticamente al destinatario.
+  // Entrega segura (NIP): el código se envía al canal configurado (destinatario
+  // o remitente) según lib/mandado-nip-channel.ts. Nunca se exige en la puerta un
+  // código sin ruta de entrega (gate del PASO 1).
   const [pinEnabled, setPinEnabled] = useState(false);
-  // Destinatario (opcional): nombre y teléfono para la plantilla
-  // `mandado__destinatario` (aviso de mandado en camino, SIN NIP).
+  // Destinatario: nombre y teléfono. Con NIP activo definen quién recibe el envío.
   const [recipientName, setRecipientName] = useState("");
   const [recipientPhone, setRecipientPhone] = useState("");
+  // Declaración del usuario sobre si el destinatario usa WhatsApp (AJUSTE 2:
+  // NO es una verdad verificada; define el canal del NIP).
+  const [recipientWhatsAppDeclared, setRecipientWhatsAppDeclared] = useState(true);
+  // Confirmación explícita del remitente de ser el canal fallback del NIP cuando
+  // el destinatario no tiene WhatsApp (AJUSTE 1). Se persiste en la orden.
+  const [senderFallbackAccepted, setSenderFallbackAccepted] = useState(false);
+  // Flujo explícito (regla 3): el remitente recibe el código aunque no haya datos
+  // del destinatario.
+  const [nipToSender, setNipToSender] = useState(false);
 
   // Cotización
   const [quote, setQuote] = useState<QuoteState>({ status: "idle" });
@@ -465,11 +474,29 @@ export default function MandadoMapFlow() {
 
 
   // ── Validación y CTA ──────────────────────────────────────────────
-  // El teléfono del destinatario es opcional (solo para la notificación
-  // `mandado__destinatario`); nunca bloquea la confirmación del mandado.
+  // Sin Entrega segura el teléfono del destinatario es opcional (solo notifica).
+  // Con Entrega segura (PASO 3) debe existir un canal WhatsApp para el NIP:
+  //  - canal destinatario → nombre + teléfono (10 dígitos) del destinatario;
+  //  - canal remitente (explícito, nipToSender) → el teléfono del remitente se
+  //    valida en el checkout (aquí solo se confirma la elección).
   const recipientPhoneDigits = recipientPhone.replace(/\D/g, "");
+  const recipientIdentified = recipientName.trim().length > 0 && recipientPhoneDigits.length === 10;
+  // Canal del NIP calculado IGUAL que el servidor (lib/mandado-nip-channel.ts):
+  //  - destinatario identificado + WhatsApp declarado → destinatario (regla 1);
+  //  - destinatario sin WhatsApp + confirmación explícita, o flujo "recibir el
+  //    código yo" → remitente (reglas 2/3);
+  //  - sin canal → null (no se puede confirmar con NIP).
+  const nipChannel =
+    !pinEnabled
+      ? null
+      : recipientIdentified && recipientWhatsAppDeclared
+        ? "recipient"
+        : nipToSender || (recipientIdentified && !recipientWhatsAppDeclared && senderFallbackAccepted)
+          ? "sender"
+          : null;
   const canConfirm =
-    Boolean(origin && destination && details.trim() && quote.status === "ready");
+    Boolean(origin && destination && details.trim() && quote.status === "ready") &&
+    (nipChannel !== null || !pinEnabled);
 
   const goToCheckout = useCallback(() => {
     if (!canConfirm || quote.status !== "ready" || !origin || !destination) return;
@@ -486,6 +513,12 @@ export default function MandadoMapFlow() {
       pinEnabled,
       recipientName: recipientName.trim() || undefined,
       recipientPhone: recipientPhoneDigits,
+      // PASO 3 + AJUSTE 1/2: declaración y canal del NIP (el servidor decide
+      // igualmente con lib/mandado-nip-channel.ts; esto refleja la elección del
+      // usuario y persiste la confirmación explícita del fallback).
+      recipientWhatsAppDeclared,
+      senderNipFallbackAccepted: nipChannel === "sender" ? true : false,
+      nipRecipient: nipChannel === "sender" ? "sender" : "recipient",
     };
     try {
       sessionStorage.setItem("mandadoCheckoutDraft", JSON.stringify(draft));
@@ -496,7 +529,8 @@ export default function MandadoMapFlow() {
   }, [
     canConfirm, quote, mode, origin, destination, details, businessName, originReference,
     destinationReference, destinationPerson, pinEnabled, recipientName,
-    recipientPhoneDigits, router,
+    recipientPhoneDigits, recipientWhatsAppDeclared, senderFallbackAccepted, nipChannel,
+    nipToSender, router,
   ]);
 
   const ctaLabel =
@@ -1148,8 +1182,9 @@ export default function MandadoMapFlow() {
                       )}
 
                       {/* 4. Seguridad (NIP) — solo al confirmar.
-                          El NIP SIEMPRE se envía al WhatsApp del cliente (remitente);
-                          el sistema no lo envía automáticamente al destinatario. */}
+                          El código se envía al canal configurado: al destinatario
+                          (si tiene WhatsApp) o al remitente (si el destinatario no
+                          tiene WhatsApp o el usuario elige recibirlo). */}
                       {progress === "confirm" && (
                       <Card>
                         <div className="flex items-start gap-3">
@@ -1176,8 +1211,9 @@ export default function MandadoMapFlow() {
                             >
                               <div className="mt-4 rounded-xl bg-[#09193B]/[0.05] px-3.5 py-3">
                                 <p className="text-xs leading-5 text-slate-600">
-                                  El NIP se enviará a tu WhatsApp para que tú decidas cuándo compartirlo
-                                  con el destinatario. El sistema no lo envía automáticamente a otra persona.
+                                  {nipToSender || !recipientWhatsAppDeclared
+                                    ? "El código de entrega se enviará a TU WhatsApp y tú deberás proporcionárselo al repartidor."
+                                    : "Enviaremos el código de entrega al WhatsApp del destinatario; esa persona deberá mostrarlo al repartidor para recibir el paquete."}
                                 </p>
                               </div>
                             </motion.div>
@@ -1186,9 +1222,10 @@ export default function MandadoMapFlow() {
                       </Card>
                       )}
 
-                      {/* 5. Notificar al destinatario (opcional) — solo al confirmar.
-                          Captura nombre y teléfono del destinatario para la plantilla
-                          `mandado__destinatario` (aviso de mandado en camino, SIN NIP). */}
+                      {/* 5. ¿Quién recibe el envío? — solo al confirmar.
+                          Con Entrega segura activa (PASO 3), el destinatario define el
+                          canal del NIP: nombre + teléfono + declaración de WhatsApp.
+                          Si el destinatario no tiene WhatsApp, el código va al remitente. */}
                       {progress === "confirm" && (
                       <Card>
                         <div className="mb-3 flex items-start gap-3">
@@ -1197,11 +1234,16 @@ export default function MandadoMapFlow() {
                           </div>
                           <div className="min-w-0 flex-1">
                             <h3 className="text-sm font-bold text-[#09193B]">
-                              Notificar al destinatario{" "}
-                              <span className="font-medium text-slate-400">(opcional)</span>
+                              {pinEnabled ? (
+                                "¿Quién recibirá el envío?"
+                              ) : (
+                                <>Notificar al destinatario{" "}<span className="font-medium text-slate-400">(opcional)</span></>
+                              )}
                             </h3>
                             <p className="mt-0.5 text-xs leading-5 text-slate-500">
-                              El destinatario recibirá una notificación por WhatsApp cuando tu mandado vaya en camino.
+                              {pinEnabled
+                                ? "Enviaremos el código de entrega a esta persona."
+                                : "El destinatario recibirá una notificación por WhatsApp cuando tu mandado vaya en camino."}
                             </p>
                           </div>
                         </div>
@@ -1236,6 +1278,67 @@ export default function MandadoMapFlow() {
                             )}
                           </div>
                         </div>
+
+                        {pinEnabled && (
+                          <div className="mt-4 space-y-3">
+                            {/* Declaración de WhatsApp del destinatario (regla 1) */}
+                            {!nipToSender && (
+                              <div className="flex items-center justify-between gap-3 rounded-xl bg-[#09193B]/[0.04] px-3.5 py-3">
+                                <div>
+                                  <p className="text-xs font-bold text-[#09193B]">¿El destinatario tiene WhatsApp?</p>
+                                  <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
+                                    {recipientWhatsAppDeclared
+                                      ? "Enviaremos el código de entrega a su WhatsApp."
+                                      : "El destinatario no tiene WhatsApp. Podemos enviar el código a ti y tú deberás proporcionárselo."}
+                                  </p>
+                                </div>
+                                <ModernSwitch checked={recipientWhatsAppDeclared} onChange={setRecipientWhatsAppDeclared} label="El destinatario tiene WhatsApp" />
+                              </div>
+                            )}
+
+                            {/* AJUSTE 1: confirmación explícita del fallback al remitente */}
+                            {!nipToSender && recipientIdentified && !recipientWhatsAppDeclared && (
+                              <label className="flex items-start gap-3 rounded-xl border border-slate-200 px-3.5 py-3">
+                                <input
+                                  type="checkbox"
+                                  checked={senderFallbackAccepted}
+                                  onChange={(e) => setSenderFallbackAccepted(e.target.checked)}
+                                  className="mt-0.5 h-4 w-4 accent-[#eb1901]"
+                                />
+                                <span className="text-[11px] leading-4 text-slate-600">
+                                  <strong className="text-slate-900">Sí, yo proporcionaré el código al destinatario.</strong>{" "}
+                                  Recibirás el código de entrega y serás responsable de proporcionárselo al destinatario antes de la entrega.
+                                </span>
+                              </label>
+                            )}
+
+                            {/* Flujo explícito: el remitente recibe el código (regla 3) */}
+                            <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3.5 py-3">
+                              <div>
+                                <p className="text-xs font-bold text-[#09193B]">Recibir el código yo (remitente)</p>
+                                <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
+                                  {nipToSender
+                                    ? "El código llegará a tu WhatsApp y tú se lo darás al repartidor."
+                                    : "Elige esta opción si prefieres que el código no vaya al destinatario."}
+                                </p>
+                              </div>
+                              <ModernSwitch checked={nipToSender} onChange={setNipToSender} label="Recibir el código yo" />
+                            </div>
+
+                            {nipChannel === null && !nipToSender && (
+                              recipientIdentified && !recipientWhatsAppDeclared ? (
+                                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                                  Para usar la entrega con NIP, confirma que recibirás el código de entrega y se lo proporcionarás al destinatario antes de la entrega.
+                                </p>
+                              ) : (
+                                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                                  Para usar la entrega con NIP necesitamos un WhatsApp donde podamos enviar el código: el del destinatario o el tuyo.
+                                  Completa el nombre y teléfono del destinatario, o elige recibir el código tú.
+                                </p>
+                              )
+                            )}
+                          </div>
+                        )}
                       </Card>
                       )}
                       </motion.div>

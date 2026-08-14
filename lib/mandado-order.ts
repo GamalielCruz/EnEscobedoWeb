@@ -63,6 +63,11 @@ export function buildMandadoOrderDocument(input: {
   settlementSnapshot?: any;
   recipientPhone?: string;
   recipientName?: string;
+  recipientWhatsAppDeclared?: boolean;
+  senderNipFallbackAccepted?: boolean;
+  nipRecipient?: "sender" | "recipient" | null;
+  nipDeliveryChannel?: "whatsapp_sender" | "whatsapp_recipient" | "none" | null;
+  nipDeliveryPhone?: string;
   businessName?: string;
   originReference?: string;
   destinationReference?: string;
@@ -96,6 +101,18 @@ export function buildMandadoOrderDocument(input: {
     mandadoDetails: input.draft.details,
     mandadoRecipientPhone: input.recipientPhone?.replace(/\D/g, "").slice(-12) || undefined,
     mandadoRecipientName: input.recipientName?.trim().slice(0, 60) || undefined,
+    // PASO 3 + AJUSTE 1/2 + endurecimiento B: declaración de WhatsApp del
+    // destinatario (no verificada), confirmación explícita del remitente como
+    // canal fallback, RESPONSABLE del NIP (`mandadoNipRecipient`: quién debe
+    // asegurar que el destinatario tenga el código) y CANAL EFECTIVO + teléfono
+    // destino (`nipDeliveryChannel`/`nipDeliveryPhone`: a qué número se intenta
+    // entregar el código). Responsable y canal coinciden hoy; el modelo los
+    // separa para escenarios futuros (lib/mandado-nip-channel.ts).
+    mandadoRecipientWhatsAppDeclared: input.recipientWhatsAppDeclared,
+    senderNipFallbackAccepted: input.nipRecipient === "sender" ? true : undefined,
+    mandadoNipRecipient: input.nipRecipient ?? undefined,
+    nipDeliveryChannel: input.draft.pinEnabled === true ? (input.nipDeliveryChannel ?? undefined) : undefined,
+    nipDeliveryPhone: input.draft.pinEnabled === true ? (input.nipDeliveryPhone ?? undefined) : undefined,
     mandadoBusinessName: input.businessName?.trim().slice(0, 80) || undefined,
     mandadoOriginReference: input.originReference?.trim().slice(0, 120) || undefined,
     mandadoDestinationReference: input.destinationReference?.trim().slice(0, 120) || undefined,
@@ -160,6 +177,10 @@ export function buildMandadoOrderDocument(input: {
     paidAt: input.paymentStatus === "paid" ? now : undefined,
     ...states,
     settlementStatus: paidOnline && input.paymentStatus === "paid" ? "ready" : "pending",
+    // PASO 1: estado de entrega del NIP. `pending` al crear (aún no se ha
+    // comunicado el código); el envío y la recepción real de Meta lo promueven
+    // a sent/delivered/failed (lib/nip-delivery.ts). Sin Entrega segura → not_required.
+    nipDeliveryStatus: input.draft.pinEnabled === true ? "pending" : "not_required",
     // NIP condicional: solo se genera cuando Entrega segura está activa. Si está
     // desactivada, no se genera ni se almacena NIP y la verificación queda en
     // not_required para que ningún flujo lo solicite.

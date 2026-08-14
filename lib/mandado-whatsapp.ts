@@ -7,6 +7,8 @@ import {
   type MandadoTemplateName,
 } from "@/lib/mandado-whatsapp-config";
 import { normalizeWhatsAppPhone, sendWhatsAppTemplate } from "@/lib/whatsapp";
+import { isNipCarrierTemplate } from "@/lib/nip-delivery";
+import { updateOrderNipDeliveryStatus } from "@/lib/nip-delivery-store";
 import { WHATSAPP_TEMPLATES } from "@/lib/whatsapp/templates";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { createHash } from "node:crypto";
@@ -71,6 +73,12 @@ export async function sendMandadoWhatsAppTemplate(input: {
   const recipient = normalizeWhatsAppPhone(input.order.phone);
   if (!recipient) return { sent: false, reason: "invalid_phone" as const };
   const template = getMandadoTemplate(input.templateName);
+  if ((template as { pendingApproval?: boolean }).pendingApproval) {
+    console.warn("[mandado-whatsapp] plantilla PENDIENTE de aprobación en Meta; el envío puede fallar", {
+      orderId: input.order._id,
+      templateName: template.name,
+    });
+  }
   const components = buildMandadoTemplateComponents(input);
   const claim = await claimDelivery({
     orderId: input.order._id,
@@ -102,6 +110,11 @@ export async function sendMandadoWhatsAppTemplate(input: {
       payload: { ...eventBase, metaMessageId },
     });
     await backendClient.patch(claim.id).set({ status: "sent", sentAt: eventBase.sentAt, metaMessageId }).commit();
+    // PASO 1/2: un 200 de Meta NO es entrega. La plantilla que transporta el NIP
+    // pasa a `sent` aquí; solo la recepción real de `statuses` lo lleva a delivered.
+    if (isNipCarrierTemplate(template.name)) {
+      await updateOrderNipDeliveryStatus(input.order._id, "sent").catch(() => null);
+    }
     return { sent: true, metaMessageId };
   } catch (error) {
     await appendOrderEvent(input.order._id, {
@@ -121,6 +134,11 @@ export async function sendMandadoWhatsAppTemplate(input: {
       failedAt: new Date().toISOString(),
       errorMessage: error instanceof Error ? error.message.slice(0, 300) : "Error desconocido",
     }).commit().catch(() => null);
+    // PASO 1/2: si la plantilla transporta el NIP y el envío falló, el código NO
+    // llegó al canal: el gate se cierra y la entrega queda como incidencia.
+    if (isNipCarrierTemplate(template.name)) {
+      await updateOrderNipDeliveryStatus(input.order._id, "failed").catch(() => null);
+    }
     console.error("[mandado-whatsapp] envio fallido", {
       orderId: input.order._id,
       templateName: template.name,
@@ -220,16 +238,22 @@ export function sendMandadoDestinoEnPuerta(order: MandadoNotification) {
  * para que él lo comparta con el repartidor. El sistema NUNCA envía el NIP al
  * destinatario ni al repartidor automáticamente.
  */
-export function sendMandadoOrdenPorCompletar(order: MandadoNotification) {
-  // Solo se llama cuando la orden requiere NIP (ver lib/mandado-arrival.ts).
-  // Si el NIP no puede revelarse (anomalía de datos: Entrega segura activa sin
-  // ciphertext), se omite el envío en lugar de mandar el folio como si fuera un
-  // código de entrega, lo que confundiría al remitente.
+export function sendMandadoOrdenPorCompletar(
+  order: MandadoNotification,
+  opts: { idempotencySuffix?: string } = {}
+) {
+  // Solo se llama cuando la orden requiere NIP Y el canal es el remitente
+  // (ver lib/mandado-arrival.ts). Si el NIP no puede revelarse (anomalía de
+  // datos: Entrega segura activa sin ciphertext), se omite el envío en lugar de
+  // mandar el folio como si fuera un código de entrega.
   if (!order.deliveryPin) {
     console.warn("[mandado-whatsapp] orden_repartidor omitida: NIP requerido pero no disponible", {
       orderId: order._id,
       orderNumber: order.orderNumber,
     });
+    // Anomalía de datos (Entrega segura activa sin ciphertext): el código no
+    // puede comunicarse; el gate queda cerrado y la entrega se escala a soporte.
+    void updateOrderNipDeliveryStatus(order._id, "failed").catch(() => null);
     return Promise.resolve({ sent: false, reason: "missing_pin" as const });
   }
   return sendMandadoWhatsAppTemplate({
@@ -239,8 +263,37 @@ export function sendMandadoOrdenPorCompletar(order: MandadoNotification) {
     // Nota: el action se normaliza en el webhook (los _ se convierten en espacios),
     // por eso el payload usa "MANDADO AYUDA" igual que los botones "SCHEDULE *".
     buttonParameters: [`MANDADO AYUDA|${order._id}`],
-    idempotencyKey: `${order._id}:orden_repartidor:en_puerta`,
+    idempotencyKey: `${order._id}:orden_repartidor:${opts.idempotencySuffix ?? "en_puerta"}`,
     logicalEvent: "orden_por_completarse",
+  });
+}
+
+/**
+ * Destinatario: el código de entrega de su mandado (PASO 4, canal "recipient").
+ * Usa `mandado_nip_destinatario` (PENDIENTE de aprobación en Meta). El teléfono
+ * destino se pasa en `order.phone` (el llamador lo normaliza desde
+ * `mandadoRecipientPhone`). El botón Ayuda llega al mismo payload que
+ * `orden_repartidor` (MANDADO AYUDA).
+ */
+export function sendMandadoNipToRecipient(
+  order: MandadoNotification,
+  opts: { idempotencySuffix?: string } = {}
+) {
+  if (!order.deliveryPin) {
+    console.warn("[mandado-whatsapp] mandado_nip_destinatario omitida: NIP requerido pero no disponible", {
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+    });
+    void updateOrderNipDeliveryStatus(order._id, "failed").catch(() => null);
+    return Promise.resolve({ sent: false, reason: "missing_pin" as const });
+  }
+  return sendMandadoWhatsAppTemplate({
+    order,
+    templateName: WHATSAPP_TEMPLATES.mandadoNipDestinatario,
+    bodyParameters: [String(order.deliveryPin)],
+    buttonParameters: [`MANDADO AYUDA|${order._id}`],
+    idempotencyKey: `${order._id}:mandado_nip_destinatario:${opts.idempotencySuffix ?? "en_puerta"}`,
+    logicalEvent: "nip_enviado_destinatario",
   });
 }
 

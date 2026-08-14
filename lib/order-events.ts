@@ -17,6 +17,9 @@ export type OrderEventType =
   | "at_door"
   | "delivery_pin_failed"
   | "delivery_pin_verified"
+  | "delivery_pin_regen"
+  | "delivery_pin_resent"
+  | "delivery_pin_incident"
   | "delivery_override"
   | "ready_for_pickup"
   | "picked_up"
@@ -34,6 +37,7 @@ export type OrderEventType =
   | "scheduled_order_cancelled"
   | "scheduled_order_risk_alert"
   | "whatsapp_template_sent"
+  | "whatsapp_template_delivered"
   | "whatsapp_template_failed";
 
 export async function appendOrderEvent(

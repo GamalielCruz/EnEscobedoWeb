@@ -36,6 +36,7 @@ import { HistoryPanel } from "@/components/dispatch/HistoryPanel";
 import { DriverSupportPanel } from "@/components/dispatch/DriverSupportPanel";
 import { AssignModal } from "@/components/dispatch/AssignModal";
 import { OrderDetailsModal } from "@/components/dispatch/OrderDetailsModal";
+import { NipIncidentsPanel } from "@/components/dispatch/NipIncidentsPanel";
 import { shortOrderCode } from "@/lib/dispatch/dispatch-format";
 
 const POLL_INTERVAL_MS = 12_000;
@@ -445,6 +446,15 @@ export function DispatchCenter() {
           </span>
         )}
       </div>
+
+      {/* ── Incidencias de NIP (entregas protegidas sin código entregado) ── */}
+      <NipIncidentsPanel
+        onSelectOrder={(orderId) => {
+          setSelectedOrderId(orderId);
+          setAlertsOpen(false);
+        }}
+        notify={notify}
+      />
 
       {/* ── Bandeja de alertas operativas ─────────────────────── */}
       {(snapshot?.alerts?.length ?? 0) > 0 && (

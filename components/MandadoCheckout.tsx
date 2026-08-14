@@ -23,6 +23,11 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
   const [phone, setPhone] = useState("");
   const [recipientName, setRecipientName] = useState("");
   const [recipientPhone, setRecipientPhone] = useState("");
+  // PASO 3 + AJUSTE 1/2: declaración del usuario sobre el WhatsApp del destinatario
+  // (no verificada) y confirmación explícita del remitente como canal fallback.
+  const [recipientWhatsAppDeclared, setRecipientWhatsAppDeclared] = useState(true);
+  const [senderFallbackAccepted, setSenderFallbackAccepted] = useState(false);
+  const [nipToSender, setNipToSender] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [clientSecret, setClientSecret] = useState<string | null>(null);
@@ -36,7 +41,10 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
   useEffect(() => {
     setRecipientName(String(draft?.recipientName || ""));
     setRecipientPhone(String(draft?.recipientPhone || "").replace(/\D/g, "").slice(0, 10));
-  }, [draft?.recipientName, draft?.recipientPhone]);
+    setRecipientWhatsAppDeclared(draft?.recipientWhatsAppDeclared ?? true);
+    setSenderFallbackAccepted(draft?.senderNipFallbackAccepted ?? false);
+    setNipToSender(draft?.nipRecipient === "sender");
+  }, [draft?.recipientName, draft?.recipientPhone, draft?.recipientWhatsAppDeclared, draft?.senderNipFallbackAccepted, draft?.nipRecipient]);
 
   useEffect(() => {
     if (!clientSecret || !stripeContainerRef.current) return;
@@ -78,10 +86,20 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
   }
 
   const digits = phone.replace(/\D/g, "").slice(-10);
-  // El NIP SIEMPRE se envía al WhatsApp del cliente (remitente). El destinatario
-  // solo recibe (opcional) la notificación `mandado__destinatario` (sin NIP).
+  // PASO 3: el código de entrega va al canal configurado (destinatario o remitente).
   const recipientDigits = recipientPhone.replace(/\D/g, "").slice(0, 10);
-  const ready = digits.length === 10 && method;
+  const pinEnabled = Boolean(draft?.pinEnabled);
+  const recipientIdentified = recipientName.trim().length > 0 && recipientDigits.length === 10;
+  // Canal del NIP calculado igual que el servidor (lib/mandado-nip-channel.ts).
+  const nipChannel =
+    !pinEnabled
+      ? null
+      : recipientIdentified && recipientWhatsAppDeclared
+        ? "recipient"
+        : nipToSender || (recipientIdentified && !recipientWhatsAppDeclared && senderFallbackAccepted)
+          ? "sender"
+          : null;
+  const ready = digits.length === 10 && method && (nipChannel !== null || !pinEnabled);
   const leaveCheckout = () => {
     sessionStorage.removeItem("mandadoCheckoutDraft");
     router.push("/?service=mandado");
@@ -107,6 +125,9 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
           phone: `52${digits}`,
           recipientPhone: recipientDigits,
           recipientName: recipientName.trim(),
+          recipientWhatsAppDeclared,
+          senderNipFallbackAccepted: nipChannel === "sender" ? true : false,
+          nipRecipient: nipChannel === "sender" ? "sender" : "recipient",
           businessName: draft.businessName || "",
           originReference: draft.originReference || "",
           destinationReference: draft.destinationReference || "",
@@ -177,9 +198,10 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                   <p className="mt-3 flex items-start gap-2 rounded-lg bg-[#09193B]/5 p-3 text-xs leading-5 text-gray-700">
                     <span className="mt-0.5 shrink-0">🔒</span>
                     <span>
-                      <strong>Entrega segura:</strong> el NIP se enviará a tu WhatsApp para que tú
-                      decidas cuándo compartirlo con el destinatario. El sistema no lo envía
-                      automáticamente a otra persona.
+                      <strong>Entrega segura:</strong>{" "}
+                      {nipChannel === "sender"
+                        ? "el código de entrega se enviará a tu WhatsApp y tú deberás proporcionárselo al repartidor."
+                        : "el código de entrega se enviará al WhatsApp del destinatario; esa persona deberá mostrarlo al repartidor."}
                     </span>
                   </p>
                 )}
@@ -211,8 +233,14 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                         </label>
 
                         <div className="mt-3 rounded-xl border border-gray-200 bg-white p-4">
-                          <span className="block text-sm font-semibold text-gray-900">Notificar al destinatario (opcional)</span>
-                          <span className="mt-1 block text-xs text-gray-500">Recibirá una notificación por WhatsApp cuando tu mandado vaya en camino.</span>
+                          <span className="block text-sm font-semibold text-gray-900">
+                            {pinEnabled ? "¿Quién recibirá el envío?" : "Notificar al destinatario (opcional)"}
+                          </span>
+                          <span className="mt-1 block text-xs text-gray-500">
+                            {pinEnabled
+                              ? "Enviaremos el código de entrega a esta persona."
+                              : "Recibirá una notificación por WhatsApp cuando tu mandado vaya en camino."}
+                          </span>
                           <input
                             value={recipientName}
                             onChange={(event) => setRecipientName(event.target.value.slice(0, 60))}
@@ -226,6 +254,57 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                           </div>
                           {recipientDigits.length > 0 && recipientDigits.length < 10 && (
                             <p className="mt-1.5 text-xs font-medium text-[#eb1902]">Ingresa los 10 dígitos del teléfono.</p>
+                          )}
+                          {pinEnabled && (
+                            <div className="mt-3 space-y-2">
+                              {!nipToSender && (
+                                <label className="flex items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                  <input type="checkbox" checked={recipientWhatsAppDeclared} onChange={(event) => setRecipientWhatsAppDeclared(event.target.checked)} className="mt-0.5 h-4 w-4 accent-[#eb1902]" />
+                                  <span className="text-xs leading-5 text-gray-600">
+                                    <strong className="text-gray-900">¿El destinatario tiene WhatsApp?</strong>
+                                    <br />
+                                    {recipientWhatsAppDeclared
+                                      ? "Enviaremos el código de entrega a su WhatsApp."
+                                      : "El destinatario no tiene WhatsApp. Podemos enviar el código a ti y tú deberás proporcionárselo."}
+                                  </span>
+                                </label>
+                              )}
+
+                              {/* AJUSTE 1: confirmación explícita del fallback al remitente */}
+                              {!nipToSender && recipientIdentified && !recipientWhatsAppDeclared && (
+                                <label className="flex items-start gap-2 rounded-lg border border-gray-200 p-3">
+                                  <input type="checkbox" checked={senderFallbackAccepted} onChange={(event) => setSenderFallbackAccepted(event.target.checked)} className="mt-0.5 h-4 w-4 accent-[#eb1902]" />
+                                  <span className="text-xs leading-5 text-gray-600">
+                                    <strong className="text-gray-900">Sí, yo proporcionaré el código al destinatario.</strong>{" "}
+                                    Recibirás el código de entrega y serás responsable de proporcionárselo al destinatario antes de la entrega.
+                                  </span>
+                                </label>
+                              )}
+
+                              <label className="flex items-start gap-2 rounded-lg border border-gray-200 p-3">
+                                <input type="checkbox" checked={nipToSender} onChange={(event) => setNipToSender(event.target.checked)} className="mt-0.5 h-4 w-4 accent-[#eb1902]" />
+                                <span className="text-xs leading-5 text-gray-600">
+                                  <strong className="text-gray-900">Recibir el código yo (remitente)</strong>
+                                  <br />
+                                  {nipToSender
+                                    ? "El código llegará a tu WhatsApp y tú se lo darás al repartidor."
+                                    : "Elige esta opción si prefieres que el código no vaya al destinatario."}
+                                </span>
+                              </label>
+
+                              {nipChannel === null && !nipToSender && (
+                                recipientIdentified && !recipientWhatsAppDeclared ? (
+                                  <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                                    Para usar la entrega con NIP, confirma que recibirás el código de entrega y se lo proporcionarás al destinatario antes de la entrega.
+                                  </p>
+                                ) : (
+                                  <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                                    Para usar la entrega con NIP necesitamos un WhatsApp donde podamos enviar el código:
+                                    el del destinatario o el tuyo. Completa el nombre y teléfono del destinatario, o elige recibir el código tú.
+                                  </p>
+                                )
+                              )}
+                            </div>
                           )}
                         </div>
                       </div>

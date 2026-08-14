@@ -20,7 +20,9 @@ import { OrdersStatusNotifications } from "@/components/OrdersStatusNotification
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { DeliveryPinCard } from "@/components/DeliveryPinCard";
+import { NipStatusCard } from "@/components/NipStatusCard";
 import { orderRequiresDeliveryPin, revealDeliveryPin } from "@/lib/delivery-pin";
+import { buildNipSenderView } from "@/lib/nip-sender-view";
 
 const BRAND_COLOR = "#eb1902";
 
@@ -61,6 +63,15 @@ interface ExtendedOrder {
   mandadoEntregaSegura?: boolean;
   deliveryPinCiphertext?: string;
   deliveryVerificationStatus?: string;
+  nipDeliveryStatus?: string;
+  deliveryPinExpiresAt?: string;
+  deliveryPinRegenCount?: number;
+  deliveryPinRegenCooldownUntil?: string;
+  nipResendCooldownUntil?: string;
+  mandadoNipRecipient?: string;
+  mandadoRecipientWhatsAppDeclared?: boolean;
+  mandadoRecipientName?: string;
+  mandadoRecipientPhone?: string;
 }
 
 const getOrderStep = (status: string | undefined) => {
@@ -168,12 +179,29 @@ const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
   // Regla única de NIP: se muestra solo si la orden REALMENTE lo requiere
   // (mandados: Entrega segura activa; restaurantes: método pin pendiente).
   // La existencia de un NIP almacenado NO implica requisito.
+  // Restaurantes: el PIN se revela al cliente como hoy (cliente = destinatario).
+  // Mandados: el PIN NO se revela aquí; lo decide NipStatusCard según el canal
+  // (nunca al remitente cuando el canal es el destinatario).
+  const isMandado = order.serviceKind === "mandado";
   const deliveryPin =
+    !isMandado &&
     order.orderType === "delivery" &&
     order.deliveryPinCiphertext &&
     orderRequiresDeliveryPin(order as ExtendedOrder)
       ? revealDeliveryPin(order.deliveryPinCiphertext)
       : null;
+
+  // Experiencia del remitente (CASOS 1-8): view model puro, humano, sin estados
+  // técnicos de Meta. El PIN solo se revela cuando el canal es el remitente y el
+  // mensaje fue enviado/entregado/falló (showPinToSender).
+  const nipView =
+    isMandado && orderRequiresDeliveryPin(order as ExtendedOrder)
+      ? buildNipSenderView(order as ExtendedOrder)
+      : null;
+  const nipPin =
+    nipView?.showPinToSender && order.deliveryPinCiphertext
+      ? revealDeliveryPin(order.deliveryPinCiphertext)
+      : undefined;
 
   return (
     <Card className="overflow-hidden border border-gray-200 shadow-sm">
@@ -207,6 +235,7 @@ const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
 
       <CardContent className="pt-5">
         {deliveryPin && <DeliveryPinCard pin={deliveryPin} />}
+        {nipView && order._id && <NipStatusCard orderId={order._id} view={nipView} pin={nipPin} />}
         <OrderStepper status={order.status} isClickCollect={order.isClickCollect} isMandado={order.serviceKind === "mandado"} />
 
         <div className="mt-4 rounded-lg border border-gray-100 bg-gray-50 p-4">

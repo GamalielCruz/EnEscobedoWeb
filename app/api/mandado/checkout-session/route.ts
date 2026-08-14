@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { assertCurrentLegalAcceptance } from "@/lib/legal-config";
 import { recordCurrentLegalAcceptance } from "@/lib/legal-acceptance";
 import { quoteMandado } from "@/lib/mandado-order";
+import { resolveMandadoNipChannel, resolveNipDeliveryTarget } from "@/lib/mandado-nip-channel";
 import { getStripe } from "@/lib/stripe";
 import { buildUrl } from "@/lib/urls";
 
@@ -19,6 +20,26 @@ export async function POST(request: NextRequest) {
     const customerName = String(body.customerName || "Cliente").trim();
     const phone = String(body.phone || "").replace(/\D/g, "");
     if (phone.length < 10 || !customerEmail.includes("@")) throw new Error("Revisa tu teléfono y correo antes de continuar.");
+    // PASO 3 + AJUSTE 1/2: decidir el canal del NIP antes de crear la sesión (fail-fast).
+    const recipientWhatsAppDeclared = body.recipientWhatsAppDeclared === undefined ? undefined : Boolean(body.recipientWhatsAppDeclared);
+    const senderNipFallbackAccepted = body.senderNipFallbackAccepted === true;
+    const nipChannel = resolveMandadoNipChannel({
+      pinEnabled: draft.pinEnabled === true,
+      senderPhone: phone,
+      recipientName: String(body.recipientName || ""),
+      recipientPhone: String(body.recipientPhone || ""),
+      recipientWhatsAppDeclared,
+      senderFallbackAccepted: senderNipFallbackAccepted,
+      explicitNipRecipient: typeof body.nipRecipient === "string" ? body.nipRecipient : undefined,
+    });
+    if (!nipChannel.ok) throw new Error(nipChannel.error);
+    // Endurecimiento B: canal EFECTIVO + teléfono destino (auditoría), separados
+    // del responsable (`mandadoNipRecipient`). Viaja en la metadata de Stripe y
+    // se persiste al construir la orden en el webhook de pago.
+    const nipTarget = resolveNipDeliveryTarget(nipChannel.channel, {
+      senderPhone: phone,
+      recipientPhone: String(body.recipientPhone || ""),
+    });
     const stripe = getStripe();
     const customers = await stripe.customers.list({ email: customerEmail, limit: 1 });
     const customerId = customers.data[0]?.id ?? (await stripe.customers.create({ email: customerEmail, name: customerName, metadata: { clerkUserId: userId } })).id;
@@ -47,6 +68,11 @@ export async function POST(request: NextRequest) {
         mandadoDetails1: draft.details.slice(450),
         mandadoRecipientPhone: String(body.recipientPhone || "").replace(/\D/g, "").slice(-12),
         mandadoRecipientName: String(body.recipientName || "").trim().slice(0, 60),
+        mandadoRecipientWhatsAppDeclared: recipientWhatsAppDeclared === undefined ? "" : recipientWhatsAppDeclared ? "true" : "false",
+        mandadoSenderNipFallbackAccepted: senderNipFallbackAccepted ? "true" : "false",
+        mandadoNipRecipient: nipChannel.ok ? nipChannel.channel ?? "" : "",
+        mandadoNipDeliveryChannel: nipTarget.deliveryChannel,
+        mandadoNipDeliveryPhone: nipTarget.deliveryPhone ?? "",
         mandadoBusinessName: String(body.businessName || "").trim().slice(0, 80),
         mandadoOriginReference: String(body.originReference || "").trim().slice(0, 120),
         mandadoDestinationReference: String(body.destinationReference || "").trim().slice(0, 120),

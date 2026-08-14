@@ -101,6 +101,14 @@
             },
             {
               "type": "string",
+              "value": "delivered"
+            },
+            {
+              "type": "string",
+              "value": "read"
+            },
+            {
+              "type": "string",
               "value": "failed"
             }
           ]
@@ -122,6 +130,20 @@
         "optional": true
       },
       "sentAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "deliveredAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "readAt": {
         "type": "objectAttribute",
         "value": {
           "type": "string"
@@ -2924,6 +2946,130 @@
         "optional": true
       },
       "deliveryPinLockedUntil": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "nipDeliveryStatus": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "not_required"
+            },
+            {
+              "type": "string",
+              "value": "pending"
+            },
+            {
+              "type": "string",
+              "value": "sent"
+            },
+            {
+              "type": "string",
+              "value": "delivered"
+            },
+            {
+              "type": "string",
+              "value": "failed"
+            },
+            {
+              "type": "string",
+              "value": "expired"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "nipSentAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "nipDeliveredAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "deliveryPinRegenCount": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "deliveryPinRegenCooldownUntil": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "nipResendCooldownUntil": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "nipIncidentAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "nipIncidentType": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "stringLiteral",
+              "value": "not_delivered"
+            },
+            {
+              "type": "stringLiteral",
+              "value": "expired"
+            },
+            {
+              "type": "stringLiteral",
+              "value": "no_whatsapp"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "nipDeliveryChannel": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "stringLiteral",
+              "value": "whatsapp_sender"
+            },
+            {
+              "type": "stringLiteral",
+              "value": "whatsapp_recipient"
+            },
+            {
+              "type": "stringLiteral",
+              "value": "none"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "nipDeliveryPhone": {
         "type": "objectAttribute",
         "value": {
           "type": "string"

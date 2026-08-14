@@ -17,6 +17,7 @@ import {
   sendMandadoClienteRecogido,
   sendMandadoDestinatarioEnCamino,
   sendMandadoDestinoEnPuerta,
+  sendMandadoNipToRecipient,
   sendMandadoOrdenPorCompletar,
 } from '@/lib/mandado-whatsapp'
 import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
@@ -31,6 +32,17 @@ import { syncBaserowOrderById } from '@/lib/baserow'
 import { isDeliveryPinValid, orderRequiresDeliveryPin, revealDeliveryPin } from '@/lib/delivery-pin'
 import { planMandadoArrival } from '@/lib/mandado-arrival'
 import { parseDeliveryPinCommand } from '@/lib/delivery-pin-command'
+import {
+  deriveNipIncidentType,
+  effectiveNipStatus,
+  getDeliveryPinBlockReason,
+  isNipCarrierTemplate,
+  mapMetaMessageStatus,
+  resolveNextClaimStatus,
+  resolveNipStatusFromClaimStatus,
+  type ClaimStatus,
+} from '@/lib/nip-delivery'
+import { updateOrderNipDeliveryStatus } from '@/lib/nip-delivery-store'
 import { verifyWhatsAppSignature } from '@/lib/whatsapp-webhook'
 import { getDeliveryScheduleConfig } from '@/lib/delivery-schedule-config'
 import { getStoreAvailability, validateFulfillmentSelection } from '@/lib/fulfillment-schedule'
@@ -131,6 +143,8 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   deliveryPinLockedUntil,
   deliveryVerificationMethod,
   deliveryVerificationStatus,
+  nipIncidentAt,
+  nipIncidentType,
   totalPrice,
   deliveryOfertaEnviada,
   deliveryOfertaExpiresAt,
@@ -141,6 +155,8 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   mandadoOrigin,
   mandadoDestination,
   mandadoRecipientPhone,
+  mandadoNipRecipient,
+  mandadoRecipientWhatsAppDeclared,
   "storeId": affiliateStore._ref,
   "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
   "storeCoordinates": coalesce(affiliateStore->coordinates, {"latitude": mandadoOrigin.lat, "longitude": mandadoOrigin.lng}),
@@ -182,6 +198,7 @@ const ACTIVE_OFFER_ORDERS_BY_DRIVER_QUERY = `*[
   mandadoOrigin,
   mandadoDestination,
   mandadoRecipientPhone,
+  mandadoNipRecipient,
   "storeId": affiliateStore._ref,
   "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
   "storeCoordinates": coalesce(affiliateStore->coordinates, {"latitude": mandadoOrigin.lat, "longitude": mandadoOrigin.lng}),
@@ -229,11 +246,16 @@ const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._r
   deliveryPinLockedUntil,
   deliveryVerificationMethod,
   deliveryVerificationStatus,
+  nipDeliveryStatus,
+  nipIncidentAt,
+  nipIncidentType,
   serviceKind,
   mandadoEntregaSegura,
   mandadoOrigin,
   mandadoDestination,
   mandadoRecipientPhone,
+  mandadoNipRecipient,
+  mandadoRecipientWhatsAppDeclared,
   "storeName": coalesce(affiliateStore->name, select(serviceKind == "mandado" => "Punto de inicio")),
   "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
   "shippingAddress": shippingAddress,
@@ -486,6 +508,88 @@ async function resolveAssignedOrderById(orderId: string, repartidorId: string) {
   }
 
   return order
+}
+
+// Dedupe de incidencias: no registrar el mismo evento de NIP bloqueado más de
+// una vez cada 15 minutos por pedido (evita spam en la bandeja del Dispatch Center).
+const NIP_INCIDENT_DEDUPE_MS = 15 * 60 * 1000
+
+// Persiste el canal EFECTIVO y el teléfono destino del NIP (endurecimiento B):
+// qué se intentó entregar y a qué número, en el momento REAL del envío (EN
+// PUERTA). `none` = no existe canal entregable (anomalía: sin teléfono).
+async function persistNipDeliveryTarget(
+  order: Record<string, unknown>,
+  target: { deliveryChannel: 'whatsapp_sender' | 'whatsapp_recipient' | 'none'; deliveryPhone?: string },
+  nowDate: Date
+) {
+  try {
+    await backendClient
+      .patch(String(order._id))
+      .ifRevisionId(String(order._rev))
+      .set({
+        nipDeliveryChannel: target.deliveryChannel,
+        nipDeliveryPhone: target.deliveryPhone,
+        updatedAt: nowDate.toISOString(),
+      })
+      .commit()
+  } catch (error) {
+    console.error('[webhook EN PUERTA] error persistiendo canal del NIP', {
+      orderId: order._id,
+      error,
+    })
+  }
+}
+
+async function recordDeliveryPinIncident(
+  order: Record<string, unknown>,
+  repartidor: Record<string, unknown>,
+  blockReason: 'expired' | 'not_delivered',
+  nowDate: Date
+) {
+  // Tipos separados de incidencia (endurecimiento): `not_delivered`, `expired`
+  // y `no_whatsapp` (canal remitente porque el destinatario declaró no usar
+  // WhatsApp). El dedupe considera el tipo: el mismo tipo dentro de 15 min no
+  // se re-registra, pero un cambio de tipo (p. ej. no_delivered → expired) sí.
+  const incidentType = deriveNipIncidentType(order, blockReason)
+  const lastIncident = String(order.nipIncidentAt ?? '')
+  const lastType = String(order.nipIncidentType ?? '')
+  if (
+    lastIncident &&
+    lastType === incidentType &&
+    nowDate.getTime() - new Date(lastIncident).getTime() < NIP_INCIDENT_DEDUPE_MS
+  ) {
+    return
+  }
+  try {
+    await backendClient
+      .patch(String(order._id))
+      .ifRevisionId(String(order._rev))
+      .set({
+        nipIncidentAt: nowDate.toISOString(),
+        nipIncidentType: incidentType,
+        updatedAt: nowDate.toISOString(),
+      })
+      .commit()
+    await appendOrderEvent(String(order._id), {
+      type: 'delivery_pin_incident',
+      source: 'whatsapp/webhook',
+      actor: String(repartidor._id ?? ''),
+      reason: blockReason,
+      payload: {
+        incidentType,
+        nipDeliveryStatus: String(order.nipDeliveryStatus ?? ''),
+        deliveryVerificationStatus: String(order.deliveryVerificationStatus ?? ''),
+      },
+    }).catch(() => null)
+    console.warn('[whatsapp webhook] incidencia de NIP registrada', {
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+      blockReason,
+      incidentType,
+    })
+  } catch (error) {
+    console.error('[whatsapp webhook] error registrando incidencia de NIP', error)
+  }
 }
 
 function getAmbiguousOrderPrompt(command: string, orders: Array<Record<string, unknown>>) {
@@ -1045,6 +1149,113 @@ export async function GET(req: NextRequest) {
   return new NextResponse('Forbidden', { status: 403 })
 }
 
+// ── PASO 2: recepción de estados de mensajes de Meta (sent/delivered/read/failed) ──
+// Procesa `value.statuses` del webhook. Un HTTP 200 del endpoint de envío NO
+// implica entrega: el estado real llega aquí por `metaMessageId` y se aplica al
+// claim idempotente (whatsappTemplateDelivery) y, cuando la plantilla transporta
+// el NIP, a `nipDeliveryStatus` de la orden.
+async function handleWhatsAppStatuses(statuses: Array<Record<string, unknown>>, traceId: string) {
+  for (const entry of statuses) {
+    const metaMessageId = String(entry.id ?? '')
+    const metaStatus = String(entry.status ?? '')
+    if (!metaMessageId || !metaStatus) continue
+
+    const incoming = mapMetaMessageStatus(metaStatus)
+    if (!incoming) {
+      // Estados desconocidos no deben romper el webhook: se ignoran y se loguean.
+      console.info('[whatsapp webhook][statuses] estado desconocido ignorado', { traceId, metaMessageId, metaStatus })
+      continue
+    }
+
+    const claim = (await backendClient.fetch(
+      `*[_type == "whatsappTemplateDelivery" && metaMessageId == $metaMessageId][0]{
+        _id, _rev, status, templateName, "orderRef": order._ref
+      }`,
+      { metaMessageId }
+    )) as { _id: string; _rev: string; status?: string; templateName?: string; orderRef?: string } | null
+
+    if (!claim) {
+      console.info('[whatsapp webhook][statuses] mensaje sin claim registrado, ignorado', { traceId, metaMessageId, metaStatus })
+      continue
+    }
+
+    const applied = await applyClaimStatus(claim, incoming, traceId)
+    if (!applied) continue
+
+    // Auditoría: un solo evento por transición real (los estados repetidos de Meta
+    // no llegan aquí porque applyClaimStatus es idempotente).
+    if (claim.orderRef) {
+      if (incoming === 'delivered' || incoming === 'read') {
+        await appendOrderEvent(claim.orderRef, {
+          type: 'whatsapp_template_delivered',
+          source: 'whatsapp/webhook',
+          payload: { templateName: claim.templateName, metaMessageId, metaStatus },
+        }).catch(() => null)
+      } else if (incoming === 'failed') {
+        await appendOrderEvent(claim.orderRef, {
+          type: 'whatsapp_template_failed',
+          source: 'whatsapp/webhook',
+          payload: {
+            templateName: claim.templateName,
+            metaMessageId,
+            metaStatus,
+            errorMessage: String((entry.errors as Array<Record<string, unknown>>)?.[0]?.message ?? ''),
+          },
+        }).catch(() => null)
+      }
+    }
+
+    // NIP: si la plantilla transporta el código, reflejar la entrega en la orden
+    // (gate del PASO 1: solo delivered abre la validación en la puerta).
+    if (claim.orderRef && isNipCarrierTemplate(claim.templateName)) {
+      const nipIncoming = resolveNipStatusFromClaimStatus(incoming)
+      if (nipIncoming) {
+        await updateOrderNipDeliveryStatus(claim.orderRef, nipIncoming).catch(() => null)
+      }
+    }
+  }
+}
+
+// Aplica la transición al claim con idempotencia y reintento ante concurrencia
+// (dos `statuses` simultáneos de Meta). Devuelve true solo si hubo transición real
+// de este llamador (evita duplicar eventos de auditoría).
+async function applyClaimStatus(
+  claim: { _id: string; _rev: string; status?: string },
+  incoming: ClaimStatus,
+  traceId: string
+): Promise<boolean> {
+  const next = resolveNextClaimStatus(claim.status as ClaimStatus | undefined, incoming)
+  if (!next || next === claim.status) return false // idempotente / degradación / desconocido
+
+  const now = new Date().toISOString()
+  const patch: Record<string, unknown> = { status: next, updatedAt: now }
+  if (next === 'delivered') patch.deliveredAt = now
+  if (next === 'read') patch.readAt = now
+  if (next === 'failed') patch.failedAt = now
+
+  try {
+    await backendClient.patch(claim._id).ifRevisionId(claim._rev).set(patch).commit()
+    return true
+  } catch (error) {
+    // Concurrencia: releer con revisión fresca y re-evaluar (forward-only).
+    const fresh = (await backendClient.fetch(
+      `*[_type == "whatsappTemplateDelivery" && _id == $claimId][0]{ _id, _rev, status }`,
+      { claimId: claim._id }
+    )) as { _id: string; _rev: string; status?: string } | null
+    if (!fresh) return false
+    const freshNext = resolveNextClaimStatus(fresh.status as ClaimStatus | undefined, incoming)
+    if (!freshNext || freshNext === fresh.status) return false
+    try {
+      await backendClient.patch(fresh._id).ifRevisionId(fresh._rev).set(patch).commit()
+      return true
+    } catch {
+      // Perdimos la carrera: otro llamador ya aplicó la transición.
+      console.info('[whatsapp webhook][statuses] transición aplicada por otro llamador', { traceId, claimId: claim._id, incoming })
+      return false
+    }
+  }
+}
+
 // Meta envia los mensajes entrantes aqui
 export async function POST(req: NextRequest) {
   const appSecret = process.env.WHATSAPP_APP_SECRET
@@ -1093,6 +1304,16 @@ export async function POST(req: NextRequest) {
       hasStatuses: Array.isArray(value?.statuses),
     })
     // #endregion
+
+    // ── PASO 2: estados de mensajes de Meta (delivered/read/failed) ──
+    // Se procesan SIEMPRE que vengan (también junto a un mensaje); son independientes
+    // del mensaje entrante y llegan con la misma firma verificada arriba.
+    const statuses = Array.isArray(value?.statuses) ? (value.statuses as Array<Record<string, unknown>>) : []
+    if (statuses.length > 0) {
+      await handleWhatsAppStatuses(statuses, traceId).catch((error) =>
+        console.error('[whatsapp webhook][statuses] error procesando estados', { traceId, error })
+      )
+    }
 
     if (!message) {
       return NextResponse.json({ status: 'ok' })
@@ -1994,17 +2215,63 @@ Te avisaremos 10 minutos antes de finalizar.`
               orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
               deliveryAddress: destination,
             }))
-            // 2) `orden_repartidor` (nombre heredado de Meta; va al CLIENTE, no al
-            //    repartidor): lleva el NIP y ofrece el botón Ayuda. SOLO cuando la
-            //    orden requiere NIP (Entrega segura activa). Un mandado sin
-            //    Entrega segura NUNCA recibe instrucciones ni códigos de NIP.
+            // 2) NIP (SOLO si la orden requiere Entrega segura): se envía al canal
+            //    configurado en la creación (PASO 4), NUNCA al repartidor. Un mandado
+            //    sin Entrega segura NUNCA recibe instrucciones ni códigos de NIP.
             if (arrivalPlan.sendOrdenPorCompletar) {
-              notifications.push(sendMandadoOrdenPorCompletar({
-                _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
-                phone: customerPhone,
-                orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
-                deliveryPin,
-              }))
+              if (arrivalPlan.nipChannel === 'recipient') {
+                // `mandado_nip_destinatario` (PENDIENTE de aprobación en Meta) al
+                // DESTINATARIO. Si la plantilla no existe en Meta, el envío falla y
+                // el gate mantiene la entrega bloqueada (sin romper otros flujos).
+                const recipientPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).mandadoRecipientPhone ?? '').replace(/\D/g, ''))
+                if (recipientPhone) {
+                  notifications.push(sendMandadoNipToRecipient({
+                    _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
+                    phone: recipientPhone,
+                    recipientPhone,
+                    orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
+                    deliveryPin,
+                  }))
+                  // Endurecimiento B: persiste el canal efectivo + teléfono destino.
+                  await persistNipDeliveryTarget(resolvedTargetOrder as Record<string, unknown>, {
+                    deliveryChannel: 'whatsapp_recipient',
+                    deliveryPhone: recipientPhone,
+                  }, nowDate)
+                } else {
+                  // Anomalía (canal destinatario sin teléfono): el NIP no puede
+                  // entregarse por ningún canal disponible → estado explícito
+                  // `none` + incidencia operativa (no solo un log). nipDeliveryStatus
+                  // queda pending → gate cerrado → escalar a soporte.
+                  await persistNipDeliveryTarget(resolvedTargetOrder as Record<string, unknown>, {
+                    deliveryChannel: 'none',
+                  }, nowDate)
+                  await recordDeliveryPinIncident(
+                    resolvedTargetOrder as Record<string, unknown>,
+                    repartidor as Record<string, unknown>,
+                    'not_delivered',
+                    nowDate
+                  )
+                  console.warn('[webhook EN PUERTA] canal destinatario sin teléfono; NIP no enviado', {
+                    orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+                  })
+                }
+              } else {
+                // Canal remitente (o legado): `orden_repartidor` (nombre heredado de
+                // Meta; va al CLIENTE, no al repartidor) con el NIP y botón Ayuda.
+                notifications.push(sendMandadoOrdenPorCompletar({
+                  _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
+                  phone: customerPhone,
+                  orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
+                  deliveryPin,
+                }))
+                // Endurecimiento B: persiste el canal efectivo + teléfono destino.
+                if (customerPhone) {
+                  await persistNipDeliveryTarget(resolvedTargetOrder as Record<string, unknown>, {
+                    deliveryChannel: 'whatsapp_sender',
+                    deliveryPhone: customerPhone,
+                  }, nowDate)
+                }
+              }
             }
           } else {
             notifications.push(sendClienteRepartidorEnPuerta(
@@ -2058,9 +2325,51 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
-        // Regla única de NIP: SOLO se pide al repartidor si la orden realmente lo
-        // requiere (mandados: Entrega segura activa; restaurantes: método pin).
+        // A (endurecimiento): NIP ya VERIFICADO es terminal e idempotente. Si un
+        // webhook reintentado o un flujo interrumpido vuelve a disparar ENTREGADO
+        // sobre una orden cuya entrega ya fue autenticada, se completa sin volver
+        // a exigir ni re-validar el código (nunca se bloquea lo ya verificado).
+        if (effectiveNipStatus(resolvedTargetOrder as Record<string, unknown>, nowDate) === 'verified') {
+          const { nextState: verifiedNextState } = await completeDeliveredOrder(
+            resolvedTargetOrder as Record<string, unknown>,
+            repartidor,
+            nowDate,
+            now
+          )
+          await sendBotMessage(
+            fromPhone,
+            verifiedNextState === 'offline'
+              ? 'Pedido entregado correctamente. Tu sesion de disponibilidad ya termino; responde INICIO para volver a conectarte.'
+              : 'Pedido entregado correctamente. Gracias!'
+          ).catch(() => null)
+          return NextResponse.json({ status: 'ok' })
+        }
+
+        // Gate de entrega (PASO 1 + AJUSTE 3): SOLO se pide el NIP si la orden
+        // realmente lo requiere Y, en mandados, si hay evidencia de que el código
+        // fue entregado al canal configurado Y sigue vigente (no expiró). Un 200 de
+        // Meta no basta; pending/sent/failed o expirado cierran el gate.
         if (orderRequiresDeliveryPin(resolvedTargetOrder as Record<string, unknown>)) {
+          const blockReason = getDeliveryPinBlockReason(resolvedTargetOrder as Record<string, unknown>, nowDate)
+          if (blockReason) {
+            // Incidencia operativa (deduplicada): la entrega protegida no puede
+            // completarse porque el código no fue entregado al canal o expiró.
+            // Aparece en la bandeja del Dispatch Center; el repartidor NO tiene
+            // un bypass automático (el override es decisión explícita de operación).
+            await recordDeliveryPinIncident(
+              resolvedTargetOrder as Record<string, unknown>,
+              repartidor as Record<string, unknown>,
+              blockReason,
+              nowDate
+            )
+            await sendBotMessage(
+              fromPhone,
+              blockReason === 'expired'
+                ? 'El código de entrega expiró. Contacta a soporte para completar la entrega.'
+                : 'El código de entrega todavía no está disponible. No completes la entrega todavía.'
+            ).catch(() => null)
+            return NextResponse.json({ status: 'ok' })
+          }
           await sendBotMessage(
             fromPhone,
             `Solicita al cliente el NIP de 6 digitos del pedido #${String((resolvedTargetOrder as Record<string, unknown>).orderNumber)} y respondelo aqui.`
@@ -2099,6 +2408,26 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
+        // A (endurecimiento): NIP ya VERIFICADO es terminal e idempotente. Un
+        // segundo `NIP <FOLIO> <6>` (reintento del webhook, doble envío del
+        // repartidor) sobre una entrega ya autenticada NO re-valida ni cuenta
+        // intentos: reconoce la entrega como ya verificada y la completa.
+        if (effectiveNipStatus(targetOrder as Record<string, unknown>, nowDate) === 'verified') {
+          const { nextState: verifiedNextState } = await completeDeliveredOrder(
+            targetOrder as Record<string, unknown>,
+            repartidor,
+            nowDate,
+            now
+          )
+          await sendBotMessage(
+            fromPhone,
+            verifiedNextState === 'offline'
+              ? 'NIP correcto. Pedido entregado correctamente. Tu sesion de disponibilidad ya termino; responde INICIO para volver a conectarte.'
+              : 'NIP correcto. Pedido entregado correctamente. Gracias!'
+          ).catch(() => null)
+          return NextResponse.json({ status: 'ok' })
+        }
+
         if (targetOrder.deliveryPinLockedUntil && new Date(String(targetOrder.deliveryPinLockedUntil)) > nowDate) {
           await sendBotMessage(fromPhone, 'El NIP esta bloqueado temporalmente. Intenta de nuevo en 15 minutos.').catch(() => null)
           return NextResponse.json({ status: 'ok' })
@@ -2109,14 +2438,29 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
-        // Regla única de NIP (lib/delivery-pin.ts): la validación depende de
-        // orderRequiresDeliveryPin, la misma fuente que el resto del sistema.
-        // Un mandado SIN Entrega segura o un pedido sin método pin pendiente
-        // NUNCA valida un NIP aquí (aunque exista uno almacenado).
-        if (
-          !orderRequiresDeliveryPin(targetOrder as Record<string, unknown>) ||
-          !isDeliveryPinValid(String(targetOrder.orderNumber), deliveryPinCommand.pin, String(targetOrder.deliveryPinHash ?? ''))
-        ) {
+        // Gate de entrega (PASO 1 + AJUSTE 3): un mandado sin NIP entregado al
+        // canal o con NIP expirado NUNCA valida aquí (aunque exista un NIP
+        // almacenado o el método diga pin). Restaurantes conservan su flujo.
+        const blockReason = getDeliveryPinBlockReason(targetOrder as Record<string, unknown>, nowDate)
+        if (blockReason) {
+          // Incidencia operativa (deduplicada, ver recordDeliveryPinIncident).
+          await recordDeliveryPinIncident(
+            targetOrder as Record<string, unknown>,
+            repartidor as Record<string, unknown>,
+            blockReason,
+            nowDate
+          )
+          await sendBotMessage(
+            fromPhone,
+            blockReason === 'expired'
+              ? 'El código de entrega expiró. Contacta a soporte para completar la entrega.'
+              : 'El código de entrega todavía no está disponible. No completes la entrega todavía.'
+          ).catch(() => null)
+          return NextResponse.json({ status: 'ok' })
+        }
+
+        // Regla única de NIP (lib/delivery-pin.ts): validación real del código.
+        if (!isDeliveryPinValid(String(targetOrder.orderNumber), deliveryPinCommand.pin, String(targetOrder.deliveryPinHash ?? ''))) {
           const attempts = Number(targetOrder.deliveryPinAttemptCount ?? 0) + 1
           const lockedUntil = attempts >= DELIVERY_PIN_MAX_ATTEMPTS
             ? new Date(nowDate.getTime() + DELIVERY_PIN_LOCK_MS).toISOString()

@@ -31,10 +31,12 @@ export type WhatsappTemplateDelivery = {
   order?: OrderReference;
   idempotencyKey?: string;
   templateName?: string;
-  status?: "pending" | "sent" | "failed";
+  status?: "pending" | "sent" | "delivered" | "read" | "failed";
   claimToken?: string;
   attemptedAt?: string;
   sentAt?: string;
+  deliveredAt?: string;
+  readAt?: string;
   failedAt?: string;
   metaMessageId?: string;
   errorMessage?: string;
@@ -485,6 +487,22 @@ export type Order = {
   deliveryPinVerifiedBy?: string;
   deliveryPinAttemptCount?: number;
   deliveryPinLockedUntil?: string;
+  nipDeliveryStatus?:
+    | "not_required"
+    | "pending"
+    | "sent"
+    | "delivered"
+    | "failed"
+    | "expired";
+  nipSentAt?: string;
+  nipDeliveredAt?: string;
+  deliveryPinRegenCount?: number;
+  deliveryPinRegenCooldownUntil?: string;
+  nipResendCooldownUntil?: string;
+  nipIncidentAt?: string;
+  nipIncidentType?: "not_delivered" | "expired" | "no_whatsapp";
+  nipDeliveryChannel?: "whatsapp_sender" | "whatsapp_recipient" | "none";
+  nipDeliveryPhone?: string;
   deliveryVerificationMethod?:
     "pin" | "customer_confirmation" | "support_override" | "not_required";
   deliveryVerificationStatus?:
@@ -1376,6 +1394,22 @@ export type MY_ORDERS_QUERY_RESULT = Array<{
   deliveryPinVerifiedBy?: string;
   deliveryPinAttemptCount?: number;
   deliveryPinLockedUntil?: string;
+  nipDeliveryStatus?:
+    | "delivered"
+    | "expired"
+    | "failed"
+    | "not_required"
+    | "pending"
+    | "sent";
+  nipSentAt?: string;
+  nipDeliveredAt?: string;
+  deliveryPinRegenCount?: number;
+  deliveryPinRegenCooldownUntil?: string;
+  nipResendCooldownUntil?: string;
+  nipIncidentAt?: string;
+  nipIncidentType?: "not_delivered" | "expired" | "no_whatsapp";
+  nipDeliveryChannel?: "whatsapp_sender" | "whatsapp_recipient" | "none";
+  nipDeliveryPhone?: string;
   deliveryVerificationMethod?:
     "customer_confirmation" | "not_required" | "pin" | "support_override";
   deliveryVerificationStatus?:

@@ -13,6 +13,7 @@ import { after } from "next/server";
 import Stripe from "stripe";
 import { sendScheduledOrderConfirmation } from "@/lib/scheduled-order-whatsapp";
 import { buildMandadoOrderDocument, quoteMandado } from "@/lib/mandado-order";
+import { resolveMandadoNipChannel } from "@/lib/mandado-nip-channel";
 import { getMexicoDateKey } from "@/lib/mexico-time";
 import { calculateEstimatedFees, calculateFeesFromActual, getProcessorType } from "@/lib/payment-processor-fees";
 import { createSettlementSnapshot, type OrderFinancials } from "@/lib/settlements";
@@ -234,6 +235,23 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
       details: `${metadata.mandadoDetails0 || ""}${metadata.mandadoDetails1 || ""}`,
       pinEnabled: metadata.mandadoPinEnabled === "true",
     });
+    // PASO 3 + AJUSTE 1/2: revalidar el canal del NIP con la metadata de la sesión
+    // (defensa en profundidad; la sesión ya se creó con canal válido).
+    const senderPhone = String(metadata.phone || session.customer_details?.phone || "");
+    const recipientName = String(metadata.mandadoRecipientName || "");
+    const recipientPhone = String(metadata.mandadoRecipientPhone || "");
+    const recipientWhatsAppDeclared = metadata.mandadoRecipientWhatsAppDeclared === "true";
+    const senderNipFallbackAccepted = metadata.mandadoSenderNipFallbackAccepted === "true";
+    const nipChannel = resolveMandadoNipChannel({
+      pinEnabled: draft.pinEnabled === true,
+      senderPhone,
+      recipientName,
+      recipientPhone,
+      recipientWhatsAppDeclared,
+      senderFallbackAccepted: senderNipFallbackAccepted,
+      explicitNipRecipient: metadata.mandadoNipRecipient === "sender" ? "sender" : undefined,
+    });
+    if (!nipChannel.ok) throw new Error(nipChannel.error);
     const stripeFees = await resolveStripeFee(stripe, session);
   
   // Create financial snapshot for mandado settlements
@@ -279,6 +297,14 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
       settlementSnapshot: mandadoSettlementSnapshot,
       recipientPhone: String(metadata.mandadoRecipientPhone || ""),
       recipientName: String(metadata.mandadoRecipientName || ""),
+      recipientWhatsAppDeclared,
+      senderNipFallbackAccepted,
+      nipRecipient: nipChannel.ok ? nipChannel.channel ?? undefined : undefined,
+      // Endurecimiento B: canal efectivo + teléfono destino desde la metadata
+      // (defensa en profundidad: se re-deriva si la metadata no los trae).
+      nipDeliveryChannel: (String(metadata.mandadoNipDeliveryChannel || "") ||
+        undefined) as "whatsapp_sender" | "whatsapp_recipient" | "none" | undefined,
+      nipDeliveryPhone: String(metadata.mandadoNipDeliveryPhone || "") || undefined,
       businessName: String(metadata.mandadoBusinessName || ""),
       originReference: String(metadata.mandadoOriginReference || ""),
       destinationReference: String(metadata.mandadoDestinationReference || ""),
