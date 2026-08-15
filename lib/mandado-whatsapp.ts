@@ -181,22 +181,22 @@ export function sendMandadoClienteRecogido(order: MandadoNotification) {
 }
 
 /**
- * Destinatario (receptor): alguien le envió un mandado y está en camino.
+ * Destinatario (receptor): el repartidor llegó con su mandado.
  *
- * 0 variables de cuerpo: la plantilla aprobada es texto 100% estático en Meta
- * ("No necesitas proporcionar ningún código para recibirlo"). El NIP solo lo
- * recibe el remitente (vía `orden_repartidor` en EN PUERTA), quien lo comparte
- * con el destinatario si lo considera necesario.
- * Solo se envía si el cliente proporcionó el teléfono del destinatario
- * (`recipientPhone`); si no hay teléfono, no se envía y el pedido se completa igual.
+ * La variable {{1}} confirma la llegada y, cuando el canal de Entrega segura
+ * es el destinatario, incluye el NIP para confirmar la entrega.
+ * Solo se envía si el cliente proporcionó el teléfono del destinatario.
  */
-export function sendMandadoDestinatarioEnCamino(order: MandadoNotification) {
+export function sendMandadoDestinatarioEnPuerta(
+  order: MandadoNotification & { recipientMessage: string },
+  opts: { idempotencySuffix?: string } = {}
+) {
   return sendMandadoWhatsAppTemplate({
     order: { _id: order._id, phone: order.recipientPhone ?? null },
     templateName: WHATSAPP_TEMPLATES.mandadoDestinatario,
-    bodyParameters: [],
-    idempotencyKey: `${order._id}:mandado__destinatario:en_camino`,
-    logicalEvent: "destinatario_en_camino",
+    bodyParameters: [order.recipientMessage],
+    idempotencyKey: `${order._id}:mandado__destinatario:${opts.idempotencySuffix ?? "en_puerta"}`,
+    logicalEvent: "destinatario_en_puerta",
   });
 }
 
@@ -215,7 +215,7 @@ export function sendMandadoDestinoEnPuerta(order: MandadoNotification) {
     templateName: WHATSAPP_TEMPLATES.mandadoDestinoEnPuerta,
     bodyParameters: [
       order.deliveryAddress || "la dirección indicada",
-      "la entrega de tu mandado",
+      order.orderStatus === "pickup" ? "recoger tu paquete" : "la entrega de tu mandado",
     ],
     idempotencyKey: `${order._id}:mandado_destino_en_puerta:en_destino`,
     logicalEvent: "repartidor_en_destino",
@@ -265,35 +265,6 @@ export function sendMandadoOrdenPorCompletar(
     buttonParameters: [`MANDADO AYUDA|${order._id}`],
     idempotencyKey: `${order._id}:orden_repartidor:${opts.idempotencySuffix ?? "en_puerta"}`,
     logicalEvent: "orden_por_completarse",
-  });
-}
-
-/**
- * Destinatario: el código de entrega de su mandado (PASO 4, canal "recipient").
- * Usa `mandado_nip_destinatario` (PENDIENTE de aprobación en Meta). El teléfono
- * destino se pasa en `order.phone` (el llamador lo normaliza desde
- * `mandadoRecipientPhone`). El botón Ayuda llega al mismo payload que
- * `orden_repartidor` (MANDADO AYUDA).
- */
-export function sendMandadoNipToRecipient(
-  order: MandadoNotification,
-  opts: { idempotencySuffix?: string } = {}
-) {
-  if (!order.deliveryPin) {
-    console.warn("[mandado-whatsapp] mandado_nip_destinatario omitida: NIP requerido pero no disponible", {
-      orderId: order._id,
-      orderNumber: order.orderNumber,
-    });
-    void updateOrderNipDeliveryStatus(order._id, "failed").catch(() => null);
-    return Promise.resolve({ sent: false, reason: "missing_pin" as const });
-  }
-  return sendMandadoWhatsAppTemplate({
-    order,
-    templateName: WHATSAPP_TEMPLATES.mandadoNipDestinatario,
-    bodyParameters: [String(order.deliveryPin)],
-    buttonParameters: [`MANDADO AYUDA|${order._id}`],
-    idempotencyKey: `${order._id}:mandado_nip_destinatario:${opts.idempotencySuffix ?? "en_puerta"}`,
-    logicalEvent: "nip_enviado_destinatario",
   });
 }
 

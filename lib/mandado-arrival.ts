@@ -4,10 +4,9 @@
 // Vive aquí (sin dependencias de runtime) para que el webhook y sus tests
 // compartan EXACTAMENTE la misma decisión y no se duplique la condición.
 //
-// Reglas:
-//  - `mandado_destino_en_puerta` (APROBADA en Meta): aviso de llegada al
-//    remitente. Siempre para mandados (no depende de Entrega segura ni del
-//    teléfono del destinatario). Variables: {{1}} dirección, {{2}} acción.
+// Reglas para la segunda llegada (destinatario):
+//  - `mandado__destinatario`: aviso de llegada al destinatario. Su variable
+//    incluye el NIP solo cuando el canal configurado es el destinatario.
 //  - NIP: SOLO si la orden REALMENTE lo requiere (mandados: Entrega segura
 //    activa). Un mandado sin Entrega segura NUNCA recibe instrucciones ni
 //    códigos de NIP, aunque exista un NIP almacenado en la orden.

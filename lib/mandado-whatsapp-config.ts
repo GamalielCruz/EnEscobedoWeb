@@ -66,28 +66,8 @@ export const MANDADO_WHATSAPP_TEMPLATES = {
     name: WHATSAPP_TEMPLATES.mandadoDestinatario,
     language: "es_MX",
     hasButtons: false,
-    bodyVariables: [],
+    bodyVariables: ["recipientMessage"],
     buttons: [],
-  },
-  /**
-   * Destinatario: el código de entrega de su mandado (PASO 4).
-   * PENDIENTE de aprobación en Meta: si no existe, el envío falla y el gate
-   * mantiene la entrega bloqueada (escalando a soporte), sin romper otros flujos.
-   * Cuando Meta apruebe la plantilla, ajustar el nombre en lib/whatsapp/templates.ts
-   * (única fuente de verdad). 1 variable de cuerpo (el NIP) + botón Ayuda.
-   * NO reutilizar `mandado__destinatario`: su texto aprobado dice que NO se
-   * necesita código.
-   */
-  recipientNip: {
-    name: WHATSAPP_TEMPLATES.mandadoNipDestinatario,
-    language: "es_MX",
-    hasButtons: true,
-    bodyVariables: ["deliveryPin"],
-    buttons: [{ index: 0, type: "quick_reply", text: "Ayuda", dynamicParameters: 1 }],
-    // PENDIENTE de aprobación en Meta: el envío se intenta igual (Meta es la
-    // fuente de verdad); si no existe, falla sin romper otros flujos y el gate
-    // mantiene la entrega bloqueada. Los tests del set aprobado la excluyen.
-    pendingApproval: true,
   },
   /**
    * Cliente (remitente): la orden está por completarse, botón Ayuda.

@@ -15,9 +15,8 @@ import {
 } from '@/lib/whatsapp'
 import {
   sendMandadoClienteRecogido,
-  sendMandadoDestinatarioEnCamino,
+  sendMandadoDestinatarioEnPuerta,
   sendMandadoDestinoEnPuerta,
-  sendMandadoNipToRecipient,
   sendMandadoOrdenPorCompletar,
 } from '@/lib/mandado-whatsapp'
 import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
@@ -154,8 +153,10 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   mandadoEntregaSegura,
   mandadoOrigin,
   mandadoDestination,
+  mandadoPickupAtDoor,
   mandadoRecipientPhone,
   mandadoNipRecipient,
+  nipDeliveryChannel,
   mandadoRecipientWhatsAppDeclared,
   "storeId": affiliateStore._ref,
   "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
@@ -197,8 +198,10 @@ const ACTIVE_OFFER_ORDERS_BY_DRIVER_QUERY = `*[
   mandadoEntregaSegura,
   mandadoOrigin,
   mandadoDestination,
+  mandadoPickupAtDoor,
   mandadoRecipientPhone,
   mandadoNipRecipient,
+  nipDeliveryChannel,
   "storeId": affiliateStore._ref,
   "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
   "storeCoordinates": coalesce(affiliateStore->coordinates, {"latitude": mandadoOrigin.lat, "longitude": mandadoOrigin.lng}),
@@ -253,8 +256,10 @@ const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._r
   mandadoEntregaSegura,
   mandadoOrigin,
   mandadoDestination,
+  mandadoPickupAtDoor,
   mandadoRecipientPhone,
   mandadoNipRecipient,
+  nipDeliveryChannel,
   mandadoRecipientWhatsAppDeclared,
   "storeName": coalesce(affiliateStore->name, select(serviceKind == "mandado" => "Punto de inicio")),
   "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
@@ -2075,12 +2080,16 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
-        // Para MANDADOS, el comando PEDIDO EN DIRECCION AL DOMICILIO significa
-        // "el repartidor YA recogió el paquete y va en camino al destino" (no
-        // existe un comando separado RECOGÍ). Dispara:
-        //  - mandado__cliente → remitente (recogido y en camino)
-        //  - mandado__destinatario → destinatario, SOLO si existe teléfono
+        // Para MANDADOS este comando solo es válido DESPUÉS de llegar al punto
+        // de recolección: indica que el paquete ya fue recibido y va al destino.
         const isMandadoOrder = String((targetOrder as Record<string, unknown>).serviceKind ?? '') === 'mandado'
+        if (isMandadoOrder && (targetOrder as Record<string, unknown>).mandadoPickupAtDoor !== true) {
+          void sendBotMessage(
+            fromPhone,
+            'Primero llega al punto de recolección y presiona En Puerta. Cuando recibas el paquete, presiona Pedido en dirección al domicilio.'
+          ).catch(() => null)
+          return NextResponse.json({ status: 'ok' })
+        }
         const notifications: Promise<unknown>[] = [
           sendRepartidorEnCamino(fromPhone, String((targetOrder as Record<string, unknown>).orderNumber), String((targetOrder as Record<string, unknown>)._id)),
         ]
@@ -2107,20 +2116,6 @@ Te avisaremos 10 minutos antes de finalizar.`
             // una notificación de "repartidor en tu domicilio para recoger" cuando
             // exista una plantilla aprobada para ello.
 
-            // Si el cliente proporcionó teléfono del destinatario, avisarle con la
-            // plantilla mandado__destinatario. Su variable {{1}} SIEMPRE indica que
-            // no se requiere código: el NIP solo lo recibe el remitente (EN PUERTA
-            // vía orden_repartidor). Si no hay teléfono del destinatario, no se envía
-            // y el pedido se completa igual.
-            const recipientPhone = normalizeWhatsAppPhone(String(mandado.mandadoRecipientPhone ?? '').replace(/\D/g, ''))
-            if (recipientPhone) {
-              notifications.push(sendMandadoDestinatarioEnCamino({
-                _id: String(mandado._id),
-                recipientPhone,
-                customerName: String(mandado.customerName ?? 'Un remitente'),
-                orderNumber: String(mandado.orderNumber ?? ''),
-              }))
-            }
           } else {
             notifications.push(
               sendOrderOnTheWay(customerPhone, String((targetOrder as Record<string, unknown>).customerName), String((targetOrder as Record<string, unknown>).orderNumber))
@@ -2165,6 +2160,49 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
+        const isMandadoOrder = String((resolvedTargetOrder as Record<string, unknown>).serviceKind ?? '') === 'mandado'
+        const pickupReached = (resolvedTargetOrder as Record<string, unknown>).mandadoPickupAtDoor === true
+
+        // Un mandado tiene dos llegadas. La primera es al origen para recibir el
+        // paquete; no debe abrir el flujo de entrega final ni pedir el NIP.
+        if (isMandadoOrder && !pickupReached) {
+          await backendClient
+            .patch(String((resolvedTargetOrder as Record<string, unknown>)._id))
+            .ifRevisionId(String((resolvedTargetOrder as Record<string, unknown>)._rev))
+            .set({ mandadoPickupAtDoor: true, updatedAt: now })
+            .commit()
+
+          after(() => syncBaserowOrderById(String((resolvedTargetOrder as Record<string, unknown>)._id)))
+          await appendOrderEvent(String((resolvedTargetOrder as Record<string, unknown>)._id), {
+            type: 'picked_up',
+            source: 'whatsapp/webhook',
+            actor: repartidor._id,
+            payload: { location: 'mandado_origin' },
+          })
+
+          const senderPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).phone ?? ''))
+          const origin =
+            ((resolvedTargetOrder as Record<string, unknown>).mandadoOrigin as { label?: string } | undefined)?.label
+            ?? 'el punto de recolección'
+          const notifications: Promise<unknown>[] = [
+            sendBotMessage(
+              fromPhone,
+              'Llegaste al punto de recolección. Recibe el paquete y, cuando vayas al destino, presiona Pedido en dirección al domicilio.'
+            ),
+          ]
+          if (senderPhone) {
+            notifications.push(sendMandadoDestinoEnPuerta({
+              _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
+              phone: senderPhone,
+              orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
+              deliveryAddress: origin,
+              orderStatus: 'pickup',
+            }))
+          }
+          await Promise.allSettled(notifications)
+          return NextResponse.json({ status: 'ok' })
+        }
+
         await backendClient
           .patch(String((resolvedTargetOrder as Record<string, unknown>)._id))
           .ifRevisionId(String((resolvedTargetOrder as Record<string, unknown>)._rev))
@@ -2203,35 +2241,26 @@ Te avisaremos 10 minutos antes de finalizar.`
           // segura). NO reutilizar `cliente_repartidor_en_puerta` para mandados.
           const arrivalPlan = planMandadoArrival(resolvedTargetOrder as Record<string, unknown>)
           if (arrivalPlan.sendDestinoEnPuerta) {
-            // 1) `mandado_destino_en_puerta` (APROBADA en Meta): repartidor llegó
-            //    al destino. Siempre para mandados (variables: dirección + acción,
-            //    sin NIP).
-            const destination =
-              (resolvedTargetOrder.mandadoDestination as { label?: string } | undefined)?.label
-              ?? (String((resolvedTargetOrder.shippingAddress as { line1?: string } | undefined)?.line1 ?? '') || 'la dirección indicada')
-            notifications.push(sendMandadoDestinoEnPuerta({
-              _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
-              phone: customerPhone,
-              orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
-              deliveryAddress: destination,
-            }))
+            // La primera llegada ya avisó al remitente. En la segunda llegada se
+            // avisa al destinatario; {{1}} indica si debe compartir un NIP.
+            const recipientPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).mandadoRecipientPhone ?? '').replace(/\D/g, ''))
+            const recipientGetsPin = arrivalPlan.sendOrdenPorCompletar && arrivalPlan.nipChannel === 'recipient' && Boolean(deliveryPin)
+            if (recipientPhone) {
+              notifications.push(sendMandadoDestinatarioEnPuerta({
+                _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
+                recipientPhone,
+                orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
+                recipientMessage: recipientGetsPin
+                  ? `Tu paquete ya llegó. Comparte este NIP con el repartidor para confirmar la entrega: ${deliveryPin}.`
+                  : 'Tu paquete ya llegó. Ya puedes recibirlo.',
+              }))
+            }
             // 2) NIP (SOLO si la orden requiere Entrega segura): se envía al canal
             //    configurado en la creación (PASO 4), NUNCA al repartidor. Un mandado
             //    sin Entrega segura NUNCA recibe instrucciones ni códigos de NIP.
             if (arrivalPlan.sendOrdenPorCompletar) {
               if (arrivalPlan.nipChannel === 'recipient') {
-                // `mandado_nip_destinatario` (PENDIENTE de aprobación en Meta) al
-                // DESTINATARIO. Si la plantilla no existe en Meta, el envío falla y
-                // el gate mantiene la entrega bloqueada (sin romper otros flujos).
-                const recipientPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).mandadoRecipientPhone ?? '').replace(/\D/g, ''))
                 if (recipientPhone) {
-                  notifications.push(sendMandadoNipToRecipient({
-                    _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
-                    phone: recipientPhone,
-                    recipientPhone,
-                    orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
-                    deliveryPin,
-                  }))
                   // Endurecimiento B: persiste el canal efectivo + teléfono destino.
                   await persistNipDeliveryTarget(resolvedTargetOrder as Record<string, unknown>, {
                     deliveryChannel: 'whatsapp_recipient',
@@ -2529,11 +2558,6 @@ Te avisaremos 10 minutos antes de finalizar.`
 
   return NextResponse.json({ status: 'ok' })
 }
-
-
-
-
-
 
 
 

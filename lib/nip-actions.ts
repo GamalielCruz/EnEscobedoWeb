@@ -22,7 +22,7 @@ import {
   planNipResend,
   resolveRegeneration,
 } from "@/lib/nip-delivery";
-import { sendMandadoNipToRecipient, sendMandadoOrdenPorCompletar } from "@/lib/mandado-whatsapp";
+import { sendMandadoDestinatarioEnPuerta, sendMandadoOrdenPorCompletar } from "@/lib/mandado-whatsapp";
 import { normalizeWhatsAppPhone } from "@/lib/whatsapp";
 import { backendClient } from "@/sanity/lib/backendClient";
 
@@ -120,14 +120,14 @@ async function sendNipToChannel(
     if (!recipientPhone) {
       return { ok: false, error: "No hay teléfono del destinatario para enviar el código." };
     }
-    const result = await sendMandadoNipToRecipient(
+    const result = await sendMandadoDestinatarioEnPuerta(
       {
         _id: order._id,
         phone: recipientPhone,
         recipientPhone,
         orderNumber: order.orderNumber,
         customerName: order.customerName,
-        deliveryPin,
+        recipientMessage: `Tu paquete ya llegó. Comparte este NIP con el repartidor para confirmar la entrega: ${deliveryPin}.`,
       },
       { idempotencySuffix }
     );

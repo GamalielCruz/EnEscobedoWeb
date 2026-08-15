@@ -47,7 +47,7 @@ export type ClaimStatus = "pending" | "sent" | "delivered" | "read" | "failed";
  */
 export const NIP_CARRIER_TEMPLATES = new Set<string>([
   WHATSAPP_TEMPLATES.ordenRepartidor,
-  WHATSAPP_TEMPLATES.mandadoNipDestinatario,
+  WHATSAPP_TEMPLATES.mandadoDestinatario,
 ]);
 
 export function isNipCarrierTemplate(templateName: string | null | undefined) {

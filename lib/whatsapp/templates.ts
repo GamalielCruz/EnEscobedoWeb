@@ -14,9 +14,8 @@
  * ── Flujo de Mandados (plantillas oficiales aprobadas) ──
  *  - `mandado_cliente`                        → remitente: paquete recogido y en camino.
  *  - `mandado__destinatario`                  → destinatario: le enviaron un mandado.
- *                                               0 variables (texto 100% estático en Meta):
- *                                               comunica que no necesita proporcionar código.
- *                                               NO solicita NIP (el NIP solo lo recibe el remitente).
+ *                                               {{1}} comunica que el paquete llegó y, cuando
+ *                                               aplica, el NIP para confirmar la entrega.
  *  - `pedido_entregado` (compartida)          → remitente: mandado entregado. Se reutiliza la
  *                                               plantilla de restaurantes con {{1}} nombre y
  *                                               {{2}} folio; sin NIP.
@@ -33,11 +32,6 @@
  *                                               Dos variables de cuerpo: {{1}} dirección de destino y
  *                                               {{2}} acción ("la entrega de tu mandado"). NO lleva NIP:
  *                                               el NIP viaja solo en `orden_repartidor` (remitente).
- *  - `mandado_nip_destinatario` (PENDIENTE)    → DESTINATARIO: lleva el NIP de la entrega (PASO 4).
- *                                               NO está aprobada en Meta; el código queda preparado y,
- *                                               si no existe, el envío falla sin romper otros flujos
- *                                               (el gate mantiene la entrega bloqueada). Cuando Meta la
- *                                               apruebe, solo hay que ajustar el nombre aquí.
  */
 export const WHATSAPP_TEMPLATES = {
   // ── Mandados ──
@@ -45,8 +39,6 @@ export const WHATSAPP_TEMPLATES = {
   mandadoDestinatario: "mandado__destinatario",
   // Aprobada en Meta: remitente avisado de que el repartidor llegó al destino.
   mandadoDestinoEnPuerta: "mandado_destino_en_puerta",
-  // PENDIENTE de aprobación en Meta: NIP al DESTINATARIO (canal recipient, PASO 4).
-  mandadoNipDestinatario: "mandado_nip_destinatario",
   ordenRepartidor: "orden_repartidor",
   clienteEntregaProgramadaSinRepartidor: "cliente_entrega_programada_sin_repartidor",
   clienteRepartidorEnPuerta: "cliente_repartidor_en_puerta",
