@@ -86,6 +86,7 @@ const REPARTIDOR_BY_PHONE_QUERY = `*[_type == "repartidor" && telefono == $telef
   extensionPreguntadaAt,
   autoDesconectadoAt,
   motivoDesconexion,
+  soporteConversacionAbierta,
   ofertaTipo,
   ofertaEnviadaAt,
   ofertaExpiraAt,
@@ -111,6 +112,7 @@ const REPARTIDOR_BY_ID_QUERY = `*[_type == "repartidor" && _id == $repartidorId]
   extensionPreguntadaAt,
   autoDesconectadoAt,
   motivoDesconexion,
+  soporteConversacionAbierta,
   ofertaTipo,
   ofertaEnviadaAt,
   ofertaExpiraAt,
@@ -1431,6 +1433,11 @@ export async function POST(req: NextRequest) {
     const nowDate = new Date()
     const now = nowDate.toISOString()
     console.log(`[whatsapp webhook] Comando "${textBody}" de ${repartidor.nombre} (${fromPhone})`)
+    if (textBody === 'FIN SOPORTE') {
+      await backendClient.patch(repartidor._id).set({ soporteConversacionAbierta: false }).commit()
+      await sendBotMessage(fromPhone, 'Conversación de soporte cerrada. Si necesitas ayuda de nuevo, escribe AYUDA.').catch(() => null)
+      return NextResponse.json({ status: 'ok' })
+    }
     // --- FIN ---
     if (textBody === 'FIN') {
       const pendingOrderIds = getPendingOfferOrderIds(repartidor)
@@ -2544,13 +2551,16 @@ Te avisaremos 10 minutos antes de finalizar.`
           console.error('[webhook soporte] error guardando mensaje del repartidor:', error)
         })
 
-      const isHelpRequest = /^(ayuda|ayudame|help|soporte|apoyo)/.test(String(textBody ?? '').trim())
-      void sendBotMessage(
-        fromPhone,
-        isHelpRequest
-          ? 'Recibimos tu solicitud de ayuda. El equipo de soporte la revisará y te responderá por este chat. Mientras tanto puedes seguir usando tus comandos.'
-          : 'Tu mensaje fue enviado al equipo de soporte; te responderán por este chat. Comandos disponibles: INICIO, FIN, OFERTAS, ORDENES, ACEPTO, RECHAZAR, PEDIDO EN DIRECCION AL DOMICILIO, EN PUERTA, ENTREGADO.'
-      ).catch(() => null)
+      // La confirmación se envía solo al abrir la conversación. Los siguientes
+      // mensajes van al operador silenciosamente para que el chat se sienta como
+      // una conversación real y no como un menú repetitivo.
+      if (repartidor.soporteConversacionAbierta !== true) {
+        await backendClient.patch(repartidor._id).set({ soporteConversacionAbierta: true }).commit().catch(() => null)
+        void sendBotMessage(
+          fromPhone,
+          'Te leemos. Describe el problema y el equipo de soporte te responderá por este chat. Para cerrar esta conversación escribe FIN SOPORTE.'
+        ).catch(() => null)
+      }
 
   } catch (error) {
     console.error('[whatsapp webhook] Error:', error)
@@ -2558,7 +2568,6 @@ Te avisaremos 10 minutos antes de finalizar.`
 
   return NextResponse.json({ status: 'ok' })
 }
-
 
 
 

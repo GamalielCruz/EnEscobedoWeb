@@ -184,3 +184,14 @@
     bottom: calc(6rem + env(safe-area-inset-bottom)) !important;
   }
 }
+
+/* Safari en iPhone amplía la página al enfocar campos menores de 16 px y no
+   siempre restablece el zoom. En móvil mantenemos ese mínimo solo en controles
+   de captura; los textos y el diseño general conservan su escala habitual. */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+}

@@ -203,6 +203,7 @@ export const repartidorType = defineType({
       ],
       description: "Conversación de soporte entre el repartidor (WhatsApp) y el Dispatch Center",
     }),
+    defineField({ name: "soporteConversacionAbierta", title: "Conversación de soporte abierta", type: "boolean", readOnly: true, hidden: true }),
     defineField({
       name: "bloqueado",
       title: "Bloqueado",
