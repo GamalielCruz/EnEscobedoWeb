@@ -50,6 +50,14 @@ export type DispatchOrderCard = {
   storeId?: string | null;
   storeHasOwnDelivery?: boolean;
   offerExpiresAt?: string | null;
+  // Mandados: información operacional capturada por el cliente (direcciones
+  // reales e indicaciones para el repartidor). Se muestran en el Dispatch Center
+  // y alimentan la confirmación por WhatsApp al repartidor.
+  mandadoOriginLabel?: string | null;
+  mandadoDestinationLabel?: string | null;
+  mandadoOriginReference?: string | null;
+  mandadoDestinationReference?: string | null;
+  mandadoDetails?: string | null;
   // Oferta pendiente por WhatsApp (mandados en modo manual/asistido y cualquier
   // pedido en modo auto): el pedido NO está asignado, pero un repartidor tiene
   // una oferta vigente (dispatchStatus == "offered").
@@ -217,6 +225,11 @@ const ACTIVE_ORDERS_QUERY = `*[
   "destLat": coalesce(shippingAddress.latitude, mandadoDestination.lat),
   "destLng": coalesce(shippingAddress.longitude, mandadoDestination.lng),
   "destLabel": coalesce(shippingAddress.line1, mandadoDestination.label),
+  "mandadoOriginLabel": mandadoOrigin.label,
+  "mandadoDestinationLabel": mandadoDestination.label,
+  mandadoOriginReference,
+  mandadoDestinationReference,
+  mandadoDetails,
   deliveryOfertaExpiresAt,
   "offerDriverId": offeredTo._ref,
   "offerDriverName": offeredTo->nombre,
@@ -295,7 +308,13 @@ const ORDER_FOR_ASSIGN_QUERY = `*[_type == "order" && _id == $orderId][0]{
   "storeLng": coalesce(affiliateStore->coordinates.longitude, mandadoOrigin.lng),
   "destLat": coalesce(shippingAddress.latitude, mandadoDestination.lat),
   "destLng": coalesce(shippingAddress.longitude, mandadoDestination.lng),
-  "destLabel": coalesce(shippingAddress.line1, mandadoDestination.label)
+  "destLabel": coalesce(shippingAddress.line1, mandadoDestination.label),
+  "mandadoOriginLabel": mandadoOrigin.label,
+  "mandadoDestinationLabel": mandadoDestination.label,
+  mandadoOriginReference,
+  mandadoDestinationReference,
+  mandadoDetails,
+  deliveryNotes
 }`;
 
 const DRIVER_FOR_ASSIGN_QUERY = `*[_type == "repartidor" && _id == $driverId][0]{
@@ -547,6 +566,11 @@ export async function fetchDispatchSnapshot(): Promise<DispatchSnapshot> {
         offerDriverId: order.offerDriverId ?? null,
         offerDriverName: order.offerDriverName ?? null,
         customerHelpRequested: Boolean(order.customerHelpRequested),
+        mandadoOriginLabel: order.mandadoOriginLabel ?? null,
+        mandadoDestinationLabel: order.mandadoDestinationLabel ?? null,
+        mandadoOriginReference: order.mandadoOriginReference ?? null,
+        mandadoDestinationReference: order.mandadoDestinationReference ?? null,
+        mandadoDetails: order.mandadoDetails ?? null,
         recommendedDriverId: topRec?.driver._id ?? null,
         recommendedDriverName: topRec?.driver.name ?? null,
         recommendedScore: topRec?.score ?? null,

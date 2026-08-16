@@ -8,6 +8,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { useHydration } from "@/hooks/useHydration";
 import type { MandadoDraft } from "@/lib/mandado";
 
 const PAYMENT_METHODS: Array<{ value: "card" | "cash"; label: string; icon: LucideIcon }> = [
@@ -19,6 +20,9 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
   const router = useRouter();
   const { isSignedIn } = useAuth();
   const { user } = useUser();
+  // El JS de Clerk carga asíncrono: se renderiza su UI solo tras el montaje
+  // para evitar hydration mismatches intermitentes (SignInButton/UserButton).
+  const isHydrated = useHydration();
   const [method, setMethod] = useState<"card" | "cash" | null>(null);
   const [phone, setPhone] = useState("");
   const [recipientName, setRecipientName] = useState("");
@@ -183,11 +187,10 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
             <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
               <h2 className="font-semibold text-gray-900">Datos del mandado</h2>
               <div className="mt-4 space-y-4">
-                <RoutePoint label={draft.mode === "purchase" ? "Tienda / compra" : "Punto de inicio"} value={draft.origin.label} />
-                {draft.businessName && <RoutePoint label="Negocio" value={draft.businessName} />}
-                {draft.originReference && <RoutePoint label="Referencias de recolección" value={draft.originReference} />}
-                <RoutePoint label="Punto de entrega" value={draft.destination.label} />
-                {draft.destinationReference && <RoutePoint label="Referencias de entrega" value={draft.destinationReference} />}
+                <RoutePoint label={draft.mode === "purchase" ? "Compra" : "Recolección"} value={draft.origin.label} />
+                {draft.originReference && <RoutePoint label="Indicaciones para el repartidor" value={draft.originReference} />}
+                <RoutePoint label="Entrega" value={draft.destination.label} />
+                {draft.destinationReference && <RoutePoint label="Indicaciones para el repartidor" value={draft.destinationReference} />}
                 {draft.destinationPerson && <RoutePoint label="Persona que recibe" value={draft.destinationPerson} />}
               </div>
               <div className="mt-4 border-t border-gray-200 pt-4">
@@ -375,11 +378,11 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                     </div>
                   </div>
                 </div>
-              ) : (
+              ) : isHydrated ? (
                 <SignInButton mode="modal">
                   <button className="mt-6 w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium">Inicia sesión para continuar</button>
                 </SignInButton>
-              )}
+              ) : null}
             </div>
           </div>
         </div>

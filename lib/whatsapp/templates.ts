@@ -37,6 +37,7 @@ export const WHATSAPP_TEMPLATES = {
   // ── Mandados ──
   mandadoCliente: "mandado_cliente",
   mandadoDestinatario: "mandado__destinatario",
+  mandadoSolicitudContacto: "mandado_solicitud_contacto",
   // Aprobada en Meta: remitente avisado de que el repartidor llegó al destino.
   mandadoDestinoEnPuerta: "mandado_destino_en_puerta",
   ordenRepartidor: "orden_repartidor",

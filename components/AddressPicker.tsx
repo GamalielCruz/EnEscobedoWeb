@@ -1,135 +1,26 @@
 "use client";
 
-import {
-  ACTIVE_ADDRESS_KEY,
-  CustomerAddress,
-  customerAddressStorageKey,
-  normalizeCustomerAddress,
-} from "@/lib/customer-address";
+import { CustomerAddress } from "@/lib/customer-address";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { useUserAddresses } from "@/hooks/useUserAddresses";
 import { ChevronDown, Loader2, MapPin, Pencil, Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useState } from "react";
+import { AddressForm } from "./AddressForm";
 
+// Diálogo rápido del Header: seleccionar la dirección activa.
+// La administración completa (crear/editar/eliminar) vive en /direcciones
+// (AddressManager); aquí se reutiliza el mismo hook y el mismo formulario.
 export function AddressPicker({ userId }: { userId: string }) {
-  const [active, setActive] = useState<CustomerAddress | null>(null);
-  const [addresses, setAddresses] = useState<CustomerAddress[]>([]);
-  const [draft, setDraft] = useState<CustomerAddress | null>(null);
-  const [draftAddress, setDraftAddress] = useState("");
-  const [draftLabel, setDraftLabel] = useState("");
+  const { addresses, active, loading, error, choose, save, remove } = useUserAddresses(userId);
   const [adding, setAdding] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  const activate = (address: CustomerAddress | null) => {
-    setActive(address);
-    if (address) {
-      localStorage.setItem(customerAddressStorageKey(userId), JSON.stringify(address));
-    } else {
-      localStorage.removeItem(customerAddressStorageKey(userId));
-    }
-    window.dispatchEvent(new CustomEvent("customerAddressChanged", { detail: address }));
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    setActive(null);
-    setAddresses([]);
-    setError("");
-    localStorage.removeItem(ACTIVE_ADDRESS_KEY);
-    setLoading(true);
-    fetch("/api/user/addresses")
-      .then((response) => response.json())
-      .then((data) => {
-        if (cancelled) return;
-        const saved = Array.isArray(data.addresses)
-          ? data.addresses.map(normalizeCustomerAddress).filter(Boolean) as CustomerAddress[]
-          : [];
-        setAddresses(saved);
-        const selected = saved.find((address) => address.id === data.activeAddressId);
-        activate(selected ?? saved[0] ?? null);
-      })
-      .catch(() => {
-        if (!cancelled) setError("No pudimos cargar tus direcciones guardadas.");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [userId]);
-
-  const choose = async (address: CustomerAddress) => {
-    activate(address);
-    try {
-      const response = await fetch("/api/user/addresses", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error();
-      setAddresses(data.addresses);
-    } catch {
-      setError("La dirección quedó activa en este dispositivo, pero no se pudo sincronizar.");
-    }
-  };
-
-  const save = async () => {
-    const label = draftLabel.trim();
-    if (!draft || !label) return;
-    const labeledAddress = { ...draft, label };
-    setLoading(true);
-    setError("");
-    try {
-      const response = await fetch("/api/user/addresses", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address: labeledAddress }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error);
-      setAddresses(data.addresses);
-      activate(data.address);
-      setAdding(false);
-      setDraft(null);
-      setDraftAddress("");
-      setDraftLabel("");
-    } catch {
-      setError("No pudimos guardar la dirección. Inténtalo de nuevo.");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const remove = async (id: string) => {
-    try {
-      const response = await fetch(`/api/user/addresses?id=${encodeURIComponent(id)}`, { method: "DELETE" });
-      if (!response.ok) throw new Error();
-      const data = await response.json();
-      const next = Array.isArray(data.addresses)
-        ? data.addresses.map(normalizeCustomerAddress).filter(Boolean) as CustomerAddress[]
-        : [];
-      setAddresses(next);
-      if (active?.id === id) activate(next[0] ?? null);
-    } catch {
-      setError("No pudimos eliminar la dirección.");
-    }
-  };
-
-  const addAddress = () => {
-    setDraft(null);
-    setDraftAddress("");
-    setDraftLabel("");
-    setAdding(true);
-  };
-
-  const editAddress = (address: CustomerAddress) => {
-    setDraft(address);
-    setDraftAddress(address.formattedAddress);
-    setDraftLabel(address.label);
-    setAdding(true);
+  const handleSave = async (address: CustomerAddress) => {
+    setBusy(true);
+    const saved = await save(address);
+    setBusy(false);
+    if (saved) setAdding(false);
   };
 
   return (
@@ -156,131 +47,62 @@ export function AddressPicker({ userId }: { userId: string }) {
               {error}
             </p>
           )}
-          <button
-            onClick={adding ? () => setAdding(false) : addAddress}
-            className="flex w-full items-center gap-3 rounded-xl border border-dashed border-gray-300 p-3 text-sm font-semibold hover:border-[#eb1901] hover:bg-rose-50"
-          >
-            <Plus className="h-5 w-5 text-[#eb1901]" />
-            {adding ? "Cancelar" : "Agregar dirección"}
-          </button>
 
-          {adding && (
-            <div className="min-w-0 max-w-full space-y-3 overflow-hidden rounded-xl bg-gray-50 p-3">
-              {!draft?.id && (
-                <label className="block space-y-2">
-                  <span className="text-xs font-semibold text-gray-700">Dirección completa</span>
-                  <div className="relative min-w-0">
-                    <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-                    <input
-                      value={draftAddress}
-                      onChange={(event) => {
-                        const value = event.target.value.slice(0, 240);
-                        setDraftAddress(value);
-                        setDraft(
-                          normalizeCustomerAddress({
-                            formattedAddress: value,
-                            street: value,
-                            country: "México",
-                          })
-                        );
-                      }}
-                      maxLength={240}
-                      autoComplete="street-address"
-                      placeholder="Ej. Calle, número, colonia y municipio"
-                      className="box-border w-full min-w-0 max-w-full rounded-lg border border-gray-300 bg-white py-3 pl-10 pr-3 text-sm outline-none focus:border-[#eb1901] focus:ring-2 focus:ring-[#eb1901]/20"
-                    />
-                  </div>
-                  <span className="block text-xs text-gray-500">
-                    Incluye calle, número, colonia y municipio.
-                  </span>
-                </label>
-              )}
-              {draft?.id && (
-                <p className="break-words rounded-lg bg-white px-3 py-2 text-sm text-gray-600">
-                  {draft.formattedAddress}
-                </p>
-              )}
-              <div className="space-y-2">
-                <label htmlFor="address-label" className="text-xs font-semibold text-gray-700">
-                  Etiqueta
-                </label>
-                <div className="flex gap-2">
-                  {["Casa", "Oficina"].map((label) => (
-                    <button
-                      key={label}
-                      type="button"
-                      onClick={() => setDraftLabel(label)}
-                      className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
-                        draftLabel === label
-                          ? "border-[#eb1901] bg-rose-50 text-[#eb1901]"
-                          : "border-gray-200 bg-white text-gray-600"
-                      }`}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  id="address-label"
-                  list="address-label-options"
-                  value={draftLabel}
-                  onChange={(event) => setDraftLabel(event.target.value.slice(0, 60))}
-                  maxLength={60}
-                  placeholder="Casa, Oficina, Casa de mamá…"
-                  className="box-border w-full min-w-0 max-w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#eb1901] focus:ring-2 focus:ring-[#eb1901]/20"
-                />
-                <datalist id="address-label-options">
-                  <option value="Casa" />
-                  <option value="Oficina" />
-                  <option value="Casa de mamá" />
-                  <option value="Otro" />
-                </datalist>
-              </div>
+          {loading && addresses.length === 0 ? (
+            <Loader2 className="mx-auto my-6 h-5 w-5 animate-spin text-gray-400" />
+          ) : (
+            <>
               <button
-                onClick={save}
-                disabled={!draft || !draftLabel.trim() || loading}
-                className="box-border w-full min-w-0 max-w-full rounded-lg bg-[#eb1901] px-4 py-2.5 text-sm font-semibold text-white disabled:bg-gray-300"
+                onClick={() => setAdding((open) => !open)}
+                className="flex w-full items-center gap-3 rounded-xl border border-dashed border-gray-300 p-3 text-sm font-semibold hover:border-[#eb1901] hover:bg-rose-50"
               >
-                {draft?.id ? "Guardar cambios" : "Guardar dirección"}
+                <Plus className="h-5 w-5 text-[#eb1901]" />
+                {adding ? "Cancelar" : "Agregar dirección"}
               </button>
-            </div>
-          )}
 
-          <section>
-            <h3 className="mb-2 text-sm font-bold text-gray-900">Dirección actual</h3>
-            {active ? (
-              <AddressRow address={active} active onChoose={choose} onEdit={() => editAddress(active)} />
-            ) : (
-              <p className="rounded-xl border border-dashed p-4 text-center text-xs text-gray-500">
-                Aún no has agregado una dirección.
-              </p>
-            )}
-          </section>
+              {adding && (
+                <AddressForm onSave={(address) => void handleSave(address)} busy={busy} />
+              )}
 
-          <section>
-            <h3 className="mb-2 text-sm font-bold text-gray-900">Direcciones guardadas</h3>
-            {loading && addresses.length === 0 ? (
-              <Loader2 className="mx-auto my-6 h-5 w-5 animate-spin text-gray-400" />
-            ) : (
-              <div className="divide-y rounded-xl border">
-                {addresses
-                  .filter((address) => address.id !== active?.id)
-                  .map((address) => (
-                    <AddressRow
-                      key={address.id}
-                      address={address}
-                      active={active?.id === address.id}
-                      onChoose={choose}
-                      onEdit={() => editAddress(address)}
-                      onRemove={() => remove(address.id)}
-                    />
-                  ))}
-                {addresses.every((address) => address.id === active?.id) && (
-                  <p className="p-4 text-center text-xs text-gray-500">Agrega otra dirección para verla aquí.</p>
+              <section>
+                <h3 className="mb-2 text-sm font-bold text-gray-900">Dirección actual</h3>
+                {active ? (
+                  <AddressRow address={active} active onChoose={choose} onEdit={() => setAdding(true)} />
+                ) : (
+                  <p className="rounded-xl border border-dashed p-4 text-center text-xs text-gray-500">
+                    Aún no has agregado una dirección.
+                  </p>
                 )}
-              </div>
-            )}
-          </section>
+              </section>
+
+              <section>
+                <h3 className="mb-2 text-sm font-bold text-gray-900">Direcciones guardadas</h3>
+                <div className="divide-y rounded-xl border">
+                  {addresses
+                    .filter((address) => address.id !== active?.id)
+                    .map((address) => (
+                      <AddressRow
+                        key={address.id}
+                        address={address}
+                        active={active?.id === address.id}
+                        onChoose={choose}
+                        onRemove={() => void remove(address.id)}
+                      />
+                    ))}
+                  {addresses.every((address) => address.id === active?.id) && (
+                    <p className="p-4 text-center text-xs text-gray-500">Agrega otra dirección para verla aquí.</p>
+                  )}
+                </div>
+              </section>
+
+              <Link
+                href="/direcciones"
+                className="block w-full rounded-xl border border-gray-200 bg-white p-3 text-center text-sm font-semibold text-[#eb1901] transition hover:border-[#eb1901] hover:bg-rose-50"
+              >
+                Ver todas mis direcciones
+              </Link>
+            </>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -297,8 +119,8 @@ function AddressRow({
   address: CustomerAddress;
   active: boolean;
   onChoose: (address: CustomerAddress) => void;
-  onEdit: () => void;
-  onRemove?: () => void;
+  onEdit?: () => void;
+  onRemove?: (id: string) => void;
 }) {
   return (
     <div className={`flex items-center gap-3 p-3 ${active ? "bg-rose-50" : "bg-white"}`}>
@@ -307,16 +129,18 @@ function AddressRow({
         <span className="block truncate text-sm font-semibold text-gray-900">{address.label}</span>
         <span className="block truncate text-xs text-gray-500">{address.formattedAddress}</span>
       </button>
-      <button
-        onClick={onEdit}
-        className="rounded-full p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
-        aria-label={`Editar ${address.label}`}
-      >
-        <Pencil className="h-4 w-4" />
-      </button>
+      {onEdit && (
+        <button
+          onClick={onEdit}
+          className="rounded-full p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+          aria-label={`Editar ${address.label}`}
+        >
+          <Pencil className="h-4 w-4" />
+        </button>
+      )}
       {onRemove && (
         <button
-          onClick={onRemove}
+          onClick={() => onRemove(address.id)}
           className="rounded-full p-2 text-gray-400 hover:bg-red-50 hover:text-red-600"
           aria-label={`Eliminar ${address.label}`}
         >

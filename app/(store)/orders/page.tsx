@@ -59,6 +59,8 @@ interface ExtendedOrder {
   mandadoMode?: "pickup" | "purchase";
   mandadoOrigin?: { label?: string };
   mandadoDestination?: { label?: string };
+  mandadoOriginReference?: string;
+  mandadoDestinationReference?: string;
   mandadoDetails?: string;
   mandadoEntregaSegura?: boolean;
   deliveryPinCiphertext?: string;
@@ -256,7 +258,9 @@ const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
           {order.serviceKind === "mandado" ? (
             <div className="space-y-3 rounded-md border border-gray-100 bg-white p-4 text-sm">
               <p><strong>{order.mandadoMode === "purchase" ? "Comprar en:" : "Recoger en:"}</strong> {order.mandadoOrigin?.label}</p>
+              {order.mandadoOriginReference && <p className="text-xs text-gray-500">💬 Indicaciones para el repartidor: {order.mandadoOriginReference}</p>}
               <p><strong>Entregar en:</strong> {order.mandadoDestination?.label}</p>
+              {order.mandadoDestinationReference && <p className="text-xs text-gray-500">💬 Indicaciones para el repartidor: {order.mandadoDestinationReference}</p>}
               <p className="rounded-lg bg-gray-50 p-3 text-gray-700">{order.mandadoDetails}</p>
             </div>
           ) : <ul className="space-y-2">

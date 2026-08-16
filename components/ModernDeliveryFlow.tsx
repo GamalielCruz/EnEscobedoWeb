@@ -7,9 +7,8 @@ import { calculateDistance } from "@/lib/clickCollect";
 import {
   CustomerAddress as StoredAddress,
   customerAddressStorageKey,
-  normalizeCustomerAddress,
-  parseCustomerAddress,
 } from "@/lib/customer-address";
+import { useUserAddresses } from "@/hooks/useUserAddresses";
 
 interface ModernDeliveryFlowProps {
   userId: string;
@@ -49,7 +48,8 @@ export default function ModernDeliveryFlow({ userId, onComplete, filterStoreId }
   const [isGoogleMapsLoaded, setIsGoogleMapsLoaded] = useState(false);
   const [loadError, setLoadError] = useState<boolean>(false);
   const [deliveryQuote, setDeliveryQuote] = useState<DeliveryQuote | null>(null);
-  const [savedAddresses, setSavedAddresses] = useState<StoredAddress[]>([]);
+  // Direcciones guardadas del usuario (libreta compartida, Clerk privateMetadata).
+  const { addresses: savedAddresses } = useUserAddresses(userId, { silent: true });
 
   // Map refs
   const mapRef = useRef<HTMLDivElement>(null);
@@ -108,34 +108,8 @@ export default function ModernDeliveryFlow({ userId, onComplete, filterStoreId }
     loadGoogleMaps().catch(() => setLoadError(true));
   }, [loadGoogleMaps]);
 
-  useEffect(() => {
-    let cancelled = false;
-    setSavedAddresses([]);
-    const local = parseCustomerAddress(localStorage.getItem(customerAddressStorageKey(userId)));
-
-    fetch("/api/user/addresses")
-      .then(async (response) => response.ok ? response.json() : null)
-      .then((data) => {
-        if (cancelled) return;
-        const addresses = Array.isArray(data?.addresses)
-          ? data.addresses.map(normalizeCustomerAddress).filter(Boolean) as StoredAddress[]
-          : [];
-        const active = addresses.find((address) => address.id === data?.activeAddressId);
-        const unique = [active, ...addresses]
-          .filter(Boolean)
-          .filter((address, index, all) =>
-            all.findIndex((item) => item?.id === address?.id) === index
-          ) as StoredAddress[];
-        setSavedAddresses(unique);
-      })
-      .catch(() => {
-        if (local && !cancelled) setSavedAddresses([local]);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [userId]);
+  // La libreta de direcciones la maneja el hook compartido (useUserAddresses);
+  // aquí solo se consume la lista guardada.
 
   // Inicializar mapa cuando estamos en el paso map-confirm
   useEffect(() => {

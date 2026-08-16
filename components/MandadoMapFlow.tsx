@@ -11,6 +11,7 @@ import {
   ChevronDown,
   ChevronRight,
   House,
+  MessageCircle,
   Loader2,
   MapPin,
   Navigation,
@@ -33,9 +34,14 @@ import {
   type MandadoMode,
   type MandadoPointQuote,
 } from "@/lib/mandado";
+import { useUser } from "@clerk/nextjs";
+import { AddressSelector } from "./AddressSelector";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
+import { customerAddressToMandadoPoint } from "@/lib/address-utils";
 
 type Mode = MandadoMode;
 type View = "main" | "picking";
+type ConfirmStep = 1 | 2;
 type AddressPoint = MandadoAddressPoint;
 type QuoteState =
   | { status: "idle" }
@@ -123,16 +129,28 @@ export default function MandadoMapFlow() {
   const [pickingFor, setPickingFor] = useState<"origin" | "destination">("origin");
   // Vista de ruta a pantalla completa (cuando ya están ambos puntos)
   const [routeOpen, setRouteOpen] = useState(false);
+  // Después de elegir ambos puntos, los datos se piden en pantallas cortas.
+  // Esto evita que el cliente tenga que descubrir el CTA bajando toda la hoja.
+  const [confirmStep, setConfirmStep] = useState<ConfirmStep>(1);
 
   const [origin, setOrigin] = useState<AddressPoint | null>(null);
   const [destination, setDestination] = useState<AddressPoint | null>(null);
   const [draftAddress, setDraftAddress] = useState<AddressPoint | null>(null);
 
-  const [details, setDetails] = useState("");
-  const [businessName, setBusinessName] = useState("");
+  // Libreta de direcciones compartida (Clerk privateMetadata).
+  const { user, isLoaded: clerkLoaded } = useUser();
+  const [addressDialogFor, setAddressDialogFor] = useState<"origin" | "destination" | null>(null);
+
+  // Indicaciones opcionales para el repartidor (recolección y entrega).
+  // Se guardan en la orden como mandadoOriginReference/mandadoDestinationReference
+  // y el webhook las envía al repartidor en el mensaje posterior al ACEPTO.
   const [originReference, setOriginReference] = useState("");
   const [destinationReference, setDestinationReference] = useState("");
-  const [destinationPerson, setDestinationPerson] = useState("");
+  // Al confirmar un punto nuevo en el mapa, opción NO obligatoria de guardarlo
+  // en la libreta para reutilizarlo después.
+  const [saveDraftPoint, setSaveDraftPoint] = useState(false);
+
+  const [details, setDetails] = useState("");
 
   // Entrega segura (NIP): el código se envía al canal configurado (destinatario
   // o remitente) según lib/mandado-nip-channel.ts. Nunca se exige en la puerta un
@@ -272,8 +290,8 @@ export default function MandadoMapFlow() {
   // ── Al salir de la pantalla de confirmación o al editar un punto,
   //    la vista de ruta vuelve al contenedor de direcciones. ──
   useEffect(() => {
-    if (view !== "main" || progress !== "confirm") setRouteOpen(false);
-  }, [view, progress]);
+    if (view !== "main" || progress !== "confirm" || confirmStep !== 2) setRouteOpen(false);
+  }, [view, progress, confirmStep]);
 
   // ── Puntitos animados sobre la ruta (misma animación que en el carrito) ──
   useEffect(() => {
@@ -418,6 +436,7 @@ export default function MandadoMapFlow() {
     setSearchInput("");
     setPredictions([]);
     setLocationDetected(false);
+    setSaveDraftPoint(false);
     const point = target === "origin" ? origin : destination;
     if (point) {
       // Al editar un punto ya elegido, el pin se mantiene visible y la vista
@@ -440,28 +459,88 @@ export default function MandadoMapFlow() {
     setDraftAddress(null);
     setSearchInput("");
     setPredictions([]);
+    setSaveDraftPoint(false);
   }, []);
+
+  // ── Usar una dirección guardada de la libreta compartida ──
+  // Se convierte al snapshot de Mandado (label + lat + lng) y se congela en la
+  // orden. Si la dirección guardada no tiene coordenadas, se abre el mapa para
+  // ubicar el punto exacto.
+  const applySavedAddress = useCallback(
+    (address: Parameters<typeof customerAddressToMandadoPoint>[0], target: "origin" | "destination") => {
+      setAddressDialogFor(null);
+      const point = customerAddressToMandadoPoint(address);
+      if (point) {
+        if (target === "origin") {
+          setOrigin(point);
+        } else {
+          setDestination(point);
+          setConfirmStep(1);
+        }
+        fittedRouteKey.current = null;
+        setModeCompact(true);
+      } else {
+        // Sin coordenadas guardadas: pedir confirmación del punto en el mapa.
+        startPicking(target);
+        if (address.formattedAddress) {
+          setSearchInput(address.formattedAddress);
+        }
+      }
+    },
+    [startPicking]
+  );
+
+  // Guardar el punto nuevo del mapa en la libreta (opcional, NO obligatorio).
+  // Reutiliza POST /api/user/addresses; si falla no bloquea el mandado.
+  const saveDraftToAddressBook = useCallback(async (point: AddressPoint) => {
+    if (!user?.id) return;
+    const payload = {
+      label: point.label || "Dirección",
+      formattedAddress: point.label,
+      street: point.label,
+      city: "",
+      state: "",
+      postalCode: "",
+      country: "México",
+      latitude: point.lat,
+      longitude: point.lng,
+    };
+    try {
+      await fetch("/api/user/addresses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: payload }),
+      });
+    } catch {
+      // El mandado continúa aunque no se pueda guardar la dirección.
+    }
+  }, [user?.id]);
 
   const confirmPick = useCallback(() => {
     if (!draftAddress) return;
+    const point = draftAddress;
+    const shouldSave = saveDraftPoint && !point.label.startsWith("Buscando dirección");
+    if (shouldSave) void saveDraftToAddressBook(point);
     if (pickingFor === "origin") {
-      setOrigin(draftAddress);
+      setOrigin(point);
       // Solo al colocar el origen por primera vez (sin destino aún) se aleja
       // la vista para que el cliente note que sigue el marcador 2. Al re-editar
       // el origen el mapa no se mueve para no confundir.
       if (!destination && !origin) {
-        panMap({ lat: draftAddress.lat + 0.006, lng: draftAddress.lng }, 13);
+        panMap({ lat: point.lat + 0.006, lng: point.lng }, 13);
       }
     } else {
-      setDestination(draftAddress);
+      setDestination(point);
+      setConfirmStep(1);
     }
     fittedRouteKey.current = null; // recalcula el encuadre al volver
     setModeCompact(true);
     setDraftAddress(null);
     setSearchInput("");
     setLocationDetected(false);
+    setSaveDraftPoint(false);
     setView("main");
-  }, [draftAddress, pickingFor, origin, destination, panMap]);
+  }, [draftAddress, pickingFor, origin, destination, panMap, saveDraftPoint, saveDraftToAddressBook]);
 
   const selectMode = useCallback((nextMode: Mode) => {
     if (nextMode === mode) return;
@@ -506,10 +585,11 @@ export default function MandadoMapFlow() {
       destination,
       details: details.trim(),
       price: quote.price,
-      businessName: businessName.trim() || undefined,
+      // Indicaciones opcionales para el repartidor: llegan a la orden como
+      // mandadoOriginReference/mandadoDestinationReference y el webhook las
+      // envía al repartidor tras el ACEPTO.
       originReference: originReference.trim() || undefined,
       destinationReference: destinationReference.trim() || undefined,
-      destinationPerson: destinationPerson.trim() || undefined,
       pinEnabled,
       recipientName: recipientName.trim() || undefined,
       recipientPhone: recipientPhoneDigits,
@@ -527,10 +607,9 @@ export default function MandadoMapFlow() {
     }
     router.push("/basket?service=mandado");
   }, [
-    canConfirm, quote, mode, origin, destination, details, businessName, originReference,
-    destinationReference, destinationPerson, pinEnabled, recipientName,
-    recipientPhoneDigits, recipientWhatsAppDeclared, senderFallbackAccepted, nipChannel,
-    nipToSender, router,
+    canConfirm, quote, mode, origin, destination, details, originReference, destinationReference,
+    pinEnabled, recipientName, recipientPhoneDigits, recipientWhatsAppDeclared,
+    senderFallbackAccepted, nipChannel, nipToSender, router,
   ]);
 
   const ctaLabel =
@@ -544,10 +623,26 @@ export default function MandadoMapFlow() {
             ? "No pudimos calcular el costo"
             : "Completa los datos de tu mandado";
 
+  const canContinueConfirmStep =
+    confirmStep === 1
+      ? Boolean(details.trim()) && (!pinEnabled || nipChannel !== null)
+      : canConfirm;
+
+  const confirmStepLabel =
+    confirmStep === 1
+      ? "Detalles del envío"
+      : "Revisa tu mandado";
+
+  const continueConfirm = () => {
+    if (!canContinueConfirmStep) return;
+    if (confirmStep < 2) setConfirmStep((step) => (step + 1) as ConfirmStep);
+    else goToCheckout();
+  };
+
   // Opciones dinámicas del mapa: cuando el panel de confirmación está abierto
   // se bloquea el arrastre y el zoom para que el mapa no se mueva (haga scroll)
-  // mientras el cliente baja a las tarjetas del paso 3. La vista de ruta vuelve
-  // a ser interactiva.
+  // mientras el cliente completa cada pantalla. La vista de ruta vuelve a ser
+  // interactiva.
   const mapOptionsDynamic = useMemo(() => {
     const lockMap = view === "main" && progress === "confirm" && !routeOpen;
     return {
@@ -584,7 +679,7 @@ export default function MandadoMapFlow() {
                 const lat = event.latLng?.lat();
                 const lng = event.latLng?.lng();
                 if (lat != null && lng != null) choosePoint({ lat, lng });
-              } else if (view === "main" && progress === "confirm" && origin && destination) {
+              } else if (view === "main" && progress === "confirm" && confirmStep === 2 && origin && destination) {
                 // Al tocar el mapa se alterna entre ver la ruta y volver a las direcciones
                 setRouteOpen((open) => !open);
               }
@@ -720,7 +815,7 @@ export default function MandadoMapFlow() {
           </div>
         )}
 
-        {view === "main" && progress === "confirm" && routeOpen && (
+        {view === "main" && progress === "confirm" && confirmStep === 2 && routeOpen && (
           <div className="pointer-events-none absolute left-1/2 top-4 z-30 -translate-x-1/2">
             <div className="flex items-center gap-2 whitespace-nowrap rounded-full bg-[#09193B]/90 px-4 py-2 text-sm font-medium text-white shadow-xl">
               {isPickup ? <Bike className="h-4 w-4" /> : <ShoppingBasket className="h-4 w-4" />}
@@ -748,7 +843,7 @@ export default function MandadoMapFlow() {
       )}
 
       {/* Botón flotante: cerrar la vista de ruta */}
-      {view === "main" && progress === "confirm" && routeOpen && (
+      {view === "main" && progress === "confirm" && confirmStep === 2 && routeOpen && (
         <button
           onClick={() => setRouteOpen(false)}
           className="absolute left-4 top-4 z-50 flex h-9 w-9 items-center justify-center rounded-full bg-white/85 text-[#09193B] shadow-lg backdrop-blur-xl transition hover:bg-white"
@@ -756,6 +851,36 @@ export default function MandadoMapFlow() {
         >
           <X className="h-4 w-4" />
         </button>
+      )}
+
+      {/* Diálogo: elegir una dirección guardada de la libreta compartida */}
+      {clerkLoaded && user && (
+        <Dialog
+          open={addressDialogFor !== null}
+          onOpenChange={(open) => {
+            if (!open) setAddressDialogFor(null);
+          }}
+        >
+          <DialogContent className="w-[calc(100vw-1.5rem)] max-w-xl overflow-hidden p-0">
+            <DialogHeader className="border-b px-5 py-4">
+              <DialogTitle>
+                {addressDialogFor === "origin"
+                  ? isPickup
+                    ? "¿Dónde recogemos?"
+                    : "¿Dónde compramos?"
+                  : "¿A dónde lo entregamos?"}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="max-h-[calc(85vh-6rem)] overflow-y-auto px-4 pb-5 pt-4 sm:px-5">
+              <AddressSelector
+                userId={user.id}
+                onSelect={(address) => {
+                  if (addressDialogFor) applySavedAddress(address, addressDialogFor);
+                }}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
       )}
 
       {/* ═══════════ VISTA: ELECCIÓN DE PUNTO EN EL MAPA ═══════════ */}
@@ -896,6 +1021,33 @@ export default function MandadoMapFlow() {
                     </p>
                   )}
 
+                  {draftAddress && user && (
+                    <button
+                      type="button"
+                      onClick={() => setSaveDraftPoint((value) => !value)}
+                      className={`mb-2 flex w-full items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-left text-xs transition ${
+                        saveDraftPoint
+                          ? "border-[#eb1901] bg-rose-50 text-[#09193B]"
+                          : "border-slate-200 bg-white text-slate-600"
+                      }`}
+                    >
+                      <span
+                        className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-md border ${
+                          saveDraftPoint ? "border-[#eb1901] bg-[#eb1901]" : "border-slate-300 bg-white"
+                        }`}
+                      >
+                        {saveDraftPoint && <CheckCircle className="h-3 w-3 text-white" />}
+                      </span>
+                      <span className="flex-1">
+                        <strong>Guardar esta dirección</strong>{" "}
+                        <span className="text-slate-400">(opcional)</span>
+                        <span className="mt-0.5 block text-[11px] leading-4 text-slate-500">
+                          La guardamos en tu libreta para usarla después. Si no, solo se usará para este mandado.
+                        </span>
+                      </span>
+                    </button>
+                  )}
+
                   <Button
                     onClick={confirmPick}
                     disabled={!draftAddress}
@@ -1005,7 +1157,7 @@ export default function MandadoMapFlow() {
                     </div>
 
                     {/* Acceso a la vista de ruta a pantalla completa */}
-                    {progress === "confirm" && (
+                    {progress === "confirm" && confirmStep === 2 && (
                       <div className="shrink-0 px-4 pb-2">
                         <button
                           onClick={() => setRouteOpen(true)}
@@ -1029,11 +1181,15 @@ export default function MandadoMapFlow() {
                         transition={{ duration: 0.22, ease: "easeOut" }}
                         className="space-y-3"
                       >
-                      {progress !== "confirm" && (
+                      {progress !== "confirm" ? (
                         <p className="text-center text-[11px] font-bold uppercase tracking-wide text-slate-500">
                           {progress === "step1"
                             ? `Paso 1 de 2 · ${isPickup ? "Elige dónde recogemos" : "Elige dónde compramos"}`
                             : "Paso 2 de 2 · ¿A dónde lo entregamos?"}
+                        </p>
+                      ) : (
+                        <p className="text-center text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                          Paso {confirmStep} de 2 · {confirmStepLabel}
                         </p>
                       )}
 
@@ -1047,120 +1203,76 @@ export default function MandadoMapFlow() {
                         />
                       )}
 
-                      {/* 1. Recolección (paso 1: botón para elegir · confirmar: tarjeta completa) */}
-                      {(progress === "step1" || progress === "confirm") && (
+                      {/* 1. Recolección (solo se elige en el mapa durante el paso 1) */}
+                      {progress === "step1" && (
                       <Card>
-                        <div className="mb-2 flex items-center justify-between">
-                          <div className="flex items-center gap-2.5">
-                            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
-                              <Store className="h-4 w-4 text-[#09193B]" />
-                            </div>
-                            <h3 className="text-sm font-bold text-[#09193B]">{originCardTitle}</h3>
+                        <div className="mb-2 flex items-center gap-2.5">
+                          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
+                            <Store className="h-4 w-4 text-[#09193B]" />
                           </div>
-                          {origin && (
-                            <button
-                              onClick={() => startPicking("origin")}
-                              className="flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-[#09193B] transition hover:bg-slate-200"
-                            >
-                              <Pencil className="h-3 w-3" /> Editar
-                            </button>
-                          )}
+                          <h3 className="text-sm font-bold text-[#09193B]">{originCardTitle}</h3>
                         </div>
-
-                        {origin ? (
-                          <div className="space-y-2.5">
-                            <div className="flex items-start gap-2.5 rounded-xl bg-slate-50 px-3.5 py-3">
-                              <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-[#09193B]" />
-                              <p className="flex-1 text-sm font-medium leading-5 text-[#09193B]">{origin.label}</p>
-                            </div>
-                            <input
-                              value={businessName}
-                              onChange={(e) => setBusinessName(e.target.value.slice(0, 80))}
-                              placeholder={isPickup ? "Nombre del negocio (opcional)" : "Nombre de la tienda (opcional)"}
-                              className={inputCls}
-                            />
-                            <input
-                              value={originReference}
-                              onChange={(e) => setOriginReference(e.target.value.slice(0, 120))}
-                              placeholder="Referencias (opcional) — ej. entrada principal, mostrador"
-                              className={inputCls}
-                            />
+                        <button
+                          onClick={() => startPicking("origin")}
+                          className="flex w-full items-center gap-3 rounded-xl border-2 border-dashed border-slate-200 px-4 py-4 text-left transition hover:border-emerald-500/50 hover:bg-emerald-50/40"
+                        >
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#09193B]/[0.06]">
+                            <Store className="h-5 w-5 text-[#09193B]" />
                           </div>
-                        ) : (
+                          <div>
+                            <p className="text-sm font-bold text-[#09193B]">{originPlaceholder}</p>
+                            <p className="mt-0.5 text-xs text-slate-500">Toca para elegirlo en el mapa</p>
+                          </div>
+                        </button>
+
+                        {clerkLoaded && user && (
                           <button
-                            onClick={() => startPicking("origin")}
-                            className="flex w-full items-center gap-3 rounded-xl border-2 border-dashed border-slate-200 px-4 py-4 text-left transition hover:border-emerald-500/50 hover:bg-emerald-50/40"
+                            type="button"
+                            onClick={() => setAddressDialogFor("origin")}
+                            className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-[#09193B] transition hover:border-[#eb1901]/40 hover:bg-rose-50"
                           >
-                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#09193B]/[0.06]">
-                              <Store className="h-5 w-5 text-[#09193B]" />
-                            </div>
-                            <div>
-                              <p className="text-sm font-bold text-[#09193B]">{originPlaceholder}</p>
-                              <p className="mt-0.5 text-xs text-slate-500">Toca para elegirlo en el mapa</p>
-                            </div>
+                            <MapPin className="h-4 w-4 text-[#eb1901]" /> Usar una dirección guardada
                           </button>
                         )}
                       </Card>
                       )}
 
-                      {/* 2. Entrega (paso 2: botón para elegir · confirmar: tarjeta completa) */}
-                      {(progress === "step2" || progress === "confirm") && (
+                      {/* 2. Entrega (solo se elige en el mapa durante el paso 2) */}
+                      {progress === "step2" && (
                       <Card>
-                        <div className="mb-2 flex items-center justify-between">
-                          <div className="flex items-center gap-2.5">
-                            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
-                              <House className="h-4 w-4 text-[#09193B]" />
-                            </div>
-                            <h3 className="text-sm font-bold text-[#09193B]">Entrega</h3>
+                        <div className="mb-2 flex items-center gap-2.5">
+                          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
+                            <House className="h-4 w-4 text-[#09193B]" />
                           </div>
-                          {destination && (
-                            <button
-                              onClick={() => startPicking("destination")}
-                              className="flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-[#09193B] transition hover:bg-slate-200"
-                            >
-                              <Pencil className="h-3 w-3" /> Editar
-                            </button>
-                          )}
+                          <h3 className="text-sm font-bold text-[#09193B]">Entrega</h3>
                         </div>
-
-                        {destination ? (
-                          <div className="space-y-2.5">
-                            <div className="flex items-start gap-2.5 rounded-xl bg-slate-50 px-3.5 py-3">
-                              <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-[#09193B]" />
-                              <p className="flex-1 text-sm font-medium leading-5 text-[#09193B]">{destination.label}</p>
-                            </div>
-                            <input
-                              value={destinationReference}
-                              onChange={(e) => setDestinationReference(e.target.value.slice(0, 120))}
-                              placeholder="Referencias (opcional) — ej. casa blanca, portón negro"
-                              className={inputCls}
-                            />
-                            <input
-                              value={destinationPerson}
-                              onChange={(e) => setDestinationPerson(e.target.value.slice(0, 60))}
-                              placeholder="Persona que recibe (opcional)"
-                              className={inputCls}
-                            />
+                        <button
+                          onClick={() => startPicking("destination")}
+                          className="flex w-full items-center gap-3 rounded-xl border-2 border-dashed border-slate-200 px-4 py-4 text-left transition hover:border-[#eb1901]/50 hover:bg-rose-50/40"
+                        >
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#09193B]/[0.06]">
+                            <House className="h-5 w-5 text-[#09193B]" />
                           </div>
-                        ) : (
+                          <div>
+                            <p className="text-sm font-bold text-[#09193B]">Elegir punto de entrega</p>
+                            <p className="mt-0.5 text-xs text-slate-500">Toca para elegirlo en el mapa</p>
+                          </div>
+                        </button>
+
+                        {clerkLoaded && user && (
                           <button
-                            onClick={() => startPicking("destination")}
-                            className="flex w-full items-center gap-3 rounded-xl border-2 border-dashed border-slate-200 px-4 py-4 text-left transition hover:border-[#eb1901]/50 hover:bg-rose-50/40"
+                            type="button"
+                            onClick={() => setAddressDialogFor("destination")}
+                            className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-[#09193B] transition hover:border-[#eb1901]/40 hover:bg-rose-50"
                           >
-                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#09193B]/[0.06]">
-                              <House className="h-5 w-5 text-[#09193B]" />
-                            </div>
-                            <div>
-                              <p className="text-sm font-bold text-[#09193B]">Elegir punto de entrega</p>
-                              <p className="mt-0.5 text-xs text-slate-500">Toca para elegirlo en el mapa</p>
-                            </div>
+                            <MapPin className="h-4 w-4 text-[#eb1901]" /> Usar una dirección guardada
                           </button>
                         )}
                       </Card>
                       )}
 
                       {/* 3. Artículo (solo al confirmar) */}
-                      {progress === "confirm" && (
+                      {progress === "confirm" && confirmStep === 1 && (
                       <Card>
                         <div className="mb-2 flex items-center gap-2.5">
                           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
@@ -1185,7 +1297,7 @@ export default function MandadoMapFlow() {
                           El código se envía al canal configurado: al destinatario
                           (si tiene WhatsApp) o al remitente (si el destinatario no
                           tiene WhatsApp o el usuario elige recibirlo). */}
-                      {progress === "confirm" && (
+                      {progress === "confirm" && confirmStep === 1 && (
                       <Card>
                         <div className="flex items-start gap-3">
                           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#09193B]">
@@ -1222,11 +1334,64 @@ export default function MandadoMapFlow() {
                       </Card>
                       )}
 
+                      {/* 4b. Indicaciones para el repartidor (opcional) — solo al
+                          confirmar. Se guardan en la orden como
+                          mandadoOriginReference/mandadoDestinationReference y el
+                          webhook las envía al repartidor tras el ACEPTO. */}
+                      {progress === "confirm" && confirmStep === 1 && (
+                      <Card>
+                        <div className="mb-3 flex items-center gap-2.5">
+                          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
+                            <Navigation className="h-4 w-4 text-[#09193B]" />
+                          </div>
+                          <div>
+                            <h3 className="text-sm font-bold text-[#09193B]">Indicaciones para el repartidor</h3>
+                            <p className="text-xs text-slate-500">Opcional · solo si ayudan a encontrar el lugar.</p>
+                          </div>
+                        </div>
+                        <div className="space-y-3">
+                          <div>
+                            <label className={labelCls} htmlFor="origin-reference">
+                              {isPickup ? "Recolección" : "Compra"}{" "}
+                              <span className="font-medium text-slate-400">(opcional)</span>
+                            </label>
+                            <textarea
+                              id="origin-reference"
+                              value={originReference}
+                              onChange={(e) => setOriginReference(e.target.value.slice(0, 120))}
+                              maxLength={120}
+                              rows={2}
+                              placeholder={
+                                isPickup
+                                  ? "Ej. Local rojo junto a la farmacia, entrada por la esquina."
+                                  : "Ej. Tienda con toldo rojo, entrada por la calle lateral."
+                              }
+                              className="w-full resize-none rounded-xl border border-slate-200 p-3 text-sm leading-5 text-[#09193B] placeholder:text-slate-400 focus:border-[#eb1901] focus:outline-none focus:ring-2 focus:ring-[#eb1901]/20"
+                            />
+                          </div>
+                          <div>
+                            <label className={labelCls} htmlFor="destination-reference">
+                              Entrega <span className="font-medium text-slate-400">(opcional)</span>
+                            </label>
+                            <textarea
+                              id="destination-reference"
+                              value={destinationReference}
+                              onChange={(e) => setDestinationReference(e.target.value.slice(0, 120))}
+                              maxLength={120}
+                              rows={2}
+                              placeholder="Ej. Casa con portón negro, frente al parque."
+                              className="w-full resize-none rounded-xl border border-slate-200 p-3 text-sm leading-5 text-[#09193B] placeholder:text-slate-400 focus:border-[#eb1901] focus:outline-none focus:ring-2 focus:ring-[#eb1901]/20"
+                            />
+                          </div>
+                        </div>
+                      </Card>
+                      )}
+
                       {/* 5. ¿Quién recibe el envío? — solo al confirmar.
                           Con Entrega segura activa (PASO 3), el destinatario define el
                           canal del NIP: nombre + teléfono + declaración de WhatsApp.
                           Si el destinatario no tiene WhatsApp, el código va al remitente. */}
-                      {progress === "confirm" && (
+                      {progress === "confirm" && confirmStep === 1 && (
                       <Card>
                         <div className="mb-3 flex items-start gap-3">
                           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
@@ -1341,6 +1506,45 @@ export default function MandadoMapFlow() {
                         )}
                       </Card>
                       )}
+
+                      {progress === "confirm" && confirmStep === 2 && origin && destination && (
+                        <Card>
+                          <div className="mb-3 flex items-center gap-2.5">
+                            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#eb1901]/10">
+                              <CheckCircle className="h-4 w-4 text-[#eb1901]" />
+                            </div>
+                            <div>
+                              <h3 className="text-sm font-bold text-[#09193B]">Tu mandado está listo</h3>
+                              <p className="text-xs text-slate-500">Revisa los datos antes de continuar.</p>
+                            </div>
+                          </div>
+                          <div className="space-y-2">
+                            <AddressSummaryRow label={originCardTitle} icon={Store} point={origin} onEdit={() => startPicking("origin")} />
+                            {originReference.trim() && (
+                              <p className="flex items-start gap-1.5 px-1 text-xs text-slate-500">
+                                <MessageCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#eb1901]" />
+                                {originReference.trim()}
+                              </p>
+                            )}
+                            <AddressSummaryRow label="Entrega" icon={House} point={destination} onEdit={() => startPicking("destination")} />
+                            {destinationReference.trim() && (
+                              <p className="flex items-start gap-1.5 px-1 text-xs text-slate-500">
+                                <MessageCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#eb1901]" />
+                                {destinationReference.trim()}
+                              </p>
+                            )}
+                            <div className="rounded-xl bg-slate-50 px-3.5 py-3">
+                              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{isPickup ? "Enviarás" : "Compra"}</p>
+                              <p className="mt-0.5 text-sm font-medium text-[#09193B]">{details}</p>
+                            </div>
+                            {pinEnabled && (
+                              <div className="rounded-xl bg-[#09193B]/[0.05] px-3.5 py-3 text-xs text-[#09193B]">
+                                Entrega segura activada{nipChannel === "recipient" ? " · NIP para el destinatario" : " · NIP para ti"}
+                              </div>
+                            )}
+                          </div>
+                        </Card>
+                      )}
                       </motion.div>
                     </div>
 
@@ -1370,19 +1574,28 @@ export default function MandadoMapFlow() {
                       </div>
                     )}
 
-                    {/* ── CTA fijo (solo en la pantalla de confirmar) ── */}
+                    {/* ── CTA fijo: siempre indica el siguiente paso ── */}
                     {progress === "confirm" && (
                     <div className="shrink-0 border-t border-slate-200 bg-white/90 px-4 pt-3 backdrop-blur-xl" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)" }}>
+                      {confirmStep > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => setConfirmStep((step) => (step - 1) as ConfirmStep)}
+                          className="mb-2 w-full text-center text-sm font-semibold text-[#09193B]"
+                        >
+                          Volver al paso anterior
+                        </button>
+                      )}
                       <Button
-                        onClick={goToCheckout}
-                        disabled={!canConfirm}
+                        onClick={continueConfirm}
+                        disabled={!canContinueConfirmStep}
                         className={`h-14 w-full rounded-full text-base font-bold shadow-lg transition-all duration-200 active:scale-[0.98] disabled:shadow-none ${
-                          canConfirm
+                          canContinueConfirmStep
                             ? "bg-[#eb1901] text-white hover:bg-[#c91602]"
                             : "bg-slate-300 text-slate-500"
                         }`}
                       >
-                        {ctaLabel}
+                        {confirmStep === 2 ? ctaLabel : <>Continuar <ChevronRight className="ml-2 h-5 w-5" /></>}
                       </Button>
                     </div>
                     )}
@@ -1394,7 +1607,7 @@ export default function MandadoMapFlow() {
         )}
 
         {/* ── Vista de ruta a pantalla completa (barra delgada + mapa) ── */}
-        {view === "main" && progress === "confirm" && routeOpen && (
+        {view === "main" && progress === "confirm" && confirmStep === 2 && routeOpen && (
           <motion.div
             key="route-bar"
             initial={{ y: "100%" }}
@@ -1498,4 +1711,3 @@ function AddressSummaryRow({
     </div>
   );
 }
-

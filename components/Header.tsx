@@ -207,6 +207,12 @@ export function Header() {
               </Link>
             ) : null}
 
+            {/* El JS de Clerk carga de forma asíncrona: si termina de cargar
+                ANTES de que React hidrate, ClerkLoaded/SignInButton renderizan
+                contenido distinto al del servidor y React lanza un hydration
+                mismatch intermitente. Se renderiza solo tras el montaje para
+                que servidor y primer render del cliente coincidan. */}
+            {isHydrated && (
             <ClerkLoaded>
               {user ? (
                 <div className="flex min-w-9 items-center justify-center">
@@ -225,7 +231,9 @@ export function Header() {
                 </SignInButton>
               )}
             </ClerkLoaded>
+            )}
 
+            {isHydrated && (
             <ClerkLoaded>
               {user && (
                 <div className="flex items-center space-x-2">
@@ -236,8 +244,9 @@ export function Header() {
                 </div>
               )}
             </ClerkLoaded>
+            )}
           </div>
-          {pathname === "/" && isLoaded && user && (
+          {pathname === "/" && isHydrated && isLoaded && user && (
             <div className="col-start-1 col-end-4 row-start-2 min-w-0">
               <AddressPicker userId={user.id} />
             </div>

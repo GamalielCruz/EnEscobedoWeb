@@ -164,12 +164,24 @@ function OrderCard({
       <div className="mt-2 space-y-1.5 pl-6 text-xs text-slate-600 dark:text-slate-400">
         <p className="flex items-center gap-1.5 font-medium text-[#09193B] dark:text-slate-200">
           <Store className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-          <span className="truncate">{order.storeName}</span>
+          <span className="truncate">
+            {order.serviceKind === "mandado" ? (order.mandadoOriginLabel || order.storeName) : order.storeName}
+          </span>
         </p>
         <p className="flex items-center gap-1.5">
           <MapPin className="h-3.5 w-3.5 shrink-0 text-slate-400" />
-          <span className="truncate">{order.destLabel}</span>
+          <span className="truncate">
+            {order.serviceKind === "mandado" ? (order.mandadoDestinationLabel || order.destLabel) : order.destLabel}
+          </span>
         </p>
+        {order.serviceKind === "mandado" && (order.mandadoOriginReference || order.mandadoDestinationReference) && (
+          <p
+            className="truncate text-[11px] italic text-slate-500 dark:text-slate-400"
+            title="Indicaciones para el repartidor"
+          >
+            💬 {[order.mandadoOriginReference, order.mandadoDestinationReference].filter(Boolean).join(" · ")}
+          </p>
+        )}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-0.5">
           <span className="flex items-center gap-1">
             <Timer className="h-3.5 w-3.5 text-slate-400" />

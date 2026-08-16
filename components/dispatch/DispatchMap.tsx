@@ -459,8 +459,12 @@ export function DispatchMap({
               Cerrar
             </button>
           </div>
-          <p className="mt-1.5 text-xs font-semibold text-[#09193B] dark:text-white">{selectedOrder.storeName}</p>
-          <p className="truncate text-[11px] text-slate-500 dark:text-slate-400">{selectedOrder.destLabel}</p>
+          <p className="mt-1.5 text-xs font-semibold text-[#09193B] dark:text-white">
+            {selectedOrder.serviceKind === "mandado" ? (selectedOrder.mandadoOriginLabel || selectedOrder.storeName) : selectedOrder.storeName}
+          </p>
+          <p className="truncate text-[11px] text-slate-500 dark:text-slate-400">
+            {selectedOrder.serviceKind === "mandado" ? (selectedOrder.mandadoDestinationLabel || selectedOrder.destLabel) : selectedOrder.destLabel}
+          </p>
           <p className="mt-1 text-[10px] text-slate-400 dark:text-slate-500">
             Ruta: {routeLabel} · ${selectedOrder.totalPrice.toFixed(2)} · {selectedOrder.paymentLabel}
           </p>

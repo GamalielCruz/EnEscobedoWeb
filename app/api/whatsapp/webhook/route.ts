@@ -12,6 +12,7 @@ import {
   sendOrderCancelled,
   sendPickupReadyForCustomer,
   sendWhatsAppMessage,
+  sendWhatsAppTemplate,
 } from '@/lib/whatsapp'
 import {
   sendMandadoClienteRecogido,
@@ -23,6 +24,7 @@ import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDrive
 import { assignOrderToDriver } from '@/lib/dispatch/dispatch-core'
 import { classifyAssignmentOutcome } from '@/lib/dispatch/dispatch-validation'
 import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
+import { buildMandadoDriverInstructions } from '@/lib/mandado-driver-instructions'
 import { appendOrderEvent } from '@/lib/order-events'
 import { resolveSettlementStatusOnDelivery } from '@/lib/order-state'
 import { buildAddressMapsUrl } from '@/lib/order-maps'
@@ -44,6 +46,7 @@ import {
 import { updateOrderNipDeliveryStatus } from '@/lib/nip-delivery-store'
 import { verifyWhatsAppSignature } from '@/lib/whatsapp-webhook'
 import { getDeliveryScheduleConfig } from '@/lib/delivery-schedule-config'
+import { WHATSAPP_TEMPLATES } from '@/lib/whatsapp/templates'
 import { getStoreAvailability, validateFulfillmentSelection } from '@/lib/fulfillment-schedule'
 import { calculatePickupConversionFinancials } from '@/lib/scheduled-order-contingency'
 
@@ -157,6 +160,8 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   mandadoDestination,
   mandadoPickupAtDoor,
   mandadoRecipientPhone,
+  mandadoContactStatus,
+  mandadoContactPhone,
   mandadoNipRecipient,
   nipDeliveryChannel,
   mandadoRecipientWhatsAppDeclared,
@@ -260,6 +265,8 @@ const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._r
   mandadoDestination,
   mandadoPickupAtDoor,
   mandadoRecipientPhone,
+  mandadoContactStatus,
+  mandadoContactPhone,
   mandadoNipRecipient,
   nipDeliveryChannel,
   mandadoRecipientWhatsAppDeclared,
@@ -675,6 +682,7 @@ async function completeDeliveredOrder(
     status: 'delivered',
     orderStatus: 'delivered',
     dispatchStatus: 'completed',
+    ...(String(targetOrder.mandadoContactStatus ?? '') === 'active' ? { mandadoContactStatus: 'closed' } : {}),
     deliveredAt: verifiedAt,
     settlementStatus: resolveDeliveredSettlement(targetOrder),
     ...(opts.verifiedByDriver
@@ -1031,8 +1039,9 @@ async function handleMandadoCustomerAction(
   // El action llega normalizado (los guiones bajos se convierten en espacios),
   // por eso se aceptan ambas formas: MANDADO AYUDA / MANDADO_AYUDA.
   const isHelpAction = action === 'MANDADO AYUDA' || action === 'MANDADO_AYUDA'
+  const isContactAction = action === 'RELAY APPROVE' || action === 'RELAY DECLINE'
   const isContingencyAction = ['SCHEDULE WAIT', 'SCHEDULE PICKUP', 'SCHEDULE HELP'].includes(action)
-  if (!orderId || (!isHelpAction && !isContingencyAction)) {
+  if (!orderId || (!isHelpAction && !isContingencyAction && !isContactAction)) {
     return false
   }
 
@@ -1043,6 +1052,10 @@ async function handleMandadoCustomerAction(
       orderNumber,
       customerName,
       phone,
+      mandadoRecipientPhone,
+      mandadoContactStatus,
+      mandadoContactPhone,
+      "contactDriverPhone": mandadoContactDriver->telefono,
       serviceKind,
       status,
       orderStatus,
@@ -1063,6 +1076,23 @@ async function handleMandadoCustomerAction(
     ['cancelled', 'delivered', 'completed'].includes(String(order.orderStatus || order.status))
   ) {
     console.warn('[whatsapp webhook] accion mandado rechazada', { action, orderId })
+    return true
+  }
+
+  if (isContactAction) {
+    const contactPhone = normalizeWhatsAppPhone(String(order.mandadoContactPhone ?? ''))
+    if (normalizeWhatsAppPhone(fromPhone) !== contactPhone || String(order.mandadoContactStatus ?? '') !== 'pending') return true
+    const approved = action === 'RELAY APPROVE'
+    await backendClient.patch(orderId).ifRevisionId(order._rev).set({
+      mandadoContactStatus: approved ? 'active' : 'declined',
+      updatedAt: now,
+    }).commit()
+    const driverPhone = normalizeWhatsAppPhone(String(order.contactDriverPhone ?? ''))
+    if (driverPhone) {
+      await sendBotMessage(driverPhone, approved
+        ? `El cliente autorizó el contacto protegido para el mandado #${String(order.orderNumber)}. Escribe: MENSAJE ${String(order.orderNumber)} <tu mensaje>`
+        : `El cliente prefirió soporte para el mandado #${String(order.orderNumber)}.`).catch(() => null)
+    }
     return true
   }
 
@@ -1403,6 +1433,18 @@ export async function POST(req: NextRequest) {
     if (await handlePickupRestaurantAction(textBody, buttonOrderId, fromPhone, new Date().toISOString())) {
       return NextResponse.json({ status: 'ok' })
     }
+    // Mensajes del cliente dentro de un contacto protegido activo: se retransmiten
+    // al repartidor desde el número de El Menú, sin exponer teléfonos.
+    const customerRelay = await backendClient.fetch(`*[_type == "order" && mandadoContactStatus == "active" && mandadoContactPhone == $phone][0]{ orderNumber, "driverPhone": mandadoContactDriver->telefono }`, {
+      phone: normalizeWhatsAppPhone(fromPhone),
+    }) as { orderNumber?: string; driverPhone?: string } | null
+    if (customerRelay && rawIncomingText?.trim()) {
+      const driverPhone = normalizeWhatsAppPhone(customerRelay.driverPhone)
+      if (driverPhone) {
+        await sendBotMessage(driverPhone, `Cliente (#${customerRelay.orderNumber}): ${rawIncomingText.trim().slice(0, 1200)}`).catch(() => null)
+      }
+      return NextResponse.json({ status: 'ok' })
+    }
     // Verificar si el numero es un repartidor registrado
     const repartidor = await findRepartidor(fromPhone)
 
@@ -1436,6 +1478,38 @@ export async function POST(req: NextRequest) {
     if (textBody === 'FIN SOPORTE') {
       await backendClient.patch(repartidor._id).set({ soporteConversacionAbierta: false }).commit()
       await sendBotMessage(fromPhone, 'Conversación de soporte cerrada. Si necesitas ayuda de nuevo, escribe AYUDA.').catch(() => null)
+      return NextResponse.json({ status: 'ok' })
+    }
+    const contactRequest = /^CONTACTAR CLIENTE(?:\s+(.+))?$/.exec(textBody)
+    const relayMessage = /^MENSAJE\s+([^\s]+)\s+(.+)$/.exec(String(rawIncomingText ?? ''))
+    if (contactRequest || relayMessage) {
+      const activeOrders = await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>
+      if (contactRequest) {
+        const order = resolveExactAssignedOrder(activeOrders, contactRequest[1])
+        const pickupReached = order?.mandadoPickupAtDoor === true
+        const targetPhone = normalizeWhatsAppPhone(String(pickupReached ? order?.mandadoRecipientPhone ?? '' : order?.phone ?? ''))
+        if (!order || String(order.serviceKind ?? '') !== 'mandado' || !targetPhone) {
+          await sendBotMessage(fromPhone, 'No encontré un mandado activo con contacto disponible. Usa: CONTACTAR CLIENTE <folio>.').catch(() => null)
+          return NextResponse.json({ status: 'ok' })
+        }
+        await backendClient.patch(String(order._id)).ifRevisionId(String(order._rev)).set({
+          mandadoContactStatus: 'pending', mandadoContactPhone: targetPhone,
+          mandadoContactDriver: { _type: 'reference', _ref: repartidor._id }, updatedAt: now,
+        }).commit()
+        await sendWhatsAppTemplate(targetPhone, WHATSAPP_TEMPLATES.mandadoSolicitudContacto, [`#${String(order.orderNumber)}`], 'es_MX', [
+          { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: `RELAY APPROVE|${String(order._id)}` }] },
+          { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: `RELAY DECLINE|${String(order._id)}` }] },
+        ]).catch(() => null)
+        await sendBotMessage(fromPhone, `Solicitamos autorización al cliente para el mandado #${String(order.orderNumber)}. Te avisaremos su respuesta.`).catch(() => null)
+        return NextResponse.json({ status: 'ok' })
+      }
+      const order = resolveExactAssignedOrder(activeOrders, relayMessage?.[1])
+      if (!order || String(order.mandadoContactStatus ?? '') !== 'active') {
+        await sendBotMessage(fromPhone, 'No hay un contacto protegido activo para ese folio.').catch(() => null)
+        return NextResponse.json({ status: 'ok' })
+      }
+      const targetPhone = normalizeWhatsAppPhone(String(order.mandadoContactPhone ?? ''))
+      if (targetPhone) await sendBotMessage(targetPhone, `Repartidor (#${String(order.orderNumber)}): ${relayMessage?.[2].trim().slice(0, 1200)}`).catch(() => null)
       return NextResponse.json({ status: 'ok' })
     }
     // --- FIN ---
@@ -2000,29 +2074,50 @@ Te avisaremos 10 minutos antes de finalizar.`
         }
 
         const shippingAddress = order.shippingAddress as { line1?: string; latitude?: number; longitude?: number } | undefined
-        const clientAddressStr = buildClientAddress(order as { shippingAddress?: { line1?: string; street?: string; city?: string } })
-        const clientMapsUrl = buildAddressMapsUrl(shippingAddress, clientAddressStr)
+        const isMandadoOrder = String(order.serviceKind ?? '') === 'mandado'
+        // Mandados: la confirmación usa las direcciones reales de recolección y
+        // entrega capturadas por el cliente (no existe una tienda de origen).
+        const mandadoOriginLabel = String(order.mandadoOriginLabel ?? order.storeName ?? 'el punto de recolección')
+        const mandadoDestinationLabel = String(order.mandadoDestinationLabel ?? order.destLabel ?? 'Ver pedido')
+        const clientAddressStr = isMandadoOrder
+          ? mandadoDestinationLabel
+          : buildClientAddress(order as { shippingAddress?: { line1?: string; street?: string; city?: string } })
+        const clientMapsUrl = isMandadoOrder
+          ? isValidCoordinate(order.destLat) && isValidCoordinate(order.destLng)
+            ? `https://www.google.com/maps?q=${order.destLat},${order.destLng}`
+            : `https://maps.google.com/maps?q=${encodeURIComponent(mandadoDestinationLabel)}`
+          : buildAddressMapsUrl(shippingAddress, clientAddressStr)
         const deliveryNotes = String(order.deliveryNotes ?? '').trim()
+        // La URL del mapa de "restaurante" de la plantilla apunta al punto de
+        // recolección del mandado (misma plantilla aprobada, datos reales).
+        const confirmationRestaurantName = isMandadoOrder ? mandadoOriginLabel : String(order.storeName ?? 'La Tienda')
+        const confirmationRestaurantMapsUrl = isMandadoOrder
+          ? isValidCoordinate(order.storeLat) && isValidCoordinate(order.storeLng)
+            ? `https://www.google.com/maps?q=${order.storeLat},${order.storeLng}`
+            : `https://maps.google.com/maps?q=${encodeURIComponent(mandadoOriginLabel)}`
+          : restaurantMapsUrl
 
         const confirmationResults = await Promise.allSettled([
           sendDriverConfirmation(
             fromPhone,
             String(order.orderNumber),
-            String(order.storeName ?? 'La Tienda'),
+            confirmationRestaurantName,
             clientAddressStr,
             paymentMethodDisplay,
-            restaurantMapsUrl,
+            confirmationRestaurantMapsUrl,
             clientMapsUrl
           ),
-          deliveryNotes
-            ? sendBotMessage(fromPhone, `Instrucciones de entrega para #${String(order.orderNumber)}:\n${deliveryNotes}`)
-            : Promise.resolve(),
+          isMandadoOrder
+            ? sendBotMessage(fromPhone, buildMandadoDriverInstructions(order, mandadoOriginLabel, mandadoDestinationLabel)).catch(() => null)
+            : deliveryNotes
+              ? sendBotMessage(fromPhone, `Instrucciones de entrega para #${String(order.orderNumber)}:\n${deliveryNotes}`)
+              : Promise.resolve(),
         ])
 
         if (confirmationResults[0]?.status === 'rejected') {
           await sendBotMessage(
             fromPhone,
-            `Pedido #${order.orderNumber} asignado. Recoge en ${order.storeName ?? 'La Tienda'} y entrega en ${clientAddressStr}. Pago: ${paymentMethodDisplay}.`
+            `Pedido #${order.orderNumber} asignado. Recoge en ${confirmationRestaurantName} y entrega en ${clientAddressStr}. Pago: ${paymentMethodDisplay}.`
           ).catch(() => null)
         }
       }
@@ -2568,14 +2663,6 @@ Te avisaremos 10 minutos antes de finalizar.`
 
   return NextResponse.json({ status: 'ok' })
 }
-
-
-
-
-
-
-
-
 
 
 

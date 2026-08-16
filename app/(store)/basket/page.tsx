@@ -9,6 +9,7 @@ import useBasketStore from "@/store/store";
 import { SignInButton, useAuth, useUser } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef, useMemo } from "react";
+import { useHydration } from "@/hooks/useHydration";
 import { SafeLocationBasedStoreSelector } from '@/components/SafeLocationBasedStoreSelector';
 import { calculateDistance } from '@/lib/clickCollect';
 import { Truck, Store, CreditCard, Banknote, MapPin, X, CheckCircle, Loader2 } from "lucide-react";
@@ -26,6 +27,9 @@ import type { FulfillmentSelection } from "@/lib/fulfillment-schedule";
 import { calculateOrderTotal, PLATFORM_SERVICE_FEE_MXN } from "@/lib/platform-service-fee";
 import MandadoCheckout from "@/components/MandadoCheckout";
 import type { MandadoDraft } from "@/lib/mandado";
+import { AddressSelector } from "@/components/AddressSelector";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import type { CustomerAddress as StoredCustomerAddress } from "@/lib/customer-address";
 
 interface SavedStoreInfo {
   storeId: string;
@@ -108,6 +112,9 @@ function BasketPage() {
   const { isSignedIn } = useAuth();
   const { user } = useUser();
   const router = useRouter();
+  // El JS de Clerk carga asíncrono: se renderiza su UI solo tras el montaje
+  // para evitar hydration mismatches intermitentes (SignInButton/UserButton).
+  const isHydrated = useHydration();
 
   const [isClient, setIsClient] = useState(false);
   const [isMandadoCheckout, setIsMandadoCheckout] = useState(false);
@@ -138,6 +145,8 @@ function BasketPage() {
   const [fulfillmentSelection, setFulfillmentSelection] = useState<FulfillmentSelection | null>(null);
   const [storeServiceTypes, setStoreServiceTypes] = useState<StoreServiceTypes | null>(null);
   const [hydratedDraftKey, setHydratedDraftKey] = useState<string | null>(null);
+  const [addressDialogOpen, setAddressDialogOpen] = useState(false);
+  const [changingAddress, setChangingAddress] = useState(false);
   const checkoutRef = useRef<any>(null);
   const stripeContainerRef = useRef<HTMLDivElement>(null);
   const normalizedCustomerAddress = useMemo(
@@ -997,6 +1006,125 @@ function BasketPage() {
     storeServiceTypes.deliveryAvailability?.available !== false;
   const pickupSupported = storeServiceTypes?.pickup === true;
 
+  // ── Cambiar dirección de entrega desde la tarjeta “Entrega en” ──
+  // Usa la libreta compartida (AddressSelector) y recalcula cobertura y tarifa
+  // con las mismas APIs que el resto del flujo (/api/delivery-pricing/quote y
+  // /api/nearest-store). La tienda se actualiza cuando corresponde.
+  const applySelectedAddress = async (selected: StoredCustomerAddress) => {
+    setAddressDialogOpen(false);
+    setChangingAddress(true);
+    setCardError("");
+    setCodError("");
+    setPickupError("");
+    try {
+      const hasCoords =
+        typeof selected.latitude === "number" &&
+        typeof selected.longitude === "number";
+      const point = hasCoords
+        ? { latitude: selected.latitude, longitude: selected.longitude }
+        : null;
+      const address = {
+        street: selected.street || selected.formattedAddress,
+        city: selected.city || "",
+        state: selected.state || "",
+        country: selected.country || "México",
+        postalCode: selected.postalCode || "",
+        latitude: point?.latitude,
+        longitude: point?.longitude,
+      };
+
+      setCustomerAddress(address);
+      if (user?.id) {
+        try {
+          localStorage.setItem(customerAddressStorageKey(user.id), JSON.stringify(selected));
+        } catch {}
+      }
+      window.dispatchEvent(new CustomEvent("customerAddressChanged", { detail: selected }));
+
+      if (!point) {
+        // Sin coordenadas: el usuario confirma el punto exacto en el mapa
+        // (mismo camino que una dirección nueva).
+        setSelectedStore(null);
+        setShippingCost(null);
+        setClientSecret(null);
+        setFulfillmentSelection(null);
+        return;
+      }
+
+      const [quoteResponse, storesResponse] = await Promise.all([
+        fetch("/api/delivery-pricing/quote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            latitude: point.latitude,
+            longitude: point.longitude,
+            storeId: cartStoreId,
+            orderDate: new Date().toISOString(),
+          }),
+        }),
+        fetch("/api/nearest-store", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            latitude: point.latitude,
+            longitude: point.longitude,
+            filterStoreId: cartStoreId,
+          }),
+        }),
+      ]);
+
+      const quoteData = await quoteResponse.json();
+      const storeData = await storesResponse.json();
+      const quote = quoteData?.quote;
+      const store = storeData?.data?.stores?.[0];
+
+      if (!quote?.allowed || quote.finalPrice == null) {
+        setShippingCost(null);
+        setSelectedStore(null);
+        setClientSecret(null);
+        setFulfillmentSelection(null);
+        setCardError(
+          quote?.reason || "Esta ubicación está fuera de nuestras zonas de entrega."
+        );
+        return;
+      }
+
+      setShippingCost(quote.finalPrice);
+      if (store) {
+        setSelectedStore(store);
+        const timing = getServiceTiming(store);
+        try {
+          localStorage.setItem(
+            "clickCollectStore",
+            JSON.stringify({
+              deliveryMethod: "delivery",
+              storeId: store._id || store.storeId,
+              storeName: store.name,
+              storeAddress: `${store.address?.street}, ${store.address?.city}`,
+              storePhone: store.contact?.phone || store.phone || "",
+              estimatedDelivery: timing.label,
+              customerAddress: address,
+              shippingCost: quote.finalPrice,
+              distanceKm: store.distanceKm ?? undefined,
+              serviceTypes: store.serviceTypes,
+              isOpen: store.isOpen ?? true,
+              manualOperationalStatus: store.manualOperationalStatus ?? "auto",
+              highDemandMode:
+                store.highDemandMode ?? store.serviceTypes?.onDemand ?? false,
+            })
+          );
+        } catch {}
+        window.dispatchEvent(new Event("storeSelected"));
+      }
+      setClientSecret(null);
+      setFulfillmentSelection(null);
+    } catch {
+      setCardError("No pudimos actualizar la dirección. Intenta de nuevo.");
+    } finally {
+      setChangingAddress(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 pt-20 pb-8">
       <div className="container mx-auto px-4 max-w-7xl">
@@ -1176,10 +1304,41 @@ function BasketPage() {
                         <span className="w-6 h-6 bg-[#eb1901] text-white rounded-full flex items-center justify-center text-sm">2</span>
                         Ubicación o Dirección 
                       </h4>
+
+                      {/* Entrega en: dirección guardada destacada + cambiar dirección */}
+                      {user && customerAddress && (
+                        <div className="rounded-xl border border-rose-200 bg-white p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <MapPin className="h-5 w-5 shrink-0 text-[#eb1901]" />
+                              <div className="min-w-0">
+                                <p className="text-xs font-semibold text-gray-500">Entrega en</p>
+                                <p className="truncate text-sm font-bold text-gray-900">
+                                  {customerAddress.street || customerAddress.formattedAddress || "Dirección"}
+                                </p>
+                                {customerAddress.city && (
+                                  <p className="truncate text-xs text-gray-500">
+                                    {[customerAddress.city, customerAddress.state].filter(Boolean).join(", ")}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setAddressDialogOpen(true)}
+                              className="shrink-0 rounded-full border border-rose-200 px-3 py-1.5 text-xs font-semibold text-[#eb1901] transition hover:bg-rose-50"
+                            >
+                              {changingAddress ? "Actualizando…" : "Cambiar dirección"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
                       <div className="border-2 border-rose-200 rounded-lg bg-white p-4 md:p-6">
                         <ModernDeliveryFlow
                           userId={user!.id}
                           onComplete={(data) => {
+                            setAddressDialogOpen(false);
                             
                             setCustomerAddress(data.customerAddress);
                             setSelectedStore(data.selectedStore);
@@ -1301,6 +1460,33 @@ function BasketPage() {
                             <CheckCircle className="w-5 h-5 text-[#70E000] flex-shrink-0 mt-0.5" />
                             <div className="flex-1">
                               <p className="text-sm font-semibold text-[#000]">Todo listo</p>
+                              {/* Entrega en: dirección destacada con cambio rápido */}
+                              <div className="mt-2 rounded-lg border border-rose-100 bg-rose-50/50 p-3">
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <p className="text-[11px] font-bold uppercase tracking-wide text-rose-700">
+                                      Entrega en
+                                    </p>
+                                    <p className="truncate text-sm font-bold text-gray-900">
+                                      {customerAddress.street || customerAddress.formattedAddress || "Dirección"}
+                                    </p>
+                                    {customerAddress.city && (
+                                      <p className="truncate text-xs text-gray-500">
+                                        {[customerAddress.city, customerAddress.state].filter(Boolean).join(", ")}
+                                      </p>
+                                    )}
+                                  </div>
+                                  {user && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setAddressDialogOpen(true)}
+                                      className="shrink-0 rounded-full border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-[#eb1901] transition hover:bg-rose-50"
+                                    >
+                                      {changingAddress ? "Actualizando…" : "Cambiar dirección"}
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
                               <p className="text-sm mt-1">
                                 {customerAddress.street}, {customerAddress.city}
                               </p>
@@ -1807,17 +1993,34 @@ function BasketPage() {
                     </div>
                   )}
                 </div>
-              ) : (
+              ) : isHydrated ? (
                 <SignInButton mode="modal">
                   <button className="mt-6 w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium">
                     Inicia sesión para continuar
                   </button>
                 </SignInButton>
-              )}
+              ) : null}
             </div>
           </div>
         </div>
       </div>
+
+      {/* Selector de dirección (libreta compartida) — se abre desde “Cambiar dirección” */}
+      {user && (
+        <Dialog open={addressDialogOpen} onOpenChange={setAddressDialogOpen}>
+          <DialogContent className="w-[calc(100vw-1.5rem)] max-w-xl overflow-hidden p-0">
+            <DialogHeader className="border-b px-5 py-4">
+              <DialogTitle>Selecciona una dirección</DialogTitle>
+            </DialogHeader>
+            <div className="max-h-[calc(85vh-6rem)] overflow-y-auto px-4 pb-5 pt-4 sm:px-5">
+              <AddressSelector
+                userId={user.id}
+                onSelect={(address) => void applySelectedAddress(address)}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }

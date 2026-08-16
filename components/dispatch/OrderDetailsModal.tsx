@@ -94,8 +94,20 @@ export function OrderDetailsModal({ order, onClose }: Props) {
           <Row label="Prioridad" value={priorityLabel} />
           <Row label="Estado dispatch" value={order.dispatchStatus || "—"} mono />
           <Row label="Estado pedido" value={order.orderStatus || "—"} mono />
-          <Row label="Origen" value={order.storeName || "—"} />
-          <Row label="Destino" value={order.destLabel || "—"} />
+          {order.serviceKind === "mandado" ? (
+            <>
+              <Row label="Recolección" value={order.mandadoOriginLabel || order.storeName || "—"} />
+              {order.mandadoOriginReference && <Row label="Indicaciones para el repartidor" value={order.mandadoOriginReference} />}
+              <Row label="Entrega" value={order.mandadoDestinationLabel || order.destLabel || "—"} />
+              {order.mandadoDestinationReference && <Row label="Indicaciones para el repartidor" value={order.mandadoDestinationReference} />}
+              {order.mandadoDetails && <Row label="Solicitud del mandado" value={order.mandadoDetails} />}
+            </>
+          ) : (
+            <>
+              <Row label="Origen" value={order.storeName || "—"} />
+              <Row label="Destino" value={order.destLabel || "—"} />
+            </>
+          )}
           <Row
             label="Coordenadas"
             value={
