@@ -24,10 +24,9 @@ import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDrive
 import { assignOrderToDriver } from '@/lib/dispatch/dispatch-core'
 import { classifyAssignmentOutcome } from '@/lib/dispatch/dispatch-validation'
 import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
-import { buildMandadoDriverInstructions } from '@/lib/mandado-driver-instructions'
 import { appendOrderEvent } from '@/lib/order-events'
 import { resolveSettlementStatusOnDelivery } from '@/lib/order-state'
-import { buildAddressMapsUrl } from '@/lib/order-maps'
+import { buildDriverConfirmationData } from '@/lib/order-maps'
 import { buildStoreMapsUrl } from '@/lib/order-pricing'
 import { syncBaserowOrderById } from '@/lib/baserow'
 import { isDeliveryPinValid, orderRequiresDeliveryPin, revealDeliveryPin } from '@/lib/delivery-pin'
@@ -213,6 +212,13 @@ const ACTIVE_OFFER_ORDERS_BY_DRIVER_QUERY = `*[
   "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
   "storeCoordinates": coalesce(affiliateStore->coordinates, {"latitude": mandadoOrigin.lat, "longitude": mandadoOrigin.lng}),
   "storeName": coalesce(affiliateStore->name, select(serviceKind == "mandado" => "Punto de inicio")),
+  "storeLat": coalesce(affiliateStore->coordinates.latitude, mandadoOrigin.lat),
+  "storeLng": coalesce(affiliateStore->coordinates.longitude, mandadoOrigin.lng),
+  "destLat": coalesce(shippingAddress.latitude, mandadoDestination.lat),
+  "destLng": coalesce(shippingAddress.longitude, mandadoDestination.lng),
+  "destLabel": coalesce(shippingAddress.line1, mandadoDestination.label),
+  "mandadoOriginLabel": mandadoOrigin.label,
+  "mandadoDestinationLabel": mandadoDestination.label,
   "shippingAddress": shippingAddress,
   deliveryNotes
 }`
@@ -311,10 +317,6 @@ function normalizeText(text: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .trim()
-}
-
-function isValidCoordinate(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value)
 }
 
 function normalizeDriverActionToken(text: string): string {
@@ -436,16 +438,6 @@ function getPendingOfferOrderIds(repartidor: {
   }
 
   return repartidor.ultimoPedidoOfertadoRef ? [repartidor.ultimoPedidoOfertadoRef] : []
-}
-
-function buildClientAddress(order: {
-  shippingAddress?: { line1?: string; street?: string; city?: string; latitude?: number; longitude?: number }
-}) {
-  return order.shippingAddress
-    ? [order.shippingAddress.line1, order.shippingAddress.street, order.shippingAddress.city]
-        .filter(Boolean)
-        .join(', ')
-    : 'Ver pedido'
 }
 
 function getDriverNextState(repartidor: { disponible?: boolean; disponibleHasta?: string }, nowDate: Date): 'available' | 'offline' {
@@ -2046,78 +2038,45 @@ Te avisaremos 10 minutos antes de finalizar.`
         ).catch(() => null)
       } else {
         const order = successOrders[0] as Record<string, unknown>
-        const storeAddress = String(order.storeAddress ?? order.storeName ?? 'la tienda')
         const paymentMethodDisplay =
           order.paymentMethod === 'cash_on_delivery' || order.paymentMethod === 'cash_on_pickup'
             ? 'COBRAR EN EFECTIVO'
             : 'YA PAGADO'
 
-        const storeCoordinates = order.storeCoordinates as
-          | { latitude?: unknown; longitude?: unknown }
-          | undefined
-        const restaurantLatitude = storeCoordinates?.latitude
-        const restaurantLongitude = storeCoordinates?.longitude
-
-        const restaurantMapsUrl =
-          isValidCoordinate(restaurantLatitude) && isValidCoordinate(restaurantLongitude)
-            ? `https://www.google.com/maps?q=${restaurantLatitude},${restaurantLongitude}`
-            : `https://maps.google.com/maps?q=${encodeURIComponent(storeAddress)}`
-
-        if (!(isValidCoordinate(restaurantLatitude) && isValidCoordinate(restaurantLongitude))) {
-          console.warn('[whatsapp webhook] usando fallback de direccion para maps del restaurante', {
-            orderId: order._id,
-            orderNumber: order.orderNumber,
-            storeName: order.storeName,
-            storeAddress,
-            storeCoordinates: order.storeCoordinates ?? null,
-          })
-        }
-
-        const shippingAddress = order.shippingAddress as { line1?: string; latitude?: number; longitude?: number } | undefined
         const isMandadoOrder = String(order.serviceKind ?? '') === 'mandado'
-        // Mandados: la confirmación usa las direcciones reales de recolección y
-        // entrega capturadas por el cliente (no existe una tienda de origen).
-        const mandadoOriginLabel = String(order.mandadoOriginLabel ?? order.storeName ?? 'el punto de recolección')
-        const mandadoDestinationLabel = String(order.mandadoDestinationLabel ?? order.destLabel ?? 'Ver pedido')
-        const clientAddressStr = isMandadoOrder
-          ? mandadoDestinationLabel
-          : buildClientAddress(order as { shippingAddress?: { line1?: string; street?: string; city?: string } })
-        const clientMapsUrl = isMandadoOrder
-          ? isValidCoordinate(order.destLat) && isValidCoordinate(order.destLng)
-            ? `https://www.google.com/maps?q=${order.destLat},${order.destLng}`
-            : `https://maps.google.com/maps?q=${encodeURIComponent(mandadoDestinationLabel)}`
-          : buildAddressMapsUrl(shippingAddress, clientAddressStr)
         const deliveryNotes = String(order.deliveryNotes ?? '').trim()
-        // La URL del mapa de "restaurante" de la plantilla apunta al punto de
-        // recolección del mandado (misma plantilla aprobada, datos reales).
-        const confirmationRestaurantName = isMandadoOrder ? mandadoOriginLabel : String(order.storeName ?? 'La Tienda')
-        const confirmationRestaurantMapsUrl = isMandadoOrder
-          ? isValidCoordinate(order.storeLat) && isValidCoordinate(order.storeLng)
-            ? `https://www.google.com/maps?q=${order.storeLat},${order.storeLng}`
-            : `https://maps.google.com/maps?q=${encodeURIComponent(mandadoOriginLabel)}`
-          : restaurantMapsUrl
+        // Datos de la plantilla confirmacion_repartidor (texto + botones de
+        // Maps) calculados en lib/order-maps.ts (puro y testeable). Para
+        // mandados usa el origen/destino reales capturados por el cliente; para
+        // restaurantes, la tienda afiliada y el shippingAddress. La plantilla
+        // es el mensaje CANÓNICO de asignación: los mandados ya no reciben el
+        // mensaje libre "📦 MANDADO" adicional que duplicaba esta información.
+        const confirmation = buildDriverConfirmationData(
+          order as Parameters<typeof buildDriverConfirmationData>[0]
+        )
 
         const confirmationResults = await Promise.allSettled([
           sendDriverConfirmation(
             fromPhone,
             String(order.orderNumber),
-            confirmationRestaurantName,
-            clientAddressStr,
+            confirmation.restaurantName,
+            confirmation.deliveryAddress,
             paymentMethodDisplay,
-            confirmationRestaurantMapsUrl,
-            clientMapsUrl
+            confirmation.restaurantMapsUrl,
+            confirmation.clientMapsUrl
           ),
-          isMandadoOrder
-            ? sendBotMessage(fromPhone, buildMandadoDriverInstructions(order, mandadoOriginLabel, mandadoDestinationLabel)).catch(() => null)
-            : deliveryNotes
-              ? sendBotMessage(fromPhone, `Instrucciones de entrega para #${String(order.orderNumber)}:\n${deliveryNotes}`)
-              : Promise.resolve(),
+          // Solo restaurantes: instrucciones de entrega adicionales. Los
+          // mandados no reciben mensajes extra al aceptar (la plantilla es
+          // canónica); las indicaciones del cliente quedan en el pedido.
+          !isMandadoOrder && deliveryNotes
+            ? sendBotMessage(fromPhone, `Instrucciones de entrega para #${String(order.orderNumber)}:\n${deliveryNotes}`)
+            : Promise.resolve(),
         ])
 
         if (confirmationResults[0]?.status === 'rejected') {
           await sendBotMessage(
             fromPhone,
-            `Pedido #${order.orderNumber} asignado. Recoge en ${confirmationRestaurantName} y entrega en ${clientAddressStr}. Pago: ${paymentMethodDisplay}.`
+            `Pedido #${order.orderNumber} asignado. Recoge en ${confirmation.restaurantName} y entrega en ${confirmation.deliveryAddress}. Pago: ${paymentMethodDisplay}.`
           ).catch(() => null)
         }
       }
