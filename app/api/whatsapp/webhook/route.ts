@@ -27,6 +27,7 @@ import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
 import { appendOrderEvent } from '@/lib/order-events'
 import { resolveSettlementStatusOnDelivery } from '@/lib/order-state'
 import { buildDriverConfirmationData } from '@/lib/order-maps'
+import { matchDriverCommand } from '@/lib/driver-commands'
 import { buildStoreMapsUrl } from '@/lib/order-pricing'
 import { syncBaserowOrderById } from '@/lib/baserow'
 import { isDeliveryPinValid, orderRequiresDeliveryPin, revealDeliveryPin } from '@/lib/delivery-pin'
@@ -1914,11 +1915,17 @@ Te avisaremos 10 minutos antes de finalizar.`
           await appendOrderEvent(String(order._id), { type: 'scheduled_order_driver_assigned', source: 'whatsapp/webhook', actor: repartidor._id, payload: { driverId: repartidor._id } })
         }
 
-        void notifyRestaurantDriverEnRoute(
-          String(order._id),
-          String(repartidor.nombre),
-          String(order.orderNumber)
-        ).catch(() => null)
+        // Los mandados no tienen restaurante afiliado: notificar aquí solo
+        // produce el log "[notify-restaurant] Restaurante sin WhatsApp
+        // configurado" con storeId null (verificado en producción). Los
+        // restaurantes conservan su notificación actual.
+        if (String(order.serviceKind ?? '') !== 'mandado') {
+          void notifyRestaurantDriverEnRoute(
+            String(order._id),
+            String(repartidor.nombre),
+            String(order.orderNumber)
+          ).catch(() => null)
+        }
 
         console.log('[whatsapp webhook] oferta aceptada con orderId', {
           repartidorId: repartidor._id,
@@ -2122,16 +2129,43 @@ Te avisaremos 10 minutos antes de finalizar.`
     }
 
     // --- PEDIDO EN DIRECCION AL DOMICILIO ---
-    if (textBody === 'PEDIDO EN DIRECCION AL DOMICILIO' || textBody.startsWith('PEDIDO EN DIRECCION AL DOMICILIO ')) {
-        const orderToken = extractOrderToken(textBody, 'PEDIDO EN DIRECCION AL DOMICILIO')
-        const shippedOrders = await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id })
-        const targetOrder = resolveExactAssignedOrder(shippedOrders as Array<Record<string, unknown>>, orderToken)
+    // El matcheo tolera variantes escritas a mano ("a domicilio", espacios
+    // dobles, puntuación final) para que un comando operativo válido NUNCA
+    // caiga en la conversación de soporte (incidencia real de producción).
+    const pedidoEnCaminoToken = matchDriverCommand(textBody, 'PEDIDO EN DIRECCION AL DOMICILIO')
+    if (pedidoEnCaminoToken !== null) {
+        const traceId = crypto.randomUUID().slice(0, 8)
+        const orderToken = pedidoEnCaminoToken || null
+        console.log('PEDIDO_EN_CAMINO_START', {
+          traceId,
+          repartidorId: repartidor._id,
+          orderToken,
+          fromPhone,
+        })
+        const shippedOrders = await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>
+        console.log('PEDIDO_EN_CAMINO_SHIPPED_ORDERS', {
+          traceId,
+          cantidad: shippedOrders.length,
+          orderIds: shippedOrders.map((o) => String(o._id)),
+          orderNumbers: shippedOrders.map((o) => String(o.orderNumber)),
+          serviceKind: shippedOrders.map((o) => String(o.serviceKind ?? '')),
+          status: shippedOrders.map((o) => String(o.status ?? '')),
+          dispatchStatus: shippedOrders.map((o) => String(o.dispatchStatus ?? '')),
+          mandadoPickupAtDoor: shippedOrders.map((o) => String(o.mandadoPickupAtDoor ?? '')),
+        })
+        const targetOrder = resolveExactAssignedOrder(shippedOrders, orderToken)
 
         if (!targetOrder) {
+          console.warn('PEDIDO_EN_CAMINO_NO_TARGET', {
+            traceId,
+            repartidorId: repartidor._id,
+            orderToken,
+            cantidadPedidos: shippedOrders.length,
+          })
           if (!shippedOrders || shippedOrders.length === 0) {
             void sendBotMessage(fromPhone, 'No tienes ningun pedido en camino actualmente.').catch(() => null)
           } else {
-            void sendBotMessage(fromPhone, getAmbiguousOrderPrompt('PEDIDO EN DIRECCION AL DOMICILIO', shippedOrders as Array<Record<string, unknown>>)).catch(() => null)
+            void sendBotMessage(fromPhone, getAmbiguousOrderPrompt('PEDIDO EN DIRECCION AL DOMICILIO', shippedOrders)).catch(() => null)
           }
           console.warn('[whatsapp webhook] intento de actualizar orden sin asignacion valida', {
             repartidorId: repartidor._id,
@@ -2140,6 +2174,16 @@ Te avisaremos 10 minutos antes de finalizar.`
           })
           return NextResponse.json({ status: 'ok' })
         }
+
+        console.log('PEDIDO_EN_CAMINO_TARGET_RESOLVED', {
+          traceId,
+          targetOrderId: String(targetOrder._id),
+          targetOrderNumber: String(targetOrder.orderNumber),
+          targetServiceKind: String(targetOrder.serviceKind ?? ''),
+          targetStatus: String(targetOrder.status ?? ''),
+          targetDispatchStatus: String(targetOrder.dispatchStatus ?? ''),
+          targetMandadoPickupAtDoor: String(targetOrder.mandadoPickupAtDoor ?? ''),
+        })
 
         // Para MANDADOS este comando solo es válido DESPUÉS de llegar al punto
         // de recolección: indica que el paquete ya fue recibido y va al destino.
@@ -2151,6 +2195,11 @@ Te avisaremos 10 minutos antes de finalizar.`
           ).catch(() => null)
           return NextResponse.json({ status: 'ok' })
         }
+        console.log('PEDIDO_EN_CAMINO_SENDING_DRIVER', {
+          traceId,
+          orderId: String(targetOrder._id),
+          orderNumber: String(targetOrder.orderNumber),
+        })
         const notifications: Promise<unknown>[] = [
           sendRepartidorEnCamino(fromPhone, String((targetOrder as Record<string, unknown>).orderNumber), String((targetOrder as Record<string, unknown>)._id)),
         ]
@@ -2185,18 +2234,29 @@ Te avisaremos 10 minutos antes de finalizar.`
         }
 
         await Promise.allSettled(notifications)
+        console.log('PEDIDO_EN_CAMINO_DRIVER_SENT', {
+          traceId,
+          orderId: String(targetOrder._id),
+          orderNumber: String(targetOrder.orderNumber),
+        })
         console.log('[whatsapp webhook] cliente notificado con orderId', {
           accion: 'en_camino',
           repartidorId: repartidor._id,
           orderId: (targetOrder as Record<string, unknown>)._id,
           orderNumber: (targetOrder as Record<string, unknown>).orderNumber,
         })
+        console.log('PEDIDO_EN_CAMINO_COMPLETED', {
+          traceId,
+          orderId: String(targetOrder._id),
+          orderNumber: String(targetOrder.orderNumber),
+        })
 
         return NextResponse.json({ status: 'ok' })
     }
 // --- EN PUERTA ---
-    if (textBody === 'EN PUERTA' || textBody.startsWith('EN PUERTA ')) {
-        const orderToken = buttonOrderId ?? extractOrderToken(textBody, 'EN PUERTA')
+    const enPuertaToken = matchDriverCommand(textBody, 'EN PUERTA')
+    if (enPuertaToken !== null) {
+        const orderToken = buttonOrderId ?? (enPuertaToken || null)
         const targetOrder = buttonOrderId
           ? await resolveAssignedOrderById(buttonOrderId, repartidor._id)
           : null
@@ -2384,8 +2444,9 @@ Te avisaremos 10 minutos antes de finalizar.`
         return NextResponse.json({ status: 'ok' })
     }
 // --- ENTREGADO ---
-      if (textBody === 'ENTREGADO' || textBody.startsWith('ENTREGADO ')) {
-        const orderToken = buttonOrderId ?? extractOrderToken(textBody, 'ENTREGADO')
+      const entregadoToken = matchDriverCommand(textBody, 'ENTREGADO')
+      if (entregadoToken !== null) {
+        const orderToken = buttonOrderId ?? (entregadoToken || null)
         const targetOrder = buttonOrderId
           ? await resolveAssignedOrderById(buttonOrderId, repartidor._id)
           : null
