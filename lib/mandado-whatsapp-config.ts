@@ -10,7 +10,7 @@
  *  2. Se asigna repartidor (si no hay: `cliente_entrega_programada_sin_repartidor`).
  *  3. El repartidor recoge el paquete (comando PEDIDO EN DIRECCION AL DOMICILIO:
  *     para mandados significa "recogido + en camino al destino"; no hay comando RECOGÍ).
- *  4. Se envía `mandado_cliente`  → remitente: recogido y en camino.
+ *  4. Se envía `mandado__cliente`  → remitente: recogido y en camino.
  *     Variables: {{1}} nombre, {{2}} DIRECCIÓN de destino (tras el 📍), {{3}} folio.
  *  5. Se envía `mandado__destinatario` → destinatario: le enviaron un mandado.
  *     0 variables (texto estático en Meta: no necesita proporcionar código).

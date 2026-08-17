@@ -12,7 +12,7 @@
  * puede importar con alias sin extensión (`@/lib/whatsapp/templates`).
  *
  * ── Flujo de Mandados (plantillas oficiales aprobadas) ──
- *  - `mandado_cliente`                        → remitente: paquete recogido y en camino.
+ *  - `mandado__cliente`                       → remitente: paquete recogido y en camino.
  *  - `mandado__destinatario`                  → destinatario: le enviaron un mandado.
  *                                               {{1}} comunica que el paquete llegó y, cuando
  *                                               aplica, el NIP para confirmar la entrega.
@@ -35,7 +35,7 @@
  */
 export const WHATSAPP_TEMPLATES = {
   // ── Mandados ──
-  mandadoCliente: "mandado_cliente",
+  mandadoCliente: "mandado__cliente",
   mandadoDestinatario: "mandado__destinatario",
   mandadoSolicitudContacto: "mandado_solicitud_contacto",
   // Aprobada en Meta: remitente avisado de que el repartidor llegó al destino.
