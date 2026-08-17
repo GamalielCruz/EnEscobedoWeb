@@ -101,3 +101,52 @@ export function buildDriverConfirmationData(order: DriverConfirmationOrder): Dri
     clientMapsUrl: mapsUrl(destLat, destLng, deliveryAddress),
   };
 }
+
+// ────────────────────────────────────────────────────────────────────────
+// Mensaje de instrucciones operativas del mandado para el repartidor
+// (texto libre, enviado con sendBotMessage DESPUÉS de la plantilla
+// `confirmacion_repartidor`, que ya lleva recolección, destino, cobro y
+// botones de Maps). Usa SOLO campos reales de la orden:
+//   - Recoge en   → mandadoOrigin(.label) / mandadoOriginLabel
+//   - Destino     → mandadoDestination(.label) / mandadoDestinationLabel
+//   - Instrucciones → mandadoDetails (obligatorio en la creación)
+//   - Indicaciones  → mandadoOriginReference + mandadoDestinationReference
+//   - Cobro       → paymentMethod + totalPrice
+// No inventa campos; las secciones sin datos se omiten (o usan un fallback
+// legible) para no enviar texto vacío.
+// ────────────────────────────────────────────────────────────────────────
+
+export type MandadoDriverInstructionsOrder = DriverConfirmationOrder & {
+  orderNumber?: unknown;
+  mandadoDetails?: unknown;
+  mandadoOriginReference?: unknown;
+  mandadoDestinationReference?: unknown;
+  paymentMethod?: unknown;
+  totalPrice?: unknown;
+};
+
+export function buildMandadoDriverInstructions(order: MandadoDriverInstructionsOrder): string {
+  const confirmation = buildDriverConfirmationData(order);
+  const details = String(order.mandadoDetails ?? "").trim();
+  const originReference = String(order.mandadoOriginReference ?? "").trim();
+  const destinationReference = String(order.mandadoDestinationReference ?? "").trim();
+  const indicaciones = [originReference, destinationReference].filter(Boolean).join("\n");
+  const paymentLabel =
+    order.paymentMethod === "cash_on_delivery" || order.paymentMethod === "cash_on_pickup"
+      ? "COBRAR EN EFECTIVO"
+      : "YA PAGADO";
+  const total = Number(order.totalPrice ?? 0);
+  const totalLabel = Number.isFinite(total) && total > 0 ? `$${total.toFixed(2)} MXN` : "";
+  const cobro = totalLabel ? `${paymentLabel} - ${totalLabel}` : paymentLabel;
+
+  const lines: string[] = [
+    `📦 MANDADO #${String(order.orderNumber ?? "")}`,
+    `Recoge en:\n${confirmation.restaurantName}`,
+    `Destino:\n${confirmation.deliveryAddress}`,
+    `📝 Instrucciones:\n${details || "Sin instrucciones adicionales."}`,
+  ];
+  if (indicaciones) lines.push(`📍 Indicaciones:\n${indicaciones}`);
+  lines.push(`💰 Cobro:\n${cobro}`);
+  lines.push("Después de recoger el mandado, dirígete al destino.");
+  return lines.join("\n\n");
+}

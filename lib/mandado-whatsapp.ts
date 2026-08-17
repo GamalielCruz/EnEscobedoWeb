@@ -115,6 +115,14 @@ export async function sendMandadoWhatsAppTemplate(input: {
     if (isNipCarrierTemplate(template.name)) {
       await updateOrderNipDeliveryStatus(input.order._id, "sent").catch(() => null);
     }
+    console.log("[mandado-whatsapp] plantilla enviada", {
+      orderId: input.order._id,
+      templateName: template.name,
+      logicalEvent: input.logicalEvent,
+      idempotencyKey: input.idempotencyKey,
+      recipient: eventBase.recipient,
+      metaMessageId,
+    });
     return { sent: true, metaMessageId };
   } catch (error) {
     await appendOrderEvent(input.order._id, {
@@ -208,8 +216,18 @@ export function sendMandadoDestinatarioEnPuerta(
  * `orden_repartidor` (aprobada, con botón Ayuda), que se envía en el mismo
  * evento EN PUERTA del webhook. No reutilizar `cliente_repartidor_en_puerta`
  * (semántica de restaurantes).
+ *
+ * Un mandado tiene DOS llegadas en EN PUERTA y cada una es un evento
+ * idempotente DISTINTO (clave propia): la 1ª llegada (punto de recolección,
+ * `orderStatus: "pickup"` → "recoger tu paquete") usa el suffix `recogido`; la
+ * 2ª llegada (destino, → "la entrega de tu mandado") usa el suffix por defecto
+ * `en_destino`. Si compartieran clave, la segunda llegada se descartaría como
+ * duplicado por claimDelivery.
  */
-export function sendMandadoDestinoEnPuerta(order: MandadoNotification) {
+export function sendMandadoDestinoEnPuerta(
+  order: MandadoNotification,
+  opts: { idempotencySuffix?: string } = {}
+) {
   return sendMandadoWhatsAppTemplate({
     order,
     templateName: WHATSAPP_TEMPLATES.mandadoDestinoEnPuerta,
@@ -217,7 +235,7 @@ export function sendMandadoDestinoEnPuerta(order: MandadoNotification) {
       order.deliveryAddress || "la dirección indicada",
       order.orderStatus === "pickup" ? "recoger tu paquete" : "la entrega de tu mandado",
     ],
-    idempotencyKey: `${order._id}:mandado_destino_en_puerta:en_destino`,
+    idempotencyKey: `${order._id}:mandado_destino_en_puerta:${opts.idempotencySuffix ?? "en_destino"}`,
     logicalEvent: "repartidor_en_destino",
   });
 }

@@ -26,7 +26,7 @@ import { classifyAssignmentOutcome } from '@/lib/dispatch/dispatch-validation'
 import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
 import { appendOrderEvent } from '@/lib/order-events'
 import { resolveSettlementStatusOnDelivery } from '@/lib/order-state'
-import { buildDriverConfirmationData } from '@/lib/order-maps'
+import { buildDriverConfirmationData, buildMandadoDriverInstructions } from '@/lib/order-maps'
 import { matchDriverCommand } from '@/lib/driver-commands'
 import { buildStoreMapsUrl } from '@/lib/order-pricing'
 import { syncBaserowOrderById } from '@/lib/baserow'
@@ -220,6 +220,9 @@ const ACTIVE_OFFER_ORDERS_BY_DRIVER_QUERY = `*[
   "destLabel": coalesce(shippingAddress.line1, mandadoDestination.label),
   "mandadoOriginLabel": mandadoOrigin.label,
   "mandadoDestinationLabel": mandadoDestination.label,
+  mandadoDetails,
+  mandadoOriginReference,
+  mandadoDestinationReference,
   "shippingAddress": shippingAddress,
   deliveryNotes
 }`
@@ -2056,8 +2059,10 @@ Te avisaremos 10 minutos antes de finalizar.`
         // Maps) calculados en lib/order-maps.ts (puro y testeable). Para
         // mandados usa el origen/destino reales capturados por el cliente; para
         // restaurantes, la tienda afiliada y el shippingAddress. La plantilla
-        // es el mensaje CANÓNICO de asignación: los mandados ya no reciben el
-        // mensaje libre "📦 MANDADO" adicional que duplicaba esta información.
+        // es el mensaje CANÓNICO de asignación (recolección, destino, cobro y
+        // Maps). Los mandados reciben ADEMÁS un texto libre con la solicitud e
+        // indicaciones (buildMandadoDriverInstructions): complementa, no
+        // duplica, la información de la plantilla.
         const confirmation = buildDriverConfirmationData(
           order as Parameters<typeof buildDriverConfirmationData>[0]
         )
@@ -2072,12 +2077,14 @@ Te avisaremos 10 minutos antes de finalizar.`
             confirmation.restaurantMapsUrl,
             confirmation.clientMapsUrl
           ),
-          // Solo restaurantes: instrucciones de entrega adicionales. Los
-          // mandados no reciben mensajes extra al aceptar (la plantilla es
-          // canónica); las indicaciones del cliente quedan en el pedido.
+          // Restaurantes: instrucciones de entrega adicionales. Mandados:
+          // mensaje operativo con la solicitud e indicaciones (la plantilla
+          // canónica conserva recolección, destino, cobro y botones de Maps).
           !isMandadoOrder && deliveryNotes
             ? sendBotMessage(fromPhone, `Instrucciones de entrega para #${String(order.orderNumber)}:\n${deliveryNotes}`)
-            : Promise.resolve(),
+            : isMandadoOrder
+              ? sendBotMessage(fromPhone, buildMandadoDriverInstructions(order as Parameters<typeof buildMandadoDriverInstructions>[0]))
+              : Promise.resolve(),
         ])
 
         if (confirmationResults[0]?.status === 'rejected') {
@@ -2312,13 +2319,16 @@ Te avisaremos 10 minutos antes de finalizar.`
             ),
           ]
           if (senderPhone) {
+            // 1ª llegada (punto de recolección): aviso con el ORIGEN y acción
+            // "recoger tu paquete". Clave de idempotencia propia (`recogido`)
+            // para no colisionar con la 2ª llegada (`en_destino`).
             notifications.push(sendMandadoDestinoEnPuerta({
               _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
               phone: senderPhone,
               orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
               deliveryAddress: origin,
               orderStatus: 'pickup',
-            }))
+            }, { idempotencySuffix: 'recogido' }))
           }
           await Promise.allSettled(notifications)
           return NextResponse.json({ status: 'ok' })
@@ -2362,6 +2372,21 @@ Te avisaremos 10 minutos antes de finalizar.`
           // segura). NO reutilizar `cliente_repartidor_en_puerta` para mandados.
           const arrivalPlan = planMandadoArrival(resolvedTargetOrder as Record<string, unknown>)
           if (arrivalPlan.sendDestinoEnPuerta) {
+            // 2ª llegada (destino): el remitente recibe SIEMPRE el aviso
+            // `mandado_destino_en_puerta` (APROBADA) con la dirección de destino
+            // y acción "la entrega de tu mandado". Es el aviso equivalente a
+            // `cliente_repartidor_en_puerta` de restaurantes, que NO se
+            // reutiliza para mandados. Clave de idempotencia `en_destino`
+            // (distinta de la 1ª llegada, `recogido`).
+            const destinationLabel =
+              ((resolvedTargetOrder as Record<string, unknown>).mandadoDestination as { label?: string } | undefined)?.label
+              ?? 'el destino del mandado'
+            notifications.push(sendMandadoDestinoEnPuerta({
+              _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
+              phone: customerPhone,
+              orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
+              deliveryAddress: destinationLabel,
+            }))
             // La primera llegada ya avisó al remitente. En la segunda llegada se
             // avisa al destinatario; {{1}} indica si debe compartir un NIP.
             const recipientPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).mandadoRecipientPhone ?? '').replace(/\D/g, ''))
