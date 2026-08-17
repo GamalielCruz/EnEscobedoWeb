@@ -62,3 +62,66 @@ export function parseCustomerAddress(value: string | null) {
 export function restoreCustomerAddress(storedValue: string | null, checkoutValue: unknown) {
   return parseCustomerAddress(storedValue) ?? normalizeCustomerAddress(checkoutValue);
 }
+
+// ── Identidad y deduplicación ────────────────────────────────────────────
+//
+// La identidad de un registro es su `id` (edición = mismo registro, aunque
+// cambien los datos). Para registros sin `id` (datos legacy) se comparan los
+// datos reales: calle, ciudad, código postal y coordenadas. El nombre
+// (label) NO forma parte de la identidad: dos registros con el mismo nombre
+// pero distinta ubicación son direcciones distintas.
+
+const logicalAddressKey = (address: CustomerAddress) => {
+  const norm = (value: string) => value.trim().toLocaleLowerCase("es-MX");
+  const parts = [norm(address.street), norm(address.city), norm(address.postalCode)];
+  if (typeof address.latitude === "number" && typeof address.longitude === "number") {
+    parts.push(address.latitude.toFixed(5), address.longitude.toFixed(5));
+  }
+  return parts.join("|");
+};
+
+/** Dos direcciones representan el mismo registro lógico. */
+export function sameCustomerAddress(a: CustomerAddress, b: CustomerAddress): boolean {
+  if (a.id && b.id) return a.id === b.id;
+  return logicalAddressKey(a) === logicalAddressKey(b);
+}
+
+/**
+ * Devuelve la lista sin duplicados preservando el orden.
+ * - Mismo `id` → se conserva la versión más reciente (última aparición).
+ * - Sin `id`, misma clave lógica (datos + coordenadas) → se conserva la
+ *   primera aparición.
+ * No colapsa registros con ids distintos aunque tengan el mismo contenido:
+ * eso corresponde a la persistencia, no al estado de la UI.
+ */
+export function dedupeCustomerAddresses(list: CustomerAddress[]): CustomerAddress[] {
+  const seen = new Set<string>();
+  const result: CustomerAddress[] = [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const item = list[i];
+    const key = item.id ? `id:${item.id}` : `key:${logicalAddressKey(item)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.unshift(item);
+  }
+  return result;
+}
+
+/**
+ * Selecciona la dirección activa: primero la referenciada por
+ * `activeAddressId`, luego una preferida (localStorage), luego la primera.
+ * Siempre devuelve un único registro → a lo sumo una dirección marcada
+ * como ACTUAL.
+ */
+export function selectActiveAddress(
+  addresses: CustomerAddress[],
+  activeAddressId: string,
+  preferredId?: string
+): CustomerAddress | null {
+  return (
+    addresses.find((address) => address.id === activeAddressId) ??
+    addresses.find((address) => address.id === preferredId) ??
+    addresses[0] ??
+    null
+  );
+}

@@ -16,8 +16,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   CustomerAddress,
   customerAddressStorageKey,
+  dedupeCustomerAddresses,
   normalizeCustomerAddress,
   parseCustomerAddress,
+  selectActiveAddress,
 } from "@/lib/customer-address";
 
 export type UseUserAddressesOptions = {
@@ -78,15 +80,13 @@ export function useUserAddresses(userId: string | undefined | null, options: Use
       if (!response.ok) throw new Error("load");
       const data = await response.json();
       if (!mounted.current) return;
-      const saved = Array.isArray(data.addresses)
-        ? (data.addresses.map(normalizeCustomerAddress).filter(Boolean) as CustomerAddress[])
-        : [];
+      const saved = dedupeCustomerAddresses(
+        Array.isArray(data.addresses)
+          ? (data.addresses.map(normalizeCustomerAddress).filter(Boolean) as CustomerAddress[])
+          : []
+      );
       setAddresses(saved);
-      const selected =
-        saved.find((address) => address.id === data.activeAddressId) ??
-        saved.find((address) => address.id === local?.id) ??
-        saved[0] ??
-        null;
+      const selected = selectActiveAddress(saved, data.activeAddressId, local?.id);
       setActive(selected);
       if (selected && !options.silent) persistActive(selected);
     } catch {
@@ -108,13 +108,20 @@ export function useUserAddresses(userId: string | undefined | null, options: Use
   }, [load]);
 
   // Escucha cambios externos (otro componente activó una dirección).
+  // El dedupe se hace DENTRO del updater funcional para no depender del
+  // closure de `addresses` (que quedaría obsoleto): si el evento llega con
+  // una dirección que ya está en la lista, no se agrega una copia. Esto
+  // evita que el propio hook (que dispara el evento en persistActive) se
+  // duplique a sí mismo en cada load/activate.
   useEffect(() => {
     if (options.silent) return;
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<CustomerAddress | null>).detail;
       setActive(detail);
-      if (detail && !addresses.some((item) => item.id === detail.id)) {
-        setAddresses((prev) => [detail, ...prev]);
+      if (detail) {
+        setAddresses((prev) =>
+          prev.some((item) => item.id === detail.id) ? prev : [detail, ...prev]
+        );
       }
     };
     window.addEventListener("customerAddressChanged", handler);
@@ -138,9 +145,11 @@ export function useUserAddresses(userId: string | undefined | null, options: Use
         if (!response.ok) throw new Error();
         if (!mounted.current) return;
         setAddresses(
-          Array.isArray(data.addresses)
-            ? (data.addresses.map(normalizeCustomerAddress).filter(Boolean) as CustomerAddress[])
-            : []
+          dedupeCustomerAddresses(
+            Array.isArray(data.addresses)
+              ? (data.addresses.map(normalizeCustomerAddress).filter(Boolean) as CustomerAddress[])
+              : []
+          )
         );
         return null;
       } catch {
@@ -166,9 +175,11 @@ export function useUserAddresses(userId: string | undefined | null, options: Use
         if (!response.ok) throw new Error(data.error || "save");
         if (!mounted.current) return null;
         const saved = normalizeCustomerAddress(data.address);
-        const next = Array.isArray(data.addresses)
-          ? (data.addresses.map(normalizeCustomerAddress).filter(Boolean) as CustomerAddress[])
-          : [];
+        const next = dedupeCustomerAddresses(
+          Array.isArray(data.addresses)
+            ? (data.addresses.map(normalizeCustomerAddress).filter(Boolean) as CustomerAddress[])
+            : []
+        );
         setAddresses(next);
         if (saved) activate(saved);
         return saved;
@@ -190,9 +201,11 @@ export function useUserAddresses(userId: string | undefined | null, options: Use
         if (!response.ok) throw new Error();
         const data = await response.json();
         if (!mounted.current) return;
-        const next = Array.isArray(data.addresses)
-          ? (data.addresses.map(normalizeCustomerAddress).filter(Boolean) as CustomerAddress[])
-          : [];
+        const next = dedupeCustomerAddresses(
+          Array.isArray(data.addresses)
+            ? (data.addresses.map(normalizeCustomerAddress).filter(Boolean) as CustomerAddress[])
+            : []
+        );
         setAddresses(next);
         if (active?.id === id) {
           const fallback = next.find((item) => item.id === data.activeAddressId) ?? next[0] ?? null;
