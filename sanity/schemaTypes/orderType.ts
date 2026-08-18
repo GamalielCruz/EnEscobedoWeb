@@ -38,6 +38,7 @@ export const orderType = defineType({
       defineField({ name: "lng", title: "Longitud", type: "number" }),
     ], hidden: ({ document }) => document?.serviceKind !== "mandado" }),
     defineField({ name: "mandadoPickupAtDoor", title: "Repartidor en punto de recolección", type: "boolean", readOnly: true, hidden: true, description: "Marca la primera llegada del repartidor al origen del mandado. La segunda llegada corresponde al destinatario." }),
+    defineField({ name: "mandadoEnRuta", title: "Repartidor en ruta al destino", type: "boolean", readOnly: true, hidden: true, description: "Marca la transición EN_ROUTE: el repartidor confirmó que ya recogió el mandado y va al destino. Nunca puede establecerse si mandadoPickupAtDoor no es true." }),
     defineField({ name: "mandadoDetails", title: "Solicitud del mandado", type: "text", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
     defineField({ name: "mandadoRecipientPhone", title: "Teléfono del destinatario (opcional)", description: "Si se captura, el destinatario recibe la notificación al llegar el repartidor. Si se eligió Entrega segura para el destinatario, ese mensaje incluye el NIP.", type: "string", hidden: ({ document }) => document?.serviceKind !== "mandado" }),
     defineField({ name: "mandadoContactStatus", title: "Contacto protegido", type: "string", options: { list: ["pending", "active", "declined", "closed"] }, readOnly: true, hidden: true }),

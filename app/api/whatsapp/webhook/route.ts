@@ -13,6 +13,7 @@ import {
   sendPickupReadyForCustomer,
   sendWhatsAppMessage,
   sendWhatsAppTemplate,
+  sendWhatsAppInteractiveMessage,
 } from '@/lib/whatsapp'
 import {
   sendMandadoClienteRecogido,
@@ -27,6 +28,13 @@ import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
 import { appendOrderEvent } from '@/lib/order-events'
 import { resolveSettlementStatusOnDelivery } from '@/lib/order-state'
 import { buildDriverConfirmationData, buildMandadoDriverInstructions } from '@/lib/order-maps'
+import {
+  mandadoDriverState,
+  buildMandadoAssignmentInteractive,
+  buildMandadoPickupArrivalInteractive,
+  buildMandadoEnRouteInteractive,
+  buildMandadoDestinationArrivalInteractive,
+} from '@/lib/mandado-driver-flow'
 import { matchDriverCommand } from '@/lib/driver-commands'
 import { buildStoreMapsUrl } from '@/lib/order-pricing'
 import { syncBaserowOrderById } from '@/lib/baserow'
@@ -159,6 +167,7 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   mandadoOrigin,
   mandadoDestination,
   mandadoPickupAtDoor,
+  mandadoEnRuta,
   mandadoRecipientPhone,
   mandadoContactStatus,
   mandadoContactPhone,
@@ -206,6 +215,7 @@ const ACTIVE_OFFER_ORDERS_BY_DRIVER_QUERY = `*[
   mandadoOrigin,
   mandadoDestination,
   mandadoPickupAtDoor,
+  mandadoEnRuta,
   mandadoRecipientPhone,
   mandadoNipRecipient,
   nipDeliveryChannel,
@@ -274,6 +284,7 @@ const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._r
   mandadoOrigin,
   mandadoDestination,
   mandadoPickupAtDoor,
+  mandadoEnRuta,
   mandadoRecipientPhone,
   mandadoContactStatus,
   mandadoContactPhone,
@@ -2067,31 +2078,51 @@ Te avisaremos 10 minutos antes de finalizar.`
           order as Parameters<typeof buildDriverConfirmationData>[0]
         )
 
-        const confirmationResults = await Promise.allSettled([
-          sendDriverConfirmation(
+        if (isMandadoOrder) {
+          // ÚNICA comunicación al repartidor tras aceptar un mandado: mensaje
+          // interactivo con toda la información (solicitud, indicaciones,
+          // cobro y link de Maps) + botón "Llegué a recolección". La plantilla
+          // confirmacion_repartidor NO se usa en mandados (duplicaba
+          // recolección, destino y cobro). Fallback a texto plano si el
+          // interactivo falla: nunca se pierde la información.
+          const assignmentMessage = buildMandadoAssignmentInteractive(
+            order as Parameters<typeof buildMandadoAssignmentInteractive>[0],
+            confirmation
+          )
+          const assignmentSent = await sendWhatsAppInteractiveMessage(
             fromPhone,
-            String(order.orderNumber),
-            confirmation.restaurantName,
-            confirmation.deliveryAddress,
-            paymentMethodDisplay,
-            confirmation.restaurantMapsUrl,
-            confirmation.clientMapsUrl
-          ),
-          // Restaurantes: instrucciones de entrega adicionales. Mandados:
-          // mensaje operativo con la solicitud e indicaciones (la plantilla
-          // canónica conserva recolección, destino, cobro y botones de Maps).
-          !isMandadoOrder && deliveryNotes
-            ? sendBotMessage(fromPhone, `Instrucciones de entrega para #${String(order.orderNumber)}:\n${deliveryNotes}`)
-            : isMandadoOrder
-              ? sendBotMessage(fromPhone, buildMandadoDriverInstructions(order as Parameters<typeof buildMandadoDriverInstructions>[0]))
-              : Promise.resolve(),
-        ])
-
-        if (confirmationResults[0]?.status === 'rejected') {
-          await sendBotMessage(
-            fromPhone,
-            `Pedido #${order.orderNumber} asignado. Recoge en ${confirmation.restaurantName} y entrega en ${confirmation.deliveryAddress}. Pago: ${paymentMethodDisplay}.`
+            assignmentMessage.body,
+            assignmentMessage.buttons
           ).catch(() => null)
+          if (!assignmentSent) {
+            await sendBotMessage(
+              fromPhone,
+              buildMandadoDriverInstructions(order as Parameters<typeof buildMandadoDriverInstructions>[0])
+            ).catch(() => null)
+          }
+        } else {
+          const confirmationResults = await Promise.allSettled([
+            sendDriverConfirmation(
+              fromPhone,
+              String(order.orderNumber),
+              confirmation.restaurantName,
+              confirmation.deliveryAddress,
+              paymentMethodDisplay,
+              confirmation.restaurantMapsUrl,
+              confirmation.clientMapsUrl
+            ),
+            // Restaurantes: instrucciones de entrega adicionales.
+            deliveryNotes
+              ? sendBotMessage(fromPhone, `Instrucciones de entrega para #${String(order.orderNumber)}:\n${deliveryNotes}`)
+              : Promise.resolve(),
+          ])
+
+          if (confirmationResults[0]?.status === 'rejected') {
+            await sendBotMessage(
+              fromPhone,
+              `Pedido #${order.orderNumber} asignado. Recoge en ${confirmation.restaurantName} y entrega en ${confirmation.deliveryAddress}. Pago: ${paymentMethodDisplay}.`
+            ).catch(() => null)
+          }
         }
       }
 
@@ -2142,14 +2173,23 @@ Te avisaremos 10 minutos antes de finalizar.`
     const pedidoEnCaminoToken = matchDriverCommand(textBody, 'PEDIDO EN DIRECCION AL DOMICILIO')
     if (pedidoEnCaminoToken !== null) {
         const traceId = crypto.randomUUID().slice(0, 8)
-        const orderToken = pedidoEnCaminoToken || null
+        // El botón "Ya recogí el mandado" viaja con payload PEDIDO EN DIRECCION
+        // AL DOMICILIO|<orderId>: honrar buttonOrderId igual que EN PUERTA/ENTREGADO
+        // para que botón y comando resuelvan la misma orden.
+        const orderToken = buttonOrderId ?? (pedidoEnCaminoToken || null)
         console.log('PEDIDO_EN_CAMINO_START', {
           traceId,
           repartidorId: repartidor._id,
           orderToken,
+          buttonOrderId,
           fromPhone,
         })
-        const shippedOrders = await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>
+        const targetOrder = buttonOrderId
+          ? await resolveAssignedOrderById(buttonOrderId, repartidor._id)
+          : null
+        const shippedOrders = targetOrder
+          ? [targetOrder]
+          : await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>
         console.log('PEDIDO_EN_CAMINO_SHIPPED_ORDERS', {
           traceId,
           cantidad: shippedOrders.length,
@@ -2159,10 +2199,11 @@ Te avisaremos 10 minutos antes de finalizar.`
           status: shippedOrders.map((o) => String(o.status ?? '')),
           dispatchStatus: shippedOrders.map((o) => String(o.dispatchStatus ?? '')),
           mandadoPickupAtDoor: shippedOrders.map((o) => String(o.mandadoPickupAtDoor ?? '')),
+          mandadoEnRuta: shippedOrders.map((o) => String(o.mandadoEnRuta ?? '')),
         })
-        const targetOrder = resolveExactAssignedOrder(shippedOrders, orderToken)
+        const resolvedTargetOrder = targetOrder ?? resolveExactAssignedOrder(shippedOrders as Array<Record<string, unknown>>, orderToken)
 
-        if (!targetOrder) {
+        if (!resolvedTargetOrder) {
           console.warn('PEDIDO_EN_CAMINO_NO_TARGET', {
             traceId,
             repartidorId: repartidor._id,
@@ -2184,37 +2225,114 @@ Te avisaremos 10 minutos antes de finalizar.`
 
         console.log('PEDIDO_EN_CAMINO_TARGET_RESOLVED', {
           traceId,
-          targetOrderId: String(targetOrder._id),
-          targetOrderNumber: String(targetOrder.orderNumber),
-          targetServiceKind: String(targetOrder.serviceKind ?? ''),
-          targetStatus: String(targetOrder.status ?? ''),
-          targetDispatchStatus: String(targetOrder.dispatchStatus ?? ''),
-          targetMandadoPickupAtDoor: String(targetOrder.mandadoPickupAtDoor ?? ''),
+          targetOrderId: String(resolvedTargetOrder._id),
+          targetOrderNumber: String(resolvedTargetOrder.orderNumber),
+          targetServiceKind: String(resolvedTargetOrder.serviceKind ?? ''),
+          targetStatus: String(resolvedTargetOrder.status ?? ''),
+          targetDispatchStatus: String(resolvedTargetOrder.dispatchStatus ?? ''),
+          targetMandadoPickupAtDoor: String(resolvedTargetOrder.mandadoPickupAtDoor ?? ''),
+          targetMandadoEnRuta: String(resolvedTargetOrder.mandadoEnRuta ?? ''),
         })
 
-        // Para MANDADOS este comando solo es válido DESPUÉS de llegar al punto
-        // de recolección: indica que el paquete ya fue recibido y va al destino.
-        const isMandadoOrder = String((targetOrder as Record<string, unknown>).serviceKind ?? '') === 'mandado'
-        if (isMandadoOrder && (targetOrder as Record<string, unknown>).mandadoPickupAtDoor !== true) {
-          void sendBotMessage(
-            fromPhone,
-            'Primero llega al punto de recolección y presiona En Puerta. Cuando recibas el paquete, presiona Pedido en dirección al domicilio.'
-          ).catch(() => null)
-          return NextResponse.json({ status: 'ok' })
-        }
-        console.log('PEDIDO_EN_CAMINO_SENDING_DRIVER', {
-          traceId,
-          orderId: String(targetOrder._id),
-          orderNumber: String(targetOrder.orderNumber),
-        })
-        const notifications: Promise<unknown>[] = [
-          sendRepartidorEnCamino(fromPhone, String((targetOrder as Record<string, unknown>).orderNumber), String((targetOrder as Record<string, unknown>)._id)),
-        ]
+        const isMandadoOrder = String((resolvedTargetOrder as Record<string, unknown>).serviceKind ?? '') === 'mandado'
+        if (isMandadoOrder) {
+          // Máquina de estados del repartidor (lib/mandado-driver-flow.ts):
+          // "Ya recogí" / PEDIDO EN DIRECCION AL DOMICILIO es la transición
+          // EN_ROUTE, SOLO válida después de registrar la llegada a recolección.
+          const driverState = mandadoDriverState(resolvedTargetOrder as Record<string, unknown>)
 
-        const customerPhone = normalizeWhatsAppPhone(String((targetOrder as Record<string, unknown>).phone ?? ''))
-        if (customerPhone && (targetOrder as Record<string, unknown>).customerName) {
-          if (isMandadoOrder) {
-            const mandado = targetOrder as Record<string, unknown>
+          if (driverState === 'assigned') {
+            // Aún no llegó al punto de recolección: mismo aviso que antes.
+            void sendBotMessage(
+              fromPhone,
+              'Primero llega al punto de recolección y presiona En Puerta. Cuando recibas el paquete, presiona Pedido en dirección al domicilio.'
+            ).catch(() => null)
+            return NextResponse.json({ status: 'ok' })
+          }
+
+          if (driverState === 'destination_arrival' || driverState === 'delivered' || driverState === null) {
+            // Duplicado o estado inválido: idempotente, NO se reenvía WhatsApp ni
+            // se repiten efectos secundarios.
+            console.log('PEDIDO_EN_CAMINO_IDEMPOTENT', {
+              traceId,
+              orderId: String(resolvedTargetOrder._id),
+              driverState,
+            })
+            return NextResponse.json({ status: 'ok' })
+          }
+
+          // driverState === 'pickup_arrival' (post-deploy) o 'en_route' (legacy
+          // con mandadoEnRuta undefined). Si el flag ya es true, es duplicado.
+          const alreadyEnRuta = (resolvedTargetOrder as Record<string, unknown>).mandadoEnRuta === true
+          if (alreadyEnRuta) {
+            console.log('PEDIDO_EN_CAMINO_IDEMPOTENT', {
+              traceId,
+              orderId: String(resolvedTargetOrder._id),
+              driverState,
+            })
+            return NextResponse.json({ status: 'ok' })
+          }
+
+          // Transición EN_ROUTE: persiste mandadoEnRuta=true (nunca sin
+          // mandadoPickupAtDoor=true, garantizado por la derivación de estado).
+          try {
+            await backendClient
+              .patch(String((resolvedTargetOrder as Record<string, unknown>)._id))
+              .ifRevisionId(String((resolvedTargetOrder as Record<string, unknown>)._rev))
+              .set({ mandadoEnRuta: true, updatedAt: now })
+              .commit()
+          } catch (patchError) {
+            // Carrera (409) u otro fallo: releer. Si ya está en ruta, la
+            // transición la ganó otro intento → idempotente, sin reenvío.
+            const fresh = await backendClient.fetch(ORDER_BY_ID_QUERY, { orderId: String((resolvedTargetOrder as Record<string, unknown>)._id) }).catch(() => null)
+            if (fresh && fresh.mandadoEnRuta === true) {
+              console.log('PEDIDO_EN_CAMINO_IDEMPOTENT', {
+                traceId,
+                orderId: String((resolvedTargetOrder as Record<string, unknown>)._id),
+                reason: 'race_win_by_other_request',
+              })
+              return NextResponse.json({ status: 'ok' })
+            }
+            console.error('[webhook PEDIDO EN CAMINO] error transicionando EN_ROUTE', {
+              traceId,
+              orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+              patchError,
+            })
+            return NextResponse.json({ status: 'ok' })
+          }
+
+          after(() => syncBaserowOrderById(String((resolvedTargetOrder as Record<string, unknown>)._id)))
+          await appendOrderEvent(String((resolvedTargetOrder as Record<string, unknown>)._id), {
+            type: 'en_route',
+            source: 'whatsapp/webhook',
+            actor: repartidor._id,
+          })
+
+          console.log('PEDIDO_EN_CAMINO_SENDING_DRIVER', {
+            traceId,
+            orderId: String((resolvedTargetOrder as Record<string, unknown>)._id),
+            orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+          })
+
+          // Mensaje mínimo EN_ROUTE (interactivo) + notificación al remitente
+          // (mandado__cliente, SIN cambios). El template repartidor_en_camino
+          // deja de usarse en mandados.
+          const notifications: Promise<unknown>[] = []
+          const enRouteConfirmation = buildDriverConfirmationData(resolvedTargetOrder as Parameters<typeof buildDriverConfirmationData>[0])
+          const enRouteMessage = buildMandadoEnRouteInteractive(
+            resolvedTargetOrder as Parameters<typeof buildMandadoEnRouteInteractive>[0],
+            enRouteConfirmation
+          )
+          const enRouteSent = await sendWhatsAppInteractiveMessage(fromPhone, enRouteMessage.body, enRouteMessage.buttons).catch(() => null)
+          if (!enRouteSent) {
+            // Fallback a texto plano si el interactivo falla: no se pierde la
+            // información (destino + link de Maps), solo los botones.
+            notifications.push(sendBotMessage(fromPhone, enRouteMessage.body).catch(() => null))
+          }
+
+          const customerPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).phone ?? ''))
+          if (customerPhone && (resolvedTargetOrder as Record<string, unknown>).customerName) {
+            const mandado = resolvedTargetOrder as Record<string, unknown>
             const destination =
               (mandado.mandadoDestination as { label?: string } | undefined)?.label
               ?? (String((mandado.shippingAddress as { line1?: string } | undefined)?.line1 ?? '') || 'la dirección indicada')
@@ -2225,37 +2343,62 @@ Te avisaremos 10 minutos antes de finalizar.`
               orderNumber: String(mandado.orderNumber ?? ''),
               deliveryAddress: destination,
             }))
-
-            // TODO (decisión de producto pendiente, NO implementar): en modo "enviar"
-            // (mandado saliente) el remitente no tiene forma de saber si el repartidor
-            // ya llegó a SU domicilio para recoger el paquete; solo existe la
-            // notificación de "ya recogido" (mandado__cliente). Aquí correspondería
-            // una notificación de "repartidor en tu domicilio para recoger" cuando
-            // exista una plantilla aprobada para ello.
-
-          } else {
-            notifications.push(
-              sendOrderOnTheWay(customerPhone, String((targetOrder as Record<string, unknown>).customerName), String((targetOrder as Record<string, unknown>).orderNumber))
-            )
           }
+
+          await Promise.allSettled(notifications)
+          console.log('PEDIDO_EN_CAMINO_DRIVER_SENT', {
+            traceId,
+            orderId: String((resolvedTargetOrder as Record<string, unknown>)._id),
+            orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+          })
+          console.log('[whatsapp webhook] cliente notificado con orderId', {
+            accion: 'en_camino',
+            repartidorId: repartidor._id,
+            orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+            orderNumber: (resolvedTargetOrder as Record<string, unknown>).orderNumber,
+          })
+          console.log('PEDIDO_EN_CAMINO_COMPLETED', {
+            traceId,
+            orderId: String((resolvedTargetOrder as Record<string, unknown>)._id),
+            orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+          })
+
+          return NextResponse.json({ status: 'ok' })
+        }
+
+        // ── Restaurantes: sin cambios ──
+        console.log('PEDIDO_EN_CAMINO_SENDING_DRIVER', {
+          traceId,
+          orderId: String((resolvedTargetOrder as Record<string, unknown>)._id),
+          orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+        })
+        const notifications: Promise<unknown>[] = [
+          sendRepartidorEnCamino(fromPhone, String((resolvedTargetOrder as Record<string, unknown>).orderNumber), String((resolvedTargetOrder as Record<string, unknown>)._id)),
+        ]
+
+        const customerPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).phone ?? ''))
+        if (customerPhone && (resolvedTargetOrder as Record<string, unknown>).customerName) {
+          notifications.push(
+            sendOrderOnTheWay(customerPhone, String((resolvedTargetOrder as Record<string, unknown>).customerName), String((resolvedTargetOrder as Record<string, unknown>).orderNumber))
+          )
         }
 
         await Promise.allSettled(notifications)
         console.log('PEDIDO_EN_CAMINO_DRIVER_SENT', {
           traceId,
-          orderId: String(targetOrder._id),
-          orderNumber: String(targetOrder.orderNumber),
+          orderId: String((resolvedTargetOrder as Record<string, unknown>)._id),
+          orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
         })
         console.log('[whatsapp webhook] cliente notificado con orderId', {
           accion: 'en_camino',
           repartidorId: repartidor._id,
-          orderId: (targetOrder as Record<string, unknown>)._id,
-          orderNumber: (targetOrder as Record<string, unknown>).orderNumber,
+          orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+          orderNumber: (resolvedTargetOrder as Record<string, unknown>).orderNumber,
         })
         console.log('PEDIDO_EN_CAMINO_COMPLETED', {
           traceId,
-          orderId: String(targetOrder._id),
-          orderNumber: String(targetOrder.orderNumber),
+          orderId: String((resolvedTargetOrder as Record<string, unknown>)._id),
+          orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
         })
 
         return NextResponse.json({ status: 'ok' })
@@ -2289,63 +2432,154 @@ Te avisaremos 10 minutos antes de finalizar.`
         }
 
         const isMandadoOrder = String((resolvedTargetOrder as Record<string, unknown>).serviceKind ?? '') === 'mandado'
-        const pickupReached = (resolvedTargetOrder as Record<string, unknown>).mandadoPickupAtDoor === true
 
-        // Un mandado tiene dos llegadas. La primera es al origen para recibir el
-        // paquete; no debe abrir el flujo de entrega final ni pedir el NIP.
-        if (isMandadoOrder && !pickupReached) {
+        if (isMandadoOrder) {
+          // Máquina de estados del repartidor (lib/mandado-driver-flow.ts): EN
+          // PUERTA despacha por el ESTADO de la orden, nunca por número de
+          // pulsación. La llegada al destino solo es válida en EN_ROUTE.
+          const driverState = mandadoDriverState(resolvedTargetOrder as Record<string, unknown>)
+
+          if (driverState === 'assigned') {
+            // ── Transición PICKUP_ARRIVAL (EN PUERTA en recolección) ──
+            // Persiste mandadoPickupAtDoor=true Y mandadoEnRuta=false (explícito)
+            // para distinguir este estado del legacy (enRuta undefined → en_route).
+            try {
+              await backendClient
+                .patch(String((resolvedTargetOrder as Record<string, unknown>)._id))
+                .ifRevisionId(String((resolvedTargetOrder as Record<string, unknown>)._rev))
+                .set({ mandadoPickupAtDoor: true, mandadoEnRuta: false, updatedAt: now })
+                .commit()
+            } catch (patchError) {
+              // Carrera (409): si otro intento ya registró la recolección, es
+              // duplicado idempotente: NO se reenvía WhatsApp ni efectos.
+              const fresh = await backendClient.fetch(ORDER_BY_ID_QUERY, { orderId: String((resolvedTargetOrder as Record<string, unknown>)._id) }).catch(() => null)
+              if (fresh && fresh.mandadoPickupAtDoor === true) {
+                console.log('EN_PUERTA_IDEMPOTENT', {
+                  repartidorId: repartidor._id,
+                  orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+                  reason: 'race_win_by_other_request',
+                })
+                return NextResponse.json({ status: 'ok' })
+              }
+              console.error('[webhook EN PUERTA] error registrando recolección', {
+                orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+                patchError,
+              })
+              return NextResponse.json({ status: 'ok' })
+            }
+
+            after(() => syncBaserowOrderById(String((resolvedTargetOrder as Record<string, unknown>)._id)))
+            await appendOrderEvent(String((resolvedTargetOrder as Record<string, unknown>)._id), {
+              type: 'picked_up',
+              source: 'whatsapp/webhook',
+              actor: repartidor._id,
+              payload: { location: 'mandado_origin' },
+            })
+
+            const senderPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).phone ?? ''))
+            const origin =
+              ((resolvedTargetOrder as Record<string, unknown>).mandadoOrigin as { label?: string } | undefined)?.label
+              ?? 'el punto de recolección'
+
+            // Mensaje mínimo PICKUP_ARRIVAL (interactivo) con botón
+            // "Ya recogí el mandado"; fallback a texto plano si falla.
+            const pickupMessage = buildMandadoPickupArrivalInteractive(String((resolvedTargetOrder as Record<string, unknown>)._id))
+            const pickupSent = await sendWhatsAppInteractiveMessage(fromPhone, pickupMessage.body, pickupMessage.buttons).catch(() => null)
+            const notifications: Promise<unknown>[] = []
+            if (!pickupSent) {
+              notifications.push(
+                sendBotMessage(
+                  fromPhone,
+                  'Llegaste al punto de recolección. Recibe el paquete y, cuando vayas al destino, presiona Pedido en dirección al domicilio.'
+                ).catch(() => null)
+              )
+            }
+            if (senderPhone) {
+              // 1ª llegada (punto de recolección): aviso con el ORIGEN y acción
+              // "recoger tu paquete". Clave de idempotencia propia (`recogido`)
+              // para no colisionar con la 2ª llegada (`en_destino`).
+              notifications.push(sendMandadoDestinoEnPuerta({
+                _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
+                phone: senderPhone,
+                orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
+                deliveryAddress: origin,
+                orderStatus: 'pickup',
+              }, { idempotencySuffix: 'recogido' }))
+            }
+            await Promise.allSettled(notifications)
+            return NextResponse.json({ status: 'ok' })
+          }
+
+          if (driverState === 'pickup_arrival' || driverState === 'destination_arrival' || driverState === 'delivered') {
+            // Duplicado (o acción sobre un estado ya transitado): idempotente,
+            // NO se reenvía WhatsApp ni se repiten efectos secundarios. Esto
+            // cierra el riesgo de que una 2ª pulsación en el ORIGEN avance al
+            // destino: en PICKUP_ARRIVAL solo vale "Ya recogí el mandado".
+            console.log('EN_PUERTA_IDEMPOTENT', {
+              repartidorId: repartidor._id,
+              orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+              driverState,
+            })
+            return NextResponse.json({ status: 'ok' })
+          }
+
+          if (driverState === null) {
+            void sendBotMessage(
+              fromPhone,
+              'No se pudo determinar el estado del mandado. Contacta a soporte.'
+            ).catch(() => null)
+            return NextResponse.json({ status: 'ok' })
+          }
+
+          // driverState === 'en_route' → la llegada al destino es válida;
+          // continúa al bloque de destino compartido (fall-through).
+        }
+
+        try {
           await backendClient
             .patch(String((resolvedTargetOrder as Record<string, unknown>)._id))
             .ifRevisionId(String((resolvedTargetOrder as Record<string, unknown>)._rev))
-            .set({ mandadoPickupAtDoor: true, updatedAt: now })
+            .set({ dispatchStatus: 'at_door', updatedAt: now })
             .commit()
-
-          after(() => syncBaserowOrderById(String((resolvedTargetOrder as Record<string, unknown>)._id)))
-          await appendOrderEvent(String((resolvedTargetOrder as Record<string, unknown>)._id), {
-            type: 'picked_up',
-            source: 'whatsapp/webhook',
-            actor: repartidor._id,
-            payload: { location: 'mandado_origin' },
-          })
-
-          const senderPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).phone ?? ''))
-          const origin =
-            ((resolvedTargetOrder as Record<string, unknown>).mandadoOrigin as { label?: string } | undefined)?.label
-            ?? 'el punto de recolección'
-          const notifications: Promise<unknown>[] = [
-            sendBotMessage(
-              fromPhone,
-              'Llegaste al punto de recolección. Recibe el paquete y, cuando vayas al destino, presiona Pedido en dirección al domicilio.'
-            ),
-          ]
-          if (senderPhone) {
-            // 1ª llegada (punto de recolección): aviso con el ORIGEN y acción
-            // "recoger tu paquete". Clave de idempotencia propia (`recogido`)
-            // para no colisionar con la 2ª llegada (`en_destino`).
-            notifications.push(sendMandadoDestinoEnPuerta({
-              _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
-              phone: senderPhone,
-              orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
-              deliveryAddress: origin,
-              orderStatus: 'pickup',
-            }, { idempotencySuffix: 'recogido' }))
+        } catch (patchError) {
+          // Carrera (409): si otro intento ya marcó at_door, es duplicado
+          // idempotente: NO se reenvían notificaciones (el ganador ya lo hizo).
+          const fresh = await backendClient.fetch(ORDER_BY_ID_QUERY, { orderId: String((resolvedTargetOrder as Record<string, unknown>)._id) }).catch(() => null)
+          if (fresh && fresh.dispatchStatus === 'at_door') {
+            console.log('EN_PUERTA_IDEMPOTENT', {
+              repartidorId: repartidor._id,
+              orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+              reason: 'race_win_by_other_request',
+            })
+            return NextResponse.json({ status: 'ok' })
           }
-          await Promise.allSettled(notifications)
+          console.error('[webhook EN PUERTA] error marcando at_door', {
+            orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+            patchError,
+          })
           return NextResponse.json({ status: 'ok' })
         }
-
-        await backendClient
-          .patch(String((resolvedTargetOrder as Record<string, unknown>)._id))
-          .ifRevisionId(String((resolvedTargetOrder as Record<string, unknown>)._rev))
-          .set({ dispatchStatus: 'at_door', updatedAt: now })
-          .commit()
 
         after(() => syncBaserowOrderById(String((resolvedTargetOrder as Record<string, unknown>)._id)))
         await appendOrderEvent(String((resolvedTargetOrder as Record<string, unknown>)._id), { type: 'at_door', source: 'whatsapp/webhook', actor: repartidor._id })
 
-        const notifications: Promise<unknown>[] = [
-          sendRepartidorEnPuerta(fromPhone, String((resolvedTargetOrder as Record<string, unknown>).orderNumber), String((resolvedTargetOrder as Record<string, unknown>)._id)),
-        ]
+        const notifications: Promise<unknown>[] = []
+        if (isMandadoOrder && !orderRequiresDeliveryPin(resolvedTargetOrder as Record<string, unknown>)) {
+          // Entrega Segura OFF: mensaje mínimo DESTINATION_ARRIVAL + botón
+          // "Entregado". El template repartidor_en_puerta deja de usarse aquí.
+          const arrivalMessage = buildMandadoDestinationArrivalInteractive(String((resolvedTargetOrder as Record<string, unknown>)._id))
+          const arrivalSent = await sendWhatsAppInteractiveMessage(fromPhone, arrivalMessage.body, arrivalMessage.buttons).catch(() => null)
+          if (!arrivalSent) {
+            // Fallback a texto plano si el interactivo falla.
+            notifications.push(sendBotMessage(fromPhone, arrivalMessage.body).catch(() => null))
+          }
+        } else {
+          // Entrega Segura ON (mandado) y restaurantes: flujo actual intacto
+          // (template repartidor_en_puerta + botón Entregado + NIP).
+          notifications.push(
+            sendRepartidorEnPuerta(fromPhone, String((resolvedTargetOrder as Record<string, unknown>).orderNumber), String((resolvedTargetOrder as Record<string, unknown>)._id))
+          )
+        }
 
         const customerPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).phone ?? ''))
         if (customerPhone && (resolvedTargetOrder as Record<string, unknown>).customerName) {

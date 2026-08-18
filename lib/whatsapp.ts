@@ -287,6 +287,66 @@ export async function sendWhatsAppMessage(to: string, message: string) {
   return data;
 }
 
+export type WhatsAppInteractiveButton = {
+  type: "reply";
+  /** Payload que llega al webhook (debe coincidir con un comando canónico). */
+  id: string;
+  title: string;
+};
+
+/**
+ * Mensaje interactivo de botones (quick replies) del repartidor.
+ *
+ * Meta solo soporta botones `reply` en interactive messages (los botones URL
+ * existen únicamente en templates); el límite es 3 botones, título <= 20
+ * caracteres y cuerpo <= 1024. Los builders de lib/mandado-driver-flow.ts ya
+ * respetan esos límites; aquí se aplican cortes de seguridad finales.
+ */
+export async function sendWhatsAppInteractiveMessage(
+  to: string,
+  body: string,
+  buttons: WhatsAppInteractiveButton[]
+) {
+  const normalizedPhone = normalizeWhatsAppPhone(to);
+
+  if (!normalizedPhone) {
+    throw new Error("Telefono invalido para WhatsApp");
+  }
+
+  if (!Array.isArray(buttons) || buttons.length === 0 || buttons.length > 3) {
+    throw new Error("Se requieren de 1 a 3 botones para un mensaje interactivo");
+  }
+
+  const { endpoint, accessToken } = getWhatsAppEndpoint();
+  const response = await fetchWhatsAppApi(endpoint, accessToken, {
+    messaging_product: "whatsapp",
+    to: normalizedPhone,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: String(body || "").slice(0, 1024) },
+      action: {
+        buttons: buttons.map((button) => ({
+          type: "reply",
+          reply: {
+            id: String(button.id || "").trim().slice(0, 256),
+            title: String(button.title || "").trim().slice(0, 20),
+          },
+        })),
+      },
+    },
+  });
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    console.error("[whatsapp] Error:", data);
+    throw new Error(data.error?.message || "Error enviando mensaje interactivo");
+  }
+
+  return data;
+}
+
 export async function sendOrderConfirmation(
   phone: string,
   name: string,

@@ -23,6 +23,7 @@ export type OrderEventType =
   | "delivery_override"
   | "ready_for_pickup"
   | "picked_up"
+  | "en_route"
   | "delivered"
   | "cancelled"
   | "refund_required"
