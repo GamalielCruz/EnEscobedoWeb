@@ -10,6 +10,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { useHydration } from "@/hooks/useHydration";
 import type { MandadoDraft } from "@/lib/mandado";
+import MandadoDriverAvailability from "./MandadoDriverAvailability";
 
 const PAYMENT_METHODS: Array<{ value: "card" | "cash"; label: string; icon: LucideIcon }> = [
   { value: "card", label: "Tarjeta", icon: CreditCard },
@@ -163,57 +164,77 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
           <p className="text-gray-600 mt-1">1 servicio</p>
         </div>
 
-        <div className="flex flex-col lg:flex-row gap-6">
-          <div className="flex-1 space-y-3">
+        {/* ── Sección full-width: Tu mandado está listo ── */}
+        <div className="mb-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between">
             <button type="button" onClick={leaveCheckout} className="flex items-center gap-2 text-sm font-semibold text-gray-600 transition-colors hover:text-[#eb1902]">
               <ArrowLeft className="h-4 w-4" /> Editar mandado
             </button>
+          </div>
 
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 hover:shadow-md transition-shadow">
-              <div className="flex gap-4">
-                <div className="w-20 h-20 md:w-24 md:h-24 flex-shrink-0">
-                  <Image src="/repartidor.png" alt="Servicio de mandado" width={96} height={96} className="object-contain w-full h-full" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h2 className="text-base md:text-lg font-semibold text-gray-900 line-clamp-2">
-                    {draft.mode === "purchase" ? "Comprar algo y llevártelo" : "Recoger algo y entregarlo"}
-                  </h2>
-                  <p className="text-lg md:text-xl font-bold text-gray-900 mt-1">${draft.price.toFixed(2)}</p>
-                  <p className="text-sm text-gray-500">Servicio de mandado</p>
-                </div>
-              </div>
+          <div className="mt-4 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {/* Recolección */}
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Recolección</p>
+              <p className="mt-1 text-sm font-medium text-gray-900">{draft.origin.label}</p>
+              {draft.originReference && (
+                <p className="mt-0.5 text-xs text-gray-500">{draft.originReference}</p>
+              )}
             </div>
-
-            <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4">
-              <h2 className="font-semibold text-gray-900">Datos del mandado</h2>
-              <div className="mt-4 space-y-4">
-                <RoutePoint label={draft.mode === "purchase" ? "Compra" : "Recolección"} value={draft.origin.label} />
-                {draft.originReference && <RoutePoint label="Indicaciones para el repartidor" value={draft.originReference} />}
-                <RoutePoint label="Entrega" value={draft.destination.label} />
-                {draft.destinationReference && <RoutePoint label="Indicaciones para el repartidor" value={draft.destinationReference} />}
-                {draft.destinationPerson && <RoutePoint label="Persona que recibe" value={draft.destinationPerson} />}
-              </div>
-              <div className="mt-4 border-t border-gray-200 pt-4">
-                <p className="text-sm font-semibold text-gray-900">Solicitud</p>
-                <p className="mt-1 whitespace-pre-line text-sm text-gray-600">{draft.details}</p>
-                {draft.mode === "purchase" && <p className="mt-3 text-xs text-amber-700">Los productos se pagan por separado; aquí solo cubres el servicio de envío.</p>}
-                {draft.pinEnabled && (
-                  <p className="mt-3 flex items-start gap-2 rounded-lg bg-[#09193B]/5 p-3 text-xs leading-5 text-gray-700">
-                    <span className="mt-0.5 shrink-0">🔒</span>
-                    <span>
-                      <strong>Entrega segura:</strong>{" "}
-                      {nipChannel === "sender"
-                        ? "el código de entrega se enviará a tu WhatsApp y tú deberás proporcionárselo al repartidor."
-                        : "el código de entrega se enviará al WhatsApp del destinatario; esa persona deberá mostrarlo al repartidor."}
-                    </span>
-                  </p>
-                )}
-              </div>
+            {/* Entrega */}
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Entrega</p>
+              <p className="mt-1 text-sm font-medium text-gray-900">{draft.destination.label}</p>
+              {draft.destinationReference && (
+                <p className="mt-0.5 text-xs text-gray-500">{draft.destinationReference}</p>
+              )}
+            </div>
+            {/* Enviarás */}
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">Enviarás</p>
+              <p className="mt-1 line-clamp-2 text-sm font-medium text-gray-900">{draft.details}</p>
             </div>
           </div>
 
-          <div className="w-full lg:w-[420px] xl:w-[480px] lg:sticky lg:top-24 h-fit">
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 md:p-6">
+          {draft.destinationPerson && (
+            <p className="mt-3 text-xs text-gray-500">Persona que recibe: <span className="font-medium text-gray-700">{draft.destinationPerson}</span></p>
+          )}
+
+          <div className="mt-4 flex items-center justify-between rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+            <div className="flex items-center gap-3">
+              <Image src="/repartidor.png" alt="Servicio de mandado" width={40} height={40} className="object-contain" />
+              <div>
+                <p className="text-sm font-semibold text-gray-900">{draft.mode === "purchase" ? "Comprar y entregar" : "Recoger y entregar"}</p>
+                <p className="text-xs text-gray-500">Servicio de mandado</p>
+              </div>
+            </div>
+            <p className="text-lg font-bold text-gray-900">${draft.price.toFixed(2)}</p>
+          </div>
+
+          {draft.mode === "purchase" && (
+            <p className="mt-3 text-xs text-amber-700">Los productos se pagan por separado; aquí solo cubres el servicio de envío.</p>
+          )}
+          {draft.pinEnabled && (
+            <p className="mt-3 flex items-start gap-2 rounded-lg bg-[#09193B]/5 p-3 text-xs leading-5 text-gray-700">
+              <span className="mt-0.5 shrink-0">🔒</span>
+              <span>
+                <strong>Entrega segura:</strong>{" "}
+                {nipChannel === "sender"
+                  ? "el código de entrega se enviará a tu WhatsApp y tú deberás proporcionárselo al repartidor."
+                  : "el código de entrega se enviará al WhatsApp del destinatario; esa persona deberá mostrarlo al repartidor."}
+              </span>
+            </p>
+          )}
+        </div>
+
+        {/* ── Sección full-width: Disponibilidad de reparto ── */}
+        <div className="mb-6">
+          <MandadoDriverAvailability />
+        </div>
+
+        {/* ── Resumen de compra ── */}
+        <div className="mx-auto w-full max-w-lg lg:sticky lg:top-24 h-fit">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 md:p-6">
               <h3 className="text-xl font-bold text-gray-900 mb-4">Resumen de Compra</h3>
 
               {isSignedIn ? (
@@ -383,7 +404,6 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                   <button className="mt-6 w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium">Inicia sesión para continuar</button>
                 </SignInButton>
               ) : null}
-            </div>
           </div>
         </div>
       </div>

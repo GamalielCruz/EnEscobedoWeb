@@ -1115,8 +1115,12 @@ export default function MandadoMapFlow() {
                         <ArrowLeft className="h-4 w-4" />
                       </button>
                       <div className="min-w-0 flex-1">
-                        <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-[#eb1901]">Mandados El Menú</p>
-                        <p className="truncate text-sm font-semibold text-[#09193B]">¿Qué necesitas hoy?</p>
+                        <div className="flex items-center gap-2">
+                          <img src="/Mandados.svg" alt="Mandados" className="h-7 w-7" />
+                          <div>
+                            <p className="truncate text-sm font-semibold text-[#09193B]">¿Qué necesitas hoy?</p>
+                          </div>
+                        </div>
                       </div>
                     </div>
 
