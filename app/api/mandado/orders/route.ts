@@ -8,6 +8,7 @@ import { recordCurrentLegalAcceptance } from "@/lib/legal-acceptance";
 import { buildMandadoOrderDocument, quoteMandado } from "@/lib/mandado-order";
 import { resolveMandadoNipChannel, resolveNipDeliveryTarget } from "@/lib/mandado-nip-channel";
 import { syncBaserowOrder } from "@/lib/baserow";
+import { createMandadoSettlementSnapshot } from "@/lib/mandado-order";
 
 export async function POST(request: NextRequest) {
   try {
@@ -43,6 +44,7 @@ export async function POST(request: NextRequest) {
       recipientPhone: String(body.recipientPhone || ""),
     });
     const orderNumber = String(body.orderNumber || crypto.randomUUID());
+    const settlementSnapshot = createMandadoSettlementSnapshot(draft, "cash_on_delivery");
     const orderData = buildMandadoOrderDocument({
       draft,
       orderNumber,
@@ -52,6 +54,7 @@ export async function POST(request: NextRequest) {
       phone,
       paymentMethod: "cash_on_delivery",
       paymentStatus: "unpaid",
+      settlementSnapshot,
       recipientPhone: String(body.recipientPhone || ""),
       recipientName: String(body.recipientName || ""),
       recipientWhatsAppDeclared,

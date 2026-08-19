@@ -5,7 +5,8 @@ import { isDriverDispatchEnabled } from "@/lib/fulfillment";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { sendMandadoNoDriverAvailable } from "@/lib/mandado-whatsapp";
 import { getDispatchConfig } from "@/lib/dispatch/dispatch-config";
-import { sendBundleDeliveryOffer, sendDeliveryOffer, sendWhatsAppMessage } from "./whatsapp";
+import { sendBundleDeliveryOffer, sendDeliveryOffer, sendMandadoDeliveryOffer, sendWhatsAppMessage } from "./whatsapp";
+import { isWhatsAppConversationOpen, buildMandadoDeliveryOfferMessage } from "./whatsapp-conversation";
 
 const OFFER_TTL_SECONDS = 10 * 60;
 const ADMIN_PHONE = process.env.ADMIN_WHATSAPP_PHONE;
@@ -52,6 +53,7 @@ type DispatchDriver = {
   disponibleHasta?: string;
   estadoDisponibilidad?: "available" | "offline" | "busy" | "offer_pending";
   storeId?: string;
+  ultimaActividad?: string;
 };
 
 type DispatchOptions = {
@@ -117,7 +119,8 @@ const STORE_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && dispon
   telefono,
   disponible,
   disponibleHasta,
-  estadoDisponibilidad
+  estadoDisponibilidad,
+  ultimaActividad
 }`;
 
 const COMMUNITY_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && disponible == true && estadoDisponibilidad == "available" && (!defined(disponibleHasta) || disponibleHasta > $now) && !defined(tiendaAsignada)] | order(_updatedAt asc){
@@ -126,7 +129,8 @@ const COMMUNITY_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && di
   telefono,
   disponible,
   disponibleHasta,
-  estadoDisponibilidad
+  estadoDisponibilidad,
+  ultimaActividad
 }`;
 
 const DRIVER_BY_ID_QUERY = `*[_type == "repartidor" && _id == $driverId][0]{
@@ -136,7 +140,8 @@ const DRIVER_BY_ID_QUERY = `*[_type == "repartidor" && _id == $driverId][0]{
   disponible,
   disponibleHasta,
   estadoDisponibilidad,
-  "storeId": tiendaAsignada._ref
+  "storeId": tiendaAsignada._ref,
+  ultimaActividad
 }`;
 
 const STORE_WAITING_ORDERS_QUERY = `*[
@@ -373,27 +378,67 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
   const mapsUrl = buildAddressMapsUrl(order.shippingAddress, address);
   const { nowIso, expiresAtIso } = buildOfferWindow();
 
-  // Calculate breakdown for driver
-  const restaurantAmount = (order.totalPrice ?? 0) - (order.driverPayout ?? 0);
-  const restaurantLabel = buildTotalLabel(restaurantAmount);
-  const driverLabel = buildTotalLabel(order.driverPayout ?? 0);
-
   await markOrdersAsOffered([order._id], selectedDriver._id, expiresAtIso);
   await prepareDriverForOffer(selectedDriver, [order._id], order.storeId ?? null, "single", nowIso, expiresAtIso);
 
   try {
-    await sendDeliveryOffer(
-      selectedDriver.telefono,
-      order.orderNumber,
-      order.customerName ?? "Cliente",
-      order.storeName ?? "La Tienda",
-      address,
-      totalLabel,
-      paymentMethodLabel,
-      mapsUrl,
-      restaurantLabel,
-      driverLabel
-    );
+    if (order.serviceKind === "mandado") {
+      const pickupAddress = order.mandadoOrigin?.label || order.storeAddress || address;
+      const deliveryAddress = order.shippingAddress?.line1 || address;
+      const driverPayoutLabel = buildTotalLabel(order.driverPayout ?? 0);
+      const windowOpen = isWhatsAppConversationOpen(selectedDriver.ultimaActividad, new Date());
+
+      if (windowOpen) {
+        // Free-form message: faster, more flexible, no Meta template needed
+        const offerText = buildMandadoDeliveryOfferMessage({
+          orderNumber: order.orderNumber,
+          customerName: order.customerName ?? "Cliente",
+          pickupAddress,
+          deliveryAddress,
+          driverPayoutLabel,
+          customerTotalLabel: totalLabel,
+          paymentMethod: paymentMethodLabel,
+        });
+        await sendWhatsAppMessage(selectedDriver.telefono, offerText);
+        console.log("[delivery-dispatch] oferta mandado enviada (mensaje normal)", {
+          orderId: order._id,
+          repartidorId: selectedDriver._id,
+          channel: "normal",
+        });
+      } else {
+        // Template fallback: works even without open conversation
+        await sendMandadoDeliveryOffer(
+          selectedDriver.telefono,
+          order.orderNumber,
+          order.customerName ?? "Cliente",
+          pickupAddress,
+          deliveryAddress,
+          driverPayoutLabel,
+          totalLabel,
+          paymentMethodLabel,
+          mapsUrl
+        );
+        console.log("[delivery-dispatch] oferta mandado enviada (template)", {
+          orderId: order._id,
+          repartidorId: selectedDriver._id,
+          channel: "template",
+        });
+      }
+    } else {
+      const restaurantAmount = (order.totalPrice ?? 0) - (order.driverPayout ?? 0);
+      await sendDeliveryOffer(
+        selectedDriver.telefono,
+        order.orderNumber,
+        order.customerName ?? "Cliente",
+        order.storeName ?? "La Tienda",
+        address,
+        totalLabel,
+        paymentMethodLabel,
+        mapsUrl,
+        buildTotalLabel(restaurantAmount),
+        buildTotalLabel(order.driverPayout ?? 0)
+      );
+    }
   } catch (error) {
     await rollbackDriverOffer(selectedDriver._id);
     await setOrdersWaiting([order._id], "send_offer_failed");
@@ -482,23 +527,47 @@ export async function offerOrderToDriver(
   const totalLabel = buildTotalLabel(order.totalPrice);
   const paymentMethodLabel = buildPaymentMethodLabel(order.paymentMethod);
   const mapsUrl = buildAddressMapsUrl(order.shippingAddress, address);
-  const restaurantAmount = (order.totalPrice ?? 0) - (order.driverPayout ?? 0);
-  const restaurantLabel = buildTotalLabel(restaurantAmount);
-  const driverLabel = buildTotalLabel(order.driverPayout ?? 0);
+  const pickupAddress = order.mandadoOrigin?.label || order.storeAddress || address;
+  const deliveryAddress = order.shippingAddress?.line1 || address;
 
   try {
-    await sendDeliveryOffer(
-      driver.telefono,
-      order.orderNumber,
-      order.customerName ?? "Cliente",
-      order.storeName ?? "Punto de inicio",
-      address,
-      totalLabel,
-      paymentMethodLabel,
-      mapsUrl,
-      restaurantLabel,
-      driverLabel
-    );
+    const driverPayoutLabel = buildTotalLabel(order.driverPayout ?? 0);
+    const windowOpen = isWhatsAppConversationOpen(driver.ultimaActividad, new Date());
+
+    if (windowOpen) {
+      const offerText = buildMandadoDeliveryOfferMessage({
+        orderNumber: order.orderNumber,
+        customerName: order.customerName ?? "Cliente",
+        pickupAddress,
+        deliveryAddress,
+        driverPayoutLabel,
+        customerTotalLabel: totalLabel,
+        paymentMethod: paymentMethodLabel,
+      });
+      await sendWhatsAppMessage(driver.telefono, offerText);
+      console.log("[delivery-dispatch] oferta manual mandado enviada (mensaje normal)", {
+        orderId,
+        repartidorId: driver._id,
+        channel: "normal",
+      });
+    } else {
+      await sendMandadoDeliveryOffer(
+        driver.telefono,
+        order.orderNumber,
+        order.customerName ?? "Cliente",
+        pickupAddress,
+        deliveryAddress,
+        driverPayoutLabel,
+        totalLabel,
+        paymentMethodLabel,
+        mapsUrl
+      );
+      console.log("[delivery-dispatch] oferta manual mandado enviada (template)", {
+        orderId,
+        repartidorId: driver._id,
+        channel: "template",
+      });
+    }
   } catch (error) {
     await rollbackDriverOffer(driver._id);
     await setOrdersWaiting([order._id], "send_offer_failed");

@@ -574,6 +574,57 @@ export async function sendDeliveryOffer(
   );
 }
 
+/**
+ * Oferta de MANDADO al repartidor por WhatsApp.
+ * Usa la plantilla exclusiva `oferta_mandado` (pendiente aprobación en Meta).
+ * Mientras no esté aprobada, la llamada lanzará error y el flujo queda en
+ * `waiting_for_driver` para reintento manual.
+ *
+ * Plantilla esperada en Meta:
+ *   Nuevo pedido #{{1}} para {{2}}.
+ *   Mandado
+ *   Dirección de recolección: {{3}}
+ *   Dirección de entrega: {{4}}
+ *   Tu envío: {{5}}
+ *   Total pagado: {{6}}
+ *   Método de pago: {{7}}
+ *   [Botón URL → Maps]
+ */
+export async function sendMandadoDeliveryOffer(
+  phone: string,
+  orderNumber: string,
+  customerName: string,
+  pickupAddress: string,
+  deliveryAddress: string,
+  driverPayoutLabel: string,
+  customerTotalLabel: string,
+  paymentMethod: string,
+  mapsUrl: string
+) {
+  return sendWhatsAppTemplate(
+    phone,
+    WHATSAPP_TEMPLATES.ofertaMandado,
+    [
+      sanitizeWhatsAppParam(orderNumber.substring(0, 30)),
+      sanitizeWhatsAppParam(customerName.substring(0, 60)),
+      sanitizeWhatsAppParam(pickupAddress.substring(0, 60)),
+      sanitizeWhatsAppParam(deliveryAddress.substring(0, 60)),
+      sanitizeWhatsAppParam(driverPayoutLabel.substring(0, 30)),
+      sanitizeWhatsAppParam(customerTotalLabel.substring(0, 30)),
+      sanitizeWhatsAppParam(paymentMethod.substring(0, 40)),
+    ],
+    "es_MX",
+    [
+      {
+        type: "button",
+        sub_type: "url",
+        index: "0",
+        parameters: [{ type: "text", text: toWhatsAppUrlButtonParam(mapsUrl) }],
+      },
+    ]
+  );
+}
+
 export async function sendBundleDeliveryOffer(
   phone: string,
   restaurantName: string,

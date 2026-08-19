@@ -3,11 +3,41 @@ import "server-only";
 import { calculateDeliveryQuote, DEFAULT_DELIVERY_CONFIG, normalizeDeliveryConfig } from "@/lib/delivery-zones";
 import { createDeliveryPin } from "@/lib/delivery-pin";
 import { legalVersions } from "@/lib/legal-config";
-import { calculateMandadoQuote, type MandadoAddressPoint, type MandadoDraft, type MandadoMode } from "@/lib/mandado";
+import { calculateMandadoQuote, MANDADO_SERVICE_FEE, type MandadoAddressPoint, type MandadoDraft, type MandadoMode } from "@/lib/mandado";
 import { buildStateFields } from "@/lib/order-state";
 import { type OrderAddressInput } from "@/lib/order-pricing";
 import { createSettlementSnapshot, type OrderFinancials } from "@/lib/settlements";
 import { backendClient } from "@/sanity/lib/backendClient";
+
+export function createMandadoSettlementSnapshot(draft: MandadoDraft, paymentMethod: "stripe" | "cash_on_delivery", stripeFee?: number) {
+  const polygonPrice = draft.polygonPrice;
+  const platformServiceFee = MANDADO_SERVICE_FEE;
+  const driverGrossPayout = polygonPrice;
+  const paidOnline = paymentMethod === "stripe";
+  const stripeFeeAmount = paidOnline ? (stripeFee || 0) : 0;
+  
+  const financials: OrderFinancials = {
+    grossTotal: draft.price,
+    productsSubtotal: 0,
+    shippingFee: polygonPrice,
+    platformServiceFee,
+    platformCommission: 0,
+    paymentProcessingFee: stripeFeeAmount,
+    paymentProcessingFeePercentage: paidOnline ? (stripeFeeAmount / draft.price) : 0,
+    paymentProcessingFixedFee: 0,
+    paymentNetAmount: paidOnline ? Math.max(0, draft.price - stripeFeeAmount) : draft.price,
+    driverPayout: driverGrossPayout,
+    storeNetTotal: 0,
+    platformNetTotal: platformServiceFee - (paidOnline ? stripeFeeAmount * 0.5 : 0),
+  };
+  
+  return createSettlementSnapshot(financials, {
+    orderType: "delivery",
+    storeHasOwnDelivery: false,
+    paymentProvider: paidOnline ? "stripe" : "cash",
+    serviceKind: "mandado",
+  }, paidOnline ? "stripe" : "cash");
+}
 
 function point(value: unknown, field: string): MandadoAddressPoint {
   const input = value as Partial<MandadoAddressPoint> | null;
@@ -18,7 +48,7 @@ function point(value: unknown, field: string): MandadoAddressPoint {
   return { label, lat, lng };
 }
 
-export function normalizeMandadoDraft(value: unknown): Omit<MandadoDraft, "price"> {
+export function normalizeMandadoDraft(value: unknown): Omit<MandadoDraft, "price" | "polygonPrice"> {
   const input = value as Partial<MandadoDraft> | null;
   const mode = input?.mode as MandadoMode;
   const details = String(input?.details || "").trim().slice(0, 800);
@@ -34,11 +64,11 @@ export async function quoteMandado(value: unknown): Promise<MandadoDraft> {
   const originQuote = calculateDeliveryQuote(config, draft.origin);
   const destinationQuote = calculateDeliveryQuote(config, draft.destination);
   const quote = calculateMandadoQuote(originQuote, destinationQuote);
-  if (!quote.allowed || quote.finalPrice == null) {
+  if (!quote.allowed || quote.finalPrice == null || quote.polygonPrice == null) {
     const label = quote.outsidePoint === "origin" ? "El punto de inicio" : "El punto de entrega";
     throw new Error(`${label} está fuera de nuestra zona de servicio. Elige una ubicación dentro del área marcada.`);
   }
-  return { ...draft, price: quote.finalPrice };
+  return { ...draft, price: quote.finalPrice, polygonPrice: quote.polygonPrice };
 }
 
 export function buildMandadoOrderDocument(input: {
@@ -76,6 +106,17 @@ export function buildMandadoOrderDocument(input: {
   const now = new Date().toISOString();
   const paidOnline = input.paymentMethod === "stripe";
   const stripeFee = Math.max(0, input.stripeFee || 0);
+  const polygonPrice = input.draft.polygonPrice;
+  const platformServiceFee = MANDADO_SERVICE_FEE;
+  const driverGrossPayout = polygonPrice;
+  
+  // Calculate Stripe fee distribution (50/50)
+  const driverStripeShare = paidOnline ? stripeFee * 0.5 : 0;
+  const platformStripeShare = paidOnline ? stripeFee * 0.5 : 0;
+  
+  const driverNetPayout = driverGrossPayout - driverStripeShare;
+  const platformNetTotal = platformServiceFee - platformStripeShare;
+  
   const states = buildStateFields({
     orderType: "delivery",
     orderStatus: "pending",
@@ -136,10 +177,10 @@ export function buildMandadoOrderDocument(input: {
     products: [],
     totalPrice: input.draft.price,
     subtotal: 0,
-    shippingCost: input.draft.price,
+    shippingCost: polygonPrice,
     productsSubtotal: 0,
-    shippingFee: input.draft.price,
-    platformServiceFee: 0,
+    shippingFee: polygonPrice,
+    platformServiceFee,
     discount: 0,
     tax: 0,
     platformCommission: 0,
@@ -151,10 +192,10 @@ export function buildMandadoOrderDocument(input: {
     paymentProcessingFeePercentage: input.stripeFeePercentage ?? 0,
     paymentProcessingFixedFee: input.stripeFixedFee ?? 0,
     paymentNetAmount: paidOnline ? Math.max(0, input.draft.price - stripeFee) : 0,
-    driverPayout: input.draft.price,
+    driverPayout: driverGrossPayout,
     grossTotal: input.draft.price,
     storeNetTotal: 0,
-    platformNetTotal: paidOnline ? -stripeFee : 0,
+    platformNetTotal,
     cashCollectedBy: paidOnline ? "none" : "community_driver",
     driverType: "community",
     settlementSnapshot: input.settlementSnapshot,

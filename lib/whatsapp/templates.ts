@@ -40,6 +40,9 @@ export const WHATSAPP_TEMPLATES = {
   mandadoSolicitudContacto: "mandado_solicitud_contacto",
   // Aprobada en Meta: remitente avisado de que el repartidor llegó al destino.
   mandadoDestinoEnPuerta: "mandado_destino_en_puerta",
+  // Oferta de mandado al repartidor: plantilla exclusiva (pendiente aprobación Meta).
+  // NO reutilizar ofertaReparto (contiene "Restaurante: {{3}}" hardcodeado).
+  ofertaMandado: "oferta_mandado",
   ordenRepartidor: "orden_repartidor",
   clienteEntregaProgramadaSinRepartidor: "cliente_entrega_programada_sin_repartidor",
   clienteRepartidorEnPuerta: "cliente_repartidor_en_puerta",

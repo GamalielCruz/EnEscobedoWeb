@@ -12,7 +12,7 @@ import { backendClient } from "@/sanity/lib/backendClient";
 import { after } from "next/server";
 import Stripe from "stripe";
 import { sendScheduledOrderConfirmation } from "@/lib/scheduled-order-whatsapp";
-import { buildMandadoOrderDocument, quoteMandado } from "@/lib/mandado-order";
+import { buildMandadoOrderDocument, quoteMandado, createMandadoSettlementSnapshot } from "@/lib/mandado-order";
 import { resolveMandadoNipChannel } from "@/lib/mandado-nip-channel";
 import { getMexicoDateKey } from "@/lib/mexico-time";
 import { calculateEstimatedFees, calculateFeesFromActual, getProcessorType } from "@/lib/payment-processor-fees";
@@ -255,25 +255,7 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
     const stripeFees = await resolveStripeFee(stripe, session);
   
   // Create financial snapshot for mandado settlements
-  const mandadoFinancials: OrderFinancials = {
-    grossTotal: draft.price,
-    productsSubtotal: 0,
-    shippingFee: draft.price,
-    platformServiceFee: 0,
-    platformCommission: 0,
-    paymentProcessingFee: stripeFees.fee,
-    paymentProcessingFeePercentage: stripeFees.percentage,
-    paymentProcessingFixedFee: stripeFees.fixedFee,
-    paymentNetAmount: stripeFees.netAmount,
-    driverPayout: draft.price,
-    storeNetTotal: 0,
-    platformNetTotal: stripeFees.fee > 0 ? -stripeFees.fee : 0,
-  };
-  const mandadoSettlementSnapshot = createSettlementSnapshot(mandadoFinancials, {
-    orderType: "delivery",
-    storeHasOwnDelivery: false,
-    paymentProvider: "stripe",
-  }, "stripe");
+  const mandadoSettlementSnapshot = createMandadoSettlementSnapshot(draft, "stripe", stripeFees.fee);
 
   const orderData = buildMandadoOrderDocument({
       draft,

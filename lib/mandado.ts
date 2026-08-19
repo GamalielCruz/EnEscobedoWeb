@@ -4,6 +4,18 @@ export type MandadoPointQuote = {
   zone: { id: string; name: string; basePrice: number } | null;
 };
 
+export type MandadoQuoteResult = {
+  allowed: true;
+  finalPrice: number;
+  polygonPrice: number;
+  outsidePoint: null;
+} | {
+  allowed: false;
+  finalPrice: null;
+  polygonPrice: null;
+  outsidePoint: "origin" | "destination" | null;
+};
+
 export type MandadoMode = "pickup" | "purchase";
 export type MandadoAddressPoint = { label: string; lat: number; lng: number };
 
@@ -13,6 +25,7 @@ export type MandadoDraft = {
   destination: MandadoAddressPoint;
   details: string;
   price: number;
+  polygonPrice: number;
   // Detalles opcionales de los puntos
   businessName?: string;
   originReference?: string;
@@ -34,22 +47,24 @@ export type MandadoDraft = {
   nipRecipient?: "sender" | "recipient";
 };
 
-export const MANDADO_SERVICE_FEE = 14;
+export const MANDADO_SERVICE_FEE = 10;
 
-export function calculateMandadoQuote(origin: MandadoPointQuote, destination: MandadoPointQuote) {
+export function calculateMandadoQuote(origin: MandadoPointQuote, destination: MandadoPointQuote): MandadoQuoteResult {
   if (!origin.allowed || !origin.zone) {
-    return { allowed: false as const, finalPrice: null, outsidePoint: "origin" as const };
+    return { allowed: false as const, finalPrice: null, polygonPrice: null, outsidePoint: "origin" as const };
   }
   if (!destination.allowed || !destination.zone) {
-    return { allowed: false as const, finalPrice: null, outsidePoint: "destination" as const };
+    return { allowed: false as const, finalPrice: null, polygonPrice: null, outsidePoint: "destination" as const };
   }
   if (origin.finalPrice == null || destination.finalPrice == null) {
-    return { allowed: false as const, finalPrice: null, outsidePoint: null };
+    return { allowed: false as const, finalPrice: null, polygonPrice: null, outsidePoint: null };
   }
 
+  const polygonPrice = Math.max(origin.finalPrice, destination.finalPrice);
   return {
     allowed: true as const,
-    finalPrice: Math.max(origin.finalPrice, destination.finalPrice) + MANDADO_SERVICE_FEE,
+    finalPrice: polygonPrice + MANDADO_SERVICE_FEE,
+    polygonPrice,
     outsidePoint: null,
   };
 }
