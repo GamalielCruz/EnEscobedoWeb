@@ -1,5 +1,13 @@
 import { NextResponse } from "next/server";
 import { backendClient } from "@/sanity/lib/backendClient";
+import { deriveDriverEstado } from "@/lib/dispatch/driver-state";
+import { getDispatchConfig } from "@/lib/dispatch/dispatch-config";
+import {
+  buildDispatchObservabilitySnapshot,
+  toPublicEstimatedWait,
+  type ObservabilityDriver,
+  type ObservabilityOrder,
+} from "@/lib/dispatch/dispatch-observability";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +27,7 @@ type RawDriver = {
   disponibleHasta?: string;
   estadoDisponibilidad?: "available" | "offline" | "busy" | "offer_pending";
   motivoDesconexion?: string;
-  activeOrders?: Array<{ _id: string }>;
+  activeOrders?: ObservabilityOrder[];
 };
 
 const COMMUNITY_DRIVERS_AVAILABILITY_QUERY = `*[
@@ -41,23 +49,43 @@ const COMMUNITY_DRIVERS_AVAILABILITY_QUERY = `*[
     orderStatus != "delivered" &&
     orderStatus != "cancelled" &&
     orderStatus != "completed"
-  ]{ _id }
+  ]{
+    _id,
+    serviceKind,
+    orderType,
+    orderStatus,
+    status,
+    dispatchStatus,
+    orderDate,
+    repartidorAsignadoAt,
+    deliveredAt,
+    mandadoPickupAtDoor,
+    mandadoEnRuta,
+    "repartidorAsignadoRef": repartidorAsignado._ref,
+    orderEvents
+  }
+}`;
+
+const MANDADO_ORDERS_QUERY = `*[_type == "order" && serviceKind == "mandado"]{
+  _id,
+  serviceKind,
+  orderType,
+  orderStatus,
+  status,
+  dispatchStatus,
+  orderDate,
+  repartidorAsignadoAt,
+  deliveredAt,
+  mandadoPickupAtDoor,
+  mandadoEnRuta,
+  "repartidorAsignadoRef": repartidorAsignado._ref,
+  orderEvents
 }`;
 
 // ────────────────────────────────────────────────────────────────────
 // Derivación de estado (MISMA lógica que deriveDriverEstado en
 // lib/dispatch/dispatch-core.ts — fuente de verdad).
 // ────────────────────────────────────────────────────────────────────
-
-function deriveDriverEstado(driver: RawDriver): string {
-  const activeCount = Array.isArray(driver.activeOrders) ? driver.activeOrders.length : 0;
-  if (driver.bloqueado) return "blocked";
-  if (driver.motivoDesconexion === "admin_paused") return "paused";
-  if (driver.estadoDisponibilidad === "busy" || activeCount > 0) return "busy";
-  if (driver.estadoDisponibilidad === "offer_pending") return "offer_pending";
-  if (driver.estadoDisponibilidad === "available" && driver.disponible) return "available";
-  return "offline";
-}
 
 // ────────────────────────────────────────────────────────────────────
 // Candidato elegible (MISMA lógica que isDriverCandidateAvailable en
@@ -80,16 +108,28 @@ export type MandadoAvailabilityResponse = {
   busyCount: number;
   activeCount: number;
   connectedCount: number;
-  estimatedWaitMinutes: null; // No hay fuente confiable para ETA de mandados
+  estimatedWait: { minMinutes: number; maxMinutes: number } | null;
   lastUpdatedAt: string;
 };
 
 export async function GET() {
   try {
     const now = Date.now();
-    const rawDrivers = await backendClient.fetch<RawDriver[]>(COMMUNITY_DRIVERS_AVAILABILITY_QUERY);
+    const [rawDrivers, mandadoOrders, dispatchConfig] = await Promise.all([
+      backendClient.fetch<RawDriver[]>(COMMUNITY_DRIVERS_AVAILABILITY_QUERY),
+      backendClient.fetch<ObservabilityOrder[]>(MANDADO_ORDERS_QUERY),
+      getDispatchConfig(),
+    ]);
 
     const drivers = rawDrivers ?? [];
+    const observability = buildDispatchObservabilitySnapshot({
+      drivers: drivers as ObservabilityDriver[],
+      orders: mandadoOrders ?? [],
+      waitingMandadoOrders: (mandadoOrders ?? []).filter((order) => order.dispatchStatus === "waiting_for_driver" && !order.repartidorAsignadoRef),
+      config: dispatchConfig,
+      now,
+    });
+    const estimatedWait = toPublicEstimatedWait(observability.expectedRelease[0] ?? null);
 
     // Clasificar cada repartidor usando la misma lógica que Dispatch Center
     const classified = drivers.map((driver: RawDriver) => ({
@@ -118,9 +158,7 @@ export async function GET() {
       busyCount,
       activeCount,
       connectedCount,
-      // No hay fuente confiable para ETA de mandados ocupados.
-      // El Dispatch Center no calcula tiempo restante de entregas activas.
-      estimatedWaitMinutes: null,
+      estimatedWait,
       lastUpdatedAt: new Date(now).toISOString(),
     };
 

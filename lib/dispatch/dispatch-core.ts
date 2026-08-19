@@ -21,6 +21,7 @@ import {
 import { releaseOrderFromDriverCore } from "./dispatch-release";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { NextResponse } from "next/server";
+import { deriveDriverEstado } from "./driver-state";
 
 // ────────────────────────────────────────────────────────────────────
 // Tipos del Dispatch Center
@@ -359,16 +360,6 @@ function buildMapsUrl(lat?: number, lng?: number, fallback?: string): string {
 // Derivación de estado de repartidor (una sola fuente para snapshot y
 // recomendaciones, alineada con lib/delivery-dispatch.ts)
 // ────────────────────────────────────────────────────────────────────
-
-function deriveDriverEstado(driver: any): DispatchDriverCard["estado"] {
-  const activeCount = Array.isArray(driver.activeOrders) ? driver.activeOrders.length : 0;
-  if (driver.bloqueado) return "blocked";
-  if (driver.motivoDesconexion === "admin_paused") return "paused";
-  if (driver.estadoDisponibilidad === "busy" || activeCount > 0) return "busy";
-  if (driver.estadoDisponibilidad === "offer_pending") return "offer_pending";
-  if (driver.estadoDisponibilidad === "available" && driver.disponible) return "available";
-  return "offline";
-}
 
 function buildDriverCardFromRaw(driver: any, now: number): DispatchDriverCard {
   const activeOrders = Array.isArray(driver.activeOrders) ? driver.activeOrders : [];

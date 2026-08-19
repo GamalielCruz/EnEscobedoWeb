@@ -162,7 +162,8 @@ export function validateAssignment(
   order: AssignmentOrderLike | null,
   driver: AssignmentDriverLike | null,
   config: DispatchConfig,
-  mode?: "auto" | "manual" | "assisted"
+  mode?: "auto" | "manual" | "assisted",
+  now = Date.now()
 ): string | null {
   if (!order) return "El pedido no existe.";
   if (!driver) return "El repartidor no existe.";
@@ -189,7 +190,7 @@ export function validateAssignment(
     if (estado === "busy" && !config.allowMultipleOrders) {
       return "El repartidor está ocupado y no se permiten múltiples pedidos.";
     }
-    if (driver.disponibleHasta && new Date(driver.disponibleHasta).getTime() <= Date.now()) {
+    if (driver.disponibleHasta && new Date(driver.disponibleHasta).getTime() <= now) {
       return "La sesión de disponibilidad del repartidor venció; reanúdalo antes de asignar.";
     }
   }

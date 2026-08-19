@@ -9,7 +9,7 @@ type AvailabilityData = {
   busyCount: number;
   activeCount: number;
   connectedCount: number;
-  estimatedWaitMinutes: number | null;
+  estimatedWait: { minMinutes: number; maxMinutes: number } | null;
   lastUpdatedAt: string;
 };
 
@@ -17,6 +17,7 @@ type AvailabilityStatus = "searching" | "available" | "busy" | "offline" | "erro
 
 const POLL_INTERVAL_MS = 30_000;
 const MINIMUM_SEARCH_TIME_MS = 2_000;
+const RELIABLE_ETA_RETENTION_MS = 2 * 60_000;
 
 function deriveStatus(data: AvailabilityData): AvailabilityStatus {
   if (data.connectedCount === 0) return "offline";
@@ -31,6 +32,7 @@ export default function MandadoDriverAvailability() {
   const abortRef = useRef<AbortController | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const dataRef = useRef<AvailabilityData | null>(null);
+  const reliableEtaRef = useRef<{ estimatedWait: AvailabilityData["estimatedWait"]; receivedAt: number } | null>(null);
 
   const fetchAvailability = useCallback(async (isInitialFetch = false) => {
     abortRef.current?.abort();
@@ -52,6 +54,15 @@ export default function MandadoDriverAvailability() {
 
       const result: AvailabilityData = await response.json();
       await minimumSearchTime;
+      const now = Date.now();
+      if (result.estimatedWait) {
+        reliableEtaRef.current = { estimatedWait: result.estimatedWait, receivedAt: now };
+      } else if (
+        reliableEtaRef.current &&
+        now - reliableEtaRef.current.receivedAt <= RELIABLE_ETA_RETENTION_MS
+      ) {
+        result.estimatedWait = reliableEtaRef.current.estimatedWait;
+      }
       dataRef.current = result;
       setData(result);
       setStatus(deriveStatus(result));
@@ -234,6 +245,11 @@ export default function MandadoDriverAvailability() {
                 ? "1 repartidor está atendiendo otro pedido"
                 : `${busyCount} repartidores están atendiendo otros pedidos`}
             </p>
+            {data?.estimatedWait && (
+              <p className="mt-1.5 text-sm font-semibold text-gray-900">
+                Tiempo estimado de espera: {data.estimatedWait.minMinutes}–{data.estimatedWait.maxMinutes} min
+              </p>
+            )}
             <p className="mt-1.5 text-xs text-gray-400">
               Te asignaremos uno cuando quede disponible.
             </p>
