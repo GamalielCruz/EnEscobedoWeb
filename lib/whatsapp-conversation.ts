@@ -64,8 +64,6 @@ export function buildMandadoDeliveryOfferMessage(input: {
     `💳 ${input.paymentMethod}`,
     ``,
     `Total pagado: ${input.customerTotalLabel}`,
-    ``,
-    `Responde ACEPTO para tomar este mandado.`,
   ];
   return lines.join("\n");
 }

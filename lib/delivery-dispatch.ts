@@ -5,7 +5,7 @@ import { isDriverDispatchEnabled } from "@/lib/fulfillment";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { sendMandadoNoDriverAvailable } from "@/lib/mandado-whatsapp";
 import { getDispatchConfig } from "@/lib/dispatch/dispatch-config";
-import { sendBundleDeliveryOffer, sendDeliveryOffer, sendMandadoDeliveryOffer, sendWhatsAppMessage } from "./whatsapp";
+import { sendBundleDeliveryOffer, sendDeliveryOffer, sendMandadoDeliveryOffer, sendWhatsAppInteractiveMessage, sendWhatsAppMessage } from "./whatsapp";
 import { isWhatsAppConversationOpen, buildMandadoDeliveryOfferMessage } from "./whatsapp-conversation";
 
 const OFFER_TTL_SECONDS = 10 * 60;
@@ -389,8 +389,8 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
       const windowOpen = isWhatsAppConversationOpen(selectedDriver.ultimaActividad, new Date());
 
       if (windowOpen) {
-        // Free-form message: faster, more flexible, no Meta template needed
-        const offerText = buildMandadoDeliveryOfferMessage({
+        // Interactive message with ACEPTO button: same acceptance flow as text command
+        const offerBody = buildMandadoDeliveryOfferMessage({
           orderNumber: order.orderNumber,
           customerName: order.customerName ?? "Cliente",
           pickupAddress,
@@ -399,11 +399,15 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
           customerTotalLabel: totalLabel,
           paymentMethod: paymentMethodLabel,
         });
-        await sendWhatsAppMessage(selectedDriver.telefono, offerText);
-        console.log("[delivery-dispatch] oferta mandado enviada (mensaje normal)", {
+        await sendWhatsAppInteractiveMessage(
+          selectedDriver.telefono,
+          offerBody,
+          [{ type: "reply", id: "ACEPTO", title: "Aceptar mandado" }]
+        );
+        console.log("[delivery-dispatch] oferta mandado enviada (interactivo)", {
           orderId: order._id,
           repartidorId: selectedDriver._id,
-          channel: "normal",
+          channel: "interactive",
         });
       } else {
         // Template fallback: works even without open conversation
@@ -535,7 +539,7 @@ export async function offerOrderToDriver(
     const windowOpen = isWhatsAppConversationOpen(driver.ultimaActividad, new Date());
 
     if (windowOpen) {
-      const offerText = buildMandadoDeliveryOfferMessage({
+      const offerBody = buildMandadoDeliveryOfferMessage({
         orderNumber: order.orderNumber,
         customerName: order.customerName ?? "Cliente",
         pickupAddress,
@@ -544,11 +548,15 @@ export async function offerOrderToDriver(
         customerTotalLabel: totalLabel,
         paymentMethod: paymentMethodLabel,
       });
-      await sendWhatsAppMessage(driver.telefono, offerText);
-      console.log("[delivery-dispatch] oferta manual mandado enviada (mensaje normal)", {
+      await sendWhatsAppInteractiveMessage(
+        driver.telefono,
+        offerBody,
+        [{ type: "reply", id: "ACEPTO", title: "Aceptar mandado" }]
+      );
+      console.log("[delivery-dispatch] oferta manual mandado enviada (interactivo)", {
         orderId,
         repartidorId: driver._id,
-        channel: "normal",
+        channel: "interactive",
       });
     } else {
       await sendMandadoDeliveryOffer(
