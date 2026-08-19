@@ -1,6 +1,6 @@
 "use client";
 
-import { SignInButton, useAuth, useUser } from "@clerk/nextjs";
+import { useAuth, useUser, useClerk } from "@clerk/nextjs";
 import { ArrowLeft, Banknote, CheckCircle, CreditCard, Loader2, MapPin, PackageCheck } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { SegmentedTabs } from "./SegmentedTabs";
@@ -21,6 +21,7 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
   const router = useRouter();
   const { isSignedIn } = useAuth();
   const { user } = useUser();
+  const clerk = useClerk();
   // El JS de Clerk carga asíncrono: se renderiza su UI solo tras el montaje
   // para evitar hydration mismatches intermitentes (SignInButton/UserButton).
   const isHydrated = useHydration();
@@ -400,9 +401,14 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                   </div>
                 </div>
               ) : isHydrated ? (
-                <SignInButton mode="modal">
-                  <button className="mt-6 w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium">Inicia sesión para continuar</button>
-                </SignInButton>
+                <button
+                  onClick={() => clerk.openSignIn({
+                    forceRedirectUrl: typeof window !== 'undefined' ? window.location.href : '/basket?service=mandado',
+                  })}
+                  className="mt-6 w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                >
+                  Inicia sesión para continuar
+                </button>
               ) : null}
           </div>
         </div>
