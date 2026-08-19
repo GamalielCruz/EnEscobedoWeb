@@ -1116,7 +1116,6 @@ export default function MandadoMapFlow() {
                       </button>
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <img src="/Mandados.svg" alt="Mandados" className="h-7 w-7" />
                           <div>
                             <p className="truncate text-sm font-semibold text-[#09193B]">¿Qué necesitas hoy?</p>
                           </div>

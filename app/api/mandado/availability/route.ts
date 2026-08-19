@@ -25,7 +25,7 @@ type RawDriver = {
 const COMMUNITY_DRIVERS_AVAILABILITY_QUERY = `*[
   _type == "repartidor" &&
   activo == true &&
-  !bloqueado
+  bloqueado != true
 ] | order(prioridad desc, nombre asc){
   _id,
   nombre,
