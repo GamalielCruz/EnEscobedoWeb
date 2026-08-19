@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Bike, RefreshCw } from "lucide-react";
+import { ThinkingOrb } from "thinking-orbs";
 
 type AvailabilityData = {
   availableCount: number;
@@ -12,9 +13,10 @@ type AvailabilityData = {
   lastUpdatedAt: string;
 };
 
-type AvailabilityStatus = "loading" | "available" | "busy" | "offline" | "error";
+type AvailabilityStatus = "searching" | "available" | "busy" | "offline" | "error";
 
 const POLL_INTERVAL_MS = 30_000;
+const MINIMUM_SEARCH_TIME_MS = 2_000;
 
 function deriveStatus(data: AvailabilityData): AvailabilityStatus {
   if (data.connectedCount === 0) return "offline";
@@ -25,14 +27,18 @@ function deriveStatus(data: AvailabilityData): AvailabilityStatus {
 
 export default function MandadoDriverAvailability() {
   const [data, setData] = useState<AvailabilityData | null>(null);
-  const [status, setStatus] = useState<AvailabilityStatus>("loading");
+  const [status, setStatus] = useState<AvailabilityStatus>("searching");
   const abortRef = useRef<AbortController | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const dataRef = useRef<AvailabilityData | null>(null);
 
-  const fetchAvailability = useCallback(async () => {
+  const fetchAvailability = useCallback(async (isInitialFetch = false) => {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
+    const minimumSearchTime = isInitialFetch
+      ? new Promise<void>((resolve) => setTimeout(resolve, MINIMUM_SEARCH_TIME_MS))
+      : Promise.resolve();
 
     try {
       const response = await fetch("/api/mandado/availability", {
@@ -45,19 +51,22 @@ export default function MandadoDriverAvailability() {
       }
 
       const result: AvailabilityData = await response.json();
+      await minimumSearchTime;
+      dataRef.current = result;
       setData(result);
       setStatus(deriveStatus(result));
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") return;
+      await minimumSearchTime;
       console.error("[MandadoDriverAvailability]", err);
-      if (!data) {
+      if (!dataRef.current) {
         setStatus("error");
       }
     }
-  }, [data]);
+  }, []);
 
   useEffect(() => {
-    fetchAvailability();
+    fetchAvailability(true);
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
@@ -80,20 +89,29 @@ export default function MandadoDriverAvailability() {
     };
   }, [fetchAvailability]);
 
-  // ── Loading ──
-  if (status === "loading") {
+  // ── Searching ──
+  if (status === "searching") {
     return (
       <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100">
-            <Bike className="h-4 w-4 text-gray-400 animate-pulse" />
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-100">
+            <ThinkingOrb
+              state="searching"
+              size={64}
+              theme="light"
+              aria-label="Buscando un repartidor"
+              style={{ width: 40, height: 40 }}
+            />
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">
               Disponibilidad de reparto
             </p>
-            <p className="mt-1 text-sm font-medium text-gray-500">
-              Buscando repartidores disponibles...
+            <p className="mt-1 text-base font-semibold text-gray-900">
+              Buscando un repartidor
+            </p>
+            <p className="mt-0.5 text-sm text-gray-500">
+              Estamos comprobando quién puede recoger tu mandado.
             </p>
           </div>
         </div>
@@ -104,7 +122,7 @@ export default function MandadoDriverAvailability() {
   // ── Error ──
   if (status === "error") {
     return (
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm animate-in fade-in duration-300">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100">
@@ -120,7 +138,7 @@ export default function MandadoDriverAvailability() {
             </div>
           </div>
           <button
-            onClick={fetchAvailability}
+            onClick={() => fetchAvailability()}
             className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-50"
           >
             <RefreshCw className="h-3.5 w-3.5" />
@@ -134,7 +152,7 @@ export default function MandadoDriverAvailability() {
   // ── Sin repartidores conectados ──
   if (status === "offline") {
     return (
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm animate-in fade-in duration-300">
         <div className="flex items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100">
             <Bike className="h-4 w-4 text-gray-400" />
@@ -164,7 +182,7 @@ export default function MandadoDriverAvailability() {
     const busyCount = data?.busyCount ?? 0;
 
     return (
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm animate-in fade-in duration-300">
         <div className="flex items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100">
             <Bike className="h-4 w-4 text-[#eb1902]" />
@@ -199,7 +217,7 @@ export default function MandadoDriverAvailability() {
     const busyCount = data?.busyCount ?? 0;
 
     return (
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm animate-in fade-in duration-300">
         <div className="flex items-center gap-3">
           <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100">
             <Bike className="h-4 w-4 text-amber-500" />
