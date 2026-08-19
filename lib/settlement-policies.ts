@@ -13,6 +13,7 @@ export type FeeDistributionPolicy =
   | "restaurant_absorbs_all"
   | "courier_absorbs_all"
   | "split_equally"
+  | "split_equally_two_parties"
   | "platform_absorbs_all";
 
 export interface SettlementPolicyConfig {
@@ -31,6 +32,7 @@ export interface PolicyContext {
   storeHasOwnDelivery: boolean;
   paymentProvider: string;
   storeId?: string;
+  serviceKind?: "mandado" | "restaurant";
 }
 
 /**
@@ -48,8 +50,18 @@ const DEFAULT_POLICY: SettlementPolicyConfig = {
  * In the future, this could read from store-specific configurations or database
  */
 export function getSettlementPolicy(context: PolicyContext): SettlementPolicyConfig {
+  // Mandados: only courier + platform participate (50/50).
+  // restaurant processing fee = $0 (no restaurant involved).
+  if (context.serviceKind === "mandado") {
+    return {
+      feeDistribution: "split_equally_two_parties",
+      platformAbsorbsServiceFee: false,
+      platformAbsorbsCommission: false,
+    };
+  }
+  
   // Future: Read from store configuration or database
-  // For now, use default policy
+  // For now, use default policy for restaurants
   return DEFAULT_POLICY;
 }
 
@@ -101,6 +113,14 @@ export function calculateFeeDistribution(
 
     case "split_equally":
       return distributeEqually(
+        totalFee,
+        restaurantAmount,
+        courierAmount,
+        platformAmount
+      );
+
+    case "split_equally_two_parties":
+      return distributeEquallyTwoParties(
         totalFee,
         restaurantAmount,
         courierAmount,
@@ -205,7 +225,7 @@ function distributeCourierAbsorbsAll(
 }
 
 /**
- * Split fees equally among all parties
+ * Split fees equally among all parties (3-way: restaurant, courier, platform)
  */
 function distributeEqually(
   totalFee: number,
@@ -224,6 +244,29 @@ function distributeEqually(
     restaurantNetAmount: restaurantAmount - feePerParty,
     courierNetAmount: courierAmount - feePerParty,
     platformNetAmount: platformAmount - (feePerParty + roundingError),
+  };
+}
+
+/**
+ * Split fees equally between courier and platform only (2-way: 50/50).
+ * Used for Mandados where restaurant has no financial participation.
+ */
+function distributeEquallyTwoParties(
+  totalFee: number,
+  restaurantAmount: number,
+  courierAmount: number,
+  platformAmount: number
+): FeeDistributionResult {
+  const halfFee = Math.round((totalFee / 2) * 100) / 100;
+  const roundingError = totalFee - halfFee * 2;
+
+  return {
+    restaurantFee: 0,
+    courierFee: halfFee,
+    platformFee: halfFee + roundingError,
+    restaurantNetAmount: restaurantAmount,
+    courierNetAmount: courierAmount - halfFee,
+    platformNetAmount: platformAmount - (halfFee + roundingError),
   };
 }
 
@@ -260,6 +303,7 @@ export function validatePolicyConfig(policy: SettlementPolicyConfig): {
     "restaurant_absorbs_all",
     "courier_absorbs_all",
     "split_equally",
+    "split_equally_two_parties",
     "platform_absorbs_all",
   ];
 
