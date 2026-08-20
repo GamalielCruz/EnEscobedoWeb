@@ -228,7 +228,7 @@ export function DispatchMap({
   const topRecDriverId = recommendations[0]?.driver._id;
 
   return (
-    <div className="relative min-h-0 overflow-hidden rounded-xl border border-black/6 bg-slate-100 shadow-[0_1px_3px_rgba(9,25,59,0.06)] dark:border-white/10 dark:bg-[#0d1526]">
+    <div className="relative h-full min-h-[180px] overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-white/10 dark:bg-[#0d1526]">
       {loadError ? (
         <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
           <AlertTriangle className="h-8 w-8 text-amber-500" />
