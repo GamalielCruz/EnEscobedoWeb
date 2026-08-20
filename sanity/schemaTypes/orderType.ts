@@ -220,6 +220,8 @@ export const orderType = defineType({
     defineField({ name: "preparationStartedAt", title: "Preparacion iniciada", type: "datetime" }),
     defineField({ name: "preparationStatus", title: "Estado de preparacion", type: "string", options: { list: ["not_started", "in_preparation", "completed"] } }),
     defineField({ name: "scheduledDispatchStartedAt", title: "Dispatch iniciado", type: "datetime" }),
+    defineField({ name: "preassignedDriver", title: "Repartidor preasignado", type: "reference", to: [{ type: "repartidor" }], description: "Reserva silenciosa: repartidor preferente cuando la orden entre a Dispatch. No marca busy ni envía WhatsApp." }),
+    defineField({ name: "preassignedAt", title: "Preasignado el", type: "datetime" }),
     defineField({ name: "scheduleRiskLevel", title: "Riesgo operativo", type: "string", options: { list: ["none", "watch", "risk", "alert", "contingency"] } }),
     defineField({ name: "scheduleRiskAlertedAt", title: "Alerta enviada", type: "datetime" }),
     defineField({ name: "scheduleCustomerChoice", title: "Eleccion de contingencia", type: "string", options: { list: ["wait_for_driver", "pickup", "help"] } }),

@@ -11,6 +11,7 @@ import {
   sendScheduledOrderNoDriver,
 } from "@/lib/scheduled-order-whatsapp";
 import { sendWhatsAppMessage } from "@/lib/whatsapp";
+import { assignOrderToDriver } from "@/lib/dispatch/dispatch-core";
 import { backendClient } from "@/sanity/lib/backendClient";
 
 type ScheduledOrder = {
@@ -32,6 +33,7 @@ type ScheduledOrder = {
   scheduledDispatchStartedAt?: string;
   scheduledSlot?: { startAt?: string; endAt?: string };
   repartidorAsignado?: unknown;
+  preassignedDriver?: { _ref?: string } | string | null;
   grossTotal?: number;
   totalPrice?: number;
   storeName?: string;
@@ -70,6 +72,7 @@ const PROJECTION = `{
   scheduledDispatchStartedAt,
   scheduledSlot,
   repartidorAsignado,
+  preassignedDriver,
   grossTotal,
   totalPrice,
   "storeName": affiliateStore->name
@@ -122,7 +125,68 @@ export async function processScheduledOrders(now = new Date()) {
           source: "cron/check-repartidores",
           at: nowIso,
         });
-        await dispatchDeliveryOffer(order._id);
+
+        // Reserva silenciosa: si hay preassignedDriver, verificar disponibilidad.
+        const preassignedRef = order.preassignedDriver;
+        const preassignedDriverId = typeof preassignedRef === "string"
+          ? preassignedRef
+          : preassignedRef?._ref ?? null;
+        if (preassignedDriverId) {
+          const driver = await backendClient.fetch<any>(
+            `*[_type == "repartidor" && _id == $driverId][0]{
+              _id, activo, disponible, bloqueado, estadoDisponibilidad, disponibleHasta
+            }`,
+            { driverId: preassignedDriverId }
+          );
+          const isAvailable =
+            driver &&
+            driver.activo &&
+            !driver.bloqueado &&
+            driver.disponible &&
+            driver.estadoDisponibilidad === "available" &&
+            (!driver.disponibleHasta || new Date(driver.disponibleHasta).getTime() > Date.now());
+
+          if (isAvailable) {
+            // Reserva confirmada: asignar directamente al preassignedDriver.
+            // assignOrderToDriver setea repartidorAsignado, limpia preassignedDriver,
+            // y maneja dispatchStatus/scheduleStatus/scheduledDispatchStartedAt.
+            const assigned = await assignOrderToDriver({
+              orderId: order._id,
+              driverId: preassignedDriverId,
+              actorUserId: "cron/check-repartidores",
+              actorName: "Cron",
+              mode: "auto",
+              reason: "reserva silenciosa confirmada",
+              notifyDriver: true,
+              markShipped: false,
+              skipEvents: true, // ya registramos los eventos arriba
+            });
+            if (!assigned.ok) {
+              // Si la asignación falló (driver ya no disponible, conflicto),
+              // limpiar preassigned y dejar que el dispatch normal continúe.
+              await backendClient
+                .patch(order._id)
+                .unset(["preassignedDriver", "preassignedAt"])
+                .commit();
+              await dispatchDeliveryOffer(order._id);
+            }
+          } else {
+            // Reserva no materializable: driver ya no disponible.
+            await backendClient
+              .patch(order._id)
+              .unset(["preassignedDriver", "preassignedAt"])
+              .commit();
+            await appendOrderEvent(order._id, {
+              type: "scheduled_order_preassignment_cleared",
+              source: "cron/check-repartidores",
+              payload: { reason: "preassigned driver no longer available" },
+            });
+            await dispatchDeliveryOffer(order._id);
+          }
+        } else {
+          // Sin reserva: dispatch normal.
+          await dispatchDeliveryOffer(order._id);
+        }
       }
     } catch (error) {
       if (!isRevisionConflict(error)) {

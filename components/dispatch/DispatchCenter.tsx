@@ -37,6 +37,7 @@ import { DriverSupportPanel } from "@/components/dispatch/DriverSupportPanel";
 import { AssignModal } from "@/components/dispatch/AssignModal";
 import { OrderDetailsModal } from "@/components/dispatch/OrderDetailsModal";
 import { NipIncidentsPanel } from "@/components/dispatch/NipIncidentsPanel";
+import { UpcomingScheduledPanel } from "@/components/dispatch/UpcomingScheduledPanel";
 import { shortOrderCode } from "@/lib/dispatch/dispatch-format";
 
 const POLL_INTERVAL_MS = 12_000;
@@ -504,6 +505,31 @@ export function DispatchCenter() {
             </div>
           )}
         </div>
+      )}
+
+      {/* ── Próximas programadas (preview, no cola activa) ───────── */}
+      {(snapshot?.upcomingScheduled?.length ?? 0) > 0 && (
+        <UpcomingScheduledPanel
+          orders={snapshot!.upcomingScheduled}
+          onRelease={async (orderId) => {
+            setBusy(true);
+            try {
+              const res = await fetch("/api/admin/delivery-schedule", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ action: "release_reservation", orderId }),
+              });
+              const data = await res.json();
+              if (!res.ok) throw new Error(data.error ?? "No se pudo liberar la reserva");
+              notify("success", "Reserva liberada.");
+              await fetchSnapshot();
+            } catch (err) {
+              notify("error", err instanceof Error ? err.message : "No se pudo liberar la reserva.");
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
       )}
 
       {error && (

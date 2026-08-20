@@ -10,7 +10,6 @@ import {
 } from "@/lib/fulfillment-schedule";
 import { isAdminUser } from "@/lib/admin";
 import { syncBaserowOrderById } from "@/lib/baserow";
-import { assignOrderToDriver } from "@/lib/dispatch/dispatch-core";
 import { backendClient } from "@/sanity/lib/backendClient";
 
 const SCHEDULED_ORDERS_QUERY = `*[
@@ -34,6 +33,7 @@ const SCHEDULED_ORDERS_QUERY = `*[
   scheduleRiskLevel,
   customerHelpRequested,
   repartidorAsignado->{ _id, nombre },
+  preassignedDriver->{ _id, nombre },
   "storeName": affiliateStore->name
 }`;
 
@@ -122,14 +122,49 @@ export async function POST(request: NextRequest) {
   const admin = await requireAdmin();
   if (admin.error) return admin.error;
   try {
-    const { action, orderId, driverId } = await request.json();
+    const body = await request.json();
+    const { action, orderId, driverId } = body;
+
+    // Acción: liberar reserva silenciosa
+    if (action === "release_reservation" && orderId) {
+      const order = await backendClient.fetch<any>(
+        `*[_type == "order" && _id == $orderId][0]{
+          _id, _rev, orderType, fulfillmentTiming, preassignedDriver, repartidorAsignado
+        }`,
+        { orderId }
+      );
+      if (
+        !order ||
+        order.orderType !== "delivery" ||
+        order.fulfillmentTiming !== "scheduled" ||
+        !order.preassignedDriver ||
+        order.repartidorAsignado
+      ) {
+        return NextResponse.json({ error: "No hay reserva que liberar." }, { status: 409 });
+      }
+      const now = new Date().toISOString();
+      await backendClient
+        .patch(orderId)
+        .unset(["preassignedDriver", "preassignedAt"])
+        .set({ updatedAt: now })
+        .commit();
+      await appendOrderEvent(orderId, {
+        type: "scheduled_order_preassignment_cleared",
+        source: "api/admin/delivery-schedule",
+        actor: admin.userId,
+        payload: { reason: "admin_released" },
+      });
+      void syncBaserowOrderById(orderId);
+      return NextResponse.json({ success: true });
+    }
+
     if (action !== "assign_driver" || !orderId || !driverId) {
       return NextResponse.json({ error: "Accion invalida." }, { status: 400 });
     }
     const [order, driver] = await Promise.all([
       backendClient.fetch<any>(
         `*[_type == "order" && _id == $orderId][0]{
-          _id, _rev, orderType, orderStatus, fulfillmentTiming, repartidorAsignado,
+          _id, _rev, orderType, orderStatus, fulfillmentTiming, repartidorAsignado, preassignedDriver,
           "storeId": affiliateStore._ref,
           "storeHasOwnDelivery": affiliateStore->hasOwnDelivery
         }`,
@@ -159,23 +194,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Orden o repartidor no disponible." }, { status: 409 });
     }
 
-    // La asignación pasa por el servicio único (lib/dispatch/dispatch-core.ts)
-    // para mantener la misma transacción y auditoría que el Dispatch Center.
-    const assigned = await assignOrderToDriver({
-      orderId,
-      driverId,
-      actorUserId: admin.userId,
-      actorName: "Operador admin",
-      mode: "manual",
-      reason: "asignación manual de pedido programado",
-      notifyDriver: true,
-      markShipped: false, // los pedidos programados no se marcan shipped hasta su ventana
-    });
-    if (!assigned.ok) {
-      return NextResponse.json({ error: assigned.error }, { status: 409 });
-    }
+    // Reserva silenciosa: solo setea preassignedDriver + preassignedAt.
+    // NO cambia dispatchStatus, scheduleStatus, scheduledDispatchStartedAt,
+    // ni marca al repartidor como busy. El driver se confirma cuando
+    // scheduledDispatchAt llega y el cron verifica disponibilidad.
+    // Si ya existe una reserva, se sobrescribe (cambio de driver).
+    const now = new Date().toISOString();
+    await backendClient
+      .patch(orderId)
+      .set({
+        preassignedDriver: { _type: "reference", _ref: driverId },
+        preassignedAt: now,
+        updatedAt: now,
+      })
+      .commit();
     await appendOrderEvent(orderId, {
-      type: "scheduled_order_driver_assigned",
+      type: "scheduled_order_driver_preassigned",
       source: "api/admin/delivery-schedule",
       actor: admin.userId,
       payload: { driverId },

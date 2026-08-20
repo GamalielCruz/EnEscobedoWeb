@@ -138,6 +138,7 @@ export type DriverRecommendation = {
 
 export type DispatchSnapshot = {
   orders: DispatchOrderCard[];
+  upcomingScheduled: UpcomingScheduledCard[];
   drivers: DispatchDriverCard[];
   kpis: DispatchKpis;
   alerts: DispatchAlert[];
@@ -145,6 +146,26 @@ export type DispatchSnapshot = {
   zones: Array<{ id: string; name: string; color?: string; coordinates: Array<{ lat: number; lng: number }> }>;
   stores: Array<{ _id: string; name: string; lat?: number; lng?: number; address?: string }>;
   generatedAt: string;
+};
+
+export type UpcomingScheduledCard = {
+  _id: string;
+  orderNumber: string;
+  serviceKind: "restaurant" | "mandado";
+  storeName: string;
+  destLabel: string;
+  totalPrice: number;
+  paymentLabel: string;
+  scheduleStatus: string | null;
+  scheduledSlot: { startAt?: string; endAt?: string } | null;
+  scheduledDispatchAt: string | null;
+  scheduledPreparationAt: string | null;
+  scheduleRiskLevel: string | null;
+  driverId: string | null;
+  driverName: string | null;
+  preassignedDriverId: string | null;
+  preassignedDriverName: string | null;
+  customerHelpRequested: boolean;
 };
 
 export type AuditEntry = {
@@ -284,6 +305,42 @@ const STORES_QUERY = `*[_type == "affiliateStore" && isActive == true && defined
   "lat": coordinates.latitude,
   "lng": coordinates.longitude,
   "address": address.street
+}`;
+
+const UPCOMING_SCHEDULED_QUERY = `*[
+  _type == "order" &&
+  !(_id in path("drafts.**")) &&
+  fulfillmentTiming == "scheduled" &&
+  dispatchStatus == "scheduled" &&
+  orderStatus != "cancelled" &&
+  orderStatus != "delivered" &&
+  orderStatus != "completed" &&
+  paymentStatus != "failed" &&
+  paymentStatus != "expired" &&
+  paymentStatus != "refunded" &&
+  paymentStatus != "requires_refund" &&
+  defined(scheduledDispatchAt) &&
+  scheduledDispatchAt <= $horizon
+] | order(scheduledDispatchAt asc)[0...50]{
+  _id,
+  orderNumber,
+  serviceKind,
+  orderStatus,
+  paymentMethod,
+  totalPrice,
+  fulfillmentTiming,
+  scheduleStatus,
+  scheduledSlot,
+  scheduledDispatchAt,
+  scheduledPreparationAt,
+  scheduleRiskLevel,
+  customerHelpRequested,
+  "driverId": repartidorAsignado._ref,
+  "driverName": repartidorAsignado->nombre,
+  "preassignedDriverId": preassignedDriver._ref,
+  "preassignedDriverName": preassignedDriver->nombre,
+  "storeName": coalesce(affiliateStore->name, select(serviceKind == "mandado" => "Punto de inicio")),
+  "destLabel": coalesce(shippingAddress.line1, mandadoDestination.label)
 }`;
 
 const ORDER_FOR_ASSIGN_QUERY = `*[_type == "order" && _id == $orderId][0]{
@@ -504,9 +561,12 @@ export function recommendDriversFromRaw(
 
 export async function fetchDispatchSnapshot(): Promise<DispatchSnapshot> {
   const now = Date.now();
-  const [rawOrders, rawDrivers, assignmentStats, deliveryStats, zonesDoc, stores, config] = await Promise.all([
+  // Ventana de 24 h para órdenes programadas futuras.
+  const upcomingHorizon = new Date(now + 24 * 60 * 60 * 1000).toISOString();
+  const [rawOrders, rawDrivers, rawUpcoming, assignmentStats, deliveryStats, zonesDoc, stores, config] = await Promise.all([
     backendClient.fetch(ACTIVE_ORDERS_QUERY),
     backendClient.fetch(DRIVERS_QUERY),
+    backendClient.fetch(UPCOMING_SCHEDULED_QUERY, { horizon: upcomingHorizon }),
     backendClient.fetch(ASSIGNMENT_STATS_QUERY),
     backendClient.fetch(DELIVERY_STATS_QUERY),
     backendClient.fetch(ZONES_QUERY),
@@ -608,6 +668,27 @@ export async function fetchDispatchSnapshot(): Promise<DispatchSnapshot> {
   // ── Bandeja de alertas operativas (solo datos reales) ────────────
   const alerts = buildOperationalAlerts(orders, drivers, kpis, config, now);
 
+  // ── Próximas programadas (preview, NO cola activa) ─────────────
+  const upcomingScheduled: UpcomingScheduledCard[] = (rawUpcoming ?? []).map((order: any) => ({
+    _id: order._id,
+    orderNumber: order.orderNumber,
+    serviceKind: order.serviceKind === "mandado" ? "mandado" : "restaurant",
+    storeName: order.storeName ?? "Tienda",
+    destLabel: order.destLabel ?? "—",
+    totalPrice: Number(order.totalPrice ?? 0),
+    paymentLabel: paymentLabel(order.paymentMethod),
+    scheduleStatus: order.scheduleStatus ?? null,
+    scheduledSlot: order.scheduledSlot ?? null,
+    scheduledDispatchAt: order.scheduledDispatchAt ?? null,
+    scheduledPreparationAt: order.scheduledPreparationAt ?? null,
+    scheduleRiskLevel: order.scheduleRiskLevel ?? null,
+    driverId: order.driverId ?? null,
+    driverName: order.driverName ?? null,
+    preassignedDriverId: order.preassignedDriverId ?? null,
+    preassignedDriverName: order.preassignedDriverName ?? null,
+    customerHelpRequested: Boolean(order.customerHelpRequested),
+  }));
+
   const normalizedZones = normalizeDeliveryConfig(zonesDoc);
   const zones = normalizedZones.zones
     .filter((zone) => zone.active !== false && zone.coordinates.length >= 3)
@@ -615,6 +696,7 @@ export async function fetchDispatchSnapshot(): Promise<DispatchSnapshot> {
 
   return {
     orders,
+    upcomingScheduled,
     drivers,
     kpis,
     alerts,
@@ -912,7 +994,7 @@ export async function assignOrderToDriver(opts: AssignOptions): Promise<AssignRe
               deliveryOfertaEnviada: false,
               updatedAt: now,
             })
-            .unset(["offeredTo", "deliveryOfertaExpiresAt"])
+            .unset(["offeredTo", "deliveryOfertaExpiresAt", "preassignedDriver", "preassignedAt"])
         )
         .patch(opts.driverId, (patch) =>
           patch

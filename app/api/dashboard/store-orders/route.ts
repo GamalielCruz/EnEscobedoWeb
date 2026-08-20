@@ -286,7 +286,11 @@ export async function PATCH(request: NextRequest) {
       updateData.settlementStatus = "refunded";
     }
 
-    const updated = await writeClient.patch(order._id).set(updateData).commit();
+    let patchOp = writeClient.patch(order._id).set(updateData);
+    if (isCancelled && order.fulfillmentTiming === "scheduled") {
+      patchOp = patchOp.unset(["preassignedDriver", "preassignedAt"]); 
+    }
+    const updated = await patchOp.commit();
 
     const events: Array<{ type: OrderEventType; reason?: string; payload?: Record<string, unknown> }> = [];
     if (shouldEmitRestaurantAccepted(order.orderStatus, orderStatus)) {

@@ -26,6 +26,7 @@ type ScheduledOrder = {
   customerHelpRequested?: boolean;
   storeName?: string;
   repartidorAsignado?: { _id: string; nombre: string };
+  preassignedDriver?: { _id: string; nombre: string };
 };
 
 type Driver = { _id: string; nombre: string; estadoDisponibilidad?: string };
@@ -133,6 +134,17 @@ export default function DeliveryScheduleAdminPage() {
     if (response.ok) await load();
   }
 
+  async function releaseReservation(orderId: string) {
+    const response = await fetch("/api/admin/delivery-schedule", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "release_reservation", orderId }),
+    });
+    const data = await response.json();
+    setMessage(response.ok ? "Reserva liberada." : data.error || "No se pudo liberar.");
+    if (response.ok) await load();
+  }
+
   const today = localDateKey();
   const tomorrow = localDateKey(new Date(Date.now() + 86_400_000));
   const visibleOrders = orders.filter((order) => {
@@ -157,6 +169,35 @@ export default function DeliveryScheduleAdminPage() {
     ["adminAlertBeforeMinutes", "Alertar admin antes"],
     ["contingencyBeforeMinutes", "Avisar contingencia al cliente antes"],
   ];
+
+  function renderDriverCell(order: ScheduledOrder) {
+    if (order.repartidorAsignado?.nombre) {
+      return <span className="font-medium text-emerald-700">{order.repartidorAsignado.nombre}</span>;
+    }
+    if (order.preassignedDriver?.nombre) {
+      return (
+        <span className="flex items-center gap-1">
+          <span className="font-medium text-violet-600">{order.preassignedDriver.nombre}</span>
+          <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[9px] font-bold text-violet-600">Reserva</span>
+          <button
+            className="ml-1 text-[10px] text-slate-400 underline hover:text-slate-600"
+            onClick={() => releaseReservation(order._id)}
+          >
+            liberar
+          </button>
+        </span>
+      );
+    }
+    if (order.orderType === "delivery") {
+      return (
+        <select className="max-w-40 rounded border p-1" defaultValue="" onChange={(event) => assignDriver(order._id, event.target.value)}>
+          <option value="">Asignar…</option>
+          {drivers.map((driver) => <option key={driver._id} value={driver._id}>{driver.nombre}</option>)}
+        </select>
+      );
+    }
+    return "No aplica";
+  }
 
   return (
     <div className="space-y-5 px-4 sm:px-0">
@@ -268,12 +309,7 @@ export default function DeliveryScheduleAdminPage() {
                     <td>{formatDate(order.scheduledDispatchAt)}</td>
                     <td>{order.scheduleStatus || order.orderStatus}</td>
                     <td>
-                      {order.repartidorAsignado?.nombre || (order.orderType === "delivery" ? (
-                        <select className="max-w-40 rounded border p-1" defaultValue="" onChange={(event) => assignDriver(order._id, event.target.value)}>
-                          <option value="">Asignar…</option>
-                          {drivers.map((driver) => <option key={driver._id} value={driver._id}>{driver.nombre}</option>)}
-                        </select>
-                      ) : "No aplica")}
+                      {renderDriverCell(order)}
                     </td>
                     <td className={["alert", "contingency"].includes(order.scheduleRiskLevel || "") ? "font-semibold text-red-600" : ""}>{order.customerHelpRequested ? "Ayuda" : order.scheduleRiskLevel || "none"}</td>
                   </tr>
