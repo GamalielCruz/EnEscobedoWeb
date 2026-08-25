@@ -19,6 +19,12 @@ export const repartidorType = defineType({
       validation: (Rule) => Rule.required(),
     }),
     defineField({
+      name: "clerkUserId",
+      title: "Clerk User ID",
+      type: "string",
+      description: "ID de Clerk vinculado a este repartidor para Drive (opcional; requiere vinculación manual)",
+    }),
+    defineField({
       name: "tiendaAsignada",
       title: "Tienda Asignada",
       type: "reference",

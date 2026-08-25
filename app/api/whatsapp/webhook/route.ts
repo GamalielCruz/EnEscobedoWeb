@@ -23,6 +23,7 @@ import {
 } from '@/lib/mandado-whatsapp'
 import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
 import { assignOrderToDriver } from '@/lib/dispatch/dispatch-core'
+import { connectDriverSession, rejectDriverOffer, markPickupArrival, markMandadoEnRoute, markAtDoor } from '@/lib/driver-actions'
 import { classifyAssignmentOutcome } from '@/lib/dispatch/dispatch-validation'
 import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
 import { appendOrderEvent } from '@/lib/order-events'
@@ -1648,36 +1649,8 @@ export async function POST(req: NextRequest) {
         availableUntil: sessionWindow.availableUntilIso,
       })
 
-      await backendClient
-        .patch(repartidor._id)
-        .set({
-          disponible: true,
-          disponibleDesde: now,
-          disponibleHasta: sessionWindow.availableUntilIso,
-          duracionDisponibilidadMinutos: sessionWindow.totalMinutes,
-          estadoDisponibilidad: 'available',
-          ultimaActividad: now,
-          esperandoSeleccionDisponibilidad: false,
-          extensionPendiente: false,
-          pendienteConfirmacion: false,
-        })
-        .unset([
-          'confirmacionEnviadaAt',
-          'extensionPreguntadaAt',
-          'autoDesconectadoAt',
-          'motivoDesconexion',
-          'ultimoPedidoOfertado',
-          'pedidosOfertados',
-          'restauranteOferta',
-          'ofertaTipo',
-          'ofertaEnviadaAt',
-          'ofertaExpiraAt',
-        ])
-        .commit()
-
-      await dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => {
-        console.error('[webhook disponibilidad] Error reintentando ordenes en espera:', error)
-      })
+      // Migrated: connectDriverSession handles patch + unset + dispatchWaitingOrdersForDriver
+      await connectDriverSession(repartidor._id, selectedSession.minutes)
 
       void sendBotMessage(
         fromPhone,
@@ -2133,27 +2106,19 @@ Te avisaremos 10 minutos antes de finalizar.`
       const traceId = crypto.randomUUID().slice(0, 8)
       const orderToken = extractOrderToken(textBody, 'RECHAZAR')
       const offerOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, nowDate, orderToken)
-      const nextState = getDriverNextState(repartidor, nowDate)
 
-      await clearPendingOfferForDriver(repartidor._id, now, nextState).catch(() => null)
+      // Migrated: use shared rejectDriverOffer for each resolved order
+      // (handles patch + clearPendingOffer + release + redispatch)
+      for (const offerOrder of offerOrders as Array<Record<string, unknown>>) {
+        await rejectDriverOffer(String(offerOrder.orderNumber), repartidor._id).catch((error) => {
+          console.error('[webhook RECHAZAR] rejectDriverOffer error:', error)
+        })
+      }
 
       if (offerOrders.length > 0) {
-        const releasedOrderIds = await releaseOrdersForDriver(
-          offerOrders.map((order: Record<string, unknown>) => String(order._id)),
-          repartidor._id,
-          'driver_rejected_offer'
-        )
-
-        if (releasedOrderIds.length > 0) {
-          await redispatchOrders(releasedOrderIds, [repartidor._id]).catch((error) => {
-            console.error('[webhook RECHAZAR] Error redispatch:', error)
-          })
-        }
-
         console.log('[webhook RECHAZAR] OFFER_REJECTED', {
           traceId,
           repartidorId: repartidor._id,
-          orderIds: releasedOrderIds,
           orderNumbers: offerOrders.map((order: Record<string, unknown>) => String(order.orderNumber)),
         })
       }
@@ -2273,40 +2238,14 @@ Te avisaremos 10 minutos antes de finalizar.`
             return NextResponse.json({ status: 'ok' })
           }
 
-          // Transición EN_ROUTE: persiste mandadoEnRuta=true (nunca sin
-          // mandadoPickupAtDoor=true, garantizado por la derivación de estado).
-          try {
-            await backendClient
-              .patch(String((resolvedTargetOrder as Record<string, unknown>)._id))
-              .ifRevisionId(String((resolvedTargetOrder as Record<string, unknown>)._rev))
-              .set({ mandadoEnRuta: true, updatedAt: now })
-              .commit()
-          } catch (patchError) {
-            // Carrera (409) u otro fallo: releer. Si ya está en ruta, la
-            // transición la ganó otro intento → idempotente, sin reenvío.
-            const fresh = await backendClient.fetch(ORDER_BY_ID_QUERY, { orderId: String((resolvedTargetOrder as Record<string, unknown>)._id) }).catch(() => null)
-            if (fresh && fresh.mandadoEnRuta === true) {
-              console.log('PEDIDO_EN_CAMINO_IDEMPOTENT', {
-                traceId,
-                orderId: String((resolvedTargetOrder as Record<string, unknown>)._id),
-                reason: 'race_win_by_other_request',
-              })
-              return NextResponse.json({ status: 'ok' })
-            }
-            console.error('[webhook PEDIDO EN CAMINO] error transicionando EN_ROUTE', {
-              traceId,
-              orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
-              patchError,
-            })
+          // Transición EN_ROUTE: shared function handles patch + ifRevisionId + event + syncBaserow
+          const enRouteResult = await markMandadoEnRoute(
+            String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+            repartidor._id
+          )
+          if (!enRouteResult.ok) {
             return NextResponse.json({ status: 'ok' })
           }
-
-          after(() => syncBaserowOrderById(String((resolvedTargetOrder as Record<string, unknown>)._id)))
-          await appendOrderEvent(String((resolvedTargetOrder as Record<string, unknown>)._id), {
-            type: 'en_route',
-            source: 'whatsapp/webhook',
-            actor: repartidor._id,
-          })
 
           console.log('PEDIDO_EN_CAMINO_SENDING_DRIVER', {
             traceId,
@@ -2441,40 +2380,14 @@ Te avisaremos 10 minutos antes de finalizar.`
 
           if (driverState === 'assigned') {
             // ── Transición PICKUP_ARRIVAL (EN PUERTA en recolección) ──
-            // Persiste mandadoPickupAtDoor=true Y mandadoEnRuta=false (explícito)
-            // para distinguir este estado del legacy (enRuta undefined → en_route).
-            try {
-              await backendClient
-                .patch(String((resolvedTargetOrder as Record<string, unknown>)._id))
-                .ifRevisionId(String((resolvedTargetOrder as Record<string, unknown>)._rev))
-                .set({ mandadoPickupAtDoor: true, mandadoEnRuta: false, updatedAt: now })
-                .commit()
-            } catch (patchError) {
-              // Carrera (409): si otro intento ya registró la recolección, es
-              // duplicado idempotente: NO se reenvía WhatsApp ni efectos.
-              const fresh = await backendClient.fetch(ORDER_BY_ID_QUERY, { orderId: String((resolvedTargetOrder as Record<string, unknown>)._id) }).catch(() => null)
-              if (fresh && fresh.mandadoPickupAtDoor === true) {
-                console.log('EN_PUERTA_IDEMPOTENT', {
-                  repartidorId: repartidor._id,
-                  orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
-                  reason: 'race_win_by_other_request',
-                })
-                return NextResponse.json({ status: 'ok' })
-              }
-              console.error('[webhook EN PUERTA] error registrando recolección', {
-                orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
-                patchError,
-              })
+            // Migrated: shared function handles patch + ifRevisionId + event + syncBaserow
+            const pickupResult = await markPickupArrival(
+              String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+              repartidor._id
+            )
+            if (!pickupResult.ok) {
               return NextResponse.json({ status: 'ok' })
             }
-
-            after(() => syncBaserowOrderById(String((resolvedTargetOrder as Record<string, unknown>)._id)))
-            await appendOrderEvent(String((resolvedTargetOrder as Record<string, unknown>)._id), {
-              type: 'picked_up',
-              source: 'whatsapp/webhook',
-              actor: repartidor._id,
-              payload: { location: 'mandado_origin' },
-            })
 
             const senderPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).phone ?? ''))
             const origin =
@@ -2535,33 +2448,14 @@ Te avisaremos 10 minutos antes de finalizar.`
           // continúa al bloque de destino compartido (fall-through).
         }
 
-        try {
-          await backendClient
-            .patch(String((resolvedTargetOrder as Record<string, unknown>)._id))
-            .ifRevisionId(String((resolvedTargetOrder as Record<string, unknown>)._rev))
-            .set({ dispatchStatus: 'at_door', updatedAt: now })
-            .commit()
-        } catch (patchError) {
-          // Carrera (409): si otro intento ya marcó at_door, es duplicado
-          // idempotente: NO se reenvían notificaciones (el ganador ya lo hizo).
-          const fresh = await backendClient.fetch(ORDER_BY_ID_QUERY, { orderId: String((resolvedTargetOrder as Record<string, unknown>)._id) }).catch(() => null)
-          if (fresh && fresh.dispatchStatus === 'at_door') {
-            console.log('EN_PUERTA_IDEMPOTENT', {
-              repartidorId: repartidor._id,
-              orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
-              reason: 'race_win_by_other_request',
-            })
-            return NextResponse.json({ status: 'ok' })
-          }
-          console.error('[webhook EN PUERTA] error marcando at_door', {
-            orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
-            patchError,
-          })
+        // Migrated: markAtDoor handles patch + ifRevisionId + event + syncBaserow
+        const atDoorResult = await markAtDoor(
+          String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+          repartidor._id
+        )
+        if (!atDoorResult.ok) {
           return NextResponse.json({ status: 'ok' })
         }
-
-        after(() => syncBaserowOrderById(String((resolvedTargetOrder as Record<string, unknown>)._id)))
-        await appendOrderEvent(String((resolvedTargetOrder as Record<string, unknown>)._id), { type: 'at_door', source: 'whatsapp/webhook', actor: repartidor._id })
 
         const notifications: Promise<unknown>[] = []
         if (isMandadoOrder && !orderRequiresDeliveryPin(resolvedTargetOrder as Record<string, unknown>)) {

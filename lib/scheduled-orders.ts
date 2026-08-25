@@ -39,6 +39,10 @@ type ScheduledOrder = {
   storeName?: string;
 };
 
+// Filtro de órdenes programadas que el cron debe procesar.
+// NOTA: NO se filtra por paymentStatus == "paid" porque una orden programada
+// ya fue validada al crearse. El pago puede estar pendiente de confirmación
+// del webhook de Stripe y eso no debe impedir que entre a Dispatch a su hora.
 const ACTIVE_SCHEDULED_FILTER = `
   _type == "order" &&
   fulfillmentTiming == "scheduled" &&
@@ -48,8 +52,7 @@ const ACTIVE_SCHEDULED_FILTER = `
   orderStatus != "delivered" &&
   paymentStatus != "failed" &&
   paymentStatus != "expired" &&
-  paymentStatus != "refunded" &&
-  (paymentStatus == "paid" || paymentMethod in ["cash_on_delivery", "cash_at_store", "cash_on_pickup"])
+  paymentStatus != "refunded"
 `;
 
 const PROJECTION = `{
@@ -192,6 +195,48 @@ export async function processScheduledOrders(now = new Date()) {
       if (!isRevisionConflict(error)) {
         summary.errors += 1;
         console.error("[scheduled-orders] no se pudo activar", { orderId: order._id, error });
+      }
+    }
+  }
+
+  // ── Safety net: reconciliación de órdenes atascadas ──────────────────
+  // Busca órdenes cuyo scheduledDispatchAt ya venció pero que siguen con
+  // scheduleStatus == "scheduled" y sin scheduledDispatchStartedAt. Esto
+  // cubre race conditions o fallos transitorios del loop principal.
+  const stuckOrders = await backendClient.fetch<ScheduledOrder[]>(
+    `*[${ACTIVE_SCHEDULED_FILTER} &&
+      orderType == "delivery" &&
+      scheduleStatus == "scheduled" &&
+      !defined(scheduledDispatchStartedAt) &&
+      scheduledDispatchAt <= $now
+    ] { _id, _rev, orderNumber, scheduledDispatchAt, scheduleStatus }`,
+    { now: nowIso }
+  );
+  for (const order of stuckOrders) {
+    // Solo procesar si no fue ya procesado en el loop principal
+    // (doble verificación atómica con ifRevisionId)
+    try {
+      await backendClient
+        .patch(order._id)
+        .ifRevisionId(order._rev)
+        .set({
+          scheduledDispatchStartedAt: nowIso,
+          dispatchStatus: "waiting_for_driver",
+          scheduleStatus: "ready_for_dispatch",
+          updatedAt: nowIso,
+        })
+        .commit();
+      summary.dispatched += 1;
+      await appendOrderEvent(order._id, {
+        type: "scheduled_order_ready_for_dispatch",
+        source: "cron/check-repartidores/safety-net",
+        at: nowIso,
+      });
+      await dispatchDeliveryOffer(order._id);
+    } catch (error) {
+      if (!isRevisionConflict(error)) {
+        summary.errors += 1;
+        console.error("[scheduled-orders] safety-net: no se pudo activar", { orderId: order._id, error });
       }
     }
   }

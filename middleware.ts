@@ -10,6 +10,23 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
   const { userId } = await auth();
   const pathname = req.nextUrl.pathname;
 
+  // ── Drive subdomain → rewrite to /drive ──────────────────────────
+  // Browser stays at / (no redirect). Next.js internally resolves /drive.
+  // Covers: drive.localhost (dev), drive.elmenu.site (prod)
+  // NOTE: req.nextUrl.hostname returns the connection hostname (127.0.0.1),
+  // not the Host header. We must use the Host header directly.
+  const hostHeader = req.headers.get("host") ?? "";
+  const requestHostname = hostHeader.split(":")[0];
+  if (
+    requestHostname.startsWith("drive.") &&
+    pathname === "/" &&
+    !pathname.startsWith("/api/")
+  ) {
+    const url = req.nextUrl.clone();
+    url.pathname = "/drive";
+    return NextResponse.rewrite(url);
+  }
+
   if (pathname === "/super" || pathname === "/super/") {
     return NextResponse.redirect(new URL("/abarrotes-pilot", req.url));
   }
