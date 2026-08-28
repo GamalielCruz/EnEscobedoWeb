@@ -12,11 +12,29 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
 
   // ── Drive subdomain → rewrite to /drive ──────────────────────────
   // Browser stays at / (no redirect). Next.js internally resolves /drive.
-  // Covers: drive.localhost (dev), drive.elmenu.site (prod)
-  // NOTE: req.nextUrl.hostname returns the connection hostname (127.0.0.1),
-  // not the Host header. We must use the Host header directly.
-  const hostHeader = req.headers.get("host") ?? "";
-  const requestHostname = hostHeader.split(":")[0];
+  // Covers: drive.localhost (dev), drive.elmenu.site (prod),
+  //         drive.staging.elmenu.site (preview).
+  // NOTE: req.nextUrl.hostname returns the Vercel-internal hostname,
+  // not the public hostname. On Vercel the original public hostname
+  // arrives in x-forwarded-host; in local dev it arrives in host.
+  const forwardedHost = req.headers.get("x-forwarded-host");
+  const hostHeader = forwardedHost ?? req.headers.get("host") ?? "";
+  const requestHostname = hostHeader.split(":")[0].toLowerCase();
+
+  // ── TEMPORARY DIAGNOSTIC LOG (remove after confirming fix) ──────
+  console.log(
+    "[middleware] host=",
+    req.headers.get("host"),
+    "forwardedHost=",
+    forwardedHost,
+    "hostname=",
+    requestHostname,
+    "path=",
+    pathname,
+    "isDrive=",
+    requestHostname.startsWith("drive."),
+  );
+
   if (
     requestHostname.startsWith("drive.") &&
     pathname === "/" &&
