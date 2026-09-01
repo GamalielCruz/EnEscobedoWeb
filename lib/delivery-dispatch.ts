@@ -8,7 +8,8 @@ import { getDispatchConfig } from "@/lib/dispatch/dispatch-config";
 import { sendBundleDeliveryOffer, sendDeliveryOffer, sendMandadoDeliveryOffer, sendWhatsAppInteractiveMessage, sendWhatsAppMessage } from "./whatsapp";
 import { isWhatsAppConversationOpen, buildMandadoDeliveryOfferMessage } from "./whatsapp-conversation";
 
-const OFFER_TTL_SECONDS = 10 * 60;
+const OFFER_TTL_SECONDS_MANDADO = 15;
+const OFFER_TTL_SECONDS_DEFAULT = 10 * 60; // 10 minutos para restaurantes y otros
 const ADMIN_PHONE = process.env.ADMIN_WHATSAPP_PHONE;
 
 type DispatchOrder = {
@@ -194,9 +195,10 @@ function createDriverRef(driverId: string) {
   return { _type: "reference" as const, _ref: driverId };
 }
 
-function buildOfferWindow() {
+function buildOfferWindow(serviceKind?: string) {
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + OFFER_TTL_SECONDS * 1000);
+  const ttl = serviceKind === "mandado" ? OFFER_TTL_SECONDS_MANDADO : OFFER_TTL_SECONDS_DEFAULT;
+  const expiresAt = new Date(now.getTime() + ttl * 1000);
   return { nowIso: now.toISOString(), expiresAtIso: expiresAt.toISOString() };
 }
 
@@ -376,7 +378,7 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
   const totalLabel = buildTotalLabel(order.totalPrice);
   const paymentMethodLabel = buildPaymentMethodLabel(order.paymentMethod);
   const mapsUrl = buildAddressMapsUrl(order.shippingAddress, address);
-  const { nowIso, expiresAtIso } = buildOfferWindow();
+  const { nowIso, expiresAtIso } = buildOfferWindow(order.serviceKind);
 
   await markOrdersAsOffered([order._id], selectedDriver._id, expiresAtIso);
   await prepareDriverForOffer(selectedDriver, [order._id], order.storeId ?? null, "single", nowIso, expiresAtIso);
@@ -512,7 +514,7 @@ export async function offerOrderToDriver(
     return { ok: false, error: "La sesión de disponibilidad del repartidor terminó; reanúdalo antes de ofertar." };
   }
 
-  const { nowIso, expiresAtIso } = buildOfferWindow();
+  const { nowIso, expiresAtIso } = buildOfferWindow(order.serviceKind);
 
   try {
     await markOrdersAsOffered([order._id], driver._id, expiresAtIso);
@@ -648,7 +650,7 @@ export async function dispatchDeliveryBundle(orderIds: string[], options: Dispat
     return false;
   }
 
-  const { nowIso, expiresAtIso } = buildOfferWindow();
+  const { nowIso, expiresAtIso } = buildOfferWindow(firstOrder.serviceKind);
   await markOrdersAsOffered(uniqueOrderIds, selectedDriver._id, expiresAtIso);
   await prepareDriverForOffer(selectedDriver, uniqueOrderIds, firstOrder.storeId, "bundle", nowIso, expiresAtIso);
 

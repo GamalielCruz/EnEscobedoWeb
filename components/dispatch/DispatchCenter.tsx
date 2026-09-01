@@ -38,6 +38,7 @@ import { OrderDetailsModal } from "@/components/dispatch/OrderDetailsModal";
 import { NipIncidentsPanel } from "@/components/dispatch/NipIncidentsPanel";
 import { UpcomingScheduledPanel } from "@/components/dispatch/UpcomingScheduledPanel";
 import { shortOrderCode } from "@/lib/dispatch/dispatch-format";
+import { useOfferAlertSound } from "@/hooks/useOfferAlertSound";
 
 const POLL_INTERVAL_MS = 12_000;
 
@@ -76,6 +77,11 @@ export function DispatchCenter() {
   const [detailsOrder, setDetailsOrder] = useState<DispatchOrderCard | null>(null);
   const [mapExpanded, setMapExpanded] = useState(false);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Sound alert for new offers ──────────────────────────────
+  const { notifyOfferChange } = useOfferAlertSound();
+  const prevOfferedIdsRef = useRef<Set<string>>(new Set());
+  const initializedRef = useRef(false);
 
   const config = snapshot?.config ?? null;
   const unreadSupportTotal = (snapshot?.drivers ?? []).reduce(
@@ -221,6 +227,38 @@ export function DispatchCenter() {
     } catch (err) { notify("error", err instanceof Error ? err.message : "Error"); }
     finally { setBusy(false); }
   }
+
+  // Detect new offers → play alert sound
+  useEffect(() => {
+    if (!snapshot) return;
+
+    const currentOfferedIds = new Set(
+      (snapshot.orders ?? [])
+        .filter((o) => o.dispatchStatus === "offered")
+        .map((o) => o._id)
+    );
+
+    if (!initializedRef.current) {
+      // First snapshot: register without playing sound
+      prevOfferedIdsRef.current = currentOfferedIds;
+      initializedRef.current = true;
+      return;
+    }
+
+    const prevIds = prevOfferedIdsRef.current;
+    const newOfferIds = [...currentOfferedIds].filter((id) => !prevIds.has(id));
+
+    if (newOfferIds.length > 0) {
+      for (const orderId of newOfferIds) {
+        const order = snapshot.orders.find((o) => o._id === orderId);
+        if (order) {
+          notifyOfferChange(order.orderNumber, order.offerExpiresAt ?? new Date().toISOString());
+        }
+      }
+    }
+
+    prevOfferedIdsRef.current = currentOfferedIds;
+  }, [snapshot, notifyOfferChange]);
 
   const mode = config?.mode ?? "auto";
   const unassignedOrders = (snapshot?.orders ?? []).filter((o) => !o.driverId);

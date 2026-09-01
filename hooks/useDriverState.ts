@@ -52,9 +52,19 @@ type DriverState = {
   offer: DriverOffer | null;
 };
 
-const ACTIVE_POLL_MS = 10_000;   // 10s when connected with active order
-const IDLE_POLL_MS = 15_000;     // 15s when connected, no orders
+// Polling intervals
+const OFFER_POLL_MS = 1_500;       // 1.5s when active offer (15s TTL window)
+const ACTIVE_POLL_MS = 10_000;     // 10s when connected with active order (no offer)
+const IDLE_POLL_MS = 15_000;       // 15s when connected, no orders
 const DISCONNECTED_POLL_MS = 30_000; // 30s when disconnected
+
+function getPollInterval(state: DriverState | null): number {
+  if (!state) return IDLE_POLL_MS;
+  if (!state.connected) return DISCONNECTED_POLL_MS;
+  if (state.offer) return OFFER_POLL_MS;
+  if (state.orders.length > 0) return ACTIVE_POLL_MS;
+  return IDLE_POLL_MS;
+}
 
 export function useDriverState() {
   const [state, setState] = useState<DriverState | null>(null);
@@ -62,6 +72,7 @@ export function useDriverState() {
   const [error, setError] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
+  const stateRef = useRef<DriverState | null>(null);
 
   const fetchState = useCallback(async () => {
     try {
@@ -70,6 +81,7 @@ export function useDriverState() {
       const data: DriverState = await res.json();
       if (mountedRef.current) {
         setState(data);
+        stateRef.current = data;
         setError(null);
         setLoading(false);
       }
@@ -81,42 +93,43 @@ export function useDriverState() {
     }
   }, []);
 
-  // Determine polling interval based on state
-  const getInterval = useCallback(() => {
-    if (!state) return IDLE_POLL_MS;
-    if (!state.connected) return DISCONNECTED_POLL_MS;
-    if (state.orders.length > 0 || state.offer) return ACTIVE_POLL_MS;
-    return IDLE_POLL_MS;
-  }, [state]);
+  // Re-schedule the interval based on current state.
+  // Called after each fetch completes to adjust polling rate.
+  const rescheduleInterval = useCallback(() => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (!mountedRef.current) return;
+    const ms = getPollInterval(stateRef.current);
+    intervalRef.current = setInterval(fetchState, ms);
+  }, [fetchState]);
 
   // Setup polling
   useEffect(() => {
     mountedRef.current = true;
-    fetchState();
+    fetchState().then(() => {
+      if (mountedRef.current) rescheduleInterval();
+    });
 
     return () => {
       mountedRef.current = false;
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [fetchState]);
+  }, [fetchState, rescheduleInterval]);
 
-  // Re-setup interval when state changes
+  // Re-adjust interval when state changes (offer appears/disappears)
   useEffect(() => {
-    if (intervalRef.current) clearInterval(intervalRef.current);
-    intervalRef.current = setInterval(fetchState, getInterval());
-
+    rescheduleInterval();
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [fetchState, getInterval]);
+  }, [state, rescheduleInterval]);
 
   // Pause when tab hidden, resume when visible
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === "visible") {
-        fetchState();
-        if (intervalRef.current) clearInterval(intervalRef.current);
-        intervalRef.current = setInterval(fetchState, getInterval());
+        fetchState().then(() => {
+          if (mountedRef.current) rescheduleInterval();
+        });
       } else {
         if (intervalRef.current) clearInterval(intervalRef.current);
       }
@@ -124,7 +137,7 @@ export function useDriverState() {
 
     document.addEventListener("visibilitychange", handleVisibility);
     return () => document.removeEventListener("visibilitychange", handleVisibility);
-  }, [fetchState, getInterval]);
+  }, [fetchState, rescheduleInterval]);
 
   return { state, loading, error, refetch: fetchState };
 }

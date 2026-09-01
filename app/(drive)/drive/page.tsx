@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, SignIn } from "@clerk/nextjs";
 import { GoogleMap, Marker, Polyline, useJsApiLoader } from "@react-google-maps/api";
 import { AnimatePresence, motion } from "framer-motion";
@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useDriverState, type DriverOrder, type DriverOffer } from "@/hooks/useDriverState";
 import { useDriverLocation } from "@/hooks/useDriverLocation";
+import { useOfferAlertSound } from "@/hooks/useOfferAlertSound";
 import { ThinkingOrb } from "thinking-orbs";
 import { shortOrderCode, estimateEtaMinutes } from "@/lib/dispatch/dispatch-format";
 
@@ -102,6 +103,40 @@ export default function DrivePage() {
 
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
+  // ── Sound alert for new offers ──────────────────────────────
+  const { notifyOfferChange, stopAlertImmediate, resetAction } = useOfferAlertSound();
+
+  // ── Offer expiration detection ─────────────────────────────
+  // Track previous offer to detect when it disappears without user action
+  const prevOfferRef = useRef<DriverOffer | null>(null);
+  const actionJustCompletedRef = useRef(false);
+
+  // Track offer changes → play/stop sound + detect expiration
+  useEffect(() => {
+    const hadOffer = prevOfferRef.current !== null;
+    const hasOffer = state?.offer !== null;
+    const offerDisappeared = hadOffer && !hasOffer;
+
+    if (state?.offer) {
+      notifyOfferChange(state.offer.orderNumber, state.offer.offerExpiresAt);
+    } else {
+      notifyOfferChange(null, null);
+    }
+
+    // If offer disappeared without user action → it expired
+    // Trigger immediate release + redispatch on the server
+    if (offerDisappeared && !actionJustCompletedRef.current) {
+      fetch("/api/driver/check-expired-offer", { method: "POST" }).catch(() => {});
+    }
+
+    prevOfferRef.current = state?.offer ?? null;
+  }, [state?.offer, notifyOfferChange]);
+
+  // Stop sound on unmount
+  useEffect(() => {
+    return () => stopAlertImmediate();
+  }, [stopAlertImmediate]);
+
   // Current position: GPS if available, otherwise from state
   const currentLocation = useMemo(() => {
     if (gpsLocation) return gpsLocation;
@@ -180,6 +215,10 @@ export default function DrivePage() {
 
   const handleOffer = useCallback(
     async (action: "accept" | "reject", orderNumber: string) => {
+      // Mark that user initiated an action → suppress expiration detection
+      actionJustCompletedRef.current = true;
+      // Stop sound immediately and suppress re-activation during action
+      stopAlertImmediate();
       setActionLoading(`offer-${orderNumber}`);
       try {
         await fetch("/api/driver/action", {
@@ -189,10 +228,12 @@ export default function DrivePage() {
         });
         await refetch();
       } finally {
+        actionJustCompletedRef.current = false;
+        resetAction();
         setActionLoading(null);
       }
     },
-    [refetch]
+    [refetch, stopAlertImmediate, resetAction]
   );
 
   // ── Not signed in ────────────────────────────────────────────────
