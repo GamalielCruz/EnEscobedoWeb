@@ -11,8 +11,8 @@ let globalIntervalId: ReturnType<typeof setInterval> | null = null;
 let globalTimeoutId: ReturnType<typeof setTimeout> | null = null;
 let activeOfferKey: string | null = null;
 
-const MAX_ALERT_DURATION_MS = 15_000;
-const CYCLE_MS = 3_000; // ~2s play + ~1s pause
+const MAX_ALERT_DURATION_MS = 12_000;
+const CYCLE_MS = 4_500; // ~2s play + ~2.5s pause
 
 function getAudio(): HTMLAudioElement {
   if (!globalAudio) {
@@ -69,7 +69,7 @@ function startAlertLoop(offerKey: string) {
     playOnce();
   }, CYCLE_MS);
 
-  // Safety net absoluto: parar después de 15.5s
+  // Safety net absoluto: parar después de 12.5s
   globalTimeoutId = setTimeout(() => {
     stopAlert();
   }, MAX_ALERT_DURATION_MS + 500);
