@@ -58,6 +58,10 @@ type DriverStateResponse = {
   location: { lat: number; lng: number } | null;
   orders: DriverOrderDTO[];
   offer: DriverOfferDTO | null;
+  /** Diagnostic: server clock at query time (ISO) */
+  serverNow?: string;
+  /** Diagnostic: seconds until offer expires (server clock) */
+  offerTtlRemaining?: number | null;
 };
 
 function paymentLabel(paymentMethod?: string): string {
@@ -189,12 +193,24 @@ export async function GET() {
   }`;
 
   const { backendClient } = await import("@/sanity/lib/backendClient");
+  const serverNow = new Date().toISOString();
   const rawOffer = await backendClient.fetch<OrderDoc | null>(offerQuery, {
     driverId: repartidor._id,
-    now: new Date().toISOString(),
+    now: serverNow,
   });
 
   const offer = rawOffer ? mapOfferDTO(rawOffer) : null;
+
+  // Diagnostic: log clock comparison
+  if (offer?.offerExpiresAt) {
+    const ttlRemaining = Math.round((new Date(offer.offerExpiresAt).getTime() - new Date(serverNow).getTime()) / 1000);
+    console.log("[driver-state] diagnostic", {
+      serverNow,
+      offerExpiresAt: offer.offerExpiresAt,
+      ttlRemainingSeconds: ttlRemaining,
+      offerReturnedByGROQ: true,
+    });
+  }
 
   // Location
   const loc = repartidor.ultimaUbicacion;
@@ -211,6 +227,10 @@ export async function GET() {
     location,
     orders,
     offer,
+    serverNow,
+    offerTtlRemaining: offer?.offerExpiresAt
+      ? Math.round((new Date(offer.offerExpiresAt).getTime() - new Date(serverNow).getTime()) / 1000)
+      : null,
   };
 
   return NextResponse.json(response, {
