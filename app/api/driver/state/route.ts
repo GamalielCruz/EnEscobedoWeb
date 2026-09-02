@@ -172,7 +172,7 @@ export async function GET() {
   const orders = (rawOrders ?? []).map(mapOrderDTO);
 
   // Check for active offer (order offered to this driver)
-  const offerQuery = `*[_type == "order" && offeredTo._ref == $driverId && dispatchStatus == "offered" && !defined(repartidorAsignado) && status != "delivered" && status != "cancelled" && defined(deliveryOfertaExpiresAt)] | order(orderDate asc)[0]{
+  const offerQuery = `*[_type == "order" && offeredTo._ref == $driverId && dispatchStatus == "offered" && !defined(repartidorAsignado) && status != "delivered" && status != "cancelled" && defined(deliveryOfertaExpiresAt) && deliveryOfertaExpiresAt > $now] | order(orderDate asc)[0]{
     _id, _rev, orderNumber, serviceKind, orderType, orderStatus, status, dispatchStatus,
     paymentMethod, totalPrice, deliveryOfertaExpiresAt,
     "repartidorAsignadoRef": repartidorAsignado._ref,
@@ -191,6 +191,7 @@ export async function GET() {
   const { backendClient } = await import("@/sanity/lib/backendClient");
   const rawOffer = await backendClient.fetch<OrderDoc | null>(offerQuery, {
     driverId: repartidor._id,
+    now: new Date().toISOString(),
   });
 
   const offer = rawOffer ? mapOfferDTO(rawOffer) : null;
