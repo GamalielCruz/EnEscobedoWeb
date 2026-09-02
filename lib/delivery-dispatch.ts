@@ -446,10 +446,10 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
       );
     }
   } catch (error) {
-    await rollbackDriverOffer(selectedDriver._id);
-    await setOrdersWaiting([order._id], "send_offer_failed");
-    console.error("[delivery-dispatch] error enviando oferta", { orderId: order._id, repartidorId: selectedDriver._id, error });
-    return false;
+    // WhatsApp notification failed, but the offer is already created in Sanity
+    // (markOrdersAsOffered + prepareDriverForOffer succeeded above).
+    // Do NOT rollback — the offer is valid; only the notification failed.
+    console.error("[delivery-dispatch] error enviando notificación WhatsApp (oferta ya creada)", { orderId: order._id, repartidorId: selectedDriver._id, error });
   }
 
   console.log("[delivery-dispatch] oferta enviada", {
@@ -579,10 +579,12 @@ export async function offerOrderToDriver(
       });
     }
   } catch (error) {
-    await rollbackDriverOffer(driver._id);
-    await setOrdersWaiting([order._id], "send_offer_failed");
-    console.error("[delivery-dispatch] error enviando oferta manual", { orderId, driverId, error });
-    return { ok: false, error: "No se pudo enviar la oferta por WhatsApp." };
+    // WhatsApp notification failed, but the offer is already created in Sanity
+    // (markOrdersAsOffered + prepareDriverForOffer succeeded above).
+    // Do NOT rollback — the offer is valid; only the notification failed.
+    // In staging, WhatsApp is intentionally disabled; in production, the
+    // driver will still receive the offer on next polling if WhatsApp fails.
+    console.error("[delivery-dispatch] error enviando notificación WhatsApp (oferta ya creada)", { orderId, driverId, error });
   }
 
   console.log("[delivery-dispatch] oferta manual enviada", {
