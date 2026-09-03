@@ -11,7 +11,7 @@ import {
   type DispatchMode,
 } from "@/lib/dispatch/dispatch-config";
 import { normalizeDeliveryConfig } from "@/lib/delivery-zones";
-import { estimateEtaMinutes, formatWaitingTime, shortOrderCode } from "@/lib/dispatch/dispatch-format";
+import { formatWaitingTime, shortOrderCode } from "@/lib/dispatch/dispatch-format";
 import {
   classifyAssignmentOutcome,
   extractRevisionInfo,
@@ -187,18 +187,10 @@ export type AuditEntry = {
 // Utilidades
 // ────────────────────────────────────────────────────────────────────
 
-export function haversineKm(a?: { lat?: number; lng?: number }, b?: { lat?: number; lng?: number }) {
-  if (!a || !b || !Number.isFinite(a.lat) || !Number.isFinite(a.lng) || !Number.isFinite(b.lat) || !Number.isFinite(b.lng)) {
-    return null;
-  }
-  const toRad = (value: number) => (value * Math.PI) / 180;
-  const dLat = toRad(b.lat! - a.lat!);
-  const dLng = toRad(b.lng! - a.lng!);
-  const s =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(a.lat!)) * Math.cos(toRad(b.lat!)) * Math.sin(dLng / 2) ** 2;
-  return Math.round(6371 * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s)) * 10) / 10;
-}
+// haversineKm now lives in matching.ts; import it here so the local binding
+// is available, and re-export it for backward compatibility.
+import { haversineKm, rankDriverCandidates } from "./matching";
+export { haversineKm };
 
 export async function requireAdmin() {
   const { userId } = await auth();
@@ -456,108 +448,9 @@ function buildDriverCardFromRaw(driver: any, now: number): DispatchDriverCard {
  * Candidato disponible según la MISMA lógica del dispatch automático
  * (lib/delivery-dispatch.ts: disponible, available y sesión vigente).
  */
-function isDriverCandidateAvailable(driver: any, now: number): boolean {
-  if (!driver.disponible) return false;
-  if (driver.estadoDisponibilidad !== "available") return false;
-  if (driver.disponibleHasta && new Date(driver.disponibleHasta).getTime() <= now) return false;
-  return true;
-}
-
-function originPoint(order: any): { lat?: number; lng?: number } | undefined {
-  const lat = order.storeLat;
-  const lng = order.storeLng;
-  return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : undefined;
-}
-
-/**
- * Motor único de recomendación. Lo usan BOTH:
- *  - /api/admin/dispatch/recommend (modo asistido, datos frescos)
- *  - fetchDispatchSnapshot (candidato top-1 por pedido, datos del snapshot)
- * Score 0..100 relativo al mejor candidato, derivado de carga, prioridad,
- * calificación y antigüedad de sesión (mismas validaciones que la asignación).
- */
-export function recommendDriversFromRaw(
-  order: any,
-  rawDrivers: any[],
-  config: DispatchConfig,
-  now = Date.now()
-): DriverRecommendation[] {
-  if (!order || order.orderType !== "delivery") return [];
-  const origin = originPoint(order);
-
-  const candidates = (rawDrivers ?? [])
-    .filter((driver: any) => driver.activo && !driver.bloqueado)
-    .filter((driver: any) => isDriverCandidateAvailable(driver, now))
-    .filter((driver: any) => {
-      const activeCount = Array.isArray(driver.activeOrders) ? driver.activeOrders.length : 0;
-      if (!config.allowMultipleOrders && activeCount >= 1) return false;
-      if (activeCount >= config.maxOrdersPerDriver) return false;
-      if (order.storeHasOwnDelivery && order.storeId && driver.storeId && driver.storeId !== order.storeId && !config.allowMixStores) return false;
-      if (order.serviceKind === "mandado" && driver.storeId && !config.allowMixRestaurantMandado) return false;
-      return true;
-    })
-    .map((driver: any) => {
-      const activeCount = Array.isArray(driver.activeOrders) ? driver.activeOrders.length : 0;
-      const rating = Number.isFinite(driver.calificacion) ? Number(driver.calificacion) : 5;
-      const prioridad = Number(driver.prioridad ?? 0);
-      const connectedMinutes = driver.disponibleDesde
-        ? Math.max(0, Math.round((now - new Date(driver.disponibleDesde).getTime()) / 60000))
-        : 0;
-
-      // Score 0..100: carga (30) + prioridad (30) + calificación (20) + antigüedad de sesión (20)
-      // Si la config prioriza mandados/restaurantes, el tipo del pedido suma un bono.
-      const loadScore = 30 * (1 - Math.min(1, activeCount / Math.max(1, config.maxOrdersPerDriver)));
-      const priorityScore = 30 * Math.min(1, prioridad / 10);
-      const ratingScore = 20 * (rating / 5);
-      const sessionScore = 20 * Math.min(1, connectedMinutes / 240);
-      const typeBonus =
-        (order.serviceKind === "mandado" && config.prioritizeMandados) ||
-        (order.serviceKind !== "mandado" && config.prioritizeRestaurants)
-          ? 10
-          : 0;
-      const raw = loadScore + priorityScore + ratingScore + sessionScore + typeBonus;
-
-      // Distancia y ETA solo si el repartidor reportó ubicación (datos reales).
-      const loc = driver.ultimaUbicacion;
-      const distanceKm =
-        origin && loc && Number.isFinite(loc.lat) && Number.isFinite(loc.lng)
-          ? haversineKm({ lat: loc.lat, lng: loc.lng }, { lat: origin.lat, lng: origin.lng })
-          : null;
-      const estimatedMinutes = estimateEtaMinutes(distanceKm);
-
-      return {
-        raw,
-        loadScore,
-        driver: buildDriverCardFromRaw(driver, now),
-        load: activeCount,
-        distanceKm,
-        estimatedMinutes,
-      };
-    });
-
-  const maxRaw = candidates.length > 0 ? Math.max(...candidates.map((candidate: any) => candidate.raw)) : 0;
-
-  const reasons = (candidate: any) => {
-    const list: string[] = [];
-    if (candidate.load === 0) list.push("Sin pedidos activos");
-    else list.push(`${candidate.load} pedido(s) activo(s)`);
-    if (candidate.driver.prioridad > 0) list.push("Prioridad alta");
-    if ((candidate.driver.rating ?? 0) >= 4.7) list.push("Mejor calificación");
-    if (candidate.distanceKm != null) list.push(`A ${candidate.distanceKm} km del origen`);
-    return list.slice(0, 3);
-  };
-
-  return candidates
-    .sort((a: any, b: any) => b.raw - a.raw)
-    .map((candidate: any) => ({
-      driver: candidate.driver,
-      score: maxRaw > 0 ? Math.round((candidate.raw / maxRaw) * 100) : 100,
-      load: candidate.load,
-      estimatedMinutes: candidate.estimatedMinutes,
-      distanceKm: candidate.distanceKm,
-      reasons: reasons(candidate),
-    }));
-}
+// Recommend functionality extracted to lib/dispatch/matching.ts.
+// Backward-compatible alias used by fetchDispatchSnapshot and recommendDriversForOrder.
+export const recommendDriversFromRaw = rankDriverCandidates;
 
 export async function fetchDispatchSnapshot(): Promise<DispatchSnapshot> {
   const now = Date.now();
