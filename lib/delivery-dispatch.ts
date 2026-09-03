@@ -7,6 +7,7 @@ import { sendMandadoNoDriverAvailable } from "@/lib/mandado-whatsapp";
 import { getDispatchConfig } from "@/lib/dispatch/dispatch-config";
 import { sendBundleDeliveryOffer, sendDeliveryOffer, sendMandadoDeliveryOffer, sendWhatsAppInteractiveMessage, sendWhatsAppMessage } from "./whatsapp";
 import { isWhatsAppConversationOpen, buildMandadoDeliveryOfferMessage } from "./whatsapp-conversation";
+import { rankDriverCandidates } from "@/lib/dispatch/matching";
 
 const OFFER_TTL_SECONDS_MANDADO = 15;
 const OFFER_TTL_SECONDS_DEFAULT = 10 * 60; // 10 minutos para restaurantes y otros
@@ -65,6 +66,7 @@ const ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   _id,
   _rev,
   orderNumber,
+  orderType,
   customerName,
   phone,
   totalPrice,
@@ -354,7 +356,16 @@ async function rollbackDriverOffer(driverId: string) {
 
 async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: string[]): Promise<boolean> {
   const candidateDrivers = await fetchCandidateDrivers(order, excludedDriverIds);
-  const selectedDriver = candidateDrivers[0];
+
+  // Fase 2: elegir al mejor candidato con el ranking existente
+  // (score: carga 30 + prioridad 30 + calificación 20 + sesión 20) en lugar
+  // del primer resultado de la query. Si el ranking queda vacío (p. ej. la
+  // configuración filtra a todos), se conserva el comportamiento anterior.
+  const dispatchConfig = await getDispatchConfig().catch(() => null);
+  const rankedDrivers = dispatchConfig ? rankDriverCandidates(order, candidateDrivers, dispatchConfig) : [];
+  const selectedDriver = rankedDrivers[0]
+    ? candidateDrivers.find((candidate) => candidate._id === rankedDrivers[0].driver._id) ?? candidateDrivers[0]
+    : candidateDrivers[0];
 
   if (!selectedDriver) {
     console.log("[delivery-dispatch] no hay repartidores disponibles", { orderId: order._id, orderNumber: order.orderNumber });
@@ -458,6 +469,7 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
     repartidorId: selectedDriver._id,
     repartidorNombre: selectedDriver.nombre,
     expiraAt: expiresAtIso,
+    rankingScore: rankedDrivers[0]?.score ?? null,
   });
   return true;
 }
