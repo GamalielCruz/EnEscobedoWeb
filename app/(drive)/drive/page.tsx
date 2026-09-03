@@ -58,11 +58,11 @@ const destPinSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="2
 function getMandadoAction(order: DriverOrder): { label: string; action: string; icon: React.ReactNode } {
   switch (order.mandadoState) {
     case "assigned":
-      return { label: "IR A RECOGER", action: "navigate_pickup", icon: <Navigation className="h-5 w-5" /> };
+      return { label: "NAVEGAR A RECOLECCIÓN", action: "navigate_pickup", icon: <Navigation className="h-5 w-5" /> };
     case "pickup_arrival":
       return { label: "YA RECOGÍ EL MANDADO", action: "picked_up", icon: <Package className="h-5 w-5" /> };
     case "en_route":
-      return { label: "IR A ENTREGAR", action: "navigate_delivery", icon: <Navigation className="h-5 w-5" /> };
+      return { label: "NAVEGAR A ENTREGA", action: "navigate_delivery", icon: <Navigation className="h-5 w-5" /> };
     case "destination_arrival":
       return { label: "CONFIRMAR ENTREGA", action: "delivered", icon: <CheckCircle className="h-5 w-5" /> };
     default:
@@ -73,12 +73,67 @@ function getMandadoAction(order: DriverOrder): { label: string; action: string; 
 function getRestaurantAction(order: DriverOrder): { label: string; action: string; icon: React.ReactNode } {
   switch (order.dispatchStatus) {
     case "accepted":
-      return { label: "IR A RECOGER", action: "navigate_pickup", icon: <Navigation className="h-5 w-5" /> };
+      return { label: "NAVEGAR A RECOLECCIÓN", action: "navigate_pickup", icon: <Navigation className="h-5 w-5" /> };
     case "at_door":
       return { label: "CONFIRMAR ENTREGA", action: "delivered", icon: <CheckCircle className="h-5 w-5" /> };
     default:
       return { label: "VER PEDIDO", action: "view", icon: <Package className="h-5 w-5" /> };
   }
+}
+
+// ── External navigation helpers ───────────────────────────────────────
+// La polyline del mapa es SOLO la vista previa de la ruta; el botón abre la
+// app de navegación del dispositivo hacia las coordenadas exactas del tramo
+// actual (recolección o entrega).
+
+function isIOSDevice(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  if (/iPad|iPhone|iPod/.test(ua)) return true;
+  // iPadOS se anuncia como Mac, pero con pantalla táctil
+  return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+}
+
+/**
+ * URL de navegación por plataforma:
+ * - iOS → Apple Maps (maps.apple.com abre la app en el dispositivo)
+ * - Android/desktop → Google Maps (en Android abre la app; en desktop, la web)
+ * El `destination` puede ser "lat,lng" (coordenadas exactas) o una dirección.
+ */
+function buildDirectionsUrl(destination: string): string {
+  const encoded = encodeURIComponent(destination);
+  if (isIOSDevice()) {
+    return `https://maps.apple.com/?daddr=${encoded}&dirflg=d`;
+  }
+  return `https://www.google.com/maps/dir/?api=1&destination=${encoded}&travelmode=driving`;
+}
+
+/**
+ * Punto de navegación real para el tramo actual del pedido:
+ * - navigate_pickup → coordenadas de la RECOLECCIÓN (storeLat/storeLng)
+ * - navigate_delivery → coordenadas de la ENTREGA (destLat/destLng)
+ * Si las coordenadas no existen (0/0), se cae al texto de la dirección real
+ * del pedido en lugar de abrir la app en un punto inventado.
+ */
+function getOrderLegTarget(
+  order: DriverOrder,
+  action: string
+): { destination: string; hasCoordinates: boolean } | null {
+  if (action !== "navigate_pickup" && action !== "navigate_delivery") return null;
+  const isPickup = action === "navigate_pickup";
+  const lat = isPickup ? order.storeLat : order.destLat;
+  const lng = isPickup ? order.storeLng : order.destLng;
+  const fallbackLabel = isPickup
+    ? (order.mandadoOriginLabel ?? order.storeName)
+    : (order.mandadoDestinationLabel ?? order.destLabel);
+  const hasCoordinates = Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0);
+  if (hasCoordinates) {
+    return { destination: `${lat},${lng}`, hasCoordinates: true };
+  }
+  if (fallbackLabel) {
+    return { destination: fallbackLabel, hasCoordinates: false };
+  }
+  return null;
 }
 
 function getOrderAction(order: DriverOrder) {
@@ -181,18 +236,13 @@ export default function DrivePage() {
 
   const handleAction = useCallback(
     async (action: string, orderNumber: string) => {
-      // Navigation actions open Google Maps
+      // Navigation actions open the device's maps app toward the exact
+      // coordinates of the order that owns the button (recolección o entrega)
       if (action === "navigate_pickup" || action === "navigate_delivery") {
-        const target = action === "navigate_pickup"
-          ? activeOrder
-          : activeOrder;
+        const order = state?.orders.find((o) => o.orderNumber === orderNumber) ?? activeOrder;
+        const target = order ? getOrderLegTarget(order, action) : null;
         if (target) {
-          const lat = action === "navigate_pickup" ? target.storeLat : target.destLat;
-          const lng = action === "navigate_pickup" ? target.storeLng : target.destLng;
-          window.open(
-            `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`,
-            "_blank"
-          );
+          window.open(buildDirectionsUrl(target.destination), "_blank", "noopener");
         }
         return;
       }
@@ -210,7 +260,7 @@ export default function DrivePage() {
         setActionLoading(null);
       }
     },
-    [activeOrder, refetch]
+    [state?.orders, activeOrder, refetch]
   );
 
   const handleOffer = useCallback(
@@ -387,7 +437,7 @@ export default function DrivePage() {
                   anchor: new google.maps.Point(14, 28),
                 }}
                 label={{
-                  text: "Destino",
+                  text: "Entrega",
                   className: "text-[10px] font-bold bg-white rounded px-1 shadow-sm",
                 }}
               />
@@ -638,14 +688,51 @@ function OrderCard({
       </div>
 
       <div className="mt-2 space-y-1">
-        <p className="flex items-center gap-1.5 text-sm text-gray-600">
-          <Store className="h-3.5 w-3.5 text-orange-400" />
-          {order.storeName}
-        </p>
-        <p className="flex items-center gap-1.5 text-sm text-gray-600">
-          <MapPin className="h-3.5 w-3.5 text-red-400" />
-          {order.destLabel}
-        </p>
+        {/* Recolección (etapa actual mientras el pedido no se ha recogido) */}
+        <div
+          className={`rounded-xl border px-3 py-2 ${
+            action === "navigate_pickup"
+              ? "border-orange-300 bg-orange-50"
+              : "border-gray-100 bg-gray-50"
+          }`}
+        >
+          <p
+            className={`text-[10px] font-bold uppercase tracking-wide ${
+              action === "navigate_pickup" ? "text-orange-500" : "text-gray-400"
+            }`}
+          >
+            📍 Recolección
+            {action === "navigate_pickup" && " · ahora"}
+          </p>
+          <p className="mt-0.5 flex items-start gap-1.5 text-sm font-semibold text-gray-800">
+            <Store className="mt-0.5 h-3.5 w-3.5 shrink-0 text-orange-400" />
+            <span className="leading-snug">{order.mandadoOriginLabel ?? order.storeName}</span>
+          </p>
+        </div>
+
+        {/* Entrega (siguiente etapa; solo destacada cuando el pedido va en ruta) */}
+        <div
+          className={`rounded-xl border px-3 py-2 ${
+            action === "navigate_delivery"
+              ? "border-red-300 bg-red-50"
+              : action === "navigate_pickup"
+                ? "border-gray-100 bg-gray-50 opacity-70"
+                : "border-gray-100 bg-gray-50"
+          }`}
+        >
+          <p
+            className={`text-[10px] font-bold uppercase tracking-wide ${
+              action === "navigate_delivery" ? "text-red-500" : "text-gray-400"
+            }`}
+          >
+            📍 Entrega
+            {action === "navigate_delivery" && " · ahora"}
+          </p>
+          <p className="mt-0.5 flex items-start gap-1.5 text-sm font-semibold text-gray-800">
+            <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
+            <span className="leading-snug">{order.mandadoDestinationLabel ?? order.destLabel}</span>
+          </p>
+        </div>
       </div>
 
       <div className="mt-2 flex items-center gap-3 text-xs text-gray-400">
