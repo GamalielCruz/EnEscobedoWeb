@@ -10,7 +10,12 @@
  * frecuentes de GPS dentro de ese umbral NO disparan llamadas de routing.
  *
  * FALLBACK: si la API falla, tarda demasiado o no hay ruta, devuelve null;
- * el mapa cae a la línea recta y la vista nunca se rompe.
+ * la página no dibuja ninguna línea (nunca una línea recta entre los dos
+ * puntos) y el mapa sigue funcionando con los marcadores.
+ *
+ * FALLOS CACHEADOS: los fallos también se recuerdan por un tiempo corto
+ * (FAILURE_REUSE_MS), de modo que si Directions está caída/deshabilitada no
+ * se reintenta en cada tick de GPS.
  */
 
 export type RoutePoint = { lat: number; lng: number };
@@ -43,6 +48,31 @@ type InFlightRoute = {
 
 const routeCache = new Map<string, CachedRoute>();
 const inFlight = new Map<string, InFlightRoute>();
+
+/** Reutilizar también los FALLOS: si Directions falla (API no habilitada,
+ * quota, etc.) no reintentar en cada tick de GPS durante un tiempo corto. */
+const FAILURE_REUSE_MS = 60_000;
+const failureCache: Array<{ destination: RoutePoint; failedAt: number }> = [];
+
+function isRecentlyFailed(destination: RoutePoint): boolean {
+  const now = Date.now();
+  for (let i = failureCache.length - 1; i >= 0; i--) {
+    const entry = failureCache[i];
+    if (now - entry.failedAt > FAILURE_REUSE_MS) {
+      failureCache.splice(i, 1);
+      continue;
+    }
+    if (haversineMeters(entry.destination, destination) < ROUTE_REUSE_METERS) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function rememberFailure(destination: RoutePoint) {
+  failureCache.push({ destination, failedAt: Date.now() });
+  if (failureCache.length > MAX_CACHE_ENTRIES) failureCache.shift();
+}
 
 function haversineMeters(a: RoutePoint, b: RoutePoint): number {
   const R = 6371000;
@@ -91,6 +121,13 @@ function requestDirections(origin: RoutePoint, destination: RoutePoint): Promise
           const leg = route?.legs?.[0];
           const path = route?.overview_path;
           if (status !== "OK" || !Array.isArray(path) || path.length < 2) {
+            if (status !== "OK") {
+              // Diagnóstico: la causa más común es que la Directions API no esté
+              // habilitada para la clave NEXT_PUBLIC_GOOGLE_MAPS_API_KEY.
+              console.warn(
+                `[routing] Google Directions devolvió "${status}" para el tramo seleccionado. Verifica que la Directions API esté habilitada para la clave de Google Maps.`
+              );
+            }
             resolve(null);
             return;
           }
@@ -137,6 +174,10 @@ export async function getRoadRoute(
 
   const key = cacheKeyFor(origin, destination);
 
+  // Caché de fallos: si Directions falló hace poco para este destino, no
+  // volver a llamar a la API en cada tick de GPS.
+  if (isRecentlyFailed(destination)) return null;
+
   // Dedupe de llamadas concurrentes: si ya hay una petición en vuelo para
   // el mismo tramo (misma lógica de proximidad que el caché), reutilizarla.
   // Evita que ticks de GPS mientras una petición está en vuelo disparen
@@ -161,6 +202,8 @@ export async function getRoadRoute(
         if (oldestKey === undefined) break;
         routeCache.delete(oldestKey);
       }
+    } else {
+      rememberFailure(destination);
     }
     return route;
   } finally {

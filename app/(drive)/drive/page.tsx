@@ -109,6 +109,10 @@ function buildDirectionsUrl(destination: string): string {
   return `https://www.google.com/maps/dir/?api=1&destination=${encoded}&travelmode=driving`;
 }
 
+function hasValidCoords(lat: number, lng: number): boolean {
+  return Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0);
+}
+
 /**
  * Punto de navegación real para el tramo actual del pedido:
  * - navigate_pickup → coordenadas de la RECOLECCIÓN (storeLat/storeLng)
@@ -200,17 +204,22 @@ export default function DrivePage() {
     return DEFAULT_CENTER;
   }, [gpsLocation, state?.location]);
 
+  // Solo pedir ruta cuando hay una ubicación real del repartidor (GPS o la
+  // última reportada); si no hay ninguna, no se dibuja ruta desde el centro.
+  const hasDriverLocation = Boolean(gpsLocation || state?.location);
+
   // Active order for navigation target
   const activeOrder = state?.orders?.[0] ?? null;
 
-  // Navigation target based on order action
+  // Navigation target based on order action (only when the order actually
+  // has valid coordinates; otherwise no route is drawn to (0,0)).
   const navTarget = useMemo(() => {
     if (!activeOrder) return null;
     const action = getOrderAction(activeOrder);
-    if (action.action === "navigate_pickup") {
+    if (action.action === "navigate_pickup" && hasValidCoords(activeOrder.storeLat, activeOrder.storeLng)) {
       return { lat: activeOrder.storeLat, lng: activeOrder.storeLng, label: activeOrder.storeName };
     }
-    if (action.action === "navigate_delivery") {
+    if (action.action === "navigate_delivery" && hasValidCoords(activeOrder.destLat, activeOrder.destLng)) {
       return { lat: activeOrder.destLat, lng: activeOrder.destLng, label: activeOrder.destLabel };
     }
     return null;
@@ -219,12 +228,20 @@ export default function DrivePage() {
   // Ruta vial dibujada sobre el mapa (Google Directions + caché dentro de
   // lib/dispatch/routing.ts). El caché hace que los ticks de GPS no llamen a
   // la API: solo se recalcula cuando el origen se mueve >200 m o cambia el
-  // destino. Si la API falla, roadRoute es null y se cae a la línea recta.
+  // destino. Si la API falla o aún no hay ruta, roadRoute es null y NO se
+  // dibuja ninguna línea (nunca una línea recta entre los dos puntos).
   const [roadRoute, setRoadRoute] = useState<RoadRoute | null>(null);
+  const prevNavKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!navTarget || !mapsLoaded) {
+    const navKey = navTarget ? `${navTarget.lat},${navTarget.lng}` : null;
+    if (prevNavKeyRef.current !== navKey) {
+      // Cambió el tramo (recolección → entrega o viceversa): descartar la
+      // ruta anterior para no dibujarla durante el tramo equivocado.
       setRoadRoute(null);
+      prevNavKeyRef.current = navKey;
+    }
+    if (!navTarget || !mapsLoaded || !hasDriverLocation) {
       return;
     }
     let cancelled = false;
@@ -234,7 +251,7 @@ export default function DrivePage() {
     return () => {
       cancelled = true;
     };
-  }, [currentLocation, navTarget, mapsLoaded]);
+  }, [currentLocation, navTarget, mapsLoaded, hasDriverLocation]);
 
   // ── Actions ──────────────────────────────────────────────────────
 
@@ -464,11 +481,13 @@ export default function DrivePage() {
               />
             )}
 
-            {/* Route line: ruta vial real (Google Directions) cuando está
-                disponible; línea recta solo como fallback si la API falla */}
-            {navTarget && (
+            {/* Route line: SOLO la geometría vial real de Google Directions.
+                Nunca se dibuja una línea recta entre los dos puntos: si no
+                hay ruta (API caída o todavía cargando), no se dibuja nada y
+                el mapa sigue funcionando con los marcadores. */}
+            {roadRoute?.path && (
               <Polyline
-                path={roadRoute?.path ?? [currentLocation, navTarget]}
+                path={roadRoute.path}
                 options={{
                   strokeColor: "#3B82F6",
                   strokeWeight: 4,
