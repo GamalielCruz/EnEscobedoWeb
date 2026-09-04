@@ -21,6 +21,7 @@ import { useDriverLocation } from "@/hooks/useDriverLocation";
 import { useOfferAlertSound } from "@/hooks/useOfferAlertSound";
 import { ThinkingOrb } from "thinking-orbs";
 import { shortOrderCode, estimateEtaMinutes } from "@/lib/dispatch/dispatch-format";
+import { getRoadRoute, type RoadRoute } from "@/lib/dispatch/routing";
 
 // ── Map config ─────────────────────────────────────────────────────
 
@@ -214,6 +215,26 @@ export default function DrivePage() {
     }
     return null;
   }, [activeOrder]);
+
+  // Ruta vial dibujada sobre el mapa (Google Directions + caché dentro de
+  // lib/dispatch/routing.ts). El caché hace que los ticks de GPS no llamen a
+  // la API: solo se recalcula cuando el origen se mueve >200 m o cambia el
+  // destino. Si la API falla, roadRoute es null y se cae a la línea recta.
+  const [roadRoute, setRoadRoute] = useState<RoadRoute | null>(null);
+
+  useEffect(() => {
+    if (!navTarget || !mapsLoaded) {
+      setRoadRoute(null);
+      return;
+    }
+    let cancelled = false;
+    getRoadRoute(currentLocation, navTarget).then((route) => {
+      if (!cancelled) setRoadRoute(route);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentLocation, navTarget, mapsLoaded]);
 
   // ── Actions ──────────────────────────────────────────────────────
 
@@ -443,13 +464,11 @@ export default function DrivePage() {
               />
             )}
 
-            {/* Route line */}
+            {/* Route line: ruta vial real (Google Directions) cuando está
+                disponible; línea recta solo como fallback si la API falla */}
             {navTarget && (
               <Polyline
-                path={[
-                  currentLocation,
-                  navTarget,
-                ]}
+                path={roadRoute?.path ?? [currentLocation, navTarget]}
                 options={{
                   strokeColor: "#3B82F6",
                   strokeWeight: 4,
