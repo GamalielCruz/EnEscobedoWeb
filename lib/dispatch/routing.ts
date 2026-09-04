@@ -74,7 +74,7 @@ function rememberFailure(destination: RoutePoint) {
   if (failureCache.length > MAX_CACHE_ENTRIES) failureCache.shift();
 }
 
-function haversineMeters(a: RoutePoint, b: RoutePoint): number {
+export function haversineMeters(a: RoutePoint, b: RoutePoint): number {
   const R = 6371000;
   const toRad = (deg: number) => (deg * Math.PI) / 180;
   const dLat = toRad(b.lat - a.lat);

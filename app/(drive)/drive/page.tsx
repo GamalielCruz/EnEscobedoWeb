@@ -21,12 +21,24 @@ import { useDriverLocation } from "@/hooks/useDriverLocation";
 import { useOfferAlertSound } from "@/hooks/useOfferAlertSound";
 import { ThinkingOrb } from "thinking-orbs";
 import { shortOrderCode, estimateEtaMinutes } from "@/lib/dispatch/dispatch-format";
-import { getRoadRoute, type RoadRoute } from "@/lib/dispatch/routing";
+import { getRoadRoute, haversineMeters, type RoadRoute, type RoutePoint } from "@/lib/dispatch/routing";
 
 // ── Map config ─────────────────────────────────────────────────────
 
 const DEFAULT_CENTER = { lat: 20.502, lng: -100.145 };
 const containerStyle = { width: "100%", height: "100%" };
+
+// ── Camera (navegación tipo GPS) ───────────────────────────────────
+// Zoom máximo al encuadrar el trayecto (evita acercarse al suelo al llegar).
+const CAMERA_MAX_ZOOM = 16.5;
+// Aire alrededor del trayecto al encuadrar (fracción del tamaño del encuadre).
+const CAMERA_PADDING = 0.15;
+// Re-encuadrar cuando el repartidor se haya desplazado al menos esto.
+const CAMERA_FOLLOW_METERS = 100;
+// Si el repartidor sale de este margen interior de la vista → re-encuadrar.
+const CAMERA_VIEWPORT_MARGIN = 0.12;
+// Sin ruta activa, recentrar al repartidor solo si se movió al menos esto.
+const DRIVER_CENTER_METERS = 20;
 const mapOptions = {
   disableDefaultUI: true,
   zoomControl: false,
@@ -111,6 +123,71 @@ function buildDirectionsUrl(destination: string): string {
 
 function hasValidCoords(lat: number, lng: number): boolean {
   return Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0);
+}
+
+/**
+ * Viewport real del mapa. Se lee con un tipo estructural porque los tipos
+ * del proyecto (types/google-maps.d.ts) solo declaran una parte de la API.
+ */
+function getMapViewport(map: google.maps.Map): {
+  minLat: number;
+  maxLat: number;
+  minLng: number;
+  maxLng: number;
+} | null {
+  const bounds = map.getBounds() as
+    | {
+        getNorthEast(): { lat(): number; lng(): number };
+        getSouthWest(): { lat(): number; lng(): number };
+      }
+    | null
+    | undefined;
+  if (!bounds) return null;
+  const ne = bounds.getNorthEast();
+  const sw = bounds.getSouthWest();
+  return { minLat: sw.lat(), maxLat: ne.lat(), minLng: sw.lng(), maxLng: ne.lng() };
+}
+
+/** ¿El repartidor quedó fuera del margen visible del mapa? (para seguirlo). */
+function isDriverOutsideViewport(map: google.maps.Map, point: RoutePoint): boolean {
+  const vp = getMapViewport(map);
+  if (!vp) return false;
+  const latInset = (vp.maxLat - vp.minLat) * CAMERA_VIEWPORT_MARGIN;
+  const lngInset = (vp.maxLng - vp.minLng) * CAMERA_VIEWPORT_MARGIN;
+  return (
+    point.lat < vp.minLat + latInset ||
+    point.lat > vp.maxLat - latInset ||
+    point.lng < vp.minLng + lngInset ||
+    point.lng > vp.maxLng - lngInset
+  );
+}
+
+/**
+ * Encuadra la cámara sobre los puntos de la ruta vial (repartidor + trayecto
+ * completo hasta el destino). Nunca se usa la línea recta entre extremos.
+ */
+function frameRouteView(map: google.maps.Map, points: RoutePoint[]): void {
+  if (points.length < 2) return;
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  let minLng = Infinity;
+  let maxLng = -Infinity;
+  for (const p of points) {
+    if (p.lat < minLat) minLat = p.lat;
+    if (p.lat > maxLat) maxLat = p.lat;
+    if (p.lng < minLng) minLng = p.lng;
+    if (p.lng > maxLng) maxLng = p.lng;
+  }
+  const latPad = (maxLat - minLat) * CAMERA_PADDING;
+  const lngPad = (maxLng - minLng) * CAMERA_PADDING;
+  map.fitBounds({
+    south: minLat - latPad,
+    west: minLng - lngPad,
+    north: maxLat + latPad,
+    east: maxLng + lngPad,
+  });
+  const zoom = map.getZoom();
+  if (typeof zoom === "number" && zoom > CAMERA_MAX_ZOOM) map.setZoom(CAMERA_MAX_ZOOM);
 }
 
 /**
@@ -252,6 +329,62 @@ export default function DrivePage() {
       cancelled = true;
     };
   }, [currentLocation, navTarget, mapsLoaded, hasDriverLocation]);
+
+  // ── Cámara (navegación tipo GPS) ────────────────────────────────
+  // Con ruta activa el encuadre lo controla el efecto de abajo. Sin ruta,
+  // el mapa sigue al repartidor con un umbral mínimo de desplazamiento para
+  // no saltar en cada tick del GPS.
+  const mapRef = useRef<google.maps.Map | null>(null);
+  const lastFollowPosRef = useRef<RoutePoint | null>(null);
+  const lastCamPosRef = useRef<RoutePoint | null>(null);
+  const lastFramedRouteRef = useRef<RoadRoute | null>(null);
+  const prevNavigatingRef = useRef(false);
+  const [mapCenter, setMapCenter] = useState<RoutePoint>(DEFAULT_CENTER);
+
+  const navigatingWithRoute = Boolean(
+    navTarget && mapsLoaded && hasDriverLocation && roadRoute?.path
+  );
+
+  // Recentrar al repartidor cuando NO hay ruta encuadrada (esperando pedido,
+  // ruta fallida o todavía cargando). Al salir de una navegación con ruta se
+  // restaura el zoom por defecto y se vuelve a centrar al repartidor.
+  useEffect(() => {
+    if (mapRef.current && prevNavigatingRef.current && !navigatingWithRoute) {
+      mapRef.current.setZoom(15);
+      setMapCenter(currentLocation);
+      lastFollowPosRef.current = currentLocation;
+    }
+    prevNavigatingRef.current = navigatingWithRoute;
+
+    if (navigatingWithRoute || !mapRef.current) return;
+    const last = lastFollowPosRef.current;
+    const dist = last ? haversineMeters(last, currentLocation) : Infinity;
+    if (dist < DRIVER_CENTER_METERS) return;
+    lastFollowPosRef.current = currentLocation;
+    setMapCenter(currentLocation);
+  }, [navigatingWithRoute, currentLocation, mapsLoaded]);
+
+  // Encuadre de la ruta: cuando llega una ruta nueva (o cambia el tramo
+  // recolección → entrega) se encuadran repartidor + trayecto vial completo.
+  // Después solo se re-encuadra si el repartidor se mueve lo suficiente o está
+  // por salirse de la vista — NUNCA en cada tick de GPS, y respetando el
+  // encuadre manual del usuario mientras el repartidor siga visible.
+  useEffect(() => {
+    if (!navigatingWithRoute || !mapRef.current || !roadRoute) return;
+    const map = mapRef.current;
+    const routeChanged = lastFramedRouteRef.current !== roadRoute;
+    if (!routeChanged) {
+      const last = lastCamPosRef.current;
+      const movedEnough = last
+        ? haversineMeters(last, currentLocation) >= CAMERA_FOLLOW_METERS
+        : true;
+      if (!movedEnough) return;
+      if (!isDriverOutsideViewport(map, currentLocation)) return;
+    }
+    frameRouteView(map, [currentLocation, ...roadRoute.path]);
+    lastCamPosRef.current = currentLocation;
+    lastFramedRouteRef.current = roadRoute;
+  }, [navigatingWithRoute, currentLocation, roadRoute, navTarget]);
 
   // ── Actions ──────────────────────────────────────────────────────
 
@@ -435,9 +568,15 @@ export default function DrivePage() {
         {mapsLoaded ? (
           <GoogleMap
             mapContainerStyle={containerStyle}
-            center={currentLocation}
+            center={mapCenter}
             zoom={15}
             options={mapOptions}
+            onLoad={(map) => {
+              mapRef.current = map;
+            }}
+            onUnmount={() => {
+              mapRef.current = null;
+            }}
           >
             {/* Driver marker */}
             <Marker
