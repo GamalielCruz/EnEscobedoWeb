@@ -91,6 +91,11 @@ function ManeuverIcon({ maneuver, className }: { maneuver: string | null; classN
   }
 }
 
+/**
+ * Banner de navegación (turn-by-turn) que flota sobre el mapa en la parte
+ * superior. Lee de un vistazo mientras se maneja: maniobra con icono grande,
+ * instrucción dominante, destino, distancia/tiempo restantes y progreso.
+ */
 export function DriveNavBar({
   title,
   icon,
@@ -122,11 +127,12 @@ export function DriveNavBar({
   waitingForRoute?: boolean;
   simulated?: boolean;
 }) {
+  const maneuverValue = maneuver ?? null;
   const accentStyle = ACCENT_STYLES[accent];
   const hasProgress = typeof progress === "number" && progress >= 0;
 
   return (
-    <div className="relative z-10 border-t border-gray-100 bg-white px-3 pt-1.5 pb-2 shadow-[0_-6px_18px_rgba(3,7,18,0.14)]">
+    <div className="rounded-2xl bg-white/95 px-3.5 py-2.5 shadow-[0_10px_30px_rgba(3,7,18,0.28)] ring-1 ring-black/5 backdrop-blur-sm">
       {/* Fila 1 — etapa · pedido · distancia restante */}
       <div className="flex items-center gap-1.5">
         <span
@@ -150,28 +156,24 @@ export function DriveNavBar({
           </span>
         )}
         {distanceLabel && (
-          <span className="ml-auto text-[11px] font-black tabular-nums text-[#09193B]">
+          <span className="ml-auto text-xs font-black tabular-nums text-[#09193B]">
             {distanceLabel}
           </span>
         )}
       </div>
 
-      {/* Fila 2 — instrucción dominante (lo que debe hacer AHORA) */}
-      <div className="mt-1 flex items-center gap-2">
-        {maneuver ? (
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-700">
-            <ManeuverIcon maneuver={maneuver} className="h-5 w-5" />
-          </span>
-        ) : (
-          <span className="w-8 shrink-0" />
-        )}
+      {/* Fila 2 — icono grande de maniobra + instrucción dominante */}
+      <div className="mt-1.5 flex items-center gap-2.5">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
+          <ManeuverIcon maneuver={maneuverValue} className="h-6 w-6" />
+        </span>
         {waitingForRoute ? (
-          <p className="flex items-center gap-1.5 text-sm font-semibold text-gray-500">
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />
+          <p className="flex items-center gap-1.5 text-base font-semibold text-gray-500">
+            <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
             Calculando ruta…
           </p>
         ) : (
-          <p className="line-clamp-2 flex-1 text-[15px] font-bold leading-snug text-[#0b1b3a]">
+          <p className="line-clamp-2 flex-1 text-[17px] font-extrabold leading-snug text-[#0b1b3a]">
             {mainText}
           </p>
         )}
@@ -179,12 +181,12 @@ export function DriveNavBar({
 
       {/* Fila 3 — destino (terciario) */}
       {subText && !waitingForRoute && (
-        <p className="mt-0.5 pl-10 truncate text-[11px] text-gray-500">{subText}</p>
+        <p className="mt-1 pl-[3.375rem] truncate text-xs text-gray-500">{subText}</p>
       )}
 
       {/* Fila 4 — progreso geométrico + tiempo restante */}
       {(hasProgress || durationLabel) && (
-        <div className="mt-1.5 flex items-center gap-2">
+        <div className="mt-2 flex items-center gap-2">
           {hasProgress ? (
             <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-gray-100">
               <div
@@ -196,7 +198,7 @@ export function DriveNavBar({
             <div className="flex-1" />
           )}
           {durationLabel && (
-            <span className="text-[11px] font-black tabular-nums text-gray-700">
+            <span className="text-xs font-black tabular-nums text-gray-700">
               {durationLabel}
             </span>
           )}

@@ -4,6 +4,11 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  /* Paleta de marca ElMenu (Fase 0: paleta de facto navy + rojo). */
+  --color-brand-navy: #09193b;
+  --color-brand-navy-deep: #0d1526;
+  --color-brand-red: #eb1902;
+  --color-brand-red-dark: #850c22;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
@@ -119,6 +124,16 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Safe areas de iOS: la pantalla del repartidor vive bajo el notch/home
+   indicator. Definidas como utilidades reales (antes eran clases muertas). */
+@utility safe-area-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+@utility safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 /* Custom scrollbar styles */

@@ -18,6 +18,7 @@ import {
   Truck,
 } from "lucide-react";
 import { DriveNavBar, type DriveNavPhase } from "@/components/drive/DriveNavBar";
+import { DriveTripSheet } from "@/components/drive/DriveTripSheet";
 import { DriveSimPanel } from "@/components/drive/DriveSimPanel";
 import { useDriveSimulator } from "@/hooks/useDriveSimulator";
 import { getDeploymentEnvironment } from "@/lib/deployment-environment";
@@ -39,6 +40,7 @@ import {
   type RoutePoint,
 } from "@/lib/dispatch/routing";
 import { instructionInSpanish } from "@/lib/dispatch/nav-instructions";
+import { DRIVE_MAP_STYLES, ROUTE_BLUE } from "@/lib/drive/map-styles";
 
 // ── Map config ─────────────────────────────────────────────────────
 
@@ -79,12 +81,16 @@ const NEAR_DESTINATION_METERS = 150;
 const DRIVE_SIM_ENABLED = getDeploymentEnvironment() !== "production";
 const mapOptions = {
   disableDefaultUI: true,
+  // Los atajos de teclado NO los apaga disableDefaultUI: se desactivan aparte.
+  keyboardShortcuts: false,
   zoomControl: false,
+  fullscreenControl: false,
+  mapTypeControl: false,
+  streetViewControl: false,
   gestureHandling: "greedy",
   clickableIcons: false,
-  styles: [
-    { featureType: "poi.business", elementType: "labels", stylers: [{ visibility: "off" }] },
-  ],
+  // Estilo de marca (lib/drive/map-styles.ts): mapa claro sin ruido de POI.
+  styles: DRIVE_MAP_STYLES,
 };
 
 // ── Pin SVG ────────────────────────────────────────────────────────
@@ -96,7 +102,7 @@ function driverArrowIcon(headingDeg: number): string {
   const rotate = normalizeDeg(headingDeg);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="34" viewBox="-17 -17 34 34">
   <g transform="rotate(${rotate})">
-    <path d="M0 -13 L6.5 10 L0 5 L-6.5 10 Z" fill="#3B82F6" stroke="#FFFFFF" stroke-width="2.2" stroke-linejoin="round"/>
+    <path d="M0 -13 L6.5 10 L0 5 L-6.5 10 Z" fill="${ROUTE_BLUE}" stroke="#FFFFFF" stroke-width="2.2" stroke-linejoin="round"/>
   </g>
 </svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
@@ -1171,9 +1177,11 @@ export default function DrivePage() {
   // ── Main UI ──────────────────────────────────────────────────────
 
   return (
-    <div className="relative flex h-[100dvh] flex-col overflow-hidden">
-      {/* Status Bar */}
-      <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between px-4 py-3 safe-area-top">
+    <div className="relative h-[100dvh] w-full overflow-hidden bg-[#0d1526]">
+      {/* Status Bar — scrim suave detrás para que el texto blanco se lea
+          sobre el mapa claro de marca (sin rediseñar: solo fondo difuminado). */}
+      <div className="absolute top-0 left-0 right-0 z-20 bg-gradient-to-b from-black/40 to-transparent pb-6 safe-area-top">
+        <div className="flex items-center justify-between px-4 pt-3">
         <div className="flex items-center gap-2">
           <div
             className={`h-2.5 w-2.5 rounded-full ${
@@ -1206,17 +1214,19 @@ export default function DrivePage() {
             })()}
           </span>
         )}
+        </div>
       </div>
 
-      {/* GPS Warning */}
+      {/* GPS Warning — debajo del status bar respetando el notch/isla
+          dinámica (env(safe-area-inset-top)). */}
       {gpsError && connected && (
-        <div className="absolute top-12 left-0 right-0 z-20 mx-4 rounded-lg bg-amber-500/20 px-3 py-2 text-xs text-amber-300">
+        <div className="absolute inset-x-0 top-[calc(env(safe-area-inset-top)+2.5rem)] z-20 mx-4 rounded-lg bg-amber-500/20 px-3 py-2 text-xs text-amber-300">
           ⚠️ {gpsError}
         </div>
       )}
 
-      {/* Map */}
-      <div className="relative flex-1">
+      {/* Map — pantalla completa como fondo; los overlays flotan encima */}
+      <div className="absolute inset-0">
         {mapsLoaded ? (
           <GoogleMap
             mapContainerStyle={containerStyle}
@@ -1276,7 +1286,7 @@ export default function DrivePage() {
               <Polyline
                 path={roadRoute.path}
                 options={{
-                  strokeColor: "#3B82F6",
+                  strokeColor: ROUTE_BLUE,
                   strokeWeight: 4,
                   strokeOpacity: 0.7,
                   geodesic: true,
@@ -1290,31 +1300,9 @@ export default function DrivePage() {
           </div>
         )}
 
-        {/* Floating controls — navegación (no interfieren con marcadores ni
-            con los controles nativos: están sobre el mapa, lado derecho). */}
+        {/* Herramienta de desarrollo: simular viaje (solo dev/staging). */}
         {mapsLoaded && (
-          <>
-            <div className="absolute right-3 bottom-4 z-20 flex flex-col gap-2">
-              <button
-                onClick={handleCenterGps}
-                aria-label="Centrar GPS"
-                title="Centrar GPS"
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#09193B] shadow-lg ring-1 ring-black/5 transition hover:bg-gray-50 active:scale-95"
-              >
-                <LocateFixed className="h-5 w-5" />
-              </button>
-              <button
-                onClick={handleFullTripView}
-                aria-label="Ver viaje completo"
-                title="Ver viaje completo"
-                className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#09193B] shadow-lg ring-1 ring-black/5 transition hover:bg-gray-50 active:scale-95"
-              >
-                <Maximize2 className="h-5 w-5" />
-              </button>
-            </div>
-
-            {/* Herramienta de desarrollo: simular viaje (solo dev/staging). */}
-            <DriveSimPanel
+          <DriveSimPanel
               visible={DRIVE_SIM_ENABLED && connected && Boolean(activeOrder) && mapsLoaded}
               canStart={sim.canStart}
               active={sim.active}
@@ -1330,122 +1318,164 @@ export default function DrivePage() {
               onStop={sim.stop}
               onSpeed={sim.setSpeed}
             />
-          </>
-        )}
-      </div>
-
-      {/* Barra de indicaciones — etapa actual del pedido (recolección/entrega) */}
+          )}
+      </div>        {/* Banner de indicaciones (turn-by-turn) — flota sobre el mapa en la
+          parte superior, debajo del status bar y el aviso de GPS. La posición
+          respeta el notch/isla dinámica con env(safe-area-inset-top). */}
       {navContent && navPhase && (
-        <DriveNavBar
-          title={navContent.title}
-          icon={navContent.icon}
-          accent={navContent.accent}
-          orderCode={navContent.orderCode}
-          mainText={navContent.main}
-          subText={navContent.sub}
-          distanceLabel={navContent.distance}
-          durationLabel={navContent.duration}
-          progress={navContent.progress}
-          maneuver={navContent.maneuver}
-          waitingForRoute={navContent.waiting}
-          simulated={sim.active}
-        />
+        <div className="absolute inset-x-3 top-[calc(env(safe-area-inset-top)+5rem)] z-30">
+          <DriveNavBar
+            title={navContent.title}
+            icon={navContent.icon}
+            accent={navContent.accent}
+            orderCode={navContent.orderCode}
+            mainText={navContent.main}
+            subText={navContent.sub}
+            distanceLabel={navContent.distance}
+            durationLabel={navContent.duration}
+            progress={navContent.progress}
+            maneuver={navContent.maneuver}
+            waitingForRoute={navContent.waiting}
+            simulated={sim.active}
+          />
+        </div>
       )}
 
-      {/* Bottom Sheet */}
-      <div className="relative z-10 rounded-t-3xl bg-white shadow-2xl safe-area-bottom">
-        <div className="mx-auto mt-3 h-1 w-10 rounded-full bg-gray-300" />
-
-        <div className="max-h-[50vh] overflow-y-auto px-4 pb-6 pt-2">
-          {/* Not connected → INICIAR (sesión abierta, sin duración) */}
-          {!connected && (
-            <div className="py-4 text-center">
-              <h2 className="text-lg font-bold text-[#09193B]">
-                Estás desconectado
-              </h2>
-              <p className="mt-1 text-sm text-gray-500">
-                Inicia para recibir pedidos
-              </p>
-
-              <button
-                onClick={() => handleSession("connect")}
-                disabled={actionLoading === "session"}
-                className="mt-4 w-full rounded-2xl bg-[#EB1902] py-4 text-lg font-black text-white shadow-lg shadow-[#EB1902]/30 transition active:scale-95"
-              >
-                {actionLoading === "session" ? (
-                  <Loader2 className="mx-auto h-5 w-5 animate-spin" />
-                ) : (
-                  "INICIAR"
-                )}
-              </button>
-            </div>
-          )}
-
-          {/* Connected → Offer */}
-          {connected && offer && (
-            <OfferCard
-              offer={offer}
-              loading={!!actionLoading?.startsWith("offer-")}
-              onAccept={() => handleOffer("accept", offer.orderNumber)}
-              onReject={() => handleOffer("reject", offer.orderNumber)}
-            />
-          )}
-
-          {/* Connected → Active orders */}
-          {connected && orders.length > 0 && (
-            <div className="space-y-3">
-              {orders.map((order) => (
-                <OrderCard
-                  key={order.orderNumber}
-                  order={order}
-                  loading={actionLoading === order.orderNumber}
-                  onAction={(action) => handleAction(action, order.orderNumber)}
-                />
-              ))}
-            </div>
-          )}
-
-          {/* Connected → No orders, no offer */}
-          {connected && orders.length === 0 && !offer && (
-            <div className="py-6 text-center">
-              <ThinkingOrb
-                state="searching"
-                size={64}
-                theme="light"
-                speed={0.7}
-                aria-label="Conectado, esperando pedidos"
-                className="mx-auto mb-3"
-              />
-              <p className="text-base font-bold text-[#09193B]">
-                Estás conectado
-              </p>
-              <p className="mt-1 text-sm font-medium text-green-600">
-                Esperando pedidos...
-              </p>
-              <p className="mt-1 text-xs text-gray-400">
-                Te notificaremos cuando haya un pedido
-              </p>
-              <button
-                onClick={() => handleSession("disconnect")}
-                disabled={actionLoading === "session"}
-                className="mt-4 rounded-xl border border-gray-200 px-6 py-2 text-sm font-medium text-gray-500 transition hover:bg-gray-50"
-              >
-                Desconectar
-              </button>
-            </div>
-          )}
-
-          {/* Connected → Disconnect button (when has orders) */}
-          {connected && (orders.length > 0 || offer) && (
+      {/* Overlay inferior (flota sobre el mapa): controles de cámara + hoja
+          del pedido. */}
+      <div className="absolute inset-x-0 bottom-0 z-20">
+        {/* Controles de cámara — flotan justo encima del overlay inferior. */}
+        {mapsLoaded && (
+          <div className="absolute right-3 -top-14 z-30 flex flex-col gap-2">
             <button
-              onClick={() => handleSession("disconnect")}
-              disabled={actionLoading === "session"}
-              className="mt-3 w-full rounded-xl border border-gray-200 py-2 text-xs font-medium text-gray-400 transition hover:bg-gray-50"
+              onClick={handleCenterGps}
+              aria-label="Centrar GPS"
+              title="Centrar GPS"
+              className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#09193B] shadow-lg ring-1 ring-black/5 transition hover:bg-gray-50 active:scale-95"
             >
-              Desconectar
+              <LocateFixed className="h-5 w-5" />
             </button>
-          )}
-        </div>
+            <button
+              onClick={handleFullTripView}
+              aria-label="Ver viaje completo"
+              title="Ver viaje completo"
+              className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#09193B] shadow-lg ring-1 ring-black/5 transition hover:bg-gray-50 active:scale-95"
+            >
+              <Maximize2 className="h-5 w-5" />
+            </button>
+          </div>
+        )}
+
+        {/* Viaje activo → hoja deslizable con botón de acción siempre visible */}
+        {connected && orders.length > 0 ? (
+          (() => {
+            const order = orders[0];
+            const orderAction = getOrderAction(order);
+            return (
+              <DriveTripSheet
+                order={order}
+                actionKind={orderAction.action}
+                actionLabel={orderAction.label}
+                actionIcon={orderAction.icon}
+                loading={actionLoading === order.orderNumber}
+                onAction={() => handleAction(orderAction.action, order.orderNumber)}
+                onDisconnect={() => handleSession("disconnect")}
+                disconnectLoading={actionLoading === "session"}
+                simulated={sim.active}
+              >
+                {orders.slice(1).map((extra) => (
+                  <OrderCard
+                    key={extra.orderNumber}
+                    order={extra}
+                    loading={actionLoading === extra.orderNumber}
+                    onAction={(action) => handleAction(action, extra.orderNumber)}
+                  />
+                ))}
+              </DriveTripSheet>
+            );
+          })()
+        ) : (
+          <div className="relative rounded-t-3xl bg-white shadow-2xl safe-area-bottom">
+            <div className="mx-auto mt-3 h-1 w-10 rounded-full bg-gray-300" />
+
+            <div className="max-h-[50vh] overflow-y-auto px-4 pb-6 pt-2">
+              {/* Not connected → INICIAR (sesión abierta, sin duración) */}
+              {!connected && (
+                <div className="py-4 text-center">
+                  <h2 className="text-lg font-bold text-[#09193B]">
+                    Estás desconectado
+                  </h2>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Inicia para recibir pedidos
+                  </p>
+
+                  <button
+                    onClick={() => handleSession("connect")}
+                    disabled={actionLoading === "session"}
+                    className="mt-4 w-full rounded-2xl bg-[#EB1902] py-4 text-lg font-black text-white shadow-lg shadow-[#EB1902]/30 transition active:scale-95"
+                  >
+                    {actionLoading === "session" ? (
+                      <Loader2 className="mx-auto h-5 w-5 animate-spin" />
+                    ) : (
+                      "INICIAR"
+                    )}
+                  </button>
+                </div>
+              )}
+
+              {/* Connected → Offer */}
+              {connected && offer && (
+                <OfferCard
+                  offer={offer}
+                  loading={!!actionLoading?.startsWith("offer-")}
+                  onAccept={() => handleOffer("accept", offer.orderNumber)}
+                  onReject={() => handleOffer("reject", offer.orderNumber)}
+                />
+              )}
+
+              {/* Connected → No orders, no offer */}
+              {connected && orders.length === 0 && !offer && (
+                <div className="py-6 text-center">
+                  <ThinkingOrb
+                    state="searching"
+                    size={64}
+                    theme="light"
+                    speed={0.7}
+                    aria-label="Conectado, esperando pedidos"
+                    className="mx-auto mb-3"
+                  />
+                  <p className="text-base font-bold text-[#09193B]">
+                    Estás conectado
+                  </p>
+                  <p className="mt-1 text-sm font-medium text-green-600">
+                    Esperando pedidos...
+                  </p>
+                  <p className="mt-1 text-xs text-gray-400">
+                    Te notificaremos cuando haya un pedido
+                  </p>
+                  <button
+                    onClick={() => handleSession("disconnect")}
+                    disabled={actionLoading === "session"}
+                    className="mt-4 rounded-xl border border-gray-200 px-6 py-2 text-sm font-medium text-gray-500 transition hover:bg-gray-50"
+                  >
+                    Desconectar
+                  </button>
+                </div>
+              )}
+
+              {/* Connected → Disconnect button (when has offer) */}
+              {connected && offer && (
+                <button
+                  onClick={() => handleSession("disconnect")}
+                  disabled={actionLoading === "session"}
+                  className="mt-3 w-full rounded-xl border border-gray-200 py-2 text-xs font-medium text-gray-400 transition hover:bg-gray-50"
+                >
+                  Desconectar
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
