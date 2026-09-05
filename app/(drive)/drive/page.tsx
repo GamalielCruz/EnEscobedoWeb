@@ -15,13 +15,28 @@ import {
   XCircle,
   Phone,
   MessageCircle,
+  LocateFixed,
+  Maximize2,
+  Truck,
 } from "lucide-react";
+import { DriveNavBar, type DriveNavPhase } from "@/components/drive/DriveNavBar";
+import { DriveSimPanel } from "@/components/drive/DriveSimPanel";
+import { useDriveSimulator } from "@/hooks/useDriveSimulator";
+import { getDeploymentEnvironment } from "@/lib/deployment-environment";
 import { useDriverState, type DriverOrder, type DriverOffer } from "@/hooks/useDriverState";
 import { useDriverLocation } from "@/hooks/useDriverLocation";
 import { useOfferAlertSound } from "@/hooks/useOfferAlertSound";
 import { ThinkingOrb } from "thinking-orbs";
 import { shortOrderCode, estimateEtaMinutes } from "@/lib/dispatch/dispatch-format";
-import { getRoadRoute, haversineMeters, type RoadRoute, type RoutePoint } from "@/lib/dispatch/routing";
+import {
+  getRoadRoute,
+  haversineMeters,
+  pathLengthMeters,
+  projectOntoPath,
+  routeTargets,
+  type RoadRoute,
+  type RoutePoint,
+} from "@/lib/dispatch/routing";
 
 // ── Map config ─────────────────────────────────────────────────────
 
@@ -39,6 +54,15 @@ const CAMERA_FOLLOW_METERS = 100;
 const CAMERA_VIEWPORT_MARGIN = 0.12;
 // Sin ruta activa, recentrar al repartidor solo si se movió al menos esto.
 const DRIVER_CENTER_METERS = 20;
+// Zoom por defecto del mapa y zoom al pulsar "Centrar GPS".
+const DEFAULT_ZOOM = 15;
+const FOLLOW_NAV_ZOOM = 17;
+// Anticipar la siguiente maniobra cuando falte menos que esto para el giro.
+const NEXT_MANEUVER_METERS = 120;
+// Mostrar "Estás llegando" cuando quede menos que esto para el destino.
+const NEAR_DESTINATION_METERS = 150;
+// El simulador de viaje SOLO existe fuera de producción (dev local/preview).
+const DRIVE_SIM_ENABLED = getDeploymentEnvironment() !== "production";
 const mapOptions = {
   disableDefaultUI: true,
   zoomControl: false,
@@ -224,6 +248,40 @@ function getOrderAction(order: DriverOrder) {
     : getRestaurantAction(order);
 }
 
+/** Etapa de navegación real según la acción del pedido (sin simulador). */
+function actionToNavPhase(action: string | null | undefined): DriveNavPhase | null {
+  switch (action) {
+    case "navigate_pickup":
+      return "to_pickup";
+    case "navigate_delivery":
+      return "to_delivery";
+    case "picked_up":
+      return "at_pickup";
+    case "delivered":
+      return "at_delivery";
+    default:
+      return null;
+  }
+}
+
+function formatMetersShort(meters: number): string {
+  const m = Math.max(0, meters);
+  if (m < 1000) {
+    const rounded = m < 100 ? Math.round(m) : Math.round(m / 10) * 10;
+    return `${rounded} m`;
+  }
+  return `${(m / 1000).toFixed(1)} km`;
+}
+
+function formatSecondsShort(seconds: number): string {
+  const minutes = Math.max(1, Math.round(seconds / 60));
+  if (minutes >= 60) {
+    const h = Math.floor(minutes / 60);
+    return `${h} h ${minutes % 60} min`;
+  }
+  return `${minutes} min`;
+}
+
 // ── Main component ─────────────────────────────────────────────────
 
 export default function DrivePage() {
@@ -274,33 +332,51 @@ export default function DrivePage() {
     return () => stopAlertImmediate();
   }, [stopAlertImmediate]);
 
-  // Current position: GPS if available, otherwise from state
-  const currentLocation = useMemo(() => {
+  // ── Ubicación real (GPS) ────────────────────────────────────────
+  // Se separa de la ubicación EFECTIVA (que el simulador puede reemplazar)
+  // para que el resto de la UI consuma exactamente la misma estructura.
+  const realLocation = useMemo(() => {
     if (gpsLocation) return gpsLocation;
     if (state?.location) return state.location;
-    return DEFAULT_CENTER;
+    return null;
   }, [gpsLocation, state?.location]);
-
-  // Solo pedir ruta cuando hay una ubicación real del repartidor (GPS o la
-  // última reportada); si no hay ninguna, no se dibuja ruta desde el centro.
-  const hasDriverLocation = Boolean(gpsLocation || state?.location);
 
   // Active order for navigation target
   const activeOrder = state?.orders?.[0] ?? null;
+  const orderAction = useMemo(
+    () => (activeOrder ? getOrderAction(activeOrder) : null),
+    [activeOrder]
+  );
 
-  // Navigation target based on order action (only when the order actually
-  // has valid coordinates; otherwise no route is drawn to (0,0)).
-  const navTarget = useMemo(() => {
+  // Coordenadas de recolección y entrega (solo si son válidas, nunca (0,0)).
+  const pickupPoint = useMemo(() => {
     if (!activeOrder) return null;
-    const action = getOrderAction(activeOrder);
-    if (action.action === "navigate_pickup" && hasValidCoords(activeOrder.storeLat, activeOrder.storeLng)) {
-      return { lat: activeOrder.storeLat, lng: activeOrder.storeLng, label: activeOrder.storeName };
-    }
-    if (action.action === "navigate_delivery" && hasValidCoords(activeOrder.destLat, activeOrder.destLng)) {
-      return { lat: activeOrder.destLat, lng: activeOrder.destLng, label: activeOrder.destLabel };
+    if (hasValidCoords(activeOrder.storeLat, activeOrder.storeLng)) {
+      return { lat: activeOrder.storeLat, lng: activeOrder.storeLng };
     }
     return null;
   }, [activeOrder]);
+  const deliveryPoint = useMemo(() => {
+    if (!activeOrder) return null;
+    if (hasValidCoords(activeOrder.destLat, activeOrder.destLng)) {
+      return { lat: activeOrder.destLat, lng: activeOrder.destLng };
+    }
+    return null;
+  }, [activeOrder]);
+
+  // Navigation target real, según la etapa del pedido: navigate_pickup →
+  // recolección, navigate_delivery → entrega (coordenadas exactas del pedido).
+  const realNavTarget = useMemo(() => {
+    if (!activeOrder) return null;
+    const action = orderAction?.action;
+    if (action === "navigate_pickup" && pickupPoint) {
+      return { ...pickupPoint, label: activeOrder.storeName };
+    }
+    if (action === "navigate_delivery" && deliveryPoint) {
+      return { ...deliveryPoint, label: activeOrder.destLabel };
+    }
+    return null;
+  }, [activeOrder, orderAction, pickupPoint, deliveryPoint]);
 
   // Ruta vial dibujada sobre el mapa (Google Directions + caché dentro de
   // lib/dispatch/routing.ts). El caché hace que los ticks de GPS no llamen a
@@ -310,6 +386,56 @@ export default function DrivePage() {
   const [roadRoute, setRoadRoute] = useState<RoadRoute | null>(null);
   const prevNavKeyRef = useRef<string | null>(null);
 
+  // ── Simulador de viaje (SOLO dev/staging) ───────────────────────
+  // Todo en estado local: entrega una posición simulada y una etapa override
+  // al MISMO pipeline que usa el GPS real (currentLocation / roadRoute /
+  // barra / cámara), sin tocar dispatch, Sanity ni el estado del pedido.
+  const sim = useDriveSimulator({
+    enabled: DRIVE_SIM_ENABLED,
+    origin: realLocation,
+    pickup: pickupPoint,
+    delivery: deliveryPoint,
+    route: roadRoute,
+  });
+
+  // Si el pedido desaparece (o el repartidor se desconecta) con una
+  // simulación en curso, detenerla: no dejar una posición fantasma.
+  const simIsActive = sim.active;
+  const stopSim = sim.stop;
+  useEffect(() => {
+    if (simIsActive && !activeOrder) stopSim();
+  }, [simIsActive, activeOrder, stopSim]);
+
+  // Ubicación EFECTIVA: simulada cuando la simulación está activa, si no la
+  // del GPS real / última reportada. El resto de la UI no sabe de dónde viene.
+  const currentLocation = useMemo(() => {
+    if (sim.active && sim.simLocation) return sim.simLocation;
+    return realLocation ?? DEFAULT_CENTER;
+  }, [sim.active, sim.simLocation, realLocation]);
+
+  // Solo pedir ruta cuando hay una ubicación del repartidor (GPS real o
+  // simulada); si no hay ninguna, no se dibuja ruta desde el centro del mapa.
+  const driverHasLocation = sim.active ? Boolean(sim.simLocation) : realLocation !== null;
+
+  // Destination según la etapa que la simulación está mostrando (permite
+  // probar el cambio RECOLECCIÓN → ENTREGA sin tocar el pedido real).
+  const simNavTarget = useMemo(() => {
+    if (!sim.active) return null;
+    const stage = sim.stage;
+    if ((stage === "to_pickup" || stage === "at_pickup") && pickupPoint) {
+      return { ...pickupPoint, label: activeOrder?.storeName };
+    }
+    if (
+      (stage === "to_delivery" || stage === "at_delivery" || stage === "done") &&
+      deliveryPoint
+    ) {
+      return { ...deliveryPoint, label: activeOrder?.destLabel };
+    }
+    return null;
+  }, [sim.active, sim.stage, pickupPoint, deliveryPoint, activeOrder]);
+
+  const navTarget = sim.active ? simNavTarget : realNavTarget;
+
   useEffect(() => {
     const navKey = navTarget ? `${navTarget.lat},${navTarget.lng}` : null;
     if (prevNavKeyRef.current !== navKey) {
@@ -318,9 +444,12 @@ export default function DrivePage() {
       setRoadRoute(null);
       prevNavKeyRef.current = navKey;
     }
-    if (!navTarget || !mapsLoaded || !hasDriverLocation) {
+    if (!navTarget || !mapsLoaded || !driverHasLocation) {
       return;
     }
+    // Mientras el simulador avanza sobre una ruta que YA corresponde al
+    // destino actual, no recalcular en cada frame de la simulación.
+    if (sim.active && routeTargets(roadRoute, navTarget)) return;
     let cancelled = false;
     getRoadRoute(currentLocation, navTarget).then((route) => {
       if (!cancelled) setRoadRoute(route);
@@ -328,63 +457,292 @@ export default function DrivePage() {
     return () => {
       cancelled = true;
     };
-  }, [currentLocation, navTarget, mapsLoaded, hasDriverLocation]);
+  }, [currentLocation, navTarget, mapsLoaded, driverHasLocation, sim.active, roadRoute]);
+
+  // Etapa de navegación efectiva (real o simulada).
+  const navPhase = useMemo<DriveNavPhase | null>(() => {
+    if (sim.active) return sim.stage as DriveNavPhase;
+    return actionToNavPhase(orderAction?.action ?? null);
+  }, [sim.active, sim.stage, orderAction]);
+
+  // Progreso + siguiente maniobra basados en la geometría REAL de la ruta y
+  // en los steps de Directions (no se hace ninguna llamada extra a Google).
+  const guidance = useMemo(() => {
+    if (!roadRoute?.path || roadRoute.path.length < 2) return null;
+    const total = pathLengthMeters(roadRoute.path);
+    if (total <= 0) return null;
+    const done = Math.min(Math.max(projectOntoPath(roadRoute.path, currentLocation), 0), total);
+    const remaining = Math.max(0, total - done);
+    const duration = roadRoute.durationSeconds;
+    const remainingSeconds =
+      duration != null ? Math.max(0, duration * (remaining / total)) : null;
+
+    // Steps de Directions: el step "pendiente" es el que aún no termina.
+    let pendingIdx = -1;
+    if (roadRoute.steps.length > 0) {
+      let acc = 0;
+      for (let i = 0; i < roadRoute.steps.length; i++) {
+        acc += roadRoute.steps[i].distanceMeters;
+        if (acc > done) {
+          pendingIdx = i;
+          break;
+        }
+      }
+      if (pendingIdx === -1) pendingIdx = roadRoute.steps.length - 1;
+    }
+    let instruction: string | null = null;
+    if (pendingIdx >= 0) {
+      const step = roadRoute.steps[pendingIdx];
+      const next = roadRoute.steps[pendingIdx + 1];
+      // Metros hasta el giro (fin del step en curso): si queda poco, mostrar
+      // la siguiente maniobra en lugar de la instrucción del tramo actual.
+      let accEnd = 0;
+      for (let i = 0; i <= pendingIdx; i++) accEnd += roadRoute.steps[i].distanceMeters;
+      const distToTurn = Math.max(0, accEnd - done);
+      instruction =
+        next && distToTurn <= NEXT_MANEUVER_METERS ? next.instruction : step.instruction;
+    }
+    return {
+      total,
+      remaining,
+      remainingSeconds,
+      instruction,
+      fractionCompleted: Math.min(1, Math.max(0, done / total)),
+    };
+  }, [roadRoute, currentLocation]);
 
   // ── Cámara (navegación tipo GPS) ────────────────────────────────
-  // Con ruta activa el encuadre lo controla el efecto de abajo. Sin ruta,
-  // el mapa sigue al repartidor con un umbral mínimo de desplazamiento para
-  // no saltar en cada tick del GPS.
+  // Modo seguimiento: la cámara acompaña al repartidor. Cuando el usuario
+  // mueve el mapa (drag) pasamos a modo exploración y la cámara deja de
+  // forzarse; "Centrar GPS" vuelve al modo seguimiento.
   const mapRef = useRef<google.maps.Map | null>(null);
+  const mapListenersRef = useRef<Array<{ remove: () => void }>>([]);
   const lastFollowPosRef = useRef<RoutePoint | null>(null);
   const lastCamPosRef = useRef<RoutePoint | null>(null);
   const lastFramedRouteRef = useRef<RoadRoute | null>(null);
   const prevNavigatingRef = useRef(false);
+  const prevFramedLegKeyRef = useRef<string | null>(null);
   const [mapCenter, setMapCenter] = useState<RoutePoint>(DEFAULT_CENTER);
+  const [followDriver, setFollowDriver] = useState(true);
 
   const navigatingWithRoute = Boolean(
-    navTarget && mapsLoaded && hasDriverLocation && roadRoute?.path
+    navTarget && mapsLoaded && driverHasLocation && roadRoute?.path
   );
+  const legKey = navTarget ? `${navTarget.lat.toFixed(4)},${navTarget.lng.toFixed(4)}` : null;
+
+  const handleMapLoad = useCallback((map: google.maps.Map) => {
+    mapRef.current = map;
+    // El usuario tomó el control del mapa (arrastrar) → salir temporalmente
+    // del modo seguimiento para no pelear contra su gesto.
+    mapListenersRef.current.forEach((listener) => listener.remove());
+    mapListenersRef.current = [
+      map.addListener("dragstart", () => setFollowDriver(false)),
+    ];
+  }, []);
+
+  const handleMapUnmount = useCallback(() => {
+    mapListenersRef.current.forEach((listener) => listener.remove());
+    mapListenersRef.current = [];
+    mapRef.current = null;
+  }, []);
 
   // Recentrar al repartidor cuando NO hay ruta encuadrada (esperando pedido,
   // ruta fallida o todavía cargando). Al salir de una navegación con ruta se
   // restaura el zoom por defecto y se vuelve a centrar al repartidor.
   useEffect(() => {
-    if (mapRef.current && prevNavigatingRef.current && !navigatingWithRoute) {
-      mapRef.current.setZoom(15);
+    const map = mapRef.current;
+    if (map && prevNavigatingRef.current && !navigatingWithRoute) {
+      map.setZoom(DEFAULT_ZOOM);
       setMapCenter(currentLocation);
       lastFollowPosRef.current = currentLocation;
+      setFollowDriver(true);
     }
     prevNavigatingRef.current = navigatingWithRoute;
 
-    if (navigatingWithRoute || !mapRef.current) return;
+    if (navigatingWithRoute || !map || !followDriver) return;
     const last = lastFollowPosRef.current;
     const dist = last ? haversineMeters(last, currentLocation) : Infinity;
     if (dist < DRIVER_CENTER_METERS) return;
     lastFollowPosRef.current = currentLocation;
     setMapCenter(currentLocation);
-  }, [navigatingWithRoute, currentLocation, mapsLoaded]);
+  }, [navigatingWithRoute, currentLocation, followDriver, mapsLoaded]);
 
-  // Encuadre de la ruta: cuando llega una ruta nueva (o cambia el tramo
-  // recolección → entrega) se encuadran repartidor + trayecto vial completo.
-  // Después solo se re-encuadra si el repartidor se mueve lo suficiente o está
-  // por salirse de la vista — NUNCA en cada tick de GPS, y respetando el
-  // encuadre manual del usuario mientras el repartidor siga visible.
+  // Encuadre de la ruta vial: cuando llega una ruta nueva se encuadran
+  // repartidor + trayecto completo; después solo se re-encuadra si el
+  // repartidor se mueve lo suficiente o está por salirse de la vista — nunca
+  // en cada tick de GPS y sin pelear contra el modo exploración (salvo cambio
+  // de tramo recolección → entrega, que re-encuadra una sola vez).
   useEffect(() => {
     if (!navigatingWithRoute || !mapRef.current || !roadRoute) return;
     const map = mapRef.current;
     const routeChanged = lastFramedRouteRef.current !== roadRoute;
-    if (!routeChanged) {
+    const legChanged = prevFramedLegKeyRef.current !== legKey;
+
+    if (!routeChanged && !legChanged) {
+      if (!followDriver) return;
       const last = lastCamPosRef.current;
       const movedEnough = last
         ? haversineMeters(last, currentLocation) >= CAMERA_FOLLOW_METERS
         : true;
       if (!movedEnough) return;
       if (!isDriverOutsideViewport(map, currentLocation)) return;
+    } else if (routeChanged && !followDriver && !legChanged) {
+      // El usuario está explorando y solo cambió la ruta (mismo tramo):
+      // no mover la cámara.
+      return;
     }
+
     frameRouteView(map, [currentLocation, ...roadRoute.path]);
     lastCamPosRef.current = currentLocation;
     lastFramedRouteRef.current = roadRoute;
-  }, [navigatingWithRoute, currentLocation, roadRoute, navTarget]);
+    if (legChanged) {
+      prevFramedLegKeyRef.current = legKey;
+      setFollowDriver(true);
+    } else if (prevFramedLegKeyRef.current !== legKey) {
+      prevFramedLegKeyRef.current = legKey;
+    }
+  }, [navigatingWithRoute, currentLocation, roadRoute, legKey, followDriver]);
+
+  // ── Controles de cámara ─────────────────────────────────────────
+
+  const handleCenterGps = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const zoom = map.getZoom();
+    if (typeof zoom !== "number" || zoom < FOLLOW_NAV_ZOOM) {
+      map.setZoom(FOLLOW_NAV_ZOOM);
+    }
+    // Neutralizar encuadres pendientes: al centrar se reanuda el seguimiento
+    // sin volver a encuadrar toda la ruta.
+    lastFollowPosRef.current = currentLocation;
+    lastCamPosRef.current = currentLocation;
+    lastFramedRouteRef.current = roadRoute;
+    setFollowDriver(true);
+    setMapCenter(currentLocation);
+  }, [currentLocation, roadRoute]);
+
+  const handleFullTripView = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const points: RoutePoint[] = [currentLocation];
+    if (roadRoute?.path?.length) {
+      // Encuadrar SOLO la geometría vial real (nunca una línea recta).
+      points.push(...roadRoute.path);
+    } else if (activeOrder) {
+      // Sin ruta todavía: encuadrar con los puntos disponibles del pedido.
+      if (pickupPoint) points.push(pickupPoint);
+      if (deliveryPoint) points.push(deliveryPoint);
+    }
+    if (points.length < 2) {
+      // Solo hay un punto: comportarse como centrar GPS.
+      setFollowDriver(true);
+      setMapCenter(currentLocation);
+      return;
+    }
+    frameRouteView(map, points);
+    // Dejar de forzar la cámara para que pueda ver el recorrido completo.
+    setFollowDriver(false);
+  }, [currentLocation, roadRoute, activeOrder, pickupPoint, deliveryPoint]);
+
+  // ── Contenido de la barra de navegación (etapa actual) ──────────
+
+  const navContent = useMemo(() => {
+    if (!navPhase || !activeOrder) return null;
+
+    const orderCode = shortOrderCode(activeOrder.orderNumber);
+    const pickupLabel = activeOrder.mandadoOriginLabel ?? activeOrder.storeName;
+    const deliveryLabel = activeOrder.mandadoDestinationLabel ?? activeOrder.destLabel;
+    const hasLegMetrics = navPhase === "to_pickup" || navPhase === "to_delivery";
+    const arriving =
+      hasLegMetrics &&
+      guidance !== null &&
+      guidance.remaining <= NEAR_DESTINATION_METERS;
+    const distanceText =
+      hasLegMetrics && guidance ? formatMetersShort(guidance.remaining) : null;
+    const durationText =
+      hasLegMetrics && guidance?.remainingSeconds != null
+        ? formatSecondsShort(guidance.remainingSeconds)
+        : null;
+    const progress =
+      hasLegMetrics && guidance ? guidance.fractionCompleted : null;
+    const address = navPhase === "to_delivery" || navPhase === "at_delivery" || navPhase === "done"
+      ? deliveryLabel
+      : pickupLabel;
+
+    switch (navPhase) {
+      case "to_pickup":
+        return {
+          title: "RECOLECCIÓN",
+          icon: <Package className="h-5 w-5" />,
+          accent: "orange" as const,
+          orderCode,
+          main: arriving
+            ? "Estás llegando a la recolección"
+            : guidance?.instruction ?? "Dirígete a la recolección",
+          sub: address,
+          distance: distanceText,
+          duration: durationText,
+          progress,
+          waiting: !guidance && sim.active,
+        };
+      case "at_pickup":
+        return {
+          title: "RECOLECCIÓN",
+          icon: <Package className="h-5 w-5" />,
+          accent: "orange" as const,
+          orderCode,
+          main: "Has llegado a la recolección",
+          sub: address,
+          distance: null,
+          duration: null,
+          progress: null,
+          waiting: false,
+        };
+      case "to_delivery":
+        return {
+          title: "ENTREGA",
+          icon: <Truck className="h-5 w-5" />,
+          accent: "red" as const,
+          orderCode,
+          main: arriving
+            ? "Estás llegando al destino"
+            : guidance?.instruction ?? "Dirígete a la entrega",
+          sub: address,
+          distance: distanceText,
+          duration: durationText,
+          progress,
+          waiting: !guidance && sim.active,
+        };
+      case "at_delivery":
+        return {
+          title: "ENTREGA",
+          icon: <MapPin className="h-5 w-5" />,
+          accent: "green" as const,
+          orderCode,
+          main: "Estás llegando al destino",
+          sub: address,
+          distance: null,
+          duration: null,
+          progress: null,
+          waiting: false,
+        };
+      case "done":
+        return {
+          title: "VIAJE COMPLETADO",
+          icon: <CheckCircle className="h-5 w-5" />,
+          accent: "green" as const,
+          orderCode,
+          main: "✓ Viaje completado",
+          sub: address,
+          distance: null,
+          duration: null,
+          progress: null,
+          waiting: false,
+        };
+      default:
+        return null;
+    }
+  }, [navPhase, activeOrder, guidance, sim.active]);
 
   // ── Actions ──────────────────────────────────────────────────────
 
@@ -564,19 +922,15 @@ export default function DrivePage() {
       )}
 
       {/* Map */}
-      <div className="flex-1">
+      <div className="relative flex-1">
         {mapsLoaded ? (
           <GoogleMap
             mapContainerStyle={containerStyle}
             center={mapCenter}
-            zoom={15}
+            zoom={DEFAULT_ZOOM}
             options={mapOptions}
-            onLoad={(map) => {
-              mapRef.current = map;
-            }}
-            onUnmount={() => {
-              mapRef.current = null;
-            }}
+            onLoad={handleMapLoad}
+            onUnmount={handleMapUnmount}
           >
             {/* Driver marker */}
             <Marker
@@ -641,7 +995,67 @@ export default function DrivePage() {
             <Loader2 className="h-6 w-6 animate-spin text-white/40" />
           </div>
         )}
+
+        {/* Floating controls — navegación (no interfieren con marcadores ni
+            con los controles nativos: están sobre el mapa, lado derecho). */}
+        {mapsLoaded && (
+          <>
+            <div className="absolute right-3 bottom-4 z-20 flex flex-col gap-2">
+              <button
+                onClick={handleCenterGps}
+                aria-label="Centrar GPS"
+                title="Centrar GPS"
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#09193B] shadow-lg ring-1 ring-black/5 transition hover:bg-gray-50 active:scale-95"
+              >
+                <LocateFixed className="h-5 w-5" />
+              </button>
+              <button
+                onClick={handleFullTripView}
+                aria-label="Ver viaje completo"
+                title="Ver viaje completo"
+                className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#09193B] shadow-lg ring-1 ring-black/5 transition hover:bg-gray-50 active:scale-95"
+              >
+                <Maximize2 className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Herramienta de desarrollo: simular viaje (solo dev/staging). */}
+            <DriveSimPanel
+              visible={DRIVE_SIM_ENABLED && connected && Boolean(activeOrder) && mapsLoaded}
+              canStart={sim.canStart}
+              active={sim.active}
+              running={sim.running}
+              finished={sim.finished}
+              stageLabel={sim.stageLabel}
+              speed={sim.speed}
+              waitingForRoute={sim.waitingForRoute}
+              onStart={sim.start}
+              onPause={sim.pause}
+              onResume={sim.resume}
+              onRestart={sim.restart}
+              onStop={sim.stop}
+              onSpeed={sim.setSpeed}
+            />
+          </>
+        )}
       </div>
+
+      {/* Barra de indicaciones — etapa actual del pedido (recolección/entrega) */}
+      {navContent && navPhase && (
+        <DriveNavBar
+          title={navContent.title}
+          icon={navContent.icon}
+          accent={navContent.accent}
+          orderCode={navContent.orderCode}
+          mainText={navContent.main}
+          subText={navContent.sub}
+          distanceText={navContent.distance}
+          durationText={navContent.duration}
+          progress={navContent.progress}
+          waitingForRoute={navContent.waiting}
+          simulated={sim.active}
+        />
+      )}
 
       {/* Bottom Sheet */}
       <div className="relative z-10 rounded-t-3xl bg-white shadow-2xl safe-area-bottom">
