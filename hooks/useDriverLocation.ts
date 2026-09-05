@@ -24,6 +24,8 @@ function haversineDistance(
 
 export function useDriverLocation(enabled: boolean) {
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
+  /** Rumbo del GPS (0-360°, válido solo mientras el dispositivo se mueve). */
+  const [heading, setHeading] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const lastReportRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
   const watchIdRef = useRef<number | null>(null);
@@ -58,6 +60,7 @@ export function useDriverLocation(enabled: boolean) {
 
   useEffect(() => {
     if (!enabled || !navigator.geolocation) {
+      setHeading(null);
       if (!navigator.geolocation) {
         setError("Tu dispositivo no permite obtener la ubicación.");
       }
@@ -68,10 +71,17 @@ export function useDriverLocation(enabled: boolean) {
 
     const onSuccess = (pos: GeolocationPosition) => {
       if (!mountedRef.current) return;
-      const { latitude, longitude, accuracy } = pos.coords;
+      const { latitude, longitude, accuracy, heading: rawHeading } = pos.coords;
       // Skip if accuracy is poor (> 100m)
       if (accuracy > 100) return;
       setLocation({ lat: latitude, lng: longitude });
+      // heading solo es válido mientras el dispositivo se mueve; el resto del
+      // sistema lo usa solo cuando viene como número dentro de [0, 360).
+      setHeading(
+        typeof rawHeading === "number" && Number.isFinite(rawHeading)
+          ? ((rawHeading % 360) + 360) % 360
+          : null
+      );
       reportLocation(latitude, longitude);
     };
 
@@ -112,5 +122,5 @@ export function useDriverLocation(enabled: boolean) {
     };
   }, [enabled, reportLocation]);
 
-  return { location, error };
+  return { location, heading, error };
 }

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, SignIn } from "@clerk/nextjs";
 import { GoogleMap, Marker, Polyline, useJsApiLoader } from "@react-google-maps/api";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   Loader2,
   MapPin,
@@ -13,8 +13,6 @@ import {
   Clock,
   CheckCircle,
   XCircle,
-  Phone,
-  MessageCircle,
   LocateFixed,
   Maximize2,
   Truck,
@@ -27,16 +25,20 @@ import { useDriverState, type DriverOrder, type DriverOffer } from "@/hooks/useD
 import { useDriverLocation } from "@/hooks/useDriverLocation";
 import { useOfferAlertSound } from "@/hooks/useOfferAlertSound";
 import { ThinkingOrb } from "thinking-orbs";
-import { shortOrderCode, estimateEtaMinutes } from "@/lib/dispatch/dispatch-format";
+import { shortOrderCode } from "@/lib/dispatch/dispatch-format";
 import {
+  bearingBetween,
   getRoadRoute,
   haversineMeters,
+  headingAlongPath,
+  movePointAlong,
   pathLengthMeters,
   projectOntoPath,
   routeTargets,
   type RoadRoute,
   type RoutePoint,
 } from "@/lib/dispatch/routing";
+import { instructionInSpanish } from "@/lib/dispatch/nav-instructions";
 
 // ── Map config ─────────────────────────────────────────────────────
 
@@ -48,15 +50,27 @@ const containerStyle = { width: "100%", height: "100%" };
 const CAMERA_MAX_ZOOM = 16.5;
 // Aire alrededor del trayecto al encuadrar (fracción del tamaño del encuadre).
 const CAMERA_PADDING = 0.15;
-// Re-encuadrar cuando el repartidor se haya desplazado al menos esto.
-const CAMERA_FOLLOW_METERS = 100;
-// Si el repartidor sale de este margen interior de la vista → re-encuadrar.
-const CAMERA_VIEWPORT_MARGIN = 0.12;
 // Sin ruta activa, recentrar al repartidor solo si se movió al menos esto.
 const DRIVER_CENTER_METERS = 20;
-// Zoom por defecto del mapa y zoom al pulsar "Centrar GPS".
+// Zoom por defecto del mapa y zoom de navegación al pulsar "Centrar GPS".
 const DEFAULT_ZOOM = 15;
 const FOLLOW_NAV_ZOOM = 17;
+// Navegación tipo GPS: posición del conductor en pantalla (fracción vertical,
+// 0 = borde superior) y distancia de cámara adelantada según el viewport.
+const NAV_DRIVER_SCREEN_FRACTION = 0.68;
+const NAV_AHEAD_MIN_METERS = 80;
+const NAV_AHEAD_MAX_METERS = 1600;
+// Re-anclar la cámara cuando el conductor avanza al menos esto sobre la ruta.
+const NAV_ANCHOR_UPDATE_METERS = 8;
+// No girar el mapa por variaciones menores de rumbo (anti-jitter).
+const NAV_HEADING_SKIP_DEG = 2.5;
+// Suavizado de rotación por frame (interpolación del ángulo más corto).
+const NAV_HEADING_SMOOTH = 0.16;
+// Rumbo derivado por movimiento: mínimo desplazamiento e intervalo.
+const NAV_MOVEMENT_MIN_METERS = 4;
+const NAV_MOVEMENT_MIN_MS = 400;
+// Ventana para ignorar zoom_changed generado por la propia cámara.
+const INTERNAL_ZOOM_GUARD_MS = 900;
 // Anticipar la siguiente maniobra cuando falte menos que esto para el giro.
 const NEXT_MANEUVER_METERS = 120;
 // Mostrar "Estás llegando" cuando quede menos que esto para el destino.
@@ -75,10 +89,18 @@ const mapOptions = {
 
 // ── Pin SVG ────────────────────────────────────────────────────────
 
-const driverPinSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-  <circle cx="16" cy="16" r="14" fill="#3B82F6" stroke="#1E40AF" stroke-width="2"/>
-  <circle cx="16" cy="16" r="5" fill="white"/>
+// Flecha de navegación del conductor como SVG data-URI: la rotación se aplica
+// explícitamente en el SVG (positiva = sentido horario, igual que el heading),
+// así el marcador siempre apunta hacia donde conduce el repartidor.
+function driverArrowIcon(headingDeg: number): string {
+  const rotate = normalizeDeg(headingDeg);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="34" viewBox="-17 -17 34 34">
+  <g transform="rotate(${rotate})">
+    <path d="M0 -13 L6.5 10 L0 5 L-6.5 10 Z" fill="#3B82F6" stroke="#FFFFFF" stroke-width="2.2" stroke-linejoin="round"/>
+  </g>
 </svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
 
 const storePinSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
   <path fill="#F97316" d="M14 2C9.03 2 5 6.03 5 11c0 6.75 9 15 9 15s9-8.25 9-15c0-4.97-4.03-9-9-9z"/>
@@ -172,18 +194,38 @@ function getMapViewport(map: google.maps.Map): {
   return { minLat: sw.lat(), maxLat: ne.lat(), minLng: sw.lng(), maxLng: ne.lng() };
 }
 
-/** ¿El repartidor quedó fuera del margen visible del mapa? (para seguirlo). */
-function isDriverOutsideViewport(map: google.maps.Map, point: RoutePoint): boolean {
+function normalizeDeg(deg: number): number {
+  return ((deg % 360) + 360) % 360;
+}
+
+/** Diferencia dirigida y mínima entre dos ángulos: 350° → 5° = +15°. */
+function shortestAngleDelta(to: number, from: number): number {
+  return ((to - from + 540) % 360) - 180;
+}
+
+/**
+ * Punto de CÁMARA para que el conductor quede en el tercio inferior de la
+ * pantalla con la carretera por delante. Solo es un objetivo visual: nunca
+ * mueve al conductor ni la ruta.
+ */
+function aheadCameraPoint(map: google.maps.Map, driver: RoutePoint, headingDeg: number): RoutePoint {
   const vp = getMapViewport(map);
-  if (!vp) return false;
-  const latInset = (vp.maxLat - vp.minLat) * CAMERA_VIEWPORT_MARGIN;
-  const lngInset = (vp.maxLng - vp.minLng) * CAMERA_VIEWPORT_MARGIN;
-  return (
-    point.lat < vp.minLat + latInset ||
-    point.lat > vp.maxLat - latInset ||
-    point.lng < vp.minLng + lngInset ||
-    point.lng > vp.maxLng - lngInset
+  let viewHeightMeters = 500;
+  if (vp) {
+    viewHeightMeters = Math.max(
+      200,
+      haversineMeters(
+        { lat: vp.minLat, lng: vp.minLng },
+        { lat: vp.maxLat, lng: vp.minLng }
+      )
+    );
+  }
+  const fraction = NAV_DRIVER_SCREEN_FRACTION - 0.5;
+  const meters = Math.min(
+    NAV_AHEAD_MAX_METERS,
+    Math.max(NAV_AHEAD_MIN_METERS, viewHeightMeters * fraction)
   );
+  return movePointAlong(driver, headingDeg, meters);
 }
 
 /**
@@ -294,7 +336,9 @@ export default function DrivePage() {
   });
 
   const { state, loading, error: stateError, refetch } = useDriverState();
-  const { location: gpsLocation, error: gpsError } = useDriverLocation(state?.connected ?? false);
+  const { location: gpsLocation, heading: gpsHeading, error: gpsError } = useDriverLocation(
+    state?.connected ?? false
+  );
 
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
@@ -490,7 +534,7 @@ export default function DrivePage() {
       }
       if (pendingIdx === -1) pendingIdx = roadRoute.steps.length - 1;
     }
-    let instruction: string | null = null;
+    let shownStep: (typeof roadRoute.steps)[number] | null = null;
     if (pendingIdx >= 0) {
       const step = roadRoute.steps[pendingIdx];
       const next = roadRoute.steps[pendingIdx + 1];
@@ -499,128 +543,353 @@ export default function DrivePage() {
       let accEnd = 0;
       for (let i = 0; i <= pendingIdx; i++) accEnd += roadRoute.steps[i].distanceMeters;
       const distToTurn = Math.max(0, accEnd - done);
-      instruction =
-        next && distToTurn <= NEXT_MANEUVER_METERS ? next.instruction : step.instruction;
+      shownStep = next && distToTurn <= NEXT_MANEUVER_METERS ? next : step;
     }
     return {
       total,
       remaining,
       remainingSeconds,
-      instruction,
+      // Siempre en español: capa de normalización sobre el texto de Google.
+      instruction: shownStep
+        ? instructionInSpanish(shownStep.instruction, shownStep.maneuver)
+        : null,
+      maneuver: shownStep?.maneuver ?? null,
       fractionCompleted: Math.min(1, Math.max(0, done / total)),
     };
   }, [roadRoute, currentLocation]);
 
   // ── Cámara (navegación tipo GPS) ────────────────────────────────
-  // Modo seguimiento: la cámara acompaña al repartidor. Cuando el usuario
-  // mueve el mapa (drag) pasamos a modo exploración y la cámara deja de
-  // forzarse; "Centrar GPS" vuelve al modo seguimiento.
+  // Modo seguimiento/navegación: la cámara acompaña al conductor con la
+  // posición adelantada (tercio inferior) y orientación según rumbo. El mapa
+  // se mueve y rota DEBAJO del conductor; currentLocation nunca cambia. Cuando
+  // el usuario arrastra o hace zoom (interacción manual) salimos del modo; los
+  // cambios internos de zoom usan un guard para no confundirse con el usuario.
   const mapRef = useRef<google.maps.Map | null>(null);
   const mapListenersRef = useRef<Array<{ remove: () => void }>>([]);
   const lastFollowPosRef = useRef<RoutePoint | null>(null);
-  const lastCamPosRef = useRef<RoutePoint | null>(null);
+  const lastCamDriverPosRef = useRef<RoutePoint | null>(null);
   const lastFramedRouteRef = useRef<RoadRoute | null>(null);
   const prevNavigatingRef = useRef(false);
   const prevFramedLegKeyRef = useRef<string | null>(null);
-  const [mapCenter, setMapCenter] = useState<RoutePoint>(DEFAULT_CENTER);
+  const currentLocationRef = useRef<RoutePoint>(currentLocation);
+  const movementHeadingRef = useRef<number | null>(null);
+  const movementPrevRef = useRef<{ pos: RoutePoint; ts: number } | null>(null);
+  const visualHeadingRef = useRef<number | null>(null);
+  const headingRafRef = useRef<number | null>(null);
+  const internalZoomRef = useRef(false);
+  const internalZoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [followDriver, setFollowDriver] = useState(true);
+  const [driverHeading, setDriverHeading] = useState(0);
 
   const navigatingWithRoute = Boolean(
     navTarget && mapsLoaded && driverHasLocation && roadRoute?.path
   );
   const legKey = navTarget ? `${navTarget.lat.toFixed(4)},${navTarget.lng.toFixed(4)}` : null;
 
-  const handleMapLoad = useCallback((map: google.maps.Map) => {
-    mapRef.current = map;
-    // El usuario tomó el control del mapa (arrastrar) → salir temporalmente
-    // del modo seguimiento para no pelear contra su gesto.
-    mapListenersRef.current.forEach((listener) => listener.remove());
-    mapListenersRef.current = [
-      map.addListener("dragstart", () => setFollowDriver(false)),
-    ];
+  // El rumbo visual para el marcador se deriva de refs en cada render.
+  currentLocationRef.current = currentLocation;
+
+  // Resuelve el rumbo objetivo según la fuente disponible:
+  // 1) GPS real (coords.heading) · 2) derivado por movimiento · 3) geometría.
+  const headingResolverRef = useRef<() => number | null>(() => null);
+  headingResolverRef.current = () => {
+    const pos = currentLocationRef.current;
+    const route = roadRoute;
+    // Simulación: rumbo del tramo actual de la geometría real.
+    if (sim.active && route?.path && route.path.length >= 2) {
+      return headingAlongPath(route.path, projectOntoPath(route.path, pos));
+    }
+    // GPS real con rumbo válido.
+    if (!sim.active && gpsHeading != null) return gpsHeading;
+    // Rumbo derivado del movimiento de posiciones consecutivas.
+    if (movementHeadingRef.current != null) return movementHeadingRef.current;
+    // Último respaldo: dirección de la ruta en el punto del conductor.
+    if (route?.path && route.path.length >= 2) {
+      return headingAlongPath(route.path, projectOntoPath(route.path, pos));
+    }
+    return null;
+  };
+
+  const stopHeadingAnimation = useCallback(() => {
+    if (headingRafRef.current !== null) {
+      cancelAnimationFrame(headingRafRef.current);
+      headingRafRef.current = null;
+    }
   }, []);
 
+  const applyHeading = useCallback((deg: number) => {
+    const map = mapRef.current;
+    if (!map) return;
+    visualHeadingRef.current = normalizeDeg(deg);
+    setDriverHeading(normalizeDeg(deg));
+    map.setHeading(normalizeDeg(deg));
+    // Re-anclar en cada paso de rotación: el conductor se mantiene en la zona
+    // inferior mientras el mapa gira debajo de él.
+    const pos = currentLocationRef.current;
+    if (pos) map.setCenter(aheadCameraPoint(map, pos, normalizeDeg(deg)));
+  }, []);
+
+  /** Rotación suave hacia `target` (siempre por el arco más corto). */
+  const startHeadingTween = useCallback(
+    (target: number) => {
+      const map = mapRef.current;
+      if (!map) return;
+      const current = visualHeadingRef.current;
+      const delta = current == null ? 0 : shortestAngleDelta(target, current);
+      if (current == null || Math.abs(delta) <= NAV_HEADING_SKIP_DEG) {
+        applyHeading(target);
+        return;
+      }
+      stopHeadingAnimation();
+      const step = () => {
+        const now = visualHeadingRef.current ?? target;
+        const diff = shortestAngleDelta(target, now);
+        if (Math.abs(diff) < 1) {
+          applyHeading(target);
+          headingRafRef.current = null;
+          return;
+        }
+        applyHeading(now + diff * NAV_HEADING_SMOOTH);
+        headingRafRef.current = requestAnimationFrame(step);
+      };
+      headingRafRef.current = requestAnimationFrame(step);
+    },
+    [applyHeading, stopHeadingAnimation]
+  );
+
+  const markInternalZoom = useCallback(() => {
+    internalZoomRef.current = true;
+    if (internalZoomTimerRef.current) clearTimeout(internalZoomTimerRef.current);
+    internalZoomTimerRef.current = setTimeout(() => {
+      internalZoomRef.current = false;
+    }, INTERNAL_ZOOM_GUARD_MS);
+  }, []);
+
+  /** Sale del modo navegación/seguimiento (interacción manual del usuario). */
+  const exitFollowMode = useCallback(() => {
+    setFollowDriver(false);
+    stopHeadingAnimation();
+    visualHeadingRef.current = null;
+    setDriverHeading(0);
+    const map = mapRef.current;
+    if (map && map.getHeading?.()) map.setHeading(0);
+  }, [stopHeadingAnimation]);
+
+  const handleMapLoad = useCallback(
+    (map: google.maps.Map) => {
+      mapRef.current = map;
+      mapListenersRef.current.forEach((listener) => listener.remove());
+      mapListenersRef.current = [
+        // Pan manual → exploración.
+        map.addListener("dragstart", () => exitFollowMode()),
+        // Zoom gestual (pinch/rueda) → exploración. Los cambios de zoom de la
+        // propia cámara (Centrar GPS / encuadres / Ver viaje) llevan guard.
+        map.addListener("zoom_changed", () => {
+          if (!internalZoomRef.current) exitFollowMode();
+        }),
+      ];
+    },
+    [exitFollowMode]
+  );
+
   const handleMapUnmount = useCallback(() => {
+    stopHeadingAnimation();
     mapListenersRef.current.forEach((listener) => listener.remove());
     mapListenersRef.current = [];
     mapRef.current = null;
-  }, []);
+  }, [stopHeadingAnimation]);
 
-  // Recentrar al repartidor cuando NO hay ruta encuadrada (esperando pedido,
-  // ruta fallida o todavía cargando). Al salir de una navegación con ruta se
-  // restaura el zoom por defecto y se vuelve a centrar al repartidor.
+  // Limpieza global al desmontar.
+  useEffect(() => {
+    return () => {
+      stopHeadingAnimation();
+      if (internalZoomTimerRef.current) clearTimeout(internalZoomTimerRef.current);
+    };
+  }, [stopHeadingAnimation]);
+
+  // Rumbo derivado por movimiento del GPS real (no aplica en simulación).
+  useEffect(() => {
+    if (sim.active) {
+      movementPrevRef.current = null;
+      movementHeadingRef.current = null;
+      return;
+    }
+    const now = Date.now();
+    const prev = movementPrevRef.current;
+    movementPrevRef.current = { pos: currentLocation, ts: now };
+    if (prev) {
+      const elapsed = now - prev.ts;
+      const dist = haversineMeters(prev.pos, currentLocation);
+      if (elapsed >= NAV_MOVEMENT_MIN_MS && dist >= NAV_MOVEMENT_MIN_METERS) {
+        const raw = bearingBetween(prev.pos, currentLocation);
+        movementHeadingRef.current =
+          movementHeadingRef.current == null
+            ? raw
+            : normalizeDeg(
+                movementHeadingRef.current +
+                  shortestAngleDelta(raw, movementHeadingRef.current) * 0.35
+              );
+      }
+    }
+  }, [currentLocation, sim.active]);
+
+  // Al salir de una navegación con ruta (pedido entregado / ruta fallida):
+  // restaurar norte arriba, zoom por defecto y centrar al repartidor.
   useEffect(() => {
     const map = mapRef.current;
     if (map && prevNavigatingRef.current && !navigatingWithRoute) {
+      stopHeadingAnimation();
+      visualHeadingRef.current = null;
+      setDriverHeading(0);
+      map.setHeading(0);
+      markInternalZoom();
       map.setZoom(DEFAULT_ZOOM);
-      setMapCenter(currentLocation);
       lastFollowPosRef.current = currentLocation;
+      map.setCenter(currentLocation);
       setFollowDriver(true);
     }
     prevNavigatingRef.current = navigatingWithRoute;
+  }, [navigatingWithRoute, currentLocation, stopHeadingAnimation, markInternalZoom, mapsLoaded]);
 
-    if (navigatingWithRoute || !map || !followDriver) return;
-    const last = lastFollowPosRef.current;
-    const dist = last ? haversineMeters(last, currentLocation) : Infinity;
-    if (dist < DRIVER_CENTER_METERS) return;
-    lastFollowPosRef.current = currentLocation;
-    setMapCenter(currentLocation);
-  }, [navigatingWithRoute, currentLocation, followDriver, mapsLoaded]);
-
-  // Encuadre de la ruta vial: cuando llega una ruta nueva se encuadran
-  // repartidor + trayecto completo; después solo se re-encuadra si el
-  // repartidor se mueve lo suficiente o está por salirse de la vista — nunca
-  // en cada tick de GPS y sin pelear contra el modo exploración (salvo cambio
-  // de tramo recolección → entrega, que re-encuadra una sola vez).
+  // ── Modo navegación (conductor en el tercio inferior, rumbo, ruta por delante)
   useEffect(() => {
-    if (!navigatingWithRoute || !mapRef.current || !roadRoute) return;
     const map = mapRef.current;
-    const routeChanged = lastFramedRouteRef.current !== roadRoute;
-    const legChanged = prevFramedLegKeyRef.current !== legKey;
+    if (!mapsLoaded || !map || !followDriver || !driverHasLocation) return;
+    const withRoute = Boolean(
+      navTarget && roadRoute?.path && roadRoute.path.length >= 2
+    );
 
-    if (!routeChanged && !legChanged) {
-      if (!followDriver) return;
-      const last = lastCamPosRef.current;
-      const movedEnough = last
-        ? haversineMeters(last, currentLocation) >= CAMERA_FOLLOW_METERS
-        : true;
-      if (!movedEnough) return;
-      if (!isDriverOutsideViewport(map, currentLocation)) return;
-    } else if (routeChanged && !followDriver && !legChanged) {
-      // El usuario está explorando y solo cambió la ruta (mismo tramo):
-      // no mover la cámara.
+    if (!withRoute) {
+      // Sin ruta: seguimiento simple, norte arriba (no girar el mapa).
+      if (visualHeadingRef.current != null) {
+        visualHeadingRef.current = null;
+        setDriverHeading(0);
+        map.setHeading(0);
+      }
+      const last = lastFollowPosRef.current;
+      const dist = last ? haversineMeters(last, currentLocation) : Infinity;
+      if (dist < DRIVER_CENTER_METERS) return;
+      lastFollowPosRef.current = currentLocation;
+      map.setCenter(currentLocation);
       return;
     }
 
-    frameRouteView(map, [currentLocation, ...roadRoute.path]);
-    lastCamPosRef.current = currentLocation;
-    lastFramedRouteRef.current = roadRoute;
-    if (legChanged) {
-      prevFramedLegKeyRef.current = legKey;
-      setFollowDriver(true);
-    } else if (prevFramedLegKeyRef.current !== legKey) {
-      prevFramedLegKeyRef.current = legKey;
+    const moved = lastCamDriverPosRef.current
+      ? haversineMeters(lastCamDriverPosRef.current, currentLocation)
+      : Infinity;
+    const target = headingResolverRef.current();
+
+    // Rotar solo si hay una fuente real de rumbo (movimiento/GPS) o simulación;
+    // así el mapa no gira mientras el conductor está detenido sin rumbo.
+    const hasMotion =
+      sim.active || gpsHeading != null || movementHeadingRef.current != null;
+    if (target != null && hasMotion) {
+      const current = visualHeadingRef.current;
+      if (current == null || Math.abs(shortestAngleDelta(target, current)) > NAV_HEADING_SKIP_DEG) {
+        startHeadingTween(target);
+      }
     }
-  }, [navigatingWithRoute, currentLocation, roadRoute, legKey, followDriver]);
+
+    if (moved < NAV_ANCHOR_UPDATE_METERS && lastCamDriverPosRef.current) return;
+    lastCamDriverPosRef.current = currentLocation;
+    const heading = visualHeadingRef.current ?? 0;
+    map.setCenter(aheadCameraPoint(map, currentLocation, heading));
+    // Zoom de navegación al entrar (sin pisar un zoom manual posterior).
+    const zoom = map.getZoom();
+    if (typeof zoom === "number" && (zoom < 15 || zoom > 18.5)) {
+      markInternalZoom();
+      map.setZoom(FOLLOW_NAV_ZOOM);
+    }
+  }, [
+    mapsLoaded,
+    followDriver,
+    driverHasLocation,
+    currentLocation,
+    roadRoute,
+    navTarget,
+    gpsHeading,
+    sim.active,
+    startHeadingTween,
+    markInternalZoom,
+  ]);
+
+  // Encuadre general de un tramo NUEVO (primera ruta o cambio recolección →
+  // entrega), una sola vez y solo en modo seguimiento. Después, mientras
+  // conduce, la cámara navegación se ancla sola (arriba) sin volver a
+  // encuadrar toda la ruta.
+  useEffect(() => {
+    const map = mapRef.current;
+    const routeReady = Boolean(
+      navTarget && driverHasLocation && roadRoute?.path && roadRoute.path.length >= 2
+    );
+    if (!mapsLoaded || !map || !routeReady || !followDriver) return;
+    const legChanged = prevFramedLegKeyRef.current !== legKey;
+    const neverFramed = lastFramedRouteRef.current === null;
+    if (!legChanged && !neverFramed) {
+      lastFramedRouteRef.current = roadRoute;
+      return;
+    }
+    // Vista general del nuevo tramo, norte arriba.
+    stopHeadingAnimation();
+    visualHeadingRef.current = null;
+    setDriverHeading(0);
+    map.setHeading(0);
+    markInternalZoom();
+    frameRouteView(map, [currentLocation, ...roadRoute!.path]);
+    prevFramedLegKeyRef.current = legKey;
+    lastFramedRouteRef.current = roadRoute;
+  }, [
+    mapsLoaded,
+    followDriver,
+    roadRoute,
+    legKey,
+    navTarget,
+    driverHasLocation,
+    currentLocation,
+    stopHeadingAnimation,
+    markInternalZoom,
+  ]);
 
   // ── Controles de cámara ─────────────────────────────────────────
 
+  // "Centrar GPS" = volver al MODO NAVEGACIÓN: posición adelantada (tercio
+  // inferior), orientación por rumbo, zoom de conducción y seguimiento activo.
+  // NUNCA encuadra todo el viaje ni recalcula routing.
   const handleCenterGps = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
-    const zoom = map.getZoom();
-    if (typeof zoom !== "number" || zoom < FOLLOW_NAV_ZOOM) {
-      map.setZoom(FOLLOW_NAV_ZOOM);
+    markInternalZoom();
+    map.setZoom(FOLLOW_NAV_ZOOM);
+    const withRoute = Boolean(
+      navTarget && roadRoute?.path && roadRoute.path.length >= 2
+    );
+    const target = headingResolverRef.current ? headingResolverRef.current() : null;
+    if (withRoute && target != null) {
+      startHeadingTween(target);
+    } else {
+      stopHeadingAnimation();
+      visualHeadingRef.current = null;
+      setDriverHeading(0);
+      map.setHeading(0);
     }
-    // Neutralizar encuadres pendientes: al centrar se reanuda el seguimiento
-    // sin volver a encuadrar toda la ruta.
     lastFollowPosRef.current = currentLocation;
-    lastCamPosRef.current = currentLocation;
-    lastFramedRouteRef.current = roadRoute;
+    lastCamDriverPosRef.current = currentLocation;
+    const heading = visualHeadingRef.current ?? 0;
+    map.setCenter(
+      withRoute ? aheadCameraPoint(map, currentLocation, heading) : currentLocation
+    );
     setFollowDriver(true);
-    setMapCenter(currentLocation);
-  }, [currentLocation, roadRoute]);
+  }, [
+    currentLocation,
+    roadRoute,
+    navTarget,
+    startHeadingTween,
+    stopHeadingAnimation,
+    markInternalZoom,
+  ]);
 
+  // "Ver viaje completo" = vista convencional (norte arriba, sin seguimiento):
+  // fitBounds sobre la geometría vial real; no vuelve al conductor solo.
   const handleFullTripView = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -635,14 +904,27 @@ export default function DrivePage() {
     }
     if (points.length < 2) {
       // Solo hay un punto: comportarse como centrar GPS.
-      setFollowDriver(true);
-      setMapCenter(currentLocation);
+      handleCenterGps();
       return;
     }
+    stopHeadingAnimation();
+    visualHeadingRef.current = null;
+    setDriverHeading(0);
+    map.setHeading(0);
+    markInternalZoom();
     frameRouteView(map, points);
     // Dejar de forzar la cámara para que pueda ver el recorrido completo.
     setFollowDriver(false);
-  }, [currentLocation, roadRoute, activeOrder, pickupPoint, deliveryPoint]);
+  }, [
+    currentLocation,
+    roadRoute,
+    activeOrder,
+    pickupPoint,
+    deliveryPoint,
+    handleCenterGps,
+    stopHeadingAnimation,
+    markInternalZoom,
+  ]);
 
   // ── Contenido de la barra de navegación (etapa actual) ──────────
 
@@ -657,17 +939,24 @@ export default function DrivePage() {
       hasLegMetrics &&
       guidance !== null &&
       guidance.remaining <= NEAR_DESTINATION_METERS;
-    const distanceText =
-      hasLegMetrics && guidance ? formatMetersShort(guidance.remaining) : null;
-    const durationText =
+    // Distancia/tiempo RESTANTES calculados desde currentLocation sobre la
+    // geometría real (la tarjeta conserva sus valores originales del servicio).
+    const distanceLabel =
+      hasLegMetrics && guidance
+        ? `${formatMetersShort(guidance.remaining)} restantes`
+        : null;
+    const durationLabel =
       hasLegMetrics && guidance?.remainingSeconds != null
         ? formatSecondsShort(guidance.remainingSeconds)
         : null;
     const progress =
       hasLegMetrics && guidance ? guidance.fractionCompleted : null;
-    const address = navPhase === "to_delivery" || navPhase === "at_delivery" || navPhase === "done"
-      ? deliveryLabel
-      : pickupLabel;
+    const address =
+      navPhase === "to_delivery" || navPhase === "at_delivery" || navPhase === "done"
+        ? deliveryLabel
+        : pickupLabel;
+    const arrivalManeuver: string | null = arriving ? "arrive" : null;
+    const maneuver = arrivalManeuver ?? guidance?.maneuver ?? null;
 
     switch (navPhase) {
       case "to_pickup":
@@ -677,12 +966,13 @@ export default function DrivePage() {
           accent: "orange" as const,
           orderCode,
           main: arriving
-            ? "Estás llegando a la recolección"
+            ? "Estás llegando"
             : guidance?.instruction ?? "Dirígete a la recolección",
-          sub: address,
-          distance: distanceText,
-          duration: durationText,
+          sub: arriving ? `Destino de recolección · ${address}` : address,
+          distance: distanceLabel,
+          duration: durationLabel,
           progress,
+          maneuver,
           waiting: !guidance && sim.active,
         };
       case "at_pickup":
@@ -696,6 +986,7 @@ export default function DrivePage() {
           distance: null,
           duration: null,
           progress: null,
+          maneuver: null,
           waiting: false,
         };
       case "to_delivery":
@@ -705,12 +996,13 @@ export default function DrivePage() {
           accent: "red" as const,
           orderCode,
           main: arriving
-            ? "Estás llegando al destino"
+            ? "Estás llegando"
             : guidance?.instruction ?? "Dirígete a la entrega",
-          sub: address,
-          distance: distanceText,
-          duration: durationText,
+          sub: arriving ? `Destino de entrega · ${address}` : address,
+          distance: distanceLabel,
+          duration: durationLabel,
           progress,
+          maneuver,
           waiting: !guidance && sim.active,
         };
       case "at_delivery":
@@ -719,11 +1011,12 @@ export default function DrivePage() {
           icon: <MapPin className="h-5 w-5" />,
           accent: "green" as const,
           orderCode,
-          main: "Estás llegando al destino",
+          main: "Has llegado a la entrega",
           sub: address,
           distance: null,
           duration: null,
           progress: null,
+          maneuver: null,
           waiting: false,
         };
       case "done":
@@ -737,6 +1030,7 @@ export default function DrivePage() {
           distance: null,
           duration: null,
           progress: null,
+          maneuver: null,
           waiting: false,
         };
       default:
@@ -926,19 +1220,19 @@ export default function DrivePage() {
         {mapsLoaded ? (
           <GoogleMap
             mapContainerStyle={containerStyle}
-            center={mapCenter}
+            center={DEFAULT_CENTER}
             zoom={DEFAULT_ZOOM}
             options={mapOptions}
             onLoad={handleMapLoad}
             onUnmount={handleMapUnmount}
           >
-            {/* Driver marker */}
+            {/* Driver marker: flecha de navegación que se rota según rumbo. */}
             <Marker
               position={currentLocation}
               icon={{
-                url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(driverPinSvg)}`,
-                scaledSize: new google.maps.Size(32, 32),
-                anchor: new google.maps.Point(16, 16),
+                url: driverArrowIcon(driverHeading),
+                scaledSize: new google.maps.Size(34, 34),
+                anchor: new google.maps.Point(17, 17),
               }}
             />
 
@@ -1049,9 +1343,10 @@ export default function DrivePage() {
           orderCode={navContent.orderCode}
           mainText={navContent.main}
           subText={navContent.sub}
-          distanceText={navContent.distance}
-          durationText={navContent.duration}
+          distanceLabel={navContent.distance}
+          durationLabel={navContent.duration}
           progress={navContent.progress}
+          maneuver={navContent.maneuver}
           waitingForRoute={navContent.waiting}
           simulated={sim.active}
         />

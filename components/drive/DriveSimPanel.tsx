@@ -1,12 +1,23 @@
 "use client";
 
-import { FlaskConical, Loader2, Pause, Play, RotateCcw, Square } from "lucide-react";
+import { useState } from "react";
+import {
+  ChevronDown,
+  ChevronUp,
+  FlaskConical,
+  Loader2,
+  Pause,
+  Play,
+  RotateCcw,
+  Square,
+} from "lucide-react";
 import { SIM_SPEEDS } from "@/hooks/useDriveSimulator";
 
 /**
  * Panel de herramientas de DESARROLLO (solo dev local / preview/staging).
  * La página solo lo monta cuando el entorno NO es producción; aquí se
  * renderiza condicionalmente con `visible` para no interferir con la UI.
+ * Se puede contraer a una píldora mínima para no tapar el mapa.
  */
 export function DriveSimPanel({
   visible,
@@ -39,6 +50,7 @@ export function DriveSimPanel({
   onStop: () => void;
   onSpeed: (speed: (typeof SIM_SPEEDS)[number]) => void;
 }) {
+  const [expanded, setExpanded] = useState(true);
   if (!visible) return null;
 
   const mainLabel = !active
@@ -56,6 +68,27 @@ export function DriveSimPanel({
     else onResume();
   };
 
+  // Minimizado: píldora compacta que vuelve a expandirse al tocarla.
+  if (!expanded) {
+    return (
+      <button
+        onClick={() => setExpanded(true)}
+        className="absolute left-3 top-20 z-30 flex items-center gap-1.5 rounded-full bg-[#0d1526]/95 px-3 py-2 text-xs font-black text-purple-300 shadow-xl ring-1 ring-white/10 backdrop-blur transition active:scale-95"
+        aria-label="Expandir simulador"
+        title="Expandir simulador de viaje"
+      >
+        <FlaskConical className="h-3.5 w-3.5" />
+        SIM
+        {active && (
+          <span className="ml-1 flex items-center gap-1 rounded-full bg-purple-500/20 px-2 py-0.5 text-[10px] font-bold text-purple-200">
+            🧪 MODO SIMULACIÓN
+          </span>
+        )}
+        <ChevronUp className="h-3.5 w-3.5 text-white/50" />
+      </button>
+    );
+  }
+
   return (
     <div className="absolute left-3 top-20 z-30 w-[min(15.5rem,calc(100vw-1.5rem))] rounded-2xl bg-[#0d1526]/95 p-2.5 text-xs text-white shadow-xl ring-1 ring-white/10 backdrop-blur">
       <div className="flex items-center justify-between gap-2">
@@ -63,11 +96,21 @@ export function DriveSimPanel({
           <FlaskConical className="h-3.5 w-3.5" />
           Simulador
         </span>
-        {active && (
-          <span className="flex items-center gap-1 rounded-full bg-purple-500/20 px-2 py-0.5 text-[10px] font-bold text-purple-200">
-            🧪 MODO SIMULACIÓN
-          </span>
-        )}
+        <div className="flex items-center gap-1.5">
+          {active && (
+            <span className="flex items-center gap-1 rounded-full bg-purple-500/20 px-2 py-0.5 text-[10px] font-bold text-purple-200">
+              🧪 MODO SIMULACIÓN
+            </span>
+          )}
+          <button
+            onClick={() => setExpanded(false)}
+            className="flex h-5 w-5 items-center justify-center rounded-md bg-white/10 text-white/60 transition hover:bg-white/20"
+            aria-label="Minimizar simulador"
+            title="Minimizar simulador"
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
 
       <div className="mt-2 grid grid-cols-[1fr_auto_auto] gap-1.5">

@@ -105,6 +105,47 @@ export function haversineMeters(a: RoutePoint, b: RoutePoint): number {
   return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
 }
 
+/** Rumbo (bearing) en grados [0,360) desde el norte, entre dos puntos. */
+export function bearingBetween(a: RoutePoint, b: RoutePoint): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const toDeg = (rad: number) => (rad * 180) / Math.PI;
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+/**
+ * Desplaza `point` `meters` metros en la dirección `bearingDeg` (0 = norte,
+ * 90 = este). Se usa solo para el objetivo de CÁMARA (nunca mueve al
+ * conductor ni la ruta).
+ */
+export function movePointAlong(point: RoutePoint, bearingDeg: number, meters: number): RoutePoint {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = (Math.cos(toRad(bearingDeg)) * meters) / 111320;
+  const dLng =
+    (Math.sin(toRad(bearingDeg)) * meters) /
+    (111320 * Math.cos(toRad(point.lat)) || 1);
+  return { lat: point.lat + dLat, lng: point.lng + dLng };
+}
+
+/** Rumbo del tramo de la polyline en la posición `meters` (0 si no aplica). */
+export function headingAlongPath(path: RoutePoint[], meters: number): number | null {
+  if (path.length < 2) return null;
+  let remaining = meters;
+  for (let i = 1; i < path.length; i++) {
+    const seg = haversineMeters(path[i - 1], path[i]);
+    if (remaining <= seg || i === path.length - 1) {
+      return bearingBetween(path[i - 1], path[i]);
+    }
+    remaining -= seg;
+  }
+  return null;
+}
+
 /** Longitud total de una polyline en metros (suma de segmentos). */
 export function pathLengthMeters(path: RoutePoint[]): number {
   let total = 0;
