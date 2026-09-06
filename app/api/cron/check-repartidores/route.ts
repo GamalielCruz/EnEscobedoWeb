@@ -3,6 +3,7 @@ import { backendClient } from '@/sanity/lib/backendClient'
 import { appendOrderEvent } from '@/lib/order-events'
 import { redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
 import { sendBotMessage } from '@/lib/whatsapp'
+import { processScheduledOrders } from '@/lib/scheduled-orders'
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -64,9 +65,11 @@ export async function GET(req: NextRequest) {
     ocupadosOmitidos: 0,
     ofertasPendientesOmitidas: 0,
     errores: 0,
+    programados: null as Awaited<ReturnType<typeof processScheduledOrders>> | null,
   }
 
   try {
+    summary.programados = await processScheduledOrders(now)
     const candidatosOfertasExpiradas: RepartidorCron[] = await backendClient.fetch(
       `*[
         _type == "repartidor" &&

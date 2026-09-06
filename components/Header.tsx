@@ -14,11 +14,15 @@ import useBasketStore from "@/store/store";
 import Image from "next/image";
 import { useHydration } from "@/hooks/useHydration";
 import { useEffect, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
+import { AddressPicker } from "@/components/AddressPicker";
 
 type OwnedStore = { _id: string; name: string; storeId?: string };
 
 export function Header() {
   const { user, isLoaded } = useUser();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
   const isHydrated = useHydration();
   const [ownedStores, setOwnedStores] = useState<OwnedStore[]>([]);
   const [isVisible, setIsVisible] = useState(true);
@@ -95,27 +99,36 @@ export function Header() {
     Boolean(user) &&
     ownedStores.length > 0;
 
+  // Ocultar header en modo mandados
+  const isMandadoMode = pathname === "/" && searchParams?.get("service") === "mandado";
+
+  if (isMandadoMode) {
+    return null;
+  }
+
   return (
     <header
-      className={`sticky top-0 z-50 w-full bg-white border-b border-gray-100 flex flex-wrap justify-between items-center px-2 py-2 transition-transform duration-300 ease-in-out motion-reduce:transition-none ${
+      className={`sticky top-0 z-50 w-full border-b border-gray-100 bg-white px-3 py-2 transition-transform duration-300 ease-in-out motion-reduce:transition-none ${
         isVisible ? "translate-y-0" : "-translate-y-full"
       }`}
     >
-      <div className="w-full ">
-        <div className="flex items-center justify-between w-full py-2 sm:py-0 gap-2">
-          <Link href="/" className="flex items-center gap-2 group" aria-label="En Escobedo">
-            <span className="relative flex items-center justify-center w-10 h-10">
-              <Image src="/logomenu.svg" alt="ElMenu Logo" width={40} height={40} className="w-8" />
-            </span>
-            <span
-              className={`relative hidden lg:flex items-center justify-center w-auto h-8 sm:h-10`}
-            >
-              <Image src="/logo.svg" alt="ElMenu Logo" width={150} height={60} />
-            </span>
-          </Link>
+      <div className="w-full">
+        <div className="grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-1.5 gap-y-1 sm:gap-x-2">
+          <div className="col-start-1 row-start-1 flex shrink-0 items-center">
+            <Link href="/" className="flex items-center gap-2 group" aria-label="En Escobedo">
+              <span className="relative flex h-10 w-10 items-center justify-center sm:h-11 sm:w-11">
+                <Image src="/logomenu.svg" alt="ElMenu Logo" width={40} height={40} className="h-8 w-8" priority />
+              </span>
+              <span
+                className={`relative hidden lg:flex items-center justify-center w-auto h-8 sm:h-10`}
+              >
+                <Image src="/logo.png" alt="ElMenu Logo" width={150} height={60} className="h-auto w-[150px]" priority />
+              </span>
+            </Link>
+          </div>
 
-          <div className="flex-1 flex justify-center sm:justify-end mx-2 lg:max-w-2xl lg:mx-auto">
-            <Form action="/search" className="w-full sm:w-80 lg:w-full max-w-lg lg:max-w-full">
+          <div className="col-start-2 col-end-3 row-start-1 min-w-0 sm:px-2 lg:mx-auto lg:w-full lg:max-w-2xl">
+            <Form action="/search" className="w-full sm:max-w-lg lg:max-w-full">
               <div className="relative w-full">
                 <input
                   type="text"
@@ -124,7 +137,6 @@ export function Header() {
                   className="
                     border-[#eb1901]
                     text-[#eb1901]
-                    px-4
                     py-2
                     rounded-2xl
                     focus:outline-none
@@ -135,22 +147,32 @@ export function Header() {
                     focus:ring-offset-[#eb1901]
                     placeholder:text-[#eb1901]
                     border
+                    h-10
                     w-full
+                    min-w-0
+                    pl-3
                     pr-10
-                    text-base
+                    text-sm
+                    sm:h-11
+                    sm:pl-4
+                    sm:text-base
                   "
                 />
-                <span className="absolute inset-y-0 right-3 flex items-center pointer-events-none text-[#eb1901]">
+                <button
+                  type="submit"
+                  aria-label="Buscar"
+                  className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-[#eb1901]"
+                >
                   <SearchIcon className="w-5 h-5" />
-                </span>
+                </button>
               </div>
             </Form>
           </div>
 
-          <div className="flex items-center gap-2 ml-2">
+          <div className="col-start-3 row-start-1 flex items-center gap-1 sm:gap-2">
             <Link
               href="/basket"
-              className="relative flex items-center justify-center bg-[#eb1901] hover:bg-[#eb1901]/80 text-gray-50 font-bold py-2 px-3 rounded"
+              className="relative flex h-10 min-w-10 items-center justify-center rounded-xl bg-[#eb1901] px-2 font-bold text-gray-50 hover:bg-[#eb1901]/80 sm:h-11 sm:min-w-11 sm:px-2.5 lg:gap-1 lg:px-3"
               aria-label="Ver carrito"
             >
               <TrolleyIcon className="w-6 h-6" />
@@ -162,31 +184,38 @@ export function Header() {
                   {itemCount}
                 </span>
               )}
-              <span className="hidden sm:block">Carrito</span>
+              <span className="hidden lg:block">Carrito</span>
             </Link>
 
             <Link
               href="/orders"
-              className="relative flex items-center justify-center bg-[#eb1901] hover:bg-[#eb1901]/80 text-gray-50 font-bold py-2 px-3 rounded"
+              className="relative flex h-10 min-w-10 items-center justify-center rounded-xl bg-[#eb1901] px-2 font-bold text-gray-50 hover:bg-[#eb1901]/80 sm:h-11 sm:min-w-11 sm:px-2.5 lg:gap-1 lg:px-3"
+              aria-label="Pedidos"
             >
               <PackageIcon className="w-6 h-6" />
-              <span className="hidden sm:block">Pedidos</span>
+              <span className="hidden lg:block">Pedidos</span>
             </Link>
 
             {shouldShowManagerIcon ? (
               <Link
                 href="/dashboard"
-                className="relative flex items-center justify-center bg-[#eb1901] hover:bg-[#eb1901]/80 text-gray-50 font-bold py-2 px-3 rounded"
+                className="relative flex h-10 min-w-10 items-center justify-center rounded-xl bg-[#eb1901] px-2 font-bold text-gray-50 hover:bg-[#eb1901]/80 sm:h-11 sm:min-w-11 sm:px-2.5 lg:gap-1 lg:px-3"
                 aria-label="Panel del restaurante"
               >
                 <LayoutDashboard className="w-6 h-6" />
-                <span className="hidden sm:block">Manager</span>
+                <span className="hidden lg:block">Manager</span>
               </Link>
             ) : null}
 
+            {/* El JS de Clerk carga de forma asíncrona: si termina de cargar
+                ANTES de que React hidrate, ClerkLoaded/SignInButton renderizan
+                contenido distinto al del servidor y React lanza un hydration
+                mismatch intermitente. Se renderiza solo tras el montaje para
+                que servidor y primer render del cliente coincidan. */}
+            {isHydrated && (
             <ClerkLoaded>
               {user ? (
-                <div className="flex items-center">
+                <div className="flex min-w-9 items-center justify-center">
                   <UserButton />
                 </div>
               ) : (
@@ -202,7 +231,9 @@ export function Header() {
                 </SignInButton>
               )}
             </ClerkLoaded>
+            )}
 
+            {isHydrated && (
             <ClerkLoaded>
               {user && (
                 <div className="flex items-center space-x-2">
@@ -213,7 +244,13 @@ export function Header() {
                 </div>
               )}
             </ClerkLoaded>
+            )}
           </div>
+          {pathname === "/" && isHydrated && isLoaded && user && (
+            <div className="col-start-1 col-end-4 row-start-2 min-w-0">
+              <AddressPicker userId={user.id} />
+            </div>
+          )}
         </div>
       </div>
     </header>

@@ -146,6 +146,20 @@ export const productType = defineType ({
       type: "number",
       validation: (Rule) => Rule.min(0),
     }),
+    defineField({
+      name: "allowSpecialInstructions",
+      title: "Permitir instrucciones especiales",
+      type: "boolean",
+      initialValue: true,
+      description: "Permite que el cliente agregue una nota a este producto.",
+    }),
+    defineField({
+      name: "acceptsAllergyRequests",
+      title: "Aceptar solicitudes por alergia",
+      type: "boolean",
+      initialValue: false,
+      description: "Activalo solo si el restaurante puede atender estas solicitudes.",
+    }),
     // Campos de aprobación
     defineField({
       name: "approvalStatus",
@@ -189,6 +203,16 @@ export const productType = defineType ({
           name: "stock",
           title: "Stock propuesto",
           type: "number",
+        }),
+        defineField({
+          name: "allowSpecialInstructions",
+          title: "Instrucciones especiales propuestas",
+          type: "boolean",
+        }),
+        defineField({
+          name: "acceptsAllergyRequests",
+          title: "Solicitudes por alergia propuestas",
+          type: "boolean",
         }),
         defineField({
           name: "description",

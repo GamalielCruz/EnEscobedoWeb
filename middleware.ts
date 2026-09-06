@@ -2,16 +2,56 @@ import { clerkMiddleware } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { assertSafeDeploymentConfiguration } from "@/lib/deployment-environment";
+import { buildUrl } from "@/lib/urls";
 
 assertSafeDeploymentConfiguration();
 
 export default clerkMiddleware(async (auth, req: NextRequest) => {
   const { userId } = await auth();
+  const pathname = req.nextUrl.pathname;
 
-  if (req.nextUrl.pathname.startsWith("/dashboard") && !req.nextUrl.pathname.startsWith("/api/")) {
+  // ── Drive subdomain → rewrite to /drive ──────────────────────────
+  // Browser stays at / (no redirect). Next.js internally resolves /drive.
+  // Covers: drive.localhost (dev), drive.elmenu.site (prod),
+  //         drive.staging.elmenu.site (preview).
+  // NOTE: req.nextUrl.hostname returns the Vercel-internal hostname,
+  // not the public hostname. On Vercel the original public hostname
+  // arrives in x-forwarded-host; in local dev it arrives in host.
+  const forwardedHost = req.headers.get("x-forwarded-host");
+  const hostHeader = forwardedHost ?? req.headers.get("host") ?? "";
+  const requestHostname = hostHeader.split(":")[0].toLowerCase();
+
+  // ── TEMPORARY DIAGNOSTIC LOG (remove after confirming fix) ──────
+  console.log(
+    "[middleware] host=",
+    req.headers.get("host"),
+    "forwardedHost=",
+    forwardedHost,
+    "hostname=",
+    requestHostname,
+    "path=",
+    pathname,
+    "isDrive=",
+    requestHostname.startsWith("drive."),
+  );
+
+  if (
+    requestHostname.startsWith("drive.") &&
+    pathname === "/" &&
+    !pathname.startsWith("/api/")
+  ) {
+    const url = req.nextUrl.clone();
+    url.pathname = "/drive";
+    return NextResponse.rewrite(url);
+  }
+
+  if (pathname === "/super" || pathname === "/super/") {
+    return NextResponse.redirect(new URL("/abarrotes-pilot", req.url));
+  }
+
+  if (pathname.startsWith("/dashboard") && !pathname.startsWith("/api/")) {
     if (!userId) {
-      const loginUrl = new URL("/", req.url);
-      return NextResponse.redirect(loginUrl);
+      return NextResponse.redirect(buildUrl("/"));
     }
   }
 

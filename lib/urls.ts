@@ -1,61 +1,44 @@
-/**
- * Utility functions for handling URLs consistently across the application
- */
-import { getDeploymentEnvironment } from "./deployment-environment";
+const URL_ERROR = "debe ser una URL absoluta con protocolo http o https";
 
-/**
- * Get the public base URL for the application
- * This should be used for external redirects, webhooks, and public-facing URLs
- */
-export function getPublicUrl(): string {
-  // Priority order:
-  // 1. NEXT_PUBLIC_SITE_URL (explicit public URL)
-  // 2. NEXT_PUBLIC_BASE_URL (fallback)
-  // 3. Environment-specific defaults
-  
-  const configuredUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_BASE_URL;
-  const environment = getDeploymentEnvironment();
+export function getPublicBaseUrl(): string {
+  const candidates = [
+    ["NEXT_PUBLIC_APP_URL", process.env.NEXT_PUBLIC_APP_URL],
+    ["NEXT_PUBLIC_BASE_URL", process.env.NEXT_PUBLIC_BASE_URL],
+    ["NEXT_PUBLIC_SITE_URL", process.env.NEXT_PUBLIC_SITE_URL],
+    ["VERCEL_URL", process.env.VERCEL_URL],
+  ] as const;
 
-  const invalidProductionUrl =
-    environment === "production" &&
-    Boolean(
-      configuredUrl?.includes("en-escobedo-web.vercel.app") ||
-      configuredUrl?.includes("localhost")
-    );
+  for (const [name, value] of candidates) {
+    const configuredUrl = value?.trim();
+    if (!configuredUrl) continue;
 
-  if (environment === "production" && configuredUrl && !invalidProductionUrl) {
-    return configuredUrl.replace(/\/$/, "");
-  }
+    const hasProtocol = /^[a-z][a-z\d+.-]*:/i.test(configuredUrl);
+    const absoluteUrl = name === "VERCEL_URL" && !hasProtocol
+      ? `https://${configuredUrl}`
+      : configuredUrl;
 
-  if (environment === "production") {
-    return "https://elmenu.site";
-  }
+    let parsedUrl: URL;
+    try {
+      parsedUrl = new URL(absoluteUrl);
+    } catch {
+      throw new Error(`${name} ${URL_ERROR}`);
+    }
 
-  if (environment === "preview") {
-    const vercelUrl = process.env.NEXT_PUBLIC_VERCEL_URL || process.env.VERCEL_URL;
-    if (vercelUrl) return `https://${vercelUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}`;
+    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+      throw new Error(`${name} ${URL_ERROR}`);
+    }
+
+    return parsedUrl.toString().replace(/\/+$/, "");
   }
 
   return "http://localhost:3000";
 }
 
 /**
- * Get the internal URL for server-side operations
- * This can use VERCEL_URL for internal Vercel operations
- */
-export function getInternalUrl(): string {
-  if (process.env.VERCEL_URL) {
-    return `https://${process.env.VERCEL_URL}`;
-  }
-  
-  return getPublicUrl();
-}
-
-/**
  * Build a full URL from a path
  */
-export function buildUrl(path: string, usePublic: boolean = true): string {
-  const baseUrl = usePublic ? getPublicUrl() : getInternalUrl();
+export function buildUrl(path: string): string {
+  const baseUrl = getPublicBaseUrl();
   const cleanPath = path.startsWith('/') ? path : `/${path}`;
   return `${baseUrl}${cleanPath}`;
 }

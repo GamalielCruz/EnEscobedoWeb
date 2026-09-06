@@ -1,7 +1,7 @@
 import { PortableText } from "next-sanity";
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import AddToBasketButtonNew from "@/components/AddToBasketButtonNew";
+import AddToBasketWithCustomization from "@/components/AddToBasketWithCustomization";
 import { getProductBySlug } from "@/sanity/lib/products/getProductBySlug";
 import type { BlockContent, Product } from "@/sanity.types";
 import Image from "next/image";
@@ -125,7 +125,6 @@ export default async function ProductPage({
   };
 
   const affiliateStore = typedProduct.affiliateStore;
-  const optionGroups = typedProduct.optionGroups || [];
   const productName = sanitizeText(product.name) || "Producto";
   const descriptionText = portableTextToPlainText(product.description);
 
@@ -244,79 +243,7 @@ export default async function ProductPage({
             </Link>
           )}
 
-          {/* Opciones de personalización (similar a spice level, pero genérico) */}
-          {optionGroups.length > 0 && (
-            <div className="space-y-6 pt-2">
-              {optionGroups.map((group) => (
-                <section key={group._key} className="space-y-3">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-base font-semibold text-gray-900">
-                      {group.title}
-                    </h2>
-                    {group.required && (
-                      <span className="text-xs font-medium text-gray-500 px-2 py-1 rounded-full bg-gray-100">
-                        Obligatorio
-                      </span>
-                    )}
-                  </div>
-                  {group.description && (
-                    <p className="text-xs text-gray-500">
-                      {group.description}
-                    </p>
-                  )}
-                  <div className="space-y-2">
-                    {group.options?.map((option) => {
-                      const controlName = `group-${group._key}`;
-                      const inputType =
-                        group.selectionType === "multiple"
-                          ? "checkbox"
-                          : "radio";
-
-                      return (
-                        <label
-                          key={option._key}
-                          className="flex items-center justify-between rounded-xl border border-gray-200 px-3 py-2 cursor-pointer hover:bg-gray-50"
-                        >
-                          <div className="flex flex-col">
-                            <span className="text-sm text-gray-900">
-                              {option.label}
-                            </span>
-                            {option.description && (
-                              <span className="text-xs text-gray-500">
-                                {option.description}
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {option.priceDelta != null &&
-                              option.priceDelta !== 0 && (
-                                <span className="text-xs text-gray-700">
-                                  {option.priceDelta > 0 ? "+" : "-"}$
-                                  {Math.abs(option.priceDelta).toFixed(2)}
-                                </span>
-                              )}
-                            <input
-                              type={inputType}
-                              name={controlName}
-                              defaultChecked={option.isDefault}
-                              className="h-4 w-4 text-black border-gray-300 focus:ring-black"
-                              readOnly
-                            />
-                          </div>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </section>
-              ))}
-            </div>
-          )}
-
-        </div>
-
-        {/* Botón fijo al fondo, estilo “Add 1 to cart • $18.00” */}
-        <div className="sticky bottom-0 z-10 border-t border-gray-200 bg-white/95 px-5 py-4 shadow-[0_-8px_24px_rgba(0,0,0,0.05)] backdrop-blur">
-          <AddToBasketButtonNew
+          <AddToBasketWithCustomization
             product={product as unknown as Product}
             disabled={isOutOfStock}
           />

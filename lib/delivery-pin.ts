@@ -48,3 +48,27 @@ export function isDeliveryPinValid(orderNumber: string, pin: string, expectedHas
   if (!/^\d{6}$/.test(pin) || !/^[a-f0-9]{64}$/.test(expectedHash)) return false;
   return timingSafeEqual(Buffer.from(hashDeliveryPin(orderNumber, pin), "hex"), Buffer.from(expectedHash, "hex"));
 }
+
+/**
+ * ÚNICA regla que decide si una entrega requiere solicitar/validar NIP.
+ *
+ * - Mandados: SOLO la bandera real de "Entrega segura" (`mandadoEntregaSegura`)
+ *   determina si se pide NIP en la entrega. La existencia de un NIP almacenado
+ *   (hash/ciphertext) NO implica que la entrega lo requiera.
+ * - Restaurantes: se conserva el comportamiento actual (método pin pendiente
+ *   ⇒ se solicita).
+ */
+export function orderRequiresDeliveryPin(order: {
+  serviceKind?: string;
+  mandadoEntregaSegura?: boolean;
+  deliveryVerificationMethod?: string;
+  deliveryVerificationStatus?: string;
+}): boolean {
+  if (order.serviceKind === "mandado") {
+    return order.mandadoEntregaSegura === true;
+  }
+  return (
+    order.deliveryVerificationMethod === "pin" &&
+    order.deliveryVerificationStatus === "pending"
+  );
+}

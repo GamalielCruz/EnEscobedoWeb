@@ -5,8 +5,8 @@ import {
   getDeliveryPricingConfigId,
   normalizeDeliveryConfig,
 } from "@/lib/delivery-zones";
-import { getStoreOperationalState } from "@/lib/storeOperationalState";
 import { backendClient } from "@/sanity/lib/backendClient";
+import { normalizeProductRequests } from "./product-requests";
 import {
   isStripePaymentProvider,
   normalizePaymentMethod,
@@ -24,11 +24,22 @@ import {
   buildStateFields,
 } from "./order-state";
 import { createDeliveryPin } from "./delivery-pin";
-import { resolveFulfillmentProvider } from "./fulfillment";
+import { isDeliveryDriverAvailable, resolveFulfillmentProvider } from "./fulfillment";
 import { legalVersions } from "./legal-config";
+import { getDeliveryScheduleConfig } from "./delivery-schedule-config";
+import {
+  calculateScheduledDispatchAt,
+  calculateScheduledPreparationAt,
+  getStoreAvailability,
+  validateFulfillmentSelection,
+  type FulfillmentSelection,
+  type FulfillmentSlot,
+} from "./fulfillment-schedule";
+import { calculateOrderTotal } from "./platform-service-fee";
+import { getCommercialSettings, getMonthlyCommissionAccumulated } from "./commercial-config";
+import { calculateCappedCommission, resolveEffectiveCommercialConditions, type EffectiveCommercialConditions } from "./commercial-rules";
 
 const DEFAULT_DELIVERY_DRIVER_PAYOUT_RATE = 1;
-const DEFAULT_PLATFORM_COMMISSION_RATE = 0;
 
 function getNumberEnv(name: string, fallback: number) {
   const raw = process.env[name];
@@ -56,8 +67,21 @@ type StoreRecord = {
   manualOperationalStatus?: "open" | "closed" | "auto" | null;
   highDemandMode?: boolean | null;
   hasOwnDelivery?: boolean;
+  connectedCommunityDrivers?: number;
   deliveryFee?: number;
+  deliveryTimeMin?: number | null;
+  scheduledOrdersEnabled?: boolean | null;
+  minimumPreparationMinutes?: number | null;
+  scheduledOrderIntervalMinutes?: number | null;
+  maximumScheduledDays?: number | null;
+  lastDeliveryOrderMinutesBeforeClose?: number | null;
+  lastPickupOrderMinutesBeforeClose?: number | null;
   platformCommissionPercent?: number;
+  commercialPlanId?: "community" | "premium";
+  commercialOverrides?: Record<string, unknown>;
+  commercialReviewRequired?: boolean;
+  commercialNotes?: string;
+  commercialPlanStartedAt?: string;
   operatingHours?: Record<string, string>;
   serviceTypes?: {
     delivery?: boolean;
@@ -77,6 +101,8 @@ type ProductRecord = {
   approvalStatus?: string;
   isVisible?: boolean;
   affiliateStore?: { _ref?: string };
+  allowSpecialInstructions?: boolean;
+  acceptsAllergyRequests?: boolean;
   optionGroups?: Array<{
     title?: string;
     required?: boolean;
@@ -92,6 +118,8 @@ export type OrderItemInput = {
   productId: string;
   quantity: number;
   customizations?: Record<string, string | string[]>;
+  notes?: string;
+  allergies?: string[];
 };
 
 export type OrderAddressInput = {
@@ -110,9 +138,19 @@ export type ValidatedOrderQuote = {
   orderType: OrderTypeValue;
   productsSubtotal: number;
   shippingFee: number;
+  platformServiceFee: number;
   discount: number;
   tax: number;
   grossTotal: number;
+  fulfillment: {
+    timing: "asap" | "scheduled";
+    estimatedPreparationMinutes: number;
+    slot?: FulfillmentSlot;
+    scheduledPreparationAt?: string;
+    scheduledDispatchAt?: string;
+  };
+  commercial: EffectiveCommercialConditions;
+  accumulatedCommission: number;
   items: Array<{
     _key: string;
     product: { _type: "reference"; _ref: string };
@@ -123,6 +161,8 @@ export type ValidatedOrderQuote = {
       options?: Array<{ _key: string; label?: string; priceDelta?: number }>;
     }>;
     unitBasePrice: number;
+    notes?: string;
+    allergies: string[];
     unitCustomizationPrice: number;
     unitTotalPrice: number;
     lineTotal: number;
@@ -130,15 +170,27 @@ export type ValidatedOrderQuote = {
   financials: {
     productsSubtotal: number;
     shippingFee: number;
+    platformServiceFee: number;
     discount: number;
     tax: number;
     platformCommission: number;
     stripeFee: number;
+    stripeFeePercentage: number;
+    stripeFixedFee: number;
     stripeNetAmount: number;
+    paymentProcessingFee: number;
+    paymentProcessingFeePercentage: number;
+    paymentProcessingFixedFee: number;
+    paymentNetAmount: number;
     driverPayout: number;
     grossTotal: number;
     storeNetTotal: number;
     platformNetTotal: number;
+    commissionWaivedByCap: number;
+    commissionCalculated: number;
+    accumulatedBeforeOrder: number;
+    deliveryBaseFee: number;
+    deliveryDiscount: number;
   };
 };
 
@@ -152,8 +204,27 @@ const STORE_QUERY = `*[_type == "affiliateStore" && _id == $storeId][0]{
   manualOperationalStatus,
   highDemandMode,
   hasOwnDelivery,
+  "connectedCommunityDrivers": count(*[
+    _type == "repartidor" &&
+    activo == true &&
+    disponible == true &&
+    (!defined(disponibleHasta) || disponibleHasta > now()) &&
+    !defined(tiendaAsignada)
+  ]),
   deliveryFee,
+  deliveryTimeMin,
+  scheduledOrdersEnabled,
+  minimumPreparationMinutes,
+  scheduledOrderIntervalMinutes,
+  maximumScheduledDays,
+  lastDeliveryOrderMinutesBeforeClose,
+  lastPickupOrderMinutesBeforeClose,
   platformCommissionPercent,
+  commercialPlanId,
+  commercialOverrides,
+  commercialReviewRequired,
+  commercialNotes,
+  commercialPlanStartedAt,
   operatingHours,
   serviceTypes
 }`;
@@ -166,10 +237,12 @@ const PRODUCTS_QUERY = `*[_type == "product" && _id in $productIds]{
   approvalStatus,
   isVisible,
   affiliateStore,
-  optionGroups
+  optionGroups,
+  allowSpecialInstructions,
+  acceptsAllergyRequests
 }`;
 
-async function getDeliveryConfig(storeId?: string) {
+export async function getDeliveryConfig(storeId?: string) {
   const doc = await backendClient.fetch(
     `*[_type == "deliveryPricingConfig" && _id == $id][0]`,
     { id: getDeliveryPricingConfigId(storeId) }
@@ -261,74 +334,109 @@ function computeFinancials(input: {
   storeHasOwnDelivery?: boolean;
   productsSubtotal: number;
   shippingFee: number;
+  deliveryBaseFee: number;
   discount: number;
   tax: number;
   paymentMethod: string;
   stripeFee?: number;
-  platformCommissionPercent?: number;
+  stripeFeePercentage?: number;
+  stripeFixedFee?: number;
+  commercial: EffectiveCommercialConditions;
+  accumulatedCommission: number;
 }) {
   const paymentMethod = normalizePaymentMethod(input.paymentMethod, input.orderType === "pickup" ? "cash_at_store" : "cash_on_delivery");
   const paymentProvider = resolvePaymentProvider(paymentMethod);
-  const grossTotal = roundMoney(input.productsSubtotal + input.shippingFee - input.discount + input.tax);
-  const commissionRate = typeof input.platformCommissionPercent === "number" &&
-    Number.isFinite(input.platformCommissionPercent) &&
-    input.platformCommissionPercent >= 0 &&
-    input.platformCommissionPercent <= 100
-    ? input.platformCommissionPercent / 100
-    : getNumberEnv("PLATFORM_COMMISSION_RATE", DEFAULT_PLATFORM_COMMISSION_RATE);
+  const platformServiceFee = input.commercial.serviceFee;
+  const grossTotal = calculateOrderTotal({
+    productsSubtotal: input.productsSubtotal,
+    shippingFee: input.shippingFee,
+    platformServiceFee,
+    discount: input.discount,
+    tax: input.tax,
+  });
+  const commission = calculateCappedCommission({
+    productsSubtotal: input.productsSubtotal,
+    commissionPercent: input.commercial.commissionPercent,
+    monthlyCommissionCap: input.commercial.monthlyCommissionCap,
+    accumulatedCommission: input.accumulatedCommission,
+  });
   const deliveryDriverRate = getNumberEnv(
     input.storeHasOwnDelivery ? "STORE_DRIVER_PAYOUT_RATE" : "COMMUNITY_DRIVER_PAYOUT_RATE",
     DEFAULT_DELIVERY_DRIVER_PAYOUT_RATE
   );
-
-  const platformCommission = roundMoney(input.productsSubtotal * commissionRate);
+  const deliveryDiscount = roundMoney(Math.max(0, input.deliveryBaseFee - input.shippingFee));
+  const platformDeliverySubsidy = input.commercial.deliveryBenefitAbsorbedBy === "platform" ? deliveryDiscount : 0;
+  const platformCommission = commission.chargedCommission;
   const stripeFee = isStripePaymentProvider(paymentProvider) ? roundMoney(input.stripeFee ?? 0) : 0;
   const stripeNetAmount = isStripePaymentProvider(paymentProvider) ? roundMoney(grossTotal - stripeFee) : 0;
-  const driverPayout = input.orderType === "delivery" ? roundMoney(input.shippingFee * deliveryDriverRate) : 0;
-  const storeNetTotal = roundMoney(grossTotal - platformCommission - stripeFee - driverPayout);
-  const platformNetTotal = roundMoney(platformCommission - stripeFee);
+  const driverPayout = input.orderType === "delivery" ? roundMoney(input.deliveryBaseFee * deliveryDriverRate) : 0;
+  const storeNetTotal = roundMoney(
+    grossTotal - platformServiceFee - platformCommission - stripeFee - driverPayout + platformDeliverySubsidy
+  );
+  const platformNetTotal = roundMoney(platformCommission + platformServiceFee - stripeFee - platformDeliverySubsidy);
 
   return {
     productsSubtotal: roundMoney(input.productsSubtotal),
     shippingFee: roundMoney(input.shippingFee),
+    platformServiceFee,
     discount: roundMoney(input.discount),
     tax: roundMoney(input.tax),
     platformCommission,
+    commissionWaivedByCap: commission.commissionWaivedByCap,
+    commissionCalculated: commission.rawCommission,
+    accumulatedBeforeOrder: commission.accumulatedBeforeOrder,
+    deliveryBaseFee: roundMoney(input.deliveryBaseFee),
+    deliveryDiscount,
     stripeFee,
+    stripeFeePercentage: input.stripeFeePercentage ?? 0,
+    stripeFixedFee: input.stripeFixedFee ?? 0,
     stripeNetAmount,
+    paymentProcessingFee: stripeFee,
+    paymentProcessingFeePercentage: input.stripeFeePercentage ?? 0,
+    paymentProcessingFixedFee: input.stripeFixedFee ?? 0,
+    paymentNetAmount: stripeNetAmount,
     driverPayout,
     grossTotal,
     storeNetTotal,
     platformNetTotal,
   };
 }
-
 export async function validateAndQuoteOrder(input: {
   storeId: string;
   items: OrderItemInput[];
   orderType: OrderTypeValue;
   paymentMethod: string;
   shippingAddress?: OrderAddressInput | null;
+  fulfillment?: FulfillmentSelection | null;
 }) {
   assert(input.storeId, "Tienda requerida.");
   assert(Array.isArray(input.items) && input.items.length > 0, "La lista de productos esta vacia.");
 
-  const [store, products] = await Promise.all([
+  const [store, products, deliverySchedule, commercialSettings, accumulatedCommission] = await Promise.all([
     backendClient.fetch<StoreRecord | null>(STORE_QUERY, { storeId: input.storeId }),
     backendClient.fetch<ProductRecord[]>(PRODUCTS_QUERY, {
       productIds: [...new Set(input.items.map((item) => item.productId).filter(Boolean))],
     }),
+    getDeliveryScheduleConfig(),
+    getCommercialSettings(),
+    getMonthlyCommissionAccumulated(input.storeId),
   ]);
 
   assert(store, "La tienda no existe.");
   assert(store.isActive === true, "La tienda no esta activa.");
-
-  const operationalState = getStoreOperationalState(store);
-  assert(operationalState.canAcceptOrders, "La tienda no acepta pedidos en este momento.");
+  const commercial = resolveEffectiveCommercialConditions(store, commercialSettings);
+  assert(
+    !isStripePaymentProvider(resolvePaymentProvider(normalizePaymentMethod(input.paymentMethod))) || commercial.onlinePaymentsEnabled,
+    "Este restaurante no tiene pagos en línea habilitados."
+  );
 
   if (input.orderType === "delivery") {
     assert(store.serviceTypes?.delivery === true, "La tienda no permite entregas.");
     resolveFulfillmentProvider("delivery", store.hasOwnDelivery);
+    assert(
+      isDeliveryDriverAvailable(store.hasOwnDelivery, Number(store.connectedCommunityDrivers || 0)),
+      "No hay repartidores de El Menú disponibles en este momento. Puedes elegir retiro en el local o intentarlo más tarde."
+    );
   } else {
     assert(store.serviceTypes?.pickup === true, "La tienda no permite pickup.");
   }
@@ -337,6 +445,11 @@ export async function validateAndQuoteOrder(input: {
   if (input.orderType === "delivery") {
     assert(normalizedAddress?.line1, "Direccion requerida para delivery.");
     assert(normalizedAddress?.city, "Ciudad requerida para delivery.");
+    assert(
+      typeof normalizedAddress?.latitude === "number" &&
+        typeof normalizedAddress?.longitude === "number",
+      "Confirma la ubicacion en el mapa para validar la cobertura."
+    );
   }
 
   const productMap = new Map(products.map((product) => [product._id, product]));
@@ -354,6 +467,7 @@ export async function validateAndQuoteOrder(input: {
     }
 
     const customizations = buildCustomizationSnapshot(product, item.customizations);
+    const requests = normalizeProductRequests(item, product);
     const unitCustomizationPrice = roundMoney(
       customizations.reduce(
         (sum, group) => sum + (group.options ?? []).reduce((groupSum, option) => groupSum + Number(option.priceDelta || 0), 0),
@@ -370,6 +484,8 @@ export async function validateAndQuoteOrder(input: {
       quantity,
       customizations,
       unitBasePrice,
+      notes: requests.notes,
+      allergies: requests.allergies,
       unitCustomizationPrice,
       unitTotalPrice,
       lineTotal,
@@ -381,7 +497,45 @@ export async function validateAndQuoteOrder(input: {
     assert(productsSubtotal >= Number(store.serviceTypes.minimumOrderDelivery), `El pedido minimo para entrega es de $${Number(store.serviceTypes.minimumOrderDelivery).toFixed(2)} MXN.`);
   }
 
-  const shippingFee = input.orderType === "delivery" ? await computeShippingFee(store, normalizedAddress) : 0;
+  const deliveryBaseFee = input.orderType === "delivery" ? await computeShippingFee(store, normalizedAddress) : 0;
+  const shippingFee = commercial.deliveryBenefitEnabled
+    ? Math.max(0, roundMoney(deliveryBaseFee - commercial.deliveryDiscountAmount))
+    : deliveryBaseFee;
+  const availability = getStoreAvailability({
+    store,
+    config: deliverySchedule,
+    fulfillmentType: input.orderType,
+    coverageAllowed: true,
+  });
+  const validatedFulfillment = validateFulfillmentSelection(availability, input.fulfillment);
+  const estimatedPreparationMinutes = Math.max(
+    0,
+    Number(store.minimumPreparationMinutes ?? store.deliveryTimeMin ?? 30) || 30
+  );
+  const fulfillment =
+    validatedFulfillment.timing === "scheduled"
+      ? {
+          timing: "scheduled" as const,
+          estimatedPreparationMinutes,
+          slot: validatedFulfillment.slot,
+          scheduledPreparationAt: calculateScheduledPreparationAt({
+            startAt: validatedFulfillment.slot.start,
+            estimatedPreparationMinutes,
+          }),
+          scheduledDispatchAt:
+            input.orderType === "delivery"
+              ? calculateScheduledDispatchAt({
+                  startAt: validatedFulfillment.slot.start,
+                  estimatedTravelMinutes: deliverySchedule.estimatedTravelMinutes,
+                  driverAssignmentMarginMinutes:
+                    deliverySchedule.driverAssignmentMarginMinutes,
+                })
+              : undefined,
+        }
+      : {
+          timing: "asap" as const,
+          estimatedPreparationMinutes,
+        };
   const discount = 0;
   const tax = 0;
   const financials = computeFinancials({
@@ -389,10 +543,12 @@ export async function validateAndQuoteOrder(input: {
     storeHasOwnDelivery: store.hasOwnDelivery,
     productsSubtotal,
     shippingFee,
+    deliveryBaseFee,
     discount,
     tax,
     paymentMethod: input.paymentMethod,
-    platformCommissionPercent: store.platformCommissionPercent,
+    commercial,
+    accumulatedCommission,
   });
 
   return {
@@ -400,9 +556,13 @@ export async function validateAndQuoteOrder(input: {
     orderType: input.orderType,
     productsSubtotal,
     shippingFee,
+    platformServiceFee: financials.platformServiceFee,
     discount,
     tax,
     grossTotal: financials.grossTotal,
+    fulfillment,
+    commercial,
+    accumulatedCommission,
     items: pricedItems,
     financials,
   } satisfies ValidatedOrderQuote;
@@ -480,8 +640,15 @@ export function buildOrderDocument(input: {
   stripeCustomerId?: string | null;
   amountDiscount?: number;
   stripeFee?: number;
+  stripeFeePercentage?: number;
+  stripeFixedFee?: number;
+  paymentProcessingFee?: number;
+  paymentProcessingFeePercentage?: number;
+  paymentProcessingFixedFee?: number;
+  paymentNetAmount?: number;
   deliveryNotes?: string;
   codInstructions?: string;
+  settlementSnapshot?: any;
 }) {
   const now = new Date().toISOString();
   const shippingAddress = normalizeAddress(input.shippingAddress);
@@ -498,31 +665,39 @@ export function buildOrderDocument(input: {
           storeHasOwnDelivery: input.quote.store.hasOwnDelivery,
           productsSubtotal: input.quote.productsSubtotal,
           shippingFee: input.quote.shippingFee,
+          deliveryBaseFee: input.quote.financials.deliveryBaseFee,
           discount: appliedDiscount,
           tax: input.quote.tax,
           paymentMethod: normalizedPaymentMethod,
           stripeFee: input.stripeFee,
-          platformCommissionPercent: input.quote.store.platformCommissionPercent,
+          commercial: input.quote.commercial,
+          accumulatedCommission: input.quote.accumulatedCommission,
         })
       : computeFinancials({
           orderType: input.orderType,
           storeHasOwnDelivery: input.quote.store.hasOwnDelivery,
           productsSubtotal: input.quote.productsSubtotal,
           shippingFee: input.quote.shippingFee,
+          deliveryBaseFee: input.quote.financials.deliveryBaseFee,
           discount: appliedDiscount,
           tax: input.quote.tax,
           paymentMethod: normalizedPaymentMethod,
-          platformCommissionPercent: input.quote.store.platformCommissionPercent,
+          commercial: input.quote.commercial,
+          accumulatedCommission: input.quote.accumulatedCommission,
         });
 
   const cashCollectedBy = resolveCashCollectedBy({ paymentMethod: normalizedPaymentMethod, orderType: input.orderType, driverType });
+  const scheduledDelivery =
+    input.orderType === "delivery" && input.quote.fulfillment.timing === "scheduled";
   const states = buildStateFields({
     orderType: input.orderType,
     orderStatus: input.orderStatus ?? "pending",
     paymentStatus: input.paymentStatus,
     dispatchStatus:
       fulfillmentProvider === "restaurant_delivery" || fulfillmentProvider === "elmenu_delivery"
-        ? input.dispatchStatus
+        ? scheduledDelivery
+          ? "scheduled"
+          : input.dispatchStatus
         : "not_required",
     settlementStatus: resolveSettlementStatus({
       paymentStatus: input.paymentStatus,
@@ -546,6 +721,26 @@ export function buildOrderDocument(input: {
     email: input.customerEmail,
     phone: normalizePhone(input.phone),
     orderType: input.orderType,
+    fulfillmentType: input.orderType,
+    fulfillmentTiming: input.quote.fulfillment.timing,
+    scheduledSlot:
+      input.quote.fulfillment.timing === "scheduled" && input.quote.fulfillment.slot
+        ? {
+            startAt: input.quote.fulfillment.slot.start,
+            endAt: input.quote.fulfillment.slot.end,
+            timezone: input.quote.fulfillment.slot.timezone,
+          }
+        : undefined,
+    estimatedPreparationMinutes: input.quote.fulfillment.estimatedPreparationMinutes,
+    storeScheduleSnapshot: input.quote.fulfillment.slot?.storeScheduleSnapshot,
+    deliveryScheduleSnapshot: input.quote.fulfillment.slot?.deliveryScheduleSnapshot,
+    scheduleStatus:
+      input.quote.fulfillment.timing === "scheduled" ? "scheduled" : "not_required",
+    scheduledPreparationAt: input.quote.fulfillment.scheduledPreparationAt,
+    scheduledDispatchAt: input.quote.fulfillment.scheduledDispatchAt,
+    preparationStatus:
+      input.quote.fulfillment.timing === "scheduled" ? "not_started" : undefined,
+    scheduleRiskLevel: scheduledDelivery ? "none" : undefined,
     fulfillmentProvider,
     sellerType: "restaurant",
     sellerId: input.storeId,
@@ -568,7 +763,8 @@ export function buildOrderDocument(input: {
       product: item.product,
       quantity: item.quantity,
       customizations: item.customizations,
-      notes: `unitBasePrice=${item.unitBasePrice};unitCustomizationPrice=${item.unitCustomizationPrice};unitTotalPrice=${item.unitTotalPrice};lineTotal=${item.lineTotal}`,
+      notes: item.notes,
+      allergies: item.allergies,
     })),
     totalPrice: finalFinancials.grossTotal,
     subtotal: input.quote.productsSubtotal,
@@ -585,15 +781,43 @@ export function buildOrderDocument(input: {
     ...states,
     productsSubtotal: finalFinancials.productsSubtotal,
     shippingFee: finalFinancials.shippingFee,
+    platformServiceFee: finalFinancials.platformServiceFee,
     discount: finalFinancials.discount,
     tax: finalFinancials.tax,
     platformCommission: finalFinancials.platformCommission,
+    commissionWaivedByCap: finalFinancials.commissionWaivedByCap,
+    commercialSnapshot: {
+      planId: input.quote.commercial.id,
+      planName: input.quote.commercial.name,
+      commissionPercent: input.quote.commercial.commissionPercent,
+      monthlyCommissionCap: input.quote.commercial.monthlyCommissionCap,
+      commissionBase: finalFinancials.productsSubtotal,
+      commissionCalculated: finalFinancials.commissionCalculated,
+      commissionCharged: finalFinancials.platformCommission,
+      commissionWaivedByCap: finalFinancials.commissionWaivedByCap,
+      accumulatedBeforeOrder: finalFinancials.accumulatedBeforeOrder,
+      serviceFeeMode: input.quote.commercial.serviceFeeMode,
+      serviceFee: finalFinancials.platformServiceFee,
+      onlinePaymentsEnabled: input.quote.commercial.onlinePaymentsEnabled,
+      premiumBadgeEnabled: input.quote.commercial.premiumBadgeEnabled,
+      bannerEligible: input.quote.commercial.bannerEligible,
+      deliveryBaseFee: finalFinancials.deliveryBaseFee,
+      deliveryDiscount: finalFinancials.deliveryDiscount,
+      deliveryBenefitAbsorbedBy: input.quote.commercial.deliveryBenefitAbsorbedBy,
+    },
     stripeFee: finalFinancials.stripeFee,
+    stripeFeePercentage: finalFinancials.stripeFeePercentage,
+    stripeFixedFee: finalFinancials.stripeFixedFee,
     stripeNetAmount: finalFinancials.stripeNetAmount,
+    paymentProcessingFee: finalFinancials.paymentProcessingFee,
+    paymentProcessingFeePercentage: finalFinancials.paymentProcessingFeePercentage,
+    paymentProcessingFixedFee: finalFinancials.paymentProcessingFixedFee,
+    paymentNetAmount: finalFinancials.paymentNetAmount,
     driverPayout: finalFinancials.driverPayout,
     grossTotal: finalFinancials.grossTotal,
     storeNetTotal: finalFinancials.storeNetTotal,
     platformNetTotal: finalFinancials.platformNetTotal,
+    settlementSnapshot: input.settlementSnapshot,
     cashCollectedBy,
     driverType,
     refundStatus: "not_requested",

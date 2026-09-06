@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useHydration } from "@/hooks/useHydration";
 import { Check, ChevronRight, ArrowLeft, ShoppingCart, MapPin, CreditCard, User, Navigation } from "lucide-react";
 import { useAuth, useUser, SignInButton } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
@@ -92,6 +93,9 @@ export default function StepByStepCheckout({
   restrictedServiceType
 }: StepByStepCheckoutProps) {
   const { isSignedIn } = useAuth();
+  // El JS de Clerk carga asíncrono: se renderiza su UI solo tras el montaje
+  // para evitar hydration mismatches intermitentes (SignInButton).
+  const isHydrated = useHydration();
   const { user } = useUser();
   const router = useRouter();
   
@@ -699,11 +703,13 @@ export default function StepByStepCheckout({
                 <User className="h-12 w-12 mx-auto text-gray-400 mb-3" />
                 <h3 className="text-lg font-semibold text-gray-900 mb-2">Inicia Sesión para Continuar</h3>
                 <p className="text-sm text-gray-600 mb-4">Necesitas una cuenta para completar tu compra</p>
+                {isHydrated && (
                 <SignInButton mode="modal">
                   <button className="bg-gradient-to-r from-blue-500 to-blue-600 text-white px-6 py-2 rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all duration-200">
                     Iniciar Sesión
                   </button>
                 </SignInButton>
+                )}
               </div>
             ) : (
               <div className="grid md:grid-cols-2 gap-4">

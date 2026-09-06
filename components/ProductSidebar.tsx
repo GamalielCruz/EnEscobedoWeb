@@ -7,15 +7,19 @@ import { PortableText } from "next-sanity";
 import { ArrowLeft, X } from "lucide-react";
 import type { BlockContent, Product } from "@/sanity.types";
 import { urlFor } from "@/sanity/lib/image";
+import {
+  getPrimaryProductCategoryName,
+  getRetailProductImageUrl,
+} from "@/lib/retail-product-images";
 import { buildStoreProductUrl, portableTextToPlainText, sanitizeText } from "@/lib/utils";
 import useBasketStore from "@/store/store";
-import AddToBasketButtonNew from "./AddToBasketButtonNew";
 import AddToBasketWithCustomization from "./AddToBasketWithCustomization";
 import ShareButton from "@/app/(store)/product/ShareButton";
 
 interface ProductSidebarProps {
   product: Product | null;
   storeId: string;
+  enableCatalogFallback?: boolean;
   isOpen: boolean;
   onClose: () => void;
 }
@@ -23,6 +27,7 @@ interface ProductSidebarProps {
 export default function ProductSidebar({
   product,
   storeId,
+  enableCatalogFallback = false,
   isOpen,
   onClose,
 }: ProductSidebarProps) {
@@ -77,6 +82,19 @@ export default function ProductSidebar({
   const shareUrl = buildStoreProductUrl(storeId, productSlug);
   const isOutOfStock = product.stock != null && product.stock <= 0;
   const itemCount = getItemCount(product._id);
+  const hasSanityImage = Boolean(product.image?.asset?._ref);
+  const fallbackImageUrl =
+    !hasSanityImage && enableCatalogFallback
+      ? getRetailProductImageUrl({
+          productName: product.name,
+          categoryName: getPrimaryProductCategoryName(product.categories),
+          imageSize: "landscape_4_3",
+        })
+      : null;
+  const productImageSrc = hasSanityImage
+    ? urlFor(product.image as NonNullable<Product["image"]>).width(900).height(675).url()
+    : fallbackImageUrl;
+  const usesGeneratedImage = !hasSanityImage && Boolean(fallbackImageUrl);
 
   return createPortal(
     <div className="fixed inset-0 z-[9999]" role="dialog" aria-modal="true" aria-label={productName}>
@@ -115,14 +133,15 @@ export default function ProductSidebar({
 
         <div className="flex-1 overflow-y-auto">
           <div className="relative aspect-[4/3] bg-gray-100">
-            {product.image ? (
+            {productImageSrc ? (
               <Image
-                src={urlFor(product.image).width(900).height(675).url()}
+                src={productImageSrc}
                 alt={productName}
                 fill
-                className="object-cover"
+                className={usesGeneratedImage ? "object-contain bg-white p-6" : "object-cover"}
                 priority
                 sizes="(max-width: 640px) 100vw, 576px"
+                unoptimized={usesGeneratedImage}
               />
             ) : (
               <div className="flex h-full items-center justify-center text-gray-400">
@@ -210,19 +229,13 @@ export default function ProductSidebar({
                 </span>
               </div>
             ) : null}
-          </div>
-        </div>
 
-        <div className="flex-shrink-0 border-t border-gray-200 bg-white p-4 shadow-[0_-8px_24px_rgba(0,0,0,0.05)]">
-          {product.optionGroups?.length ? (
             <AddToBasketWithCustomization
               product={product}
               disabled={isOutOfStock}
               onClose={handleClose}
             />
-          ) : (
-            <AddToBasketButtonNew product={product} disabled={isOutOfStock} />
-          )}
+          </div>
         </div>
       </aside>
     </div>,

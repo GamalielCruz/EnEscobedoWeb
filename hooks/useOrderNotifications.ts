@@ -15,6 +15,7 @@ export type OrderItem = {
       priceDelta?: number;
     }>;
   }>;
+  allergies?: string[];
   notes?: string;
 };
 

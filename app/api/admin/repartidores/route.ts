@@ -8,6 +8,12 @@ const REPARTIDORES_QUERY = `*[_type == "repartidor"] | order(nombre asc) {
   nombre,
   telefono,
   activo,
+  disponible,
+  disponibleHasta,
+  estadoDisponibilidad,
+  "conectado": activo == true &&
+    disponible == true &&
+    (!defined(disponibleHasta) || disponibleHasta > now()),
   notas,
   "tiendaAsignada": tiendaAsignada->{
     _id,

@@ -5,25 +5,62 @@ import {
   sendOrderOnTheWay,
   sendOrderDelivered,
   normalizeWhatsAppPhone,
-  sendConfirmacionRepartidor,
+  sendDriverConfirmation,
   sendRepartidorEnCamino,
   sendRepartidorEnPuerta,
   sendClienteRepartidorEnPuerta,
   sendOrderCancelled,
   sendPickupReadyForCustomer,
+  sendWhatsAppMessage,
+  sendWhatsAppTemplate,
+  sendWhatsAppInteractiveMessage,
 } from '@/lib/whatsapp'
+import {
+  sendMandadoClienteRecogido,
+  sendMandadoDestinatarioEnPuerta,
+  sendMandadoDestinoEnPuerta,
+  sendMandadoOrdenPorCompletar,
+} from '@/lib/mandado-whatsapp'
 import { dispatchWaitingOrdersForDriver, redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
+import { assignOrderToDriver } from '@/lib/dispatch/dispatch-core'
+import { connectDriverSession, rejectDriverOffer, markPickupArrival, markMandadoEnRoute, markAtDoor } from '@/lib/driver-actions'
+import { classifyAssignmentOutcome } from '@/lib/dispatch/dispatch-validation'
 import { notifyRestaurantDriverEnRoute } from '@/lib/restaurant-notifications'
 import { appendOrderEvent } from '@/lib/order-events'
 import { resolveSettlementStatusOnDelivery } from '@/lib/order-state'
-import { buildAddressMapsUrl } from '@/lib/order-maps'
+import { buildDriverConfirmationData, buildMandadoDriverInstructions } from '@/lib/order-maps'
+import {
+  mandadoDriverState,
+  buildMandadoAssignmentInteractive,
+  buildMandadoPickupArrivalInteractive,
+  buildMandadoEnRouteInteractive,
+  buildMandadoDestinationArrivalInteractive,
+} from '@/lib/mandado-driver-flow'
+import { matchDriverCommand } from '@/lib/driver-commands'
 import { buildStoreMapsUrl } from '@/lib/order-pricing'
 import { syncBaserowOrderById } from '@/lib/baserow'
-import { isDeliveryPinValid, revealDeliveryPin } from '@/lib/delivery-pin'
+import { isDeliveryPinValid, orderRequiresDeliveryPin, revealDeliveryPin } from '@/lib/delivery-pin'
+import { planMandadoArrival } from '@/lib/mandado-arrival'
 import { parseDeliveryPinCommand } from '@/lib/delivery-pin-command'
+import {
+  deriveNipIncidentType,
+  effectiveNipStatus,
+  getDeliveryPinBlockReason,
+  isNipCarrierTemplate,
+  mapMetaMessageStatus,
+  resolveNextClaimStatus,
+  resolveNipStatusFromClaimStatus,
+  type ClaimStatus,
+} from '@/lib/nip-delivery'
+import { updateOrderNipDeliveryStatus } from '@/lib/nip-delivery-store'
 import { verifyWhatsAppSignature } from '@/lib/whatsapp-webhook'
+import { getDeliveryScheduleConfig } from '@/lib/delivery-schedule-config'
+import { WHATSAPP_TEMPLATES } from '@/lib/whatsapp/templates'
+import { getStoreAvailability, validateFulfillmentSelection } from '@/lib/fulfillment-schedule'
+import { calculatePickupConversionFinancials } from '@/lib/scheduled-order-contingency'
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN
+const ADMIN_PHONE = process.env.ADMIN_WHATSAPP_PHONE
 const MEXICO_TIME_ZONE = 'America/Mexico_City'
 const SESSION_OPTIONS = {
   '1': { minutes: 60, label: '1 hora' },
@@ -61,6 +98,7 @@ const REPARTIDOR_BY_PHONE_QUERY = `*[_type == "repartidor" && telefono == $telef
   extensionPreguntadaAt,
   autoDesconectadoAt,
   motivoDesconexion,
+  soporteConversacionAbierta,
   ofertaTipo,
   ofertaEnviadaAt,
   ofertaExpiraAt,
@@ -86,6 +124,7 @@ const REPARTIDOR_BY_ID_QUERY = `*[_type == "repartidor" && _id == $repartidorId]
   extensionPreguntadaAt,
   autoDesconectadoAt,
   motivoDesconexion,
+  soporteConversacionAbierta,
   ofertaTipo,
   ofertaEnviadaAt,
   ofertaExpiraAt,
@@ -104,6 +143,7 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   status,
   dispatchStatus,
   orderStatus,
+  fulfillmentTiming,
   paymentMethod,
   paymentProvider,
   paymentStatus,
@@ -116,15 +156,29 @@ const ORDER_BY_ID_QUERY = `*[_type == "order" && _id == $orderId][0]{
   deliveryPinLockedUntil,
   deliveryVerificationMethod,
   deliveryVerificationStatus,
+  nipIncidentAt,
+  nipIncidentType,
   totalPrice,
   deliveryOfertaEnviada,
   deliveryOfertaExpiresAt,
   "repartidorAsignadoRef": repartidorAsignado._ref,
   "offeredToRef": offeredTo._ref,
+  serviceKind,
+  mandadoEntregaSegura,
+  mandadoOrigin,
+  mandadoDestination,
+  mandadoPickupAtDoor,
+  mandadoEnRuta,
+  mandadoRecipientPhone,
+  mandadoContactStatus,
+  mandadoContactPhone,
+  mandadoNipRecipient,
+  nipDeliveryChannel,
+  mandadoRecipientWhatsAppDeclared,
   "storeId": affiliateStore._ref,
-  "storeAddress": affiliateStore->address.street,
-  "storeCoordinates": affiliateStore->coordinates,
-  "storeName": affiliateStore->name,
+  "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
+  "storeCoordinates": coalesce(affiliateStore->coordinates, {"latitude": mandadoOrigin.lat, "longitude": mandadoOrigin.lng}),
+  "storeName": coalesce(affiliateStore->name, select(serviceKind == "mandado" => "Punto de inicio")),
   "shippingAddress": shippingAddress
 }`
 
@@ -146,6 +200,7 @@ const ACTIVE_OFFER_ORDERS_BY_DRIVER_QUERY = `*[
   phone,
   status,
   dispatchStatus,
+  fulfillmentTiming,
   paymentMethod,
   paymentProvider,
   paymentStatus,
@@ -156,10 +211,29 @@ const ACTIVE_OFFER_ORDERS_BY_DRIVER_QUERY = `*[
   deliveryOfertaExpiresAt,
   "repartidorAsignadoRef": repartidorAsignado._ref,
   "offeredToRef": offeredTo._ref,
+  serviceKind,
+  mandadoEntregaSegura,
+  mandadoOrigin,
+  mandadoDestination,
+  mandadoPickupAtDoor,
+  mandadoEnRuta,
+  mandadoRecipientPhone,
+  mandadoNipRecipient,
+  nipDeliveryChannel,
   "storeId": affiliateStore._ref,
-  "storeAddress": affiliateStore->address.street,
-  "storeCoordinates": affiliateStore->coordinates,
-  "storeName": affiliateStore->name,
+  "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
+  "storeCoordinates": coalesce(affiliateStore->coordinates, {"latitude": mandadoOrigin.lat, "longitude": mandadoOrigin.lng}),
+  "storeName": coalesce(affiliateStore->name, select(serviceKind == "mandado" => "Punto de inicio")),
+  "storeLat": coalesce(affiliateStore->coordinates.latitude, mandadoOrigin.lat),
+  "storeLng": coalesce(affiliateStore->coordinates.longitude, mandadoOrigin.lng),
+  "destLat": coalesce(shippingAddress.latitude, mandadoDestination.lat),
+  "destLng": coalesce(shippingAddress.longitude, mandadoDestination.lng),
+  "destLabel": coalesce(shippingAddress.line1, mandadoDestination.label),
+  "mandadoOriginLabel": mandadoOrigin.label,
+  "mandadoDestinationLabel": mandadoDestination.label,
+  mandadoDetails,
+  mandadoOriginReference,
+  mandadoDestinationReference,
   "shippingAddress": shippingAddress,
   deliveryNotes
 }`
@@ -203,10 +277,38 @@ const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._r
   deliveryPinLockedUntil,
   deliveryVerificationMethod,
   deliveryVerificationStatus,
-  "storeName": affiliateStore->name,
-  "storeAddress": affiliateStore->address.street,
+  nipDeliveryStatus,
+  nipIncidentAt,
+  nipIncidentType,
+  serviceKind,
+  mandadoEntregaSegura,
+  mandadoOrigin,
+  mandadoDestination,
+  mandadoPickupAtDoor,
+  mandadoEnRuta,
+  mandadoRecipientPhone,
+  mandadoContactStatus,
+  mandadoContactPhone,
+  mandadoNipRecipient,
+  nipDeliveryChannel,
+  mandadoRecipientWhatsAppDeclared,
+  "storeName": coalesce(affiliateStore->name, select(serviceKind == "mandado" => "Punto de inicio")),
+  "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
   "shippingAddress": shippingAddress,
   deliveryNotes
+}`
+
+// Consulta ligera del estado REAL de un pedido para reconciliar una
+// aceptación fallida/conflictiva (idempotencia): se decide por Sanity, no por
+// la revisión obsoleta de este intento.
+const RECONCILE_ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
+  _id,
+  orderNumber,
+  orderStatus,
+  dispatchStatus,
+  deliveryOfertaExpiresAt,
+  "driverId": repartidorAsignado._ref,
+  "offeredToRef": offeredTo._ref
 }`
 
 // Busca repartidor probando telefono normalizado y luego raw
@@ -231,10 +333,6 @@ function normalizeText(text: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .trim()
-}
-
-function isValidCoordinate(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value)
 }
 
 function normalizeDriverActionToken(text: string): string {
@@ -358,16 +456,6 @@ function getPendingOfferOrderIds(repartidor: {
   return repartidor.ultimoPedidoOfertadoRef ? [repartidor.ultimoPedidoOfertadoRef] : []
 }
 
-function buildClientAddress(order: {
-  shippingAddress?: { line1?: string; street?: string; city?: string; latitude?: number; longitude?: number }
-}) {
-  return order.shippingAddress
-    ? [order.shippingAddress.line1, order.shippingAddress.street, order.shippingAddress.city]
-        .filter(Boolean)
-        .join(', ')
-    : 'Ver pedido'
-}
-
 function getDriverNextState(repartidor: { disponible?: boolean; disponibleHasta?: string }, nowDate: Date): 'available' | 'offline' {
   if (!repartidor.disponible) {
     return 'offline'
@@ -444,6 +532,88 @@ async function resolveAssignedOrderById(orderId: string, repartidorId: string) {
   return order
 }
 
+// Dedupe de incidencias: no registrar el mismo evento de NIP bloqueado más de
+// una vez cada 15 minutos por pedido (evita spam en la bandeja del Dispatch Center).
+const NIP_INCIDENT_DEDUPE_MS = 15 * 60 * 1000
+
+// Persiste el canal EFECTIVO y el teléfono destino del NIP (endurecimiento B):
+// qué se intentó entregar y a qué número, en el momento REAL del envío (EN
+// PUERTA). `none` = no existe canal entregable (anomalía: sin teléfono).
+async function persistNipDeliveryTarget(
+  order: Record<string, unknown>,
+  target: { deliveryChannel: 'whatsapp_sender' | 'whatsapp_recipient' | 'none'; deliveryPhone?: string },
+  nowDate: Date
+) {
+  try {
+    await backendClient
+      .patch(String(order._id))
+      .ifRevisionId(String(order._rev))
+      .set({
+        nipDeliveryChannel: target.deliveryChannel,
+        nipDeliveryPhone: target.deliveryPhone,
+        updatedAt: nowDate.toISOString(),
+      })
+      .commit()
+  } catch (error) {
+    console.error('[webhook EN PUERTA] error persistiendo canal del NIP', {
+      orderId: order._id,
+      error,
+    })
+  }
+}
+
+async function recordDeliveryPinIncident(
+  order: Record<string, unknown>,
+  repartidor: Record<string, unknown>,
+  blockReason: 'expired' | 'not_delivered',
+  nowDate: Date
+) {
+  // Tipos separados de incidencia (endurecimiento): `not_delivered`, `expired`
+  // y `no_whatsapp` (canal remitente porque el destinatario declaró no usar
+  // WhatsApp). El dedupe considera el tipo: el mismo tipo dentro de 15 min no
+  // se re-registra, pero un cambio de tipo (p. ej. no_delivered → expired) sí.
+  const incidentType = deriveNipIncidentType(order, blockReason)
+  const lastIncident = String(order.nipIncidentAt ?? '')
+  const lastType = String(order.nipIncidentType ?? '')
+  if (
+    lastIncident &&
+    lastType === incidentType &&
+    nowDate.getTime() - new Date(lastIncident).getTime() < NIP_INCIDENT_DEDUPE_MS
+  ) {
+    return
+  }
+  try {
+    await backendClient
+      .patch(String(order._id))
+      .ifRevisionId(String(order._rev))
+      .set({
+        nipIncidentAt: nowDate.toISOString(),
+        nipIncidentType: incidentType,
+        updatedAt: nowDate.toISOString(),
+      })
+      .commit()
+    await appendOrderEvent(String(order._id), {
+      type: 'delivery_pin_incident',
+      source: 'whatsapp/webhook',
+      actor: String(repartidor._id ?? ''),
+      reason: blockReason,
+      payload: {
+        incidentType,
+        nipDeliveryStatus: String(order.nipDeliveryStatus ?? ''),
+        deliveryVerificationStatus: String(order.deliveryVerificationStatus ?? ''),
+      },
+    }).catch(() => null)
+    console.warn('[whatsapp webhook] incidencia de NIP registrada', {
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+      blockReason,
+      incidentType,
+    })
+  } catch (error) {
+    console.error('[whatsapp webhook] error registrando incidencia de NIP', error)
+  }
+}
+
 function getAmbiguousOrderPrompt(command: string, orders: Array<Record<string, unknown>>) {
   const orderList = orders.map((order) => String(order.orderNumber)).join(', ')
   const firstOrder = String(orders[0]?.orderNumber ?? 'ORD-001')
@@ -501,6 +671,62 @@ function resolveDeliveredSettlement(order: Record<string, unknown>) {
     settlementStatus: String(order.settlementStatus ?? ''),
     orderStatus: 'delivered',
   })
+}
+
+/**
+ * Completa una entrega en puerta (paso final ENTREGADO / NIP válido).
+ * Compartido por el flujo con NIP (validado) y el flujo sin NIP (Entrega
+ * segura desactivada), donde `verifiedByDriver` solo se marca si hubo NIP.
+ */
+async function completeDeliveredOrder(
+  targetOrder: Record<string, unknown>,
+  repartidor: { _id: string; disponible?: boolean; disponibleHasta?: string },
+  nowDate: Date,
+  now: string,
+  opts: { verifiedByDriver?: boolean } = {}
+) {
+  const verifiedAt = now
+  await backendClient.patch(String(targetOrder._id)).ifRevisionId(String(targetOrder._rev)).set({
+    status: 'delivered',
+    orderStatus: 'delivered',
+    dispatchStatus: 'completed',
+    ...(String(targetOrder.mandadoContactStatus ?? '') === 'active' ? { mandadoContactStatus: 'closed' } : {}),
+    deliveredAt: verifiedAt,
+    settlementStatus: resolveDeliveredSettlement(targetOrder),
+    ...(opts.verifiedByDriver
+      ? {
+          deliveryPinVerifiedAt: verifiedAt,
+          deliveryPinVerifiedBy: repartidor._id,
+          deliveryVerificationStatus: 'verified',
+        }
+      : {}),
+    ...(targetOrder.fulfillmentTiming === 'scheduled' ? { scheduleStatus: 'completed' } : {}),
+    updatedAt: verifiedAt,
+  }).commit()
+
+  after(() => syncBaserowOrderById(String(targetOrder._id)))
+  if (opts.verifiedByDriver) {
+    await appendOrderEvent(String(targetOrder._id), { type: 'delivery_pin_verified', source: 'whatsapp/webhook', actor: repartidor._id })
+  }
+  await appendOrderEvent(String(targetOrder._id), { type: 'delivered', source: 'whatsapp/webhook', actor: repartidor._id })
+
+  const remainingOrders = ((await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>))
+    .filter((order) => String(order._id) !== String(targetOrder._id))
+  const nextState = remainingOrders.length > 0 ? 'busy' : getDriverNextState(repartidor, nowDate)
+  await backendClient.patch(repartidor._id).set({
+    disponible: nextState !== 'offline',
+    estadoDisponibilidad: nextState,
+    ultimaActividad: now,
+  }).commit()
+  if (nextState === 'available') {
+    await dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => console.error('[webhook NIP] Error redisparando pedidos:', error))
+  }
+
+  const customerPhone = normalizeWhatsAppPhone(String(targetOrder.phone ?? ''))
+  if (customerPhone && targetOrder.customerName) {
+    await sendOrderDelivered(customerPhone, String(targetOrder.customerName), String(targetOrder.orderNumber)).catch(() => null)
+  }
+  return { nextState }
 }
 
 async function clearCompetingOffers(orderIds: string[], acceptedDriverId: string, orderNumberLabel: string, now: string) {
@@ -565,7 +791,7 @@ async function handlePickupRestaurantAction(action: string, orderId: string | nu
     after(() => syncBaserowOrderById(String(order._id)))
     await appendOrderEvent(String(order._id), { type: 'ready_for_pickup', source: 'whatsapp/webhook', actor: 'store' })
     if (customerPhone) {
-      await sendPickupReadyForCustomer(customerPhone, customerName, orderNumber, storeName, storeMapsUrl).catch(() => null)
+      await sendPickupReadyForCustomer(customerPhone, orderNumber, storeName, storeMapsUrl).catch(() => null)
     }
     return true
   }
@@ -597,6 +823,363 @@ async function handlePickupRestaurantAction(action: string, orderId: string | nu
   }
   return true
 }
+
+async function handleScheduledCustomerAction(
+  action: string,
+  orderId: string | null,
+  fromPhone: string,
+  now: string
+) {
+  if (!orderId || !['SCHEDULE WAIT', 'SCHEDULE PICKUP', 'SCHEDULE HELP'].includes(action)) {
+    return false
+  }
+
+  let order = await backendClient.fetch(
+    `*[_type == "order" && _id == $orderId][0]{
+      _id,
+      _rev,
+      orderNumber,
+      customerName,
+      phone,
+      orderType,
+      orderStatus,
+      status,
+      paymentStatus,
+      paymentProvider,
+      paymentMethod,
+      fulfillmentTiming,
+      scheduledSlot,
+      scheduleCustomerChoice,
+      repartidorAsignado,
+      "offeredToRef": offeredTo._ref,
+      productsSubtotal,
+      shippingFee,
+      platformServiceFee,
+      discount,
+      tax,
+      platformCommission,
+      stripeFee,
+      grossTotal,
+      totalPrice,
+      "store": affiliateStore->{
+        _id,
+        name,
+        contact,
+        isActive,
+        isOpen,
+        manualOperationalStatus,
+        operatingHours,
+        serviceTypes,
+        deliveryTimeMin,
+        scheduledOrdersEnabled,
+        minimumPreparationMinutes,
+        scheduledOrderIntervalMinutes,
+        maximumScheduledDays,
+        lastDeliveryOrderMinutesBeforeClose,
+        lastPickupOrderMinutesBeforeClose
+      },
+      orderEvents
+    }`,
+    { orderId }
+  ) as Record<string, any> | null
+
+  if (
+    !order ||
+    normalizeWhatsAppPhone(fromPhone) !== normalizeWhatsAppPhone(order.phone) ||
+    order.fulfillmentTiming !== 'scheduled' ||
+    order.orderType !== 'delivery' ||
+    order.repartidorAsignado ||
+    ['cancelled', 'delivered', 'completed'].includes(String(order.orderStatus || order.status))
+  ) {
+    console.warn('[whatsapp webhook] accion programada rechazada', { action, orderId })
+    return true
+  }
+
+  const idempotencyKey = `${orderId}:${action}`
+  const choice = action === 'SCHEDULE WAIT'
+    ? 'wait_for_driver'
+    : action === 'SCHEDULE PICKUP'
+      ? 'pickup'
+      : 'help'
+  if (order.scheduleCustomerChoice === choice) return true
+  const alreadyHandled = (order.orderEvents ?? []).some((event: Record<string, unknown>) => {
+    if (!event.payloadJson) return false
+    try {
+      return JSON.parse(String(event.payloadJson)).idempotencyKey === idempotencyKey
+    } catch {
+      return false
+    }
+  })
+  if (alreadyHandled) return true
+
+  if (action === 'SCHEDULE WAIT') {
+    await backendClient.patch(orderId).ifRevisionId(order._rev).set({
+      scheduleCustomerChoice: 'wait_for_driver',
+      scheduleCustomerChoiceAt: now,
+      updatedAt: now,
+    }).commit()
+    await appendOrderEvent(orderId, {
+      type: 'manual_admin_action',
+      source: 'whatsapp/webhook',
+      actor: 'customer',
+      reason: 'customer_waits_for_driver',
+      payload: { idempotencyKey },
+    })
+    await redispatchOrders([orderId])
+    return true
+  }
+
+  if (action === 'SCHEDULE HELP') {
+    await backendClient.patch(orderId).ifRevisionId(order._rev).set({
+      scheduleCustomerChoice: 'help',
+      scheduleCustomerChoiceAt: now,
+      customerHelpRequested: true,
+      scheduleRiskLevel: 'contingency',
+      updatedAt: now,
+    }).commit()
+    await appendOrderEvent(orderId, {
+      type: 'manual_admin_action',
+      source: 'whatsapp/webhook',
+      actor: 'customer',
+      reason: 'customer_requested_help',
+      payload: { idempotencyKey },
+    })
+    return true
+  }
+
+  if (order.store?.serviceTypes?.pickup !== true) return true
+  const config = await getDeliveryScheduleConfig()
+  const pickupAvailability = getStoreAvailability({
+    store: order.store,
+    config,
+    fulfillmentType: 'pickup',
+    now: new Date(now),
+  })
+  validateFulfillmentSelection(pickupAvailability, {
+    timing: 'scheduled',
+    scheduledSlot: {
+      startAt: order.scheduledSlot.startAt,
+      endAt: order.scheduledSlot.endAt,
+    },
+  })
+
+  if (order.offeredToRef) {
+    await releaseOrdersForDriver([orderId], String(order.offeredToRef), 'customer_changed_to_pickup')
+    const refreshed = await backendClient.fetch<{ _rev: string }>(
+      `*[_type == "order" && _id == $orderId][0]{ _rev }`,
+      { orderId }
+    )
+    order._rev = refreshed._rev
+  }
+
+  const shippingFee = Number(order.shippingFee ?? 0)
+  const needsPartialRefund = order.paymentProvider === 'stripe' && shippingFee > 0
+  const financials = calculatePickupConversionFinancials({
+    productsSubtotal: Number(order.productsSubtotal ?? 0),
+    discount: Number(order.discount ?? 0),
+    tax: Number(order.tax ?? 0),
+    platformCommission: Number(order.platformCommission ?? 0),
+    platformServiceFee: Number(order.platformServiceFee ?? 0),
+    stripeFee: Number(order.stripeFee ?? 0),
+    shippingFee,
+    paidWithStripe: order.paymentProvider === 'stripe',
+  })
+
+  await backendClient.patch(orderId).ifRevisionId(String(order._rev)).set({
+    orderType: 'pickup',
+    fulfillmentType: 'pickup',
+    fulfillmentProvider: 'pickup',
+    fulfillmentProviderSnapshot: { provider: 'pickup', restaurantName: order.store?.name || 'Restaurante' },
+    dispatchStatus: 'not_required',
+    driverType: 'none',
+    driverPayout: financials.driverPayout,
+    shippingFee: financials.shippingFee,
+    shippingCost: 0,
+    totalPrice: financials.grossTotal,
+    grossTotal: financials.grossTotal,
+    stripeNetAmount: financials.stripeNetAmount,
+    storeNetTotal: financials.storeNetTotal,
+    platformNetTotal: financials.platformNetTotal,
+    cashCollectedBy: order.paymentProvider === 'stripe' ? 'none' : 'store',
+    scheduleCustomerChoice: 'pickup',
+    scheduleCustomerChoiceAt: now,
+    customerPickupConsentAt: now,
+    requiresStripeReconciliation: needsPartialRefund,
+    refundStatus: needsPartialRefund ? 'requested' : 'not_requested',
+    ...(needsPartialRefund
+      ? {
+          refundAmount: financials.refundAmount,
+          refundReason: 'Cambio de entrega programada a recoleccion',
+        }
+      : {}),
+    updatedAt: now,
+  }).unset([
+    'offeredTo',
+    'deliveryOfertaExpiresAt',
+    'deliveryOfertaEnviada',
+    'repartidorAsignado',
+    'repartidorAsignadoAt',
+  ]).commit()
+
+  await appendOrderEvent(orderId, {
+    type: 'scheduled_order_changed_to_pickup',
+    source: 'whatsapp/webhook',
+    actor: 'customer',
+    payload: { idempotencyKey, previousShippingFee: shippingFee, grossTotal: financials.grossTotal },
+  })
+  after(() => syncBaserowOrderById(orderId))
+  if (order.store?.contact?.phone) {
+    await sendWhatsAppMessage(
+      String(order.store.contact.phone),
+      `El pedido #${order.orderNumber} cambio a recoleccion con consentimiento del cliente.`
+    ).catch(() => null)
+  }
+  return true
+}
+// Acciones del cliente desde plantillas de Mandados (boton Ayuda de orden_repartidor
+// y los botones de contingencia de cliente_entrega_programada_sin_repartidor).
+async function handleMandadoCustomerAction(
+  action: string,
+  orderId: string | null,
+  fromPhone: string,
+  now: string
+) {
+  // El action llega normalizado (los guiones bajos se convierten en espacios),
+  // por eso se aceptan ambas formas: MANDADO AYUDA / MANDADO_AYUDA.
+  const isHelpAction = action === 'MANDADO AYUDA' || action === 'MANDADO_AYUDA'
+  const isContactAction = action === 'RELAY APPROVE' || action === 'RELAY DECLINE'
+  const isContingencyAction = ['SCHEDULE WAIT', 'SCHEDULE PICKUP', 'SCHEDULE HELP'].includes(action)
+  if (!orderId || (!isHelpAction && !isContingencyAction && !isContactAction)) {
+    return false
+  }
+
+  const order = await backendClient.fetch(
+    `*[_type == "order" && _id == $orderId][0]{
+      _id,
+      _rev,
+      orderNumber,
+      customerName,
+      phone,
+      mandadoRecipientPhone,
+      mandadoContactStatus,
+      mandadoContactPhone,
+      "contactDriverPhone": mandadoContactDriver->telefono,
+      serviceKind,
+      status,
+      orderStatus,
+      repartidorAsignado,
+      scheduleCustomerChoice,
+      orderEvents
+    }`,
+    { orderId }
+  ) as Record<string, any> | null
+
+  // MANDADO AYUDA se envía en EN PUERTA (cuando ya hay repartidor asignado),
+  // por lo que el guard de repartidorAsignado aplica solo a las acciones de contingencia.
+  if (
+    !order ||
+    String(order.serviceKind ?? '') !== 'mandado' ||
+    normalizeWhatsAppPhone(fromPhone) !== normalizeWhatsAppPhone(order.phone) ||
+    (isContingencyAction && order.repartidorAsignado) ||
+    ['cancelled', 'delivered', 'completed'].includes(String(order.orderStatus || order.status))
+  ) {
+    console.warn('[whatsapp webhook] accion mandado rechazada', { action, orderId })
+    return true
+  }
+
+  if (isContactAction) {
+    const contactPhone = normalizeWhatsAppPhone(String(order.mandadoContactPhone ?? ''))
+    if (normalizeWhatsAppPhone(fromPhone) !== contactPhone || String(order.mandadoContactStatus ?? '') !== 'pending') return true
+    const approved = action === 'RELAY APPROVE'
+    await backendClient.patch(orderId).ifRevisionId(order._rev).set({
+      mandadoContactStatus: approved ? 'active' : 'declined',
+      updatedAt: now,
+    }).commit()
+    const driverPhone = normalizeWhatsAppPhone(String(order.contactDriverPhone ?? ''))
+    if (driverPhone) {
+      await sendBotMessage(driverPhone, approved
+        ? `El cliente autorizó el contacto protegido para el mandado #${String(order.orderNumber)}. Escribe: MENSAJE ${String(order.orderNumber)} <tu mensaje>`
+        : `El cliente prefirió soporte para el mandado #${String(order.orderNumber)}.`).catch(() => null)
+    }
+    return true
+  }
+
+  const idempotencyKey = `${orderId}:${action}`
+  const alreadyHandled = (order.orderEvents ?? []).some((event: Record<string, unknown>) => {
+    if (!event.payloadJson) return false
+    try {
+      return JSON.parse(String(event.payloadJson)).idempotencyKey === idempotencyKey
+    } catch {
+      return false
+    }
+  })
+  if (alreadyHandled) return true
+
+  if (action === 'SCHEDULE WAIT') {
+    await backendClient.patch(orderId).ifRevisionId(order._rev).set({
+      scheduleCustomerChoice: 'wait_for_driver',
+      scheduleCustomerChoiceAt: now,
+      updatedAt: now,
+    }).commit()
+    await appendOrderEvent(orderId, {
+      type: 'manual_admin_action',
+      source: 'whatsapp/webhook',
+      actor: 'customer',
+      reason: 'customer_waits_for_driver_mandado',
+      payload: { idempotencyKey },
+    })
+    await redispatchOrders([orderId])
+    return true
+  }
+
+  if (isHelpAction || action === 'SCHEDULE HELP') {
+    await backendClient.patch(orderId).ifRevisionId(order._rev).set({
+      scheduleCustomerChoice: 'help',
+      scheduleCustomerChoiceAt: now,
+      customerHelpRequested: true,
+      updatedAt: now,
+    }).commit()
+    await appendOrderEvent(orderId, {
+      type: 'manual_admin_action',
+      source: 'whatsapp/webhook',
+      actor: 'customer',
+      reason: 'customer_requested_help_mandado',
+      payload: { idempotencyKey },
+    })
+    if (ADMIN_PHONE) {
+      await sendBotMessage(
+        ADMIN_PHONE,
+        `El cliente pidio ayuda para el mandado #${String(order.orderNumber ?? '')}. Revisa la orden ${orderId}.`
+      ).catch(() => null)
+    }
+    return true
+  }
+
+  if (action === 'SCHEDULE PICKUP') {
+    await backendClient.patch(orderId).ifRevisionId(order._rev).set({
+      scheduleCustomerChoice: 'pickup',
+      scheduleCustomerChoiceAt: now,
+      updatedAt: now,
+    }).commit()
+    await appendOrderEvent(orderId, {
+      type: 'manual_admin_action',
+      source: 'whatsapp/webhook',
+      actor: 'customer',
+      reason: 'customer_changed_mandado_to_pickup',
+      payload: { idempotencyKey },
+    })
+    if (ADMIN_PHONE) {
+      await sendBotMessage(
+        ADMIN_PHONE,
+        `El cliente cambio su mandado #${String(order.orderNumber ?? '')} a recoleccion. Gestiona manualmente.`
+      ).catch(() => null)
+    }
+    return true
+  }
+
+  return false
+}
+
 // Meta llama este GET para verificar el webhook
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url)
@@ -609,6 +1192,113 @@ export async function GET(req: NextRequest) {
     return new NextResponse(challenge, { status: 200 })
   }
   return new NextResponse('Forbidden', { status: 403 })
+}
+
+// ── PASO 2: recepción de estados de mensajes de Meta (sent/delivered/read/failed) ──
+// Procesa `value.statuses` del webhook. Un HTTP 200 del endpoint de envío NO
+// implica entrega: el estado real llega aquí por `metaMessageId` y se aplica al
+// claim idempotente (whatsappTemplateDelivery) y, cuando la plantilla transporta
+// el NIP, a `nipDeliveryStatus` de la orden.
+async function handleWhatsAppStatuses(statuses: Array<Record<string, unknown>>, traceId: string) {
+  for (const entry of statuses) {
+    const metaMessageId = String(entry.id ?? '')
+    const metaStatus = String(entry.status ?? '')
+    if (!metaMessageId || !metaStatus) continue
+
+    const incoming = mapMetaMessageStatus(metaStatus)
+    if (!incoming) {
+      // Estados desconocidos no deben romper el webhook: se ignoran y se loguean.
+      console.info('[whatsapp webhook][statuses] estado desconocido ignorado', { traceId, metaMessageId, metaStatus })
+      continue
+    }
+
+    const claim = (await backendClient.fetch(
+      `*[_type == "whatsappTemplateDelivery" && metaMessageId == $metaMessageId][0]{
+        _id, _rev, status, templateName, "orderRef": order._ref
+      }`,
+      { metaMessageId }
+    )) as { _id: string; _rev: string; status?: string; templateName?: string; orderRef?: string } | null
+
+    if (!claim) {
+      console.info('[whatsapp webhook][statuses] mensaje sin claim registrado, ignorado', { traceId, metaMessageId, metaStatus })
+      continue
+    }
+
+    const applied = await applyClaimStatus(claim, incoming, traceId)
+    if (!applied) continue
+
+    // Auditoría: un solo evento por transición real (los estados repetidos de Meta
+    // no llegan aquí porque applyClaimStatus es idempotente).
+    if (claim.orderRef) {
+      if (incoming === 'delivered' || incoming === 'read') {
+        await appendOrderEvent(claim.orderRef, {
+          type: 'whatsapp_template_delivered',
+          source: 'whatsapp/webhook',
+          payload: { templateName: claim.templateName, metaMessageId, metaStatus },
+        }).catch(() => null)
+      } else if (incoming === 'failed') {
+        await appendOrderEvent(claim.orderRef, {
+          type: 'whatsapp_template_failed',
+          source: 'whatsapp/webhook',
+          payload: {
+            templateName: claim.templateName,
+            metaMessageId,
+            metaStatus,
+            errorMessage: String((entry.errors as Array<Record<string, unknown>>)?.[0]?.message ?? ''),
+          },
+        }).catch(() => null)
+      }
+    }
+
+    // NIP: si la plantilla transporta el código, reflejar la entrega en la orden
+    // (gate del PASO 1: solo delivered abre la validación en la puerta).
+    if (claim.orderRef && isNipCarrierTemplate(claim.templateName)) {
+      const nipIncoming = resolveNipStatusFromClaimStatus(incoming)
+      if (nipIncoming) {
+        await updateOrderNipDeliveryStatus(claim.orderRef, nipIncoming).catch(() => null)
+      }
+    }
+  }
+}
+
+// Aplica la transición al claim con idempotencia y reintento ante concurrencia
+// (dos `statuses` simultáneos de Meta). Devuelve true solo si hubo transición real
+// de este llamador (evita duplicar eventos de auditoría).
+async function applyClaimStatus(
+  claim: { _id: string; _rev: string; status?: string },
+  incoming: ClaimStatus,
+  traceId: string
+): Promise<boolean> {
+  const next = resolveNextClaimStatus(claim.status as ClaimStatus | undefined, incoming)
+  if (!next || next === claim.status) return false // idempotente / degradación / desconocido
+
+  const now = new Date().toISOString()
+  const patch: Record<string, unknown> = { status: next, updatedAt: now }
+  if (next === 'delivered') patch.deliveredAt = now
+  if (next === 'read') patch.readAt = now
+  if (next === 'failed') patch.failedAt = now
+
+  try {
+    await backendClient.patch(claim._id).ifRevisionId(claim._rev).set(patch).commit()
+    return true
+  } catch (error) {
+    // Concurrencia: releer con revisión fresca y re-evaluar (forward-only).
+    const fresh = (await backendClient.fetch(
+      `*[_type == "whatsappTemplateDelivery" && _id == $claimId][0]{ _id, _rev, status }`,
+      { claimId: claim._id }
+    )) as { _id: string; _rev: string; status?: string } | null
+    if (!fresh) return false
+    const freshNext = resolveNextClaimStatus(fresh.status as ClaimStatus | undefined, incoming)
+    if (!freshNext || freshNext === fresh.status) return false
+    try {
+      await backendClient.patch(fresh._id).ifRevisionId(fresh._rev).set(patch).commit()
+      return true
+    } catch {
+      // Perdimos la carrera: otro llamador ya aplicó la transición.
+      console.info('[whatsapp webhook][statuses] transición aplicada por otro llamador', { traceId, claimId: claim._id, incoming })
+      return false
+    }
+  }
 }
 
 // Meta envia los mensajes entrantes aqui
@@ -660,6 +1350,16 @@ export async function POST(req: NextRequest) {
     })
     // #endregion
 
+    // ── PASO 2: estados de mensajes de Meta (delivered/read/failed) ──
+    // Se procesan SIEMPRE que vengan (también junto a un mensaje); son independientes
+    // del mensaje entrante y llegan con la misma firma verificada arriba.
+    const statuses = Array.isArray(value?.statuses) ? (value.statuses as Array<Record<string, unknown>>) : []
+    if (statuses.length > 0) {
+      await handleWhatsAppStatuses(statuses, traceId).catch((error) =>
+        console.error('[whatsapp webhook][statuses] error procesando estados', { traceId, error })
+      )
+    }
+
     if (!message) {
       return NextResponse.json({ status: 'ok' })
     }
@@ -669,9 +1369,13 @@ export async function POST(req: NextRequest) {
     let buttonPayloadRaw: string | null = null
     let buttonTitleRaw: string | null = null
     let buttonOrderId: string | null = null
+    // Texto ORIGINAL del mensaje (sin normalizar) para la bandeja de soporte.
+    let rawIncomingText: string | null = null
 
     if (message.type === 'text') {
-      textBody = normalizeText((message.text as Record<string, unknown>)?.body as string ?? '')
+      const rawBody = (message.text as Record<string, unknown>)?.body as string ?? ''
+      rawIncomingText = String(rawBody)
+      textBody = normalizeText(rawBody)
     } else if (message.type === 'interactive') {
       const interactive = message.interactive as Record<string, unknown>
       const buttonReply = interactive?.button_reply as Record<string, unknown>
@@ -728,7 +1432,25 @@ export async function POST(req: NextRequest) {
     })
     // #endregion
 
+    if (await handleMandadoCustomerAction(textBody, buttonOrderId, fromPhone, new Date().toISOString())) {
+      return NextResponse.json({ status: 'ok' })
+    }
+    if (await handleScheduledCustomerAction(textBody, buttonOrderId, fromPhone, new Date().toISOString())) {
+      return NextResponse.json({ status: 'ok' })
+    }
     if (await handlePickupRestaurantAction(textBody, buttonOrderId, fromPhone, new Date().toISOString())) {
+      return NextResponse.json({ status: 'ok' })
+    }
+    // Mensajes del cliente dentro de un contacto protegido activo: se retransmiten
+    // al repartidor desde el número de El Menú, sin exponer teléfonos.
+    const customerRelay = await backendClient.fetch(`*[_type == "order" && mandadoContactStatus == "active" && mandadoContactPhone == $phone][0]{ orderNumber, "driverPhone": mandadoContactDriver->telefono }`, {
+      phone: normalizeWhatsAppPhone(fromPhone),
+    }) as { orderNumber?: string; driverPhone?: string } | null
+    if (customerRelay && rawIncomingText?.trim()) {
+      const driverPhone = normalizeWhatsAppPhone(customerRelay.driverPhone)
+      if (driverPhone) {
+        await sendBotMessage(driverPhone, `Cliente (#${customerRelay.orderNumber}): ${rawIncomingText.trim().slice(0, 1200)}`).catch(() => null)
+      }
       return NextResponse.json({ status: 'ok' })
     }
     // Verificar si el numero es un repartidor registrado
@@ -761,6 +1483,43 @@ export async function POST(req: NextRequest) {
     const nowDate = new Date()
     const now = nowDate.toISOString()
     console.log(`[whatsapp webhook] Comando "${textBody}" de ${repartidor.nombre} (${fromPhone})`)
+    if (textBody === 'FIN SOPORTE') {
+      await backendClient.patch(repartidor._id).set({ soporteConversacionAbierta: false }).commit()
+      await sendBotMessage(fromPhone, 'Conversación de soporte cerrada. Si necesitas ayuda de nuevo, escribe AYUDA.').catch(() => null)
+      return NextResponse.json({ status: 'ok' })
+    }
+    const contactRequest = /^CONTACTAR CLIENTE(?:\s+(.+))?$/.exec(textBody)
+    const relayMessage = /^MENSAJE\s+([^\s]+)\s+(.+)$/.exec(String(rawIncomingText ?? ''))
+    if (contactRequest || relayMessage) {
+      const activeOrders = await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>
+      if (contactRequest) {
+        const order = resolveExactAssignedOrder(activeOrders, contactRequest[1])
+        const pickupReached = order?.mandadoPickupAtDoor === true
+        const targetPhone = normalizeWhatsAppPhone(String(pickupReached ? order?.mandadoRecipientPhone ?? '' : order?.phone ?? ''))
+        if (!order || String(order.serviceKind ?? '') !== 'mandado' || !targetPhone) {
+          await sendBotMessage(fromPhone, 'No encontré un mandado activo con contacto disponible. Usa: CONTACTAR CLIENTE <folio>.').catch(() => null)
+          return NextResponse.json({ status: 'ok' })
+        }
+        await backendClient.patch(String(order._id)).ifRevisionId(String(order._rev)).set({
+          mandadoContactStatus: 'pending', mandadoContactPhone: targetPhone,
+          mandadoContactDriver: { _type: 'reference', _ref: repartidor._id }, updatedAt: now,
+        }).commit()
+        await sendWhatsAppTemplate(targetPhone, WHATSAPP_TEMPLATES.mandadoSolicitudContacto, [`#${String(order.orderNumber)}`], 'es_MX', [
+          { type: 'button', sub_type: 'quick_reply', index: '0', parameters: [{ type: 'payload', payload: `RELAY APPROVE|${String(order._id)}` }] },
+          { type: 'button', sub_type: 'quick_reply', index: '1', parameters: [{ type: 'payload', payload: `RELAY DECLINE|${String(order._id)}` }] },
+        ]).catch(() => null)
+        await sendBotMessage(fromPhone, `Solicitamos autorización al cliente para el mandado #${String(order.orderNumber)}. Te avisaremos su respuesta.`).catch(() => null)
+        return NextResponse.json({ status: 'ok' })
+      }
+      const order = resolveExactAssignedOrder(activeOrders, relayMessage?.[1])
+      if (!order || String(order.mandadoContactStatus ?? '') !== 'active') {
+        await sendBotMessage(fromPhone, 'No hay un contacto protegido activo para ese folio.').catch(() => null)
+        return NextResponse.json({ status: 'ok' })
+      }
+      const targetPhone = normalizeWhatsAppPhone(String(order.mandadoContactPhone ?? ''))
+      if (targetPhone) await sendBotMessage(targetPhone, `Repartidor (#${String(order.orderNumber)}): ${relayMessage?.[2].trim().slice(0, 1200)}`).catch(() => null)
+      return NextResponse.json({ status: 'ok' })
+    }
     // --- FIN ---
     if (textBody === 'FIN') {
       const pendingOrderIds = getPendingOfferOrderIds(repartidor)
@@ -890,36 +1649,8 @@ export async function POST(req: NextRequest) {
         availableUntil: sessionWindow.availableUntilIso,
       })
 
-      await backendClient
-        .patch(repartidor._id)
-        .set({
-          disponible: true,
-          disponibleDesde: now,
-          disponibleHasta: sessionWindow.availableUntilIso,
-          duracionDisponibilidadMinutos: sessionWindow.totalMinutes,
-          estadoDisponibilidad: 'available',
-          ultimaActividad: now,
-          esperandoSeleccionDisponibilidad: false,
-          extensionPendiente: false,
-          pendienteConfirmacion: false,
-        })
-        .unset([
-          'confirmacionEnviadaAt',
-          'extensionPreguntadaAt',
-          'autoDesconectadoAt',
-          'motivoDesconexion',
-          'ultimoPedidoOfertado',
-          'pedidosOfertados',
-          'restauranteOferta',
-          'ofertaTipo',
-          'ofertaEnviadaAt',
-          'ofertaExpiraAt',
-        ])
-        .commit()
-
-      await dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => {
-        console.error('[webhook disponibilidad] Error reintentando ordenes en espera:', error)
-      })
+      // Migrated: connectDriverSession handles patch + unset + dispatchWaitingOrdersForDriver
+      await connectDriverSession(repartidor._id, selectedSession.minutes)
 
       void sendBotMessage(
         fromPhone,
@@ -1060,11 +1791,26 @@ Te avisaremos 10 minutos antes de finalizar.`
 
     // --- ACEPTO ---
     if (textBody === 'ACEPTO' || textBody === 'ACEPTAR' || textBody.startsWith('ACEPTO ') || textBody.startsWith('ACEPTAR ')) {
+      const traceId = crypto.randomUUID().slice(0, 8)
       const orderToken = extractOrderToken(textBody, textBody.startsWith('ACEPTAR') ? 'ACEPTAR' : 'ACEPTO')
+      console.log('[webhook ACEPTO] OFFER_ACCEPT_RECEIVED', {
+        traceId,
+        repartidorId: repartidor._id,
+        repartidorNombre: repartidor.nombre,
+        orderToken,
+      })
       const offerOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, nowDate, orderToken)
+      console.log('[webhook ACEPTO] OFFER_ACCEPT_VALIDATED', {
+        traceId,
+        repartidorId: repartidor._id,
+        orderIds: offerOrders.map((order: Record<string, unknown>) => String(order._id)),
+      })
 
-      void backendClient.patch(repartidor._id).set({ ultimaActividad: now }).commit().catch(() => null)
-
+      // NOTA: ya no se lanza un patch fire-and-forget de ultimaActividad aquí.
+      // Ese patch asíncrono cambiaba la revisión del repartidor justo entre el
+      // fetch y el commit de assignOrderToDriver, causando el 409 real en
+      // producción (documentRevisionIDDoesNotMatchError sobre el repartidor).
+      // assignOrderToDriver actualiza ultimaActividad dentro de su transacción.
       if (offerOrders.length === 0) {
         const nextState = getDriverNextState(repartidor, nowDate)
         const pendingOrderIds = getPendingOfferOrderIds(repartidor)
@@ -1100,125 +1846,256 @@ Te avisaremos 10 minutos antes de finalizar.`
         return NextResponse.json({ status: 'ok' })
       }
 
+      // Cada pedido se asigna a través del servicio único del Dispatch Center
+      // (lib/dispatch/dispatch-core.ts). El servicio resuelve internamente los
+      // conflictos de revisión (409) releendo el estado real de Sanity y
+      // reintentando con revisiones frescas; un fallo devuelto aquí ya está
+      // clasificado (validation | conflict | already_assigned_other) y nunca
+      // significa "reintenta con la misma revisión".
+      const assignedOutcomes: Array<{
+        order: Record<string, unknown>
+        ok: boolean
+        idempotent?: boolean
+        code?: string
+      }> = []
       try {
-        for (const order of offerOrders as Array<Record<string, unknown>>) {
-          await backendClient
-            .patch(String(order._id))
-            .ifRevisionId(String(order._rev))
-            .set({
-              repartidorAsignado: { _type: 'reference', _ref: repartidor._id },
-              repartidorAsignadoAt: now,
-              status: 'shipped',
-              orderStatus: 'shipped',
-              dispatchStatus: 'accepted',
-              deliveryOfertaEnviada: false,
-              updatedAt: now,
-            })
-            .unset(['deliveryOfertaExpiresAt', 'offeredTo'])
-            .commit()
+      for (const order of offerOrders as Array<Record<string, unknown>>) {
+        const assigned = await assignOrderToDriver({
+          orderId: String(order._id),
+          driverId: repartidor._id,
+          mode: 'auto',
+          actorName: String(repartidor.nombre ?? ''),
+          notifyDriver: false,
+          skipEvents: true,
+        })
 
-          after(() => syncBaserowOrderById(String(order._id)))
-          await appendOrderEvent(String(order._id), { type: 'offer_accepted', source: 'whatsapp/webhook', actor: repartidor._id })
-          await appendOrderEvent(String(order._id), { type: 'driver_assigned', source: 'whatsapp/webhook', actor: repartidor._id, payload: { driverId: repartidor._id } })
+        if (!assigned.ok) {
+          console.warn('[webhook ACEPTO] ASSIGNMENT_FAILED', {
+            traceId,
+            orderId: String(order._id),
+            repartidorId: repartidor._id,
+            code: assigned.code,
+            error: assigned.error,
+          })
+          assignedOutcomes.push({ order, ok: false, code: assigned.code })
+          continue
+        }
 
+        if (assigned.idempotent) {
+          // Doble "Acepto" / reintento concurrente: el pedido ya quedó asignado
+          // a este repartidor. Éxito idempotente: NO se re-ejecutan eventos ni
+          // notificaciones (el ganador ya los emitió) para no duplicar.
+          console.log('[webhook ACEPTO] ASSIGNMENT_IDEMPOTENT', {
+            traceId,
+            orderId: String(order._id),
+            repartidorId: repartidor._id,
+          })
+          assignedOutcomes.push({ order, ok: true, idempotent: true })
+          continue
+        }
+
+        assignedOutcomes.push({ order, ok: true })
+        after(() => syncBaserowOrderById(String(order._id)))
+        await appendOrderEvent(String(order._id), { type: 'offer_accepted', source: 'whatsapp/webhook', actor: repartidor._id })
+        await appendOrderEvent(String(order._id), { type: 'driver_assigned', source: 'whatsapp/webhook', actor: repartidor._id, payload: { driverId: repartidor._id } })
+        if (order.fulfillmentTiming === 'scheduled') {
+          await appendOrderEvent(String(order._id), { type: 'scheduled_order_driver_assigned', source: 'whatsapp/webhook', actor: repartidor._id, payload: { driverId: repartidor._id } })
+        }
+
+        // Los mandados no tienen restaurante afiliado: notificar aquí solo
+        // produce el log "[notify-restaurant] Restaurante sin WhatsApp
+        // configurado" con storeId null (verificado en producción). Los
+        // restaurantes conservan su notificación actual.
+        if (String(order.serviceKind ?? '') !== 'mandado') {
           void notifyRestaurantDriverEnRoute(
             String(order._id),
             String(repartidor.nombre),
             String(order.orderNumber)
           ).catch(() => null)
-
-          console.log('[whatsapp webhook] oferta aceptada con orderId', {
-            repartidorId: repartidor._id,
-            orderId: order._id,
-            orderNumber: order.orderNumber,
-          })
         }
 
-        await clearPendingOfferForDriver(repartidor._id, now, 'busy')
-      } catch (patchError) {
-        const remainingOfferOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, new Date(), orderToken).catch(() => [])
-        if (remainingOfferOrders.length === 0) {
-          await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
-          await sendBotMessage(fromPhone, 'La oferta ya no esta disponible o ya fue tomada.').catch(() => null)
-        }
-        console.error('[whatsapp webhook] error asignando oferta', {
+        console.log('[whatsapp webhook] oferta aceptada con orderId', {
           repartidorId: repartidor._id,
-          orderIds: offerOrders.map((order: Record<string, unknown>) => order._id),
-          remainingOfferOrderIds: Array.isArray(remainingOfferOrders) ? remainingOfferOrders.map((order: Record<string, unknown>) => order._id) : [],
-          patchError,
+          orderId: order._id,
+          orderNumber: order.orderNumber,
         })
-        return NextResponse.json({ status: 'ok' })
+      }
+      } catch (loopError) {
+        // Error inesperado (p. ej. fallo de red a Sanity en el fetch): se
+        // registra y se continúa con la reconciliación por estado real para no
+        // dejar el pedido incoherente ni responder 500 a Meta (que reintentaría).
+        console.error('[webhook ACEPTO] error inesperado al asignar', {
+          traceId,
+          repartidorId: repartidor._id,
+          orderIds: offerOrders.map((order: Record<string, unknown>) => String(order._id)),
+          loopError,
+        })
       }
 
-      const orderNumbersLabel = offerOrders.map((order: Record<string, unknown>) => `#${order.orderNumber}`).join(', ')
+      // ── Reconciliación de fallos por el estado REAL de Sanity ─────────
+      // Nunca se libera un pedido que en realidad quedó asignado (a este u
+      // otro repartidor): se relee el documento y se decide según la verdad
+      // actual, no según la opinión de este intento.
+      const failures = assignedOutcomes.filter((outcome) => !outcome.ok)
+      const successes = assignedOutcomes.filter((outcome) => outcome.ok)
+      const releasedOrderIds: string[] = []
+
+      for (const failure of failures) {
+        const freshOrder = await backendClient.fetch(RECONCILE_ORDER_QUERY, { orderId: String(failure.order._id) }) as Record<string, unknown> | null
+        const outcome = classifyAssignmentOutcome(freshOrder as Parameters<typeof classifyAssignmentOutcome>[0], repartidor._id, nowDate.getTime())
+        console.warn('[webhook ACEPTO] ASSIGNMENT_RECONCILE', {
+          traceId,
+          orderId: String(failure.order._id),
+          orderNumber: failure.order.orderNumber,
+          kind: outcome.kind,
+          code: failure.code,
+        })
+        switch (outcome.kind) {
+          case 'assigned_to_me': {
+            // Un intento concurrente ganó y ya asignó a este repartidor:
+            // éxito idempotente sin re-notificar (el ganador ya notificó).
+            break
+          }
+          case 'assigned_to_other': {
+            if (successes.length === 0) {
+              await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
+            }
+            void sendBotMessage(fromPhone, `El pedido #${failure.order.orderNumber} ya fue tomado por otro repartidor.`).catch(() => null)
+            break
+          }
+          case 'still_offered': {
+            if (failure.code === 'validation') {
+              // Falla de validación real (p. ej. capacidad máxima en un
+              // bundle): se libera para que el pedido vuelva a la cola.
+              releasedOrderIds.push(String(failure.order._id))
+            } else {
+              // Conflicto persistente de revisión: la oferta sigue vigente.
+              // NO se libera ni se toca al repartidor; puede reintentar.
+              void sendBotMessage(fromPhone, 'Hubo un error al confirmar tu aceptación. Inténtalo de nuevo en unos segundos.').catch(() => null)
+            }
+            break
+          }
+          case 'offer_released':
+          case 'order_missing': {
+            if (successes.length === 0) {
+              await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
+            }
+            void sendBotMessage(fromPhone, `La oferta del pedido #${failure.order.orderNumber} ya no está vigente.`).catch(() => null)
+            break
+          }
+        }
+      }
+
+      if (releasedOrderIds.length > 0) {
+        const released = await releaseOrdersForDriver(releasedOrderIds, repartidor._id, 'assign_failed_after_validation').catch(() => [])
+        if (released.length > 0) {
+          console.log('[webhook ACEPTO] OFFER_RELEASED', {
+            traceId,
+            orderIds: released,
+            repartidorId: repartidor._id,
+          })
+          await redispatchOrders(released, [repartidor._id]).catch(() => null)
+        }
+        if (successes.length === 0) {
+          await clearPendingOfferForDriver(repartidor._id, now, getDriverNextState(repartidor, nowDate)).catch(() => null)
+        }
+        void sendBotMessage(
+          fromPhone,
+          'No se pudo completar la asignacion por una restriccion de capacidad. Las ofertas se liberaron y se buscara otro repartidor.'
+        ).catch(() => null)
+      }
+
+      // Solo las asignaciones NUEVAS reciben mensajería de confirmación. Las
+      // aceptaciones idempotentes (doble "Acepto" donde otro intento ganó) ya
+      // fueron notificadas por el ganador: NO se vuelven a enviar plantillas
+      // ni se vuelve a avisar a repartidores competidores (evita duplicados).
+      const newAssignments = successes.filter((outcome) => !outcome.idempotent)
+      if (newAssignments.length === 0) {
+        return NextResponse.json({ status: 'ok' })
+      }
+      const successOrders = newAssignments.map((outcome) => outcome.order)
+
+      const orderNumbersLabel = successOrders.map((order: Record<string, unknown>) => `#${order.orderNumber}`).join(', ')
       void clearCompetingOffers(
-        offerOrders.map((order: Record<string, unknown>) => String(order._id)),
+        successOrders.map((order: Record<string, unknown>) => String(order._id)),
         repartidor._id,
         orderNumbersLabel,
         now
       ).catch((error) => console.error('[webhook ACEPTO] Error limpiando ofertas competidoras:', error))
 
-      if (offerOrders.length > 1) {
-        const restaurantName = String(offerOrders[0].storeName ?? 'La Tienda')
-        const totalBundle = offerOrders.reduce((sum: number, order: Record<string, unknown>) => sum + Number(order.totalPrice ?? 0), 0)
+      if (successOrders.length > 1) {
+        const restaurantName = String(successOrders[0].storeName ?? 'La Tienda')
+        const totalBundle = successOrders.reduce((sum: number, order: Record<string, unknown>) => sum + Number(order.totalPrice ?? 0), 0)
         await sendBotMessage(
           fromPhone,
           `Bundle aceptado.\n\nRestaurante: ${restaurantName}\nPedidos: ${orderNumbersLabel}\nPago total estimado: ${totalBundle.toFixed(2)} MXN\n\nPara evitar errores, usa el folio al actualizar cada pedido:\nPEDIDO EN DIRECCION AL DOMICILIO <FOLIO>\nEN PUERTA <FOLIO>\nENTREGADO <FOLIO>`
         ).catch(() => null)
       } else {
-        const order = offerOrders[0] as Record<string, unknown>
-        const storeAddress = String(order.storeAddress ?? order.storeName ?? 'la tienda')
+        const order = successOrders[0] as Record<string, unknown>
         const paymentMethodDisplay =
           order.paymentMethod === 'cash_on_delivery' || order.paymentMethod === 'cash_on_pickup'
             ? 'COBRAR EN EFECTIVO'
             : 'YA PAGADO'
 
-        const storeCoordinates = order.storeCoordinates as
-          | { latitude?: unknown; longitude?: unknown }
-          | undefined
-        const restaurantLatitude = storeCoordinates?.latitude
-        const restaurantLongitude = storeCoordinates?.longitude
-
-        const restaurantMapsUrl =
-          isValidCoordinate(restaurantLatitude) && isValidCoordinate(restaurantLongitude)
-            ? `https://www.google.com/maps?q=${restaurantLatitude},${restaurantLongitude}`
-            : `https://maps.google.com/maps?q=${encodeURIComponent(storeAddress)}`
-
-        if (!(isValidCoordinate(restaurantLatitude) && isValidCoordinate(restaurantLongitude))) {
-          console.warn('[whatsapp webhook] usando fallback de direccion para maps del restaurante', {
-            orderId: order._id,
-            orderNumber: order.orderNumber,
-            storeName: order.storeName,
-            storeAddress,
-            storeCoordinates: order.storeCoordinates ?? null,
-          })
-        }
-
-        const shippingAddress = order.shippingAddress as { line1?: string; latitude?: number; longitude?: number } | undefined
-        const clientAddressStr = buildClientAddress(order as { shippingAddress?: { line1?: string; street?: string; city?: string } })
-        const clientMapsUrl = buildAddressMapsUrl(shippingAddress, clientAddressStr)
+        const isMandadoOrder = String(order.serviceKind ?? '') === 'mandado'
         const deliveryNotes = String(order.deliveryNotes ?? '').trim()
+        // Datos de la plantilla confirmacion_repartidor (texto + botones de
+        // Maps) calculados en lib/order-maps.ts (puro y testeable). Para
+        // mandados usa el origen/destino reales capturados por el cliente; para
+        // restaurantes, la tienda afiliada y el shippingAddress. La plantilla
+        // es el mensaje CANÓNICO de asignación (recolección, destino, cobro y
+        // Maps). Los mandados reciben ADEMÁS un texto libre con la solicitud e
+        // indicaciones (buildMandadoDriverInstructions): complementa, no
+        // duplica, la información de la plantilla.
+        const confirmation = buildDriverConfirmationData(
+          order as Parameters<typeof buildDriverConfirmationData>[0]
+        )
 
-        const confirmationResults = await Promise.allSettled([
-          sendConfirmacionRepartidor(
+        if (isMandadoOrder) {
+          // ÚNICA comunicación al repartidor tras aceptar un mandado: mensaje
+          // interactivo con toda la información (solicitud, indicaciones,
+          // cobro y link de Maps) + botón "Llegué a recolección". La plantilla
+          // confirmacion_repartidor NO se usa en mandados (duplicaba
+          // recolección, destino y cobro). Fallback a texto plano si el
+          // interactivo falla: nunca se pierde la información.
+          const assignmentMessage = buildMandadoAssignmentInteractive(
+            order as Parameters<typeof buildMandadoAssignmentInteractive>[0],
+            confirmation
+          )
+          const assignmentSent = await sendWhatsAppInteractiveMessage(
             fromPhone,
-            String(order.orderNumber),
-            String(order.storeName ?? 'La Tienda'),
-            clientAddressStr,
-            paymentMethodDisplay,
-            restaurantMapsUrl,
-            clientMapsUrl
-          ),
-          deliveryNotes
-            ? sendBotMessage(fromPhone, `Instrucciones de entrega para #${String(order.orderNumber)}:\n${deliveryNotes}`)
-            : Promise.resolve(),
-        ])
-
-        if (confirmationResults[0]?.status === 'rejected') {
-          await sendBotMessage(
-            fromPhone,
-            `Pedido #${order.orderNumber} asignado. Recoge en ${order.storeName ?? 'La Tienda'} y entrega en ${clientAddressStr}. Pago: ${paymentMethodDisplay}.`
+            assignmentMessage.body,
+            assignmentMessage.buttons
           ).catch(() => null)
+          if (!assignmentSent) {
+            await sendBotMessage(
+              fromPhone,
+              buildMandadoDriverInstructions(order as Parameters<typeof buildMandadoDriverInstructions>[0])
+            ).catch(() => null)
+          }
+        } else {
+          const confirmationResults = await Promise.allSettled([
+            sendDriverConfirmation(
+              fromPhone,
+              String(order.orderNumber),
+              confirmation.restaurantName,
+              confirmation.deliveryAddress,
+              paymentMethodDisplay,
+              confirmation.restaurantMapsUrl,
+              confirmation.clientMapsUrl
+            ),
+            // Restaurantes: instrucciones de entrega adicionales.
+            deliveryNotes
+              ? sendBotMessage(fromPhone, `Instrucciones de entrega para #${String(order.orderNumber)}:\n${deliveryNotes}`)
+              : Promise.resolve(),
+          ])
+
+          if (confirmationResults[0]?.status === 'rejected') {
+            await sendBotMessage(
+              fromPhone,
+              `Pedido #${order.orderNumber} asignado. Recoge en ${confirmation.restaurantName} y entrega en ${confirmation.deliveryAddress}. Pago: ${paymentMethodDisplay}.`
+            ).catch(() => null)
+          }
         }
       }
 
@@ -1226,28 +2103,23 @@ Te avisaremos 10 minutos antes de finalizar.`
     }
 // --- RECHAZAR ---
     if (textBody === 'RECHAZAR' || textBody.startsWith('RECHAZAR ')) {
+      const traceId = crypto.randomUUID().slice(0, 8)
       const orderToken = extractOrderToken(textBody, 'RECHAZAR')
       const offerOrders = await resolvePendingOfferOrders(repartidor as Record<string, unknown>, nowDate, orderToken)
-      const nextState = getDriverNextState(repartidor, nowDate)
 
-      await clearPendingOfferForDriver(repartidor._id, now, nextState).catch(() => null)
+      // Migrated: use shared rejectDriverOffer for each resolved order
+      // (handles patch + clearPendingOffer + release + redispatch)
+      for (const offerOrder of offerOrders as Array<Record<string, unknown>>) {
+        await rejectDriverOffer(String(offerOrder.orderNumber), repartidor._id).catch((error) => {
+          console.error('[webhook RECHAZAR] rejectDriverOffer error:', error)
+        })
+      }
 
       if (offerOrders.length > 0) {
-        const releasedOrderIds = await releaseOrdersForDriver(
-          offerOrders.map((order: Record<string, unknown>) => String(order._id)),
-          repartidor._id,
-          'driver_rejected_offer'
-        )
-
-        if (releasedOrderIds.length > 0) {
-          await redispatchOrders(releasedOrderIds, [repartidor._id]).catch((error) => {
-            console.error('[webhook RECHAZAR] Error redispatch:', error)
-          })
-        }
-
-        console.log('[whatsapp webhook] oferta rechazada con orderIds', {
+        console.log('[webhook RECHAZAR] OFFER_REJECTED', {
+          traceId,
           repartidorId: repartidor._id,
-          orderIds: releasedOrderIds,
+          orderNumbers: offerOrders.map((order: Record<string, unknown>) => String(order.orderNumber)),
         })
       }
 
@@ -1260,16 +2132,53 @@ Te avisaremos 10 minutos antes de finalizar.`
     }
 
     // --- PEDIDO EN DIRECCION AL DOMICILIO ---
-    if (textBody === 'PEDIDO EN DIRECCION AL DOMICILIO' || textBody.startsWith('PEDIDO EN DIRECCION AL DOMICILIO ')) {
-        const orderToken = extractOrderToken(textBody, 'PEDIDO EN DIRECCION AL DOMICILIO')
-        const shippedOrders = await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id })
-        const targetOrder = resolveExactAssignedOrder(shippedOrders as Array<Record<string, unknown>>, orderToken)
+    // El matcheo tolera variantes escritas a mano ("a domicilio", espacios
+    // dobles, puntuación final) para que un comando operativo válido NUNCA
+    // caiga en la conversación de soporte (incidencia real de producción).
+    const pedidoEnCaminoToken = matchDriverCommand(textBody, 'PEDIDO EN DIRECCION AL DOMICILIO')
+    if (pedidoEnCaminoToken !== null) {
+        const traceId = crypto.randomUUID().slice(0, 8)
+        // El botón "Ya recogí el mandado" viaja con payload PEDIDO EN DIRECCION
+        // AL DOMICILIO|<orderId>: honrar buttonOrderId igual que EN PUERTA/ENTREGADO
+        // para que botón y comando resuelvan la misma orden.
+        const orderToken = buttonOrderId ?? (pedidoEnCaminoToken || null)
+        console.log('PEDIDO_EN_CAMINO_START', {
+          traceId,
+          repartidorId: repartidor._id,
+          orderToken,
+          buttonOrderId,
+          fromPhone,
+        })
+        const targetOrder = buttonOrderId
+          ? await resolveAssignedOrderById(buttonOrderId, repartidor._id)
+          : null
+        const shippedOrders = targetOrder
+          ? [targetOrder]
+          : await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>
+        console.log('PEDIDO_EN_CAMINO_SHIPPED_ORDERS', {
+          traceId,
+          cantidad: shippedOrders.length,
+          orderIds: shippedOrders.map((o) => String(o._id)),
+          orderNumbers: shippedOrders.map((o) => String(o.orderNumber)),
+          serviceKind: shippedOrders.map((o) => String(o.serviceKind ?? '')),
+          status: shippedOrders.map((o) => String(o.status ?? '')),
+          dispatchStatus: shippedOrders.map((o) => String(o.dispatchStatus ?? '')),
+          mandadoPickupAtDoor: shippedOrders.map((o) => String(o.mandadoPickupAtDoor ?? '')),
+          mandadoEnRuta: shippedOrders.map((o) => String(o.mandadoEnRuta ?? '')),
+        })
+        const resolvedTargetOrder = targetOrder ?? resolveExactAssignedOrder(shippedOrders as Array<Record<string, unknown>>, orderToken)
 
-        if (!targetOrder) {
+        if (!resolvedTargetOrder) {
+          console.warn('PEDIDO_EN_CAMINO_NO_TARGET', {
+            traceId,
+            repartidorId: repartidor._id,
+            orderToken,
+            cantidadPedidos: shippedOrders.length,
+          })
           if (!shippedOrders || shippedOrders.length === 0) {
             void sendBotMessage(fromPhone, 'No tienes ningun pedido en camino actualmente.').catch(() => null)
           } else {
-            void sendBotMessage(fromPhone, getAmbiguousOrderPrompt('PEDIDO EN DIRECCION AL DOMICILIO', shippedOrders as Array<Record<string, unknown>>)).catch(() => null)
+            void sendBotMessage(fromPhone, getAmbiguousOrderPrompt('PEDIDO EN DIRECCION AL DOMICILIO', shippedOrders)).catch(() => null)
           }
           console.warn('[whatsapp webhook] intento de actualizar orden sin asignacion valida', {
             repartidorId: repartidor._id,
@@ -1279,30 +2188,164 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
+        console.log('PEDIDO_EN_CAMINO_TARGET_RESOLVED', {
+          traceId,
+          targetOrderId: String(resolvedTargetOrder._id),
+          targetOrderNumber: String(resolvedTargetOrder.orderNumber),
+          targetServiceKind: String(resolvedTargetOrder.serviceKind ?? ''),
+          targetStatus: String(resolvedTargetOrder.status ?? ''),
+          targetDispatchStatus: String(resolvedTargetOrder.dispatchStatus ?? ''),
+          targetMandadoPickupAtDoor: String(resolvedTargetOrder.mandadoPickupAtDoor ?? ''),
+          targetMandadoEnRuta: String(resolvedTargetOrder.mandadoEnRuta ?? ''),
+        })
+
+        const isMandadoOrder = String((resolvedTargetOrder as Record<string, unknown>).serviceKind ?? '') === 'mandado'
+        if (isMandadoOrder) {
+          // Máquina de estados del repartidor (lib/mandado-driver-flow.ts):
+          // "Ya recogí" / PEDIDO EN DIRECCION AL DOMICILIO es la transición
+          // EN_ROUTE, SOLO válida después de registrar la llegada a recolección.
+          const driverState = mandadoDriverState(resolvedTargetOrder as Record<string, unknown>)
+
+          if (driverState === 'assigned') {
+            // Aún no llegó al punto de recolección: mismo aviso que antes.
+            void sendBotMessage(
+              fromPhone,
+              'Primero llega al punto de recolección y presiona En Puerta. Cuando recibas el paquete, presiona Pedido en dirección al domicilio.'
+            ).catch(() => null)
+            return NextResponse.json({ status: 'ok' })
+          }
+
+          if (driverState === 'destination_arrival' || driverState === 'delivered' || driverState === null) {
+            // Duplicado o estado inválido: idempotente, NO se reenvía WhatsApp ni
+            // se repiten efectos secundarios.
+            console.log('PEDIDO_EN_CAMINO_IDEMPOTENT', {
+              traceId,
+              orderId: String(resolvedTargetOrder._id),
+              driverState,
+            })
+            return NextResponse.json({ status: 'ok' })
+          }
+
+          // driverState === 'pickup_arrival' (post-deploy) o 'en_route' (legacy
+          // con mandadoEnRuta undefined). Si el flag ya es true, es duplicado.
+          const alreadyEnRuta = (resolvedTargetOrder as Record<string, unknown>).mandadoEnRuta === true
+          if (alreadyEnRuta) {
+            console.log('PEDIDO_EN_CAMINO_IDEMPOTENT', {
+              traceId,
+              orderId: String(resolvedTargetOrder._id),
+              driverState,
+            })
+            return NextResponse.json({ status: 'ok' })
+          }
+
+          // Transición EN_ROUTE: shared function handles patch + ifRevisionId + event + syncBaserow
+          const enRouteResult = await markMandadoEnRoute(
+            String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+            repartidor._id
+          )
+          if (!enRouteResult.ok) {
+            return NextResponse.json({ status: 'ok' })
+          }
+
+          console.log('PEDIDO_EN_CAMINO_SENDING_DRIVER', {
+            traceId,
+            orderId: String((resolvedTargetOrder as Record<string, unknown>)._id),
+            orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+          })
+
+          // Mensaje mínimo EN_ROUTE (interactivo) + notificación al remitente
+          // (mandado__cliente, SIN cambios). El template repartidor_en_camino
+          // deja de usarse en mandados.
+          const notifications: Promise<unknown>[] = []
+          const enRouteConfirmation = buildDriverConfirmationData(resolvedTargetOrder as Parameters<typeof buildDriverConfirmationData>[0])
+          const enRouteMessage = buildMandadoEnRouteInteractive(
+            resolvedTargetOrder as Parameters<typeof buildMandadoEnRouteInteractive>[0],
+            enRouteConfirmation
+          )
+          const enRouteSent = await sendWhatsAppInteractiveMessage(fromPhone, enRouteMessage.body, enRouteMessage.buttons).catch(() => null)
+          if (!enRouteSent) {
+            // Fallback a texto plano si el interactivo falla: no se pierde la
+            // información (destino + link de Maps), solo los botones.
+            notifications.push(sendBotMessage(fromPhone, enRouteMessage.body).catch(() => null))
+          }
+
+          const customerPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).phone ?? ''))
+          if (customerPhone && (resolvedTargetOrder as Record<string, unknown>).customerName) {
+            const mandado = resolvedTargetOrder as Record<string, unknown>
+            const destination =
+              (mandado.mandadoDestination as { label?: string } | undefined)?.label
+              ?? (String((mandado.shippingAddress as { line1?: string } | undefined)?.line1 ?? '') || 'la dirección indicada')
+            notifications.push(sendMandadoClienteRecogido({
+              _id: String(mandado._id),
+              phone: customerPhone,
+              customerName: String(mandado.customerName),
+              orderNumber: String(mandado.orderNumber ?? ''),
+              deliveryAddress: destination,
+            }))
+          }
+
+          await Promise.allSettled(notifications)
+          console.log('PEDIDO_EN_CAMINO_DRIVER_SENT', {
+            traceId,
+            orderId: String((resolvedTargetOrder as Record<string, unknown>)._id),
+            orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+          })
+          console.log('[whatsapp webhook] cliente notificado con orderId', {
+            accion: 'en_camino',
+            repartidorId: repartidor._id,
+            orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+            orderNumber: (resolvedTargetOrder as Record<string, unknown>).orderNumber,
+          })
+          console.log('PEDIDO_EN_CAMINO_COMPLETED', {
+            traceId,
+            orderId: String((resolvedTargetOrder as Record<string, unknown>)._id),
+            orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+          })
+
+          return NextResponse.json({ status: 'ok' })
+        }
+
+        // ── Restaurantes: sin cambios ──
+        console.log('PEDIDO_EN_CAMINO_SENDING_DRIVER', {
+          traceId,
+          orderId: String((resolvedTargetOrder as Record<string, unknown>)._id),
+          orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+        })
         const notifications: Promise<unknown>[] = [
-          sendRepartidorEnCamino(fromPhone, String((targetOrder as Record<string, unknown>).orderNumber), String((targetOrder as Record<string, unknown>)._id)),
+          sendRepartidorEnCamino(fromPhone, String((resolvedTargetOrder as Record<string, unknown>).orderNumber), String((resolvedTargetOrder as Record<string, unknown>)._id)),
         ]
 
-        const customerPhone = normalizeWhatsAppPhone(String((targetOrder as Record<string, unknown>).phone ?? ''))
-        if (customerPhone && (targetOrder as Record<string, unknown>).customerName) {
+        const customerPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).phone ?? ''))
+        if (customerPhone && (resolvedTargetOrder as Record<string, unknown>).customerName) {
           notifications.push(
-            sendOrderOnTheWay(customerPhone, String((targetOrder as Record<string, unknown>).customerName), String((targetOrder as Record<string, unknown>).orderNumber))
+            sendOrderOnTheWay(customerPhone, String((resolvedTargetOrder as Record<string, unknown>).customerName), String((resolvedTargetOrder as Record<string, unknown>).orderNumber))
           )
         }
 
         await Promise.allSettled(notifications)
+        console.log('PEDIDO_EN_CAMINO_DRIVER_SENT', {
+          traceId,
+          orderId: String((resolvedTargetOrder as Record<string, unknown>)._id),
+          orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+        })
         console.log('[whatsapp webhook] cliente notificado con orderId', {
           accion: 'en_camino',
           repartidorId: repartidor._id,
-          orderId: (targetOrder as Record<string, unknown>)._id,
-          orderNumber: (targetOrder as Record<string, unknown>).orderNumber,
+          orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+          orderNumber: (resolvedTargetOrder as Record<string, unknown>).orderNumber,
+        })
+        console.log('PEDIDO_EN_CAMINO_COMPLETED', {
+          traceId,
+          orderId: String((resolvedTargetOrder as Record<string, unknown>)._id),
+          orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
         })
 
         return NextResponse.json({ status: 'ok' })
     }
 // --- EN PUERTA ---
-    if (textBody === 'EN PUERTA' || textBody.startsWith('EN PUERTA ')) {
-        const orderToken = buttonOrderId ?? extractOrderToken(textBody, 'EN PUERTA')
+    const enPuertaToken = matchDriverCommand(textBody, 'EN PUERTA')
+    if (enPuertaToken !== null) {
+        const orderToken = buttonOrderId ?? (enPuertaToken || null)
         const targetOrder = buttonOrderId
           ? await resolveAssignedOrderById(buttonOrderId, repartidor._id)
           : null
@@ -1327,40 +2370,220 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
-        await backendClient
-          .patch(String((resolvedTargetOrder as Record<string, unknown>)._id))
-          .ifRevisionId(String((resolvedTargetOrder as Record<string, unknown>)._rev))
-          .set({ dispatchStatus: 'at_door', updatedAt: now })
-          .commit()
+        const isMandadoOrder = String((resolvedTargetOrder as Record<string, unknown>).serviceKind ?? '') === 'mandado'
 
-        after(() => syncBaserowOrderById(String((resolvedTargetOrder as Record<string, unknown>)._id)))
-        await appendOrderEvent(String((resolvedTargetOrder as Record<string, unknown>)._id), { type: 'at_door', source: 'whatsapp/webhook', actor: repartidor._id })
+        if (isMandadoOrder) {
+          // Máquina de estados del repartidor (lib/mandado-driver-flow.ts): EN
+          // PUERTA despacha por el ESTADO de la orden, nunca por número de
+          // pulsación. La llegada al destino solo es válida en EN_ROUTE.
+          const driverState = mandadoDriverState(resolvedTargetOrder as Record<string, unknown>)
 
-        const notifications: Promise<unknown>[] = [
-          sendRepartidorEnPuerta(fromPhone, String((resolvedTargetOrder as Record<string, unknown>).orderNumber), String((resolvedTargetOrder as Record<string, unknown>)._id)),
-        ]
+          if (driverState === 'assigned') {
+            // ── Transición PICKUP_ARRIVAL (EN PUERTA en recolección) ──
+            // Migrated: shared function handles patch + ifRevisionId + event + syncBaserow
+            const pickupResult = await markPickupArrival(
+              String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+              repartidor._id
+            )
+            if (!pickupResult.ok) {
+              return NextResponse.json({ status: 'ok' })
+            }
+
+            const senderPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).phone ?? ''))
+            const origin =
+              ((resolvedTargetOrder as Record<string, unknown>).mandadoOrigin as { label?: string } | undefined)?.label
+              ?? 'el punto de recolección'
+
+            // Mensaje mínimo PICKUP_ARRIVAL (interactivo) con botón
+            // "Ya recogí el mandado"; fallback a texto plano si falla.
+            const pickupMessage = buildMandadoPickupArrivalInteractive(String((resolvedTargetOrder as Record<string, unknown>)._id))
+            const pickupSent = await sendWhatsAppInteractiveMessage(fromPhone, pickupMessage.body, pickupMessage.buttons).catch(() => null)
+            const notifications: Promise<unknown>[] = []
+            if (!pickupSent) {
+              notifications.push(
+                sendBotMessage(
+                  fromPhone,
+                  'Llegaste al punto de recolección. Recibe el paquete y, cuando vayas al destino, presiona Pedido en dirección al domicilio.'
+                ).catch(() => null)
+              )
+            }
+            if (senderPhone) {
+              // 1ª llegada (punto de recolección): aviso con el ORIGEN y acción
+              // "recoger tu paquete". Clave de idempotencia propia (`recogido`)
+              // para no colisionar con la 2ª llegada (`en_destino`).
+              notifications.push(sendMandadoDestinoEnPuerta({
+                _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
+                phone: senderPhone,
+                orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
+                deliveryAddress: origin,
+                orderStatus: 'pickup',
+              }, { idempotencySuffix: 'recogido' }))
+            }
+            await Promise.allSettled(notifications)
+            return NextResponse.json({ status: 'ok' })
+          }
+
+          if (driverState === 'pickup_arrival' || driverState === 'destination_arrival' || driverState === 'delivered') {
+            // Duplicado (o acción sobre un estado ya transitado): idempotente,
+            // NO se reenvía WhatsApp ni se repiten efectos secundarios. Esto
+            // cierra el riesgo de que una 2ª pulsación en el ORIGEN avance al
+            // destino: en PICKUP_ARRIVAL solo vale "Ya recogí el mandado".
+            console.log('EN_PUERTA_IDEMPOTENT', {
+              repartidorId: repartidor._id,
+              orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+              driverState,
+            })
+            return NextResponse.json({ status: 'ok' })
+          }
+
+          if (driverState === null) {
+            void sendBotMessage(
+              fromPhone,
+              'No se pudo determinar el estado del mandado. Contacta a soporte.'
+            ).catch(() => null)
+            return NextResponse.json({ status: 'ok' })
+          }
+
+          // driverState === 'en_route' → la llegada al destino es válida;
+          // continúa al bloque de destino compartido (fall-through).
+        }
+
+        // Migrated: markAtDoor handles patch + ifRevisionId + event + syncBaserow
+        const atDoorResult = await markAtDoor(
+          String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+          repartidor._id
+        )
+        if (!atDoorResult.ok) {
+          return NextResponse.json({ status: 'ok' })
+        }
+
+        const notifications: Promise<unknown>[] = []
+        if (isMandadoOrder && !orderRequiresDeliveryPin(resolvedTargetOrder as Record<string, unknown>)) {
+          // Entrega Segura OFF: mensaje mínimo DESTINATION_ARRIVAL + botón
+          // "Entregado". El template repartidor_en_puerta deja de usarse aquí.
+          const arrivalMessage = buildMandadoDestinationArrivalInteractive(String((resolvedTargetOrder as Record<string, unknown>)._id))
+          const arrivalSent = await sendWhatsAppInteractiveMessage(fromPhone, arrivalMessage.body, arrivalMessage.buttons).catch(() => null)
+          if (!arrivalSent) {
+            // Fallback a texto plano si el interactivo falla.
+            notifications.push(sendBotMessage(fromPhone, arrivalMessage.body).catch(() => null))
+          }
+        } else {
+          // Entrega Segura ON (mandado) y restaurantes: flujo actual intacto
+          // (template repartidor_en_puerta + botón Entregado + NIP).
+          notifications.push(
+            sendRepartidorEnPuerta(fromPhone, String((resolvedTargetOrder as Record<string, unknown>).orderNumber), String((resolvedTargetOrder as Record<string, unknown>)._id))
+          )
+        }
 
         const customerPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).phone ?? ''))
         if (customerPhone && (resolvedTargetOrder as Record<string, unknown>).customerName) {
           let deliveryPin: string | undefined
-          try {
-            const ciphertext = String((resolvedTargetOrder as Record<string, unknown>).deliveryPinCiphertext ?? '')
-            if (ciphertext && (resolvedTargetOrder as Record<string, unknown>).deliveryVerificationStatus === 'pending') {
-              deliveryPin = revealDeliveryPin(ciphertext)
+          // Regla única de NIP: solo se revela/comunica si la orden REALMENTE lo
+          // requiere (mandados: Entrega segura activa; restaurantes: método pin
+          // pendiente). La existencia de un NIP almacenado NO implica requisito.
+          if (orderRequiresDeliveryPin(resolvedTargetOrder as Record<string, unknown>)) {
+            try {
+              const ciphertext = String((resolvedTargetOrder as Record<string, unknown>).deliveryPinCiphertext ?? '')
+              if (ciphertext) {
+                deliveryPin = revealDeliveryPin(ciphertext)
+              }
+            } catch (error) {
+              console.error('[webhook EN PUERTA] No se pudo revelar el NIP del pedido', {
+                orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+                error,
+              })
             }
-          } catch (error) {
-            console.error('[webhook EN PUERTA] No se pudo revelar el NIP del pedido', {
-              orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
-              error,
-            })
           }
 
-          notifications.push(sendClienteRepartidorEnPuerta(
-            customerPhone,
-            String((resolvedTargetOrder as Record<string, unknown>).customerName),
-            String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
-            deliveryPin
-          ))
+          // Regla central (lib/mandado-arrival.ts): decide QUÉ plantillas recibe
+          // el remitente en EN PUERTA según el valor real de la orden (Entrega
+          // segura). NO reutilizar `cliente_repartidor_en_puerta` para mandados.
+          const arrivalPlan = planMandadoArrival(resolvedTargetOrder as Record<string, unknown>)
+          if (arrivalPlan.sendDestinoEnPuerta) {
+            // 2ª llegada (destino): el remitente recibe SIEMPRE el aviso
+            // `mandado_destino_en_puerta` (APROBADA) con la dirección de destino
+            // y acción "la entrega de tu mandado". Es el aviso equivalente a
+            // `cliente_repartidor_en_puerta` de restaurantes, que NO se
+            // reutiliza para mandados. Clave de idempotencia `en_destino`
+            // (distinta de la 1ª llegada, `recogido`).
+            const destinationLabel =
+              ((resolvedTargetOrder as Record<string, unknown>).mandadoDestination as { label?: string } | undefined)?.label
+              ?? 'el destino del mandado'
+            notifications.push(sendMandadoDestinoEnPuerta({
+              _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
+              phone: customerPhone,
+              orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
+              deliveryAddress: destinationLabel,
+            }))
+            // La primera llegada ya avisó al remitente. En la segunda llegada se
+            // avisa al destinatario; {{1}} indica si debe compartir un NIP.
+            const recipientPhone = normalizeWhatsAppPhone(String((resolvedTargetOrder as Record<string, unknown>).mandadoRecipientPhone ?? '').replace(/\D/g, ''))
+            const recipientGetsPin = arrivalPlan.sendOrdenPorCompletar && arrivalPlan.nipChannel === 'recipient' && Boolean(deliveryPin)
+            if (recipientPhone) {
+              notifications.push(sendMandadoDestinatarioEnPuerta({
+                _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
+                recipientPhone,
+                orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
+                recipientMessage: recipientGetsPin
+                  ? `Tu paquete ya llegó. Comparte este NIP con el repartidor para confirmar la entrega: ${deliveryPin}.`
+                  : 'Tu paquete ya llegó. Ya puedes recibirlo.',
+              }))
+            }
+            // 2) NIP (SOLO si la orden requiere Entrega segura): se envía al canal
+            //    configurado en la creación (PASO 4), NUNCA al repartidor. Un mandado
+            //    sin Entrega segura NUNCA recibe instrucciones ni códigos de NIP.
+            if (arrivalPlan.sendOrdenPorCompletar) {
+              if (arrivalPlan.nipChannel === 'recipient') {
+                if (recipientPhone) {
+                  // Endurecimiento B: persiste el canal efectivo + teléfono destino.
+                  await persistNipDeliveryTarget(resolvedTargetOrder as Record<string, unknown>, {
+                    deliveryChannel: 'whatsapp_recipient',
+                    deliveryPhone: recipientPhone,
+                  }, nowDate)
+                } else {
+                  // Anomalía (canal destinatario sin teléfono): el NIP no puede
+                  // entregarse por ningún canal disponible → estado explícito
+                  // `none` + incidencia operativa (no solo un log). nipDeliveryStatus
+                  // queda pending → gate cerrado → escalar a soporte.
+                  await persistNipDeliveryTarget(resolvedTargetOrder as Record<string, unknown>, {
+                    deliveryChannel: 'none',
+                  }, nowDate)
+                  await recordDeliveryPinIncident(
+                    resolvedTargetOrder as Record<string, unknown>,
+                    repartidor as Record<string, unknown>,
+                    'not_delivered',
+                    nowDate
+                  )
+                  console.warn('[webhook EN PUERTA] canal destinatario sin teléfono; NIP no enviado', {
+                    orderId: (resolvedTargetOrder as Record<string, unknown>)._id,
+                  })
+                }
+              } else {
+                // Canal remitente (o legado): `orden_repartidor` (nombre heredado de
+                // Meta; va al CLIENTE, no al repartidor) con el NIP y botón Ayuda.
+                notifications.push(sendMandadoOrdenPorCompletar({
+                  _id: String((resolvedTargetOrder as Record<string, unknown>)._id),
+                  phone: customerPhone,
+                  orderNumber: String((resolvedTargetOrder as Record<string, unknown>).orderNumber ?? ''),
+                  deliveryPin,
+                }))
+                // Endurecimiento B: persiste el canal efectivo + teléfono destino.
+                if (customerPhone) {
+                  await persistNipDeliveryTarget(resolvedTargetOrder as Record<string, unknown>, {
+                    deliveryChannel: 'whatsapp_sender',
+                    deliveryPhone: customerPhone,
+                  }, nowDate)
+                }
+              }
+            }
+          } else {
+            notifications.push(sendClienteRepartidorEnPuerta(
+              customerPhone,
+              String((resolvedTargetOrder as Record<string, unknown>).customerName),
+              String((resolvedTargetOrder as Record<string, unknown>).orderNumber),
+              deliveryPin
+            ))
+          }
         }
 
         await Promise.allSettled(notifications)
@@ -1374,8 +2597,9 @@ Te avisaremos 10 minutos antes de finalizar.`
         return NextResponse.json({ status: 'ok' })
     }
 // --- ENTREGADO ---
-      if (textBody === 'ENTREGADO' || textBody.startsWith('ENTREGADO ')) {
-        const orderToken = buttonOrderId ?? extractOrderToken(textBody, 'ENTREGADO')
+      const entregadoToken = matchDriverCommand(textBody, 'ENTREGADO')
+      if (entregadoToken !== null) {
+        const orderToken = buttonOrderId ?? (entregadoToken || null)
         const targetOrder = buttonOrderId
           ? await resolveAssignedOrderById(buttonOrderId, repartidor._id)
           : null
@@ -1405,11 +2629,72 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
+        // A (endurecimiento): NIP ya VERIFICADO es terminal e idempotente. Si un
+        // webhook reintentado o un flujo interrumpido vuelve a disparar ENTREGADO
+        // sobre una orden cuya entrega ya fue autenticada, se completa sin volver
+        // a exigir ni re-validar el código (nunca se bloquea lo ya verificado).
+        if (effectiveNipStatus(resolvedTargetOrder as Record<string, unknown>, nowDate) === 'verified') {
+          const { nextState: verifiedNextState } = await completeDeliveredOrder(
+            resolvedTargetOrder as Record<string, unknown>,
+            repartidor,
+            nowDate,
+            now
+          )
+          await sendBotMessage(
+            fromPhone,
+            verifiedNextState === 'offline'
+              ? 'Pedido entregado correctamente. Tu sesion de disponibilidad ya termino; responde INICIO para volver a conectarte.'
+              : 'Pedido entregado correctamente. Gracias!'
+          ).catch(() => null)
+          return NextResponse.json({ status: 'ok' })
+        }
+
+        // Gate de entrega (PASO 1 + AJUSTE 3): SOLO se pide el NIP si la orden
+        // realmente lo requiere Y, en mandados, si hay evidencia de que el código
+        // fue entregado al canal configurado Y sigue vigente (no expiró). Un 200 de
+        // Meta no basta; pending/sent/failed o expirado cierran el gate.
+        if (orderRequiresDeliveryPin(resolvedTargetOrder as Record<string, unknown>)) {
+          const blockReason = getDeliveryPinBlockReason(resolvedTargetOrder as Record<string, unknown>, nowDate)
+          if (blockReason) {
+            // Incidencia operativa (deduplicada): la entrega protegida no puede
+            // completarse porque el código no fue entregado al canal o expiró.
+            // Aparece en la bandeja del Dispatch Center; el repartidor NO tiene
+            // un bypass automático (el override es decisión explícita de operación).
+            await recordDeliveryPinIncident(
+              resolvedTargetOrder as Record<string, unknown>,
+              repartidor as Record<string, unknown>,
+              blockReason,
+              nowDate
+            )
+            await sendBotMessage(
+              fromPhone,
+              blockReason === 'expired'
+                ? 'El código de entrega expiró. Contacta a soporte para completar la entrega.'
+                : 'El código de entrega todavía no está disponible. No completes la entrega todavía.'
+            ).catch(() => null)
+            return NextResponse.json({ status: 'ok' })
+          }
+          await sendBotMessage(
+            fromPhone,
+            `Solicita al cliente el NIP de 6 digitos del pedido #${String((resolvedTargetOrder as Record<string, unknown>).orderNumber)} y respondelo aqui.`
+          ).catch(() => null)
+          return NextResponse.json({ status: 'ok' })
+        }
+
+        // Entrega segura desactivada (o verificación no requerida): la entrega se
+        // completa directamente, sin solicitar ni validar NIP.
+        const { nextState: noPinNextState } = await completeDeliveredOrder(
+          resolvedTargetOrder as Record<string, unknown>,
+          repartidor,
+          nowDate,
+          now
+        )
         await sendBotMessage(
           fromPhone,
-          `Solicita al cliente el NIP de 6 digitos del pedido #${String((resolvedTargetOrder as Record<string, unknown>).orderNumber)} y respondelo aqui.`
+          noPinNextState === 'offline'
+            ? 'Pedido entregado correctamente. Tu sesion de disponibilidad ya termino; responde INICIO para volver a conectarte.'
+            : 'Pedido entregado correctamente. Gracias!'
         ).catch(() => null)
-
         return NextResponse.json({ status: 'ok' })
       }
 
@@ -1427,6 +2712,26 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
+        // A (endurecimiento): NIP ya VERIFICADO es terminal e idempotente. Un
+        // segundo `NIP <FOLIO> <6>` (reintento del webhook, doble envío del
+        // repartidor) sobre una entrega ya autenticada NO re-valida ni cuenta
+        // intentos: reconoce la entrega como ya verificada y la completa.
+        if (effectiveNipStatus(targetOrder as Record<string, unknown>, nowDate) === 'verified') {
+          const { nextState: verifiedNextState } = await completeDeliveredOrder(
+            targetOrder as Record<string, unknown>,
+            repartidor,
+            nowDate,
+            now
+          )
+          await sendBotMessage(
+            fromPhone,
+            verifiedNextState === 'offline'
+              ? 'NIP correcto. Pedido entregado correctamente. Tu sesion de disponibilidad ya termino; responde INICIO para volver a conectarte.'
+              : 'NIP correcto. Pedido entregado correctamente. Gracias!'
+          ).catch(() => null)
+          return NextResponse.json({ status: 'ok' })
+        }
+
         if (targetOrder.deliveryPinLockedUntil && new Date(String(targetOrder.deliveryPinLockedUntil)) > nowDate) {
           await sendBotMessage(fromPhone, 'El NIP esta bloqueado temporalmente. Intenta de nuevo en 15 minutos.').catch(() => null)
           return NextResponse.json({ status: 'ok' })
@@ -1437,10 +2742,29 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
-        if (
-          targetOrder.deliveryVerificationMethod !== 'pin' ||
-          !isDeliveryPinValid(String(targetOrder.orderNumber), deliveryPinCommand.pin, String(targetOrder.deliveryPinHash ?? ''))
-        ) {
+        // Gate de entrega (PASO 1 + AJUSTE 3): un mandado sin NIP entregado al
+        // canal o con NIP expirado NUNCA valida aquí (aunque exista un NIP
+        // almacenado o el método diga pin). Restaurantes conservan su flujo.
+        const blockReason = getDeliveryPinBlockReason(targetOrder as Record<string, unknown>, nowDate)
+        if (blockReason) {
+          // Incidencia operativa (deduplicada, ver recordDeliveryPinIncident).
+          await recordDeliveryPinIncident(
+            targetOrder as Record<string, unknown>,
+            repartidor as Record<string, unknown>,
+            blockReason,
+            nowDate
+          )
+          await sendBotMessage(
+            fromPhone,
+            blockReason === 'expired'
+              ? 'El código de entrega expiró. Contacta a soporte para completar la entrega.'
+              : 'El código de entrega todavía no está disponible. No completes la entrega todavía.'
+          ).catch(() => null)
+          return NextResponse.json({ status: 'ok' })
+        }
+
+        // Regla única de NIP (lib/delivery-pin.ts): validación real del código.
+        if (!isDeliveryPinValid(String(targetOrder.orderNumber), deliveryPinCommand.pin, String(targetOrder.deliveryPinHash ?? ''))) {
           const attempts = Number(targetOrder.deliveryPinAttemptCount ?? 0) + 1
           const lockedUntil = attempts >= DELIVERY_PIN_MAX_ATTEMPTS
             ? new Date(nowDate.getTime() + DELIVERY_PIN_LOCK_MS).toISOString()
@@ -1465,39 +2789,7 @@ Te avisaremos 10 minutos antes de finalizar.`
           return NextResponse.json({ status: 'ok' })
         }
 
-        const verifiedAt = now
-        await backendClient.patch(String(targetOrder._id)).ifRevisionId(String(targetOrder._rev)).set({
-          status: 'delivered',
-          orderStatus: 'delivered',
-          dispatchStatus: 'completed',
-          deliveredAt: verifiedAt,
-          settlementStatus: resolveDeliveredSettlement(targetOrder),
-          deliveryPinVerifiedAt: verifiedAt,
-          deliveryPinVerifiedBy: repartidor._id,
-          deliveryVerificationStatus: 'verified',
-          updatedAt: verifiedAt,
-        }).commit()
-
-        after(() => syncBaserowOrderById(String(targetOrder._id)))
-        await appendOrderEvent(String(targetOrder._id), { type: 'delivery_pin_verified', source: 'whatsapp/webhook', actor: repartidor._id })
-        await appendOrderEvent(String(targetOrder._id), { type: 'delivered', source: 'whatsapp/webhook', actor: repartidor._id })
-
-        const remainingOrders = (await backendClient.fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { repartidorId: repartidor._id }) as Array<Record<string, unknown>>)
-          .filter((order) => String(order._id) !== String(targetOrder._id))
-        const nextState = remainingOrders.length > 0 ? 'busy' : getDriverNextState(repartidor, nowDate)
-        await backendClient.patch(repartidor._id).set({
-          disponible: nextState !== 'offline',
-          estadoDisponibilidad: nextState,
-          ultimaActividad: now,
-        }).commit()
-        if (nextState === 'available') {
-          await dispatchWaitingOrdersForDriver(repartidor._id).catch((error) => console.error('[webhook NIP] Error redisparando pedidos:', error))
-        }
-
-        const customerPhone = normalizeWhatsAppPhone(String(targetOrder.phone ?? ''))
-        if (customerPhone && targetOrder.customerName) {
-          await sendOrderDelivered(customerPhone, String(targetOrder.customerName), String(targetOrder.orderNumber)).catch(() => null)
-        }
+        const { nextState } = await completeDeliveredOrder(targetOrder, repartidor, nowDate, now, { verifiedByDriver: true })
         await sendBotMessage(
           fromPhone,
           nextState === 'offline'
@@ -1507,10 +2799,36 @@ Te avisaremos 10 minutos antes de finalizar.`
         return NextResponse.json({ status: 'ok' })
       }
 // --- Cualquier otro mensaje de un repartidor registrado ---
-      void sendBotMessage(
-        fromPhone,
-        `Comandos disponibles: INICIO, FIN, OFERTAS, ORDENES, ACEPTO, RECHAZAR, PEDIDO EN DIRECCION AL DOMICILIO, EN PUERTA, ENTREGADO.`
-      ).catch(() => null)
+      // Se captura en la bandeja de mensajes del Dispatch Center (soporteChat)
+      // para que el operador pueda verlo y responderle por WhatsApp. Nunca se
+      // descarta ni se oculta: es información real del repartidor.
+      await backendClient
+        .patch(repartidor._id)
+        .setIfMissing({ soporteChat: [] })
+        .append('soporteChat', [
+          {
+            _key: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            role: 'driver',
+            body: String(rawIncomingText ?? textBody ?? '').trim().substring(0, 2000),
+            createdAt: now,
+            readAt: null,
+          },
+        ])
+        .commit()
+        .catch((error: unknown) => {
+          console.error('[webhook soporte] error guardando mensaje del repartidor:', error)
+        })
+
+      // La confirmación se envía solo al abrir la conversación. Los siguientes
+      // mensajes van al operador silenciosamente para que el chat se sienta como
+      // una conversación real y no como un menú repetitivo.
+      if (repartidor.soporteConversacionAbierta !== true) {
+        await backendClient.patch(repartidor._id).set({ soporteConversacionAbierta: true }).commit().catch(() => null)
+        void sendBotMessage(
+          fromPhone,
+          'Te leemos. Describe el problema y el equipo de soporte te responderá por este chat. Para cerrar esta conversación escribe FIN SOPORTE.'
+        ).catch(() => null)
+      }
 
   } catch (error) {
     console.error('[whatsapp webhook] Error:', error)
@@ -1518,22 +2836,6 @@ Te avisaremos 10 minutos antes de finalizar.`
 
   return NextResponse.json({ status: 'ok' })
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 

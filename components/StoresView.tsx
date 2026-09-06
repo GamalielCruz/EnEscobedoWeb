@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import StoreGrid from "./StoreGrid";
 import { StoreCategoryFilter } from "./StoreCategoryFilter";
 import { Skeleton } from "./ui/skeleton";
+import MandadoMapFlow from "./MandadoMapFlow";
 
 interface StoreCategoryIcon {
   type?: string;
@@ -52,6 +53,7 @@ interface Store {
   averageDeliveryTime?: number;
   isActive?: boolean;
   promotionalMessages?: string[];
+  promotionalMessagesEnabled?: boolean;
 }
 
 interface StoreCategory {
@@ -71,7 +73,7 @@ interface StoresViewProps {
 
 function StoreGridSkeleton() {
   return (
-    <div className="mt-4 grid w-full grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+    <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
       {Array.from({ length: 4 }).map((_, index) => (
         <div key={index} className="overflow-hidden rounded-lg border border-gray-100 bg-white">
           <Skeleton className="h-48 w-full rounded-none" />
@@ -96,6 +98,8 @@ export default function StoresView({
   const [isPending, startTransition] = useTransition();
   const [pendingCategory, setPendingCategory] = useState("");
   const selectedCategory = isPending ? pendingCategory : initialCategory || "";
+  const mandadoSelected = searchParams?.get("service") === "mandado";
+  const superSelected = searchParams?.get("service") === "super";
 
   const handleCategoryChange = (categoryId: string | null) => {
     setPendingCategory(categoryId || "");
@@ -104,6 +108,8 @@ export default function StoresView({
     // Remove page when changing category
     params.delete("page");
     
+    params.delete("service");
+
     if (categoryId) {
       params.set("category", categoryId);
     } else {
@@ -116,21 +122,43 @@ export default function StoresView({
     });
   };
 
+  const handleMandadoSelect = () => {
+    setPendingCategory("");
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
+    params.delete("page");
+    params.delete("category");
+    if (mandadoSelected) params.delete("service");
+    else params.set("service", "mandado");
+    const queryString = params.toString();
+    startTransition(() => router.push(queryString ? `/?${queryString}` : "/"));
+  };
+
+  const handleSuperSelect = () => {
+    startTransition(() => router.push("/super"));
+  };
+
+  // En modo mandado, renderizar solo el componente sin wrappers
+  if (mandadoSelected) {
+    return <MandadoMapFlow />;
+  }
+
   return (
     <>
       {/* Filtro de categorías */}
-      {storeCategories.length > 0 && (
-        <div className="mb-6">
-          <StoreCategoryFilter
-            categories={storeCategories}
-            selectedCategory={selectedCategory}
-            onCategoryChange={handleCategoryChange}
-          />
-        </div>
-      )}
+      <div className="mb-2 w-full">
+        <StoreCategoryFilter
+          categories={storeCategories}
+          selectedCategory={selectedCategory}
+          onCategoryChange={handleCategoryChange}
+          mandadoSelected={mandadoSelected}
+          onMandadoSelect={handleMandadoSelect}
+          superSelected={superSelected}
+          onSuperSelect={handleSuperSelect}
+        />
+      </div>
 
       {/* Grid de tiendas */}
-      <div aria-busy={isPending}>
+      <div className="w-full max-w-7xl mx-auto" aria-busy={isPending}>
         {isPending ? <StoreGridSkeleton /> : <StoreGrid stores={stores} />}
       </div>
     </>
