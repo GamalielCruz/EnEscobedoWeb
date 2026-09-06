@@ -7,7 +7,6 @@ import { motion } from "framer-motion";
 import {
   Loader2,
   MapPin,
-  Navigation,
   Package,
   Store,
   Clock,
@@ -44,6 +43,12 @@ import { DRIVE_MAP_STYLES, ROUTE_BLUE } from "@/lib/drive/map-styles";
 
 // ── Map config ─────────────────────────────────────────────────────
 
+// Map ID del mapa vectorial de marca (Cloud Console → Map Management). Sin
+// él el mapa es raster: sin rotación heading-up ni tilt. El estilo visual
+// vive en el PROPIO Map ID (JSON de marca importado); el fallback inline de
+// DRIVE_MAP_STYLES es solo transitorio hasta crear el Map ID.
+const DRIVE_MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID || "";
+
 const DEFAULT_CENTER = { lat: 20.502, lng: -100.145 };
 const containerStyle = { width: "100%", height: "100%" };
 
@@ -64,6 +69,9 @@ const NAV_AHEAD_MIN_METERS = 80;
 const NAV_AHEAD_MAX_METERS = 1600;
 // Re-anclar la cámara cuando el conductor avanza al menos esto sobre la ruta.
 const NAV_ANCHOR_UPDATE_METERS = 8;
+// Inclinación de la cámara en modo navegación (heading-up). Vector map en la
+// pista permite compose center/heading/tilt/zoom con map.moveCamera.
+const NAV_TILT = 30;
 // No girar el mapa por variaciones menores de rumbo (anti-jitter).
 const NAV_HEADING_SKIP_DEG = 2.5;
 // Suavizado de rotación por frame (interpolación del ángulo más corto).
@@ -89,8 +97,13 @@ const mapOptions = {
   streetViewControl: false,
   gestureHandling: "greedy",
   clickableIcons: false,
-  // Estilo de marca (lib/drive/map-styles.ts): mapa claro sin ruido de POI.
-  styles: DRIVE_MAP_STYLES,
+  // Map ID VECTORIAL (Cloud Console): habilita rotación heading-up + tilt
+  // vía map.moveCamera y el estilo de marca configurado en el mismo Map ID.
+  ...(DRIVE_MAP_ID ? { mapId: DRIVE_MAP_ID } : {}),
+  // Fallback TRANSITORIO (solo si aún no existe el Map ID): estilo inline con
+  // el mismo JSON de marca. Estado final = Map ID + estilo de marca + rotación
+  // siempre juntos; este branch desaparece cuando DRIVE_MAP_ID esté en env.
+  ...(DRIVE_MAP_ID ? {} : { styles: DRIVE_MAP_STYLES }),
 };
 
 // ── Pin SVG ────────────────────────────────────────────────────────
@@ -123,56 +136,32 @@ const destPinSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="2
 function getMandadoAction(order: DriverOrder): { label: string; action: string; icon: React.ReactNode } {
   switch (order.mandadoState) {
     case "assigned":
-      return { label: "NAVEGAR A RECOLECCIÓN", action: "navigate_pickup", icon: <Navigation className="h-5 w-5" /> };
+      return { label: "RECOLECCIÓN", action: "navigate_pickup", icon: <MapPin className="h-4 w-4" /> };
     case "pickup_arrival":
-      return { label: "YA RECOGÍ EL MANDADO", action: "picked_up", icon: <Package className="h-5 w-5" /> };
+      return { label: "YA RECOGÍ EL MANDADO", action: "picked_up", icon: <Package className="h-4 w-4" /> };
     case "en_route":
-      return { label: "NAVEGAR A ENTREGA", action: "navigate_delivery", icon: <Navigation className="h-5 w-5" /> };
+      return { label: "ENTREGA", action: "navigate_delivery", icon: <MapPin className="h-4 w-4" /> };
     case "destination_arrival":
-      return { label: "CONFIRMAR ENTREGA", action: "delivered", icon: <CheckCircle className="h-5 w-5" /> };
+      return { label: "CONFIRMAR ENTREGA", action: "delivered", icon: <CheckCircle className="h-4 w-4" /> };
     default:
-      return { label: "VER PEDIDO", action: "view", icon: <Package className="h-5 w-5" /> };
+      return { label: "VER PEDIDO", action: "view", icon: <Package className="h-4 w-4" /> };
   }
 }
 
 function getRestaurantAction(order: DriverOrder): { label: string; action: string; icon: React.ReactNode } {
   switch (order.dispatchStatus) {
     case "accepted":
-      return { label: "NAVEGAR A RECOLECCIÓN", action: "navigate_pickup", icon: <Navigation className="h-5 w-5" /> };
+      return { label: "RECOLECCIÓN", action: "navigate_pickup", icon: <MapPin className="h-4 w-4" /> };
     case "at_door":
-      return { label: "CONFIRMAR ENTREGA", action: "delivered", icon: <CheckCircle className="h-5 w-5" /> };
+      return { label: "CONFIRMAR ENTREGA", action: "delivered", icon: <CheckCircle className="h-4 w-4" /> };
     default:
-      return { label: "VER PEDIDO", action: "view", icon: <Package className="h-5 w-5" /> };
+      return { label: "VER PEDIDO", action: "view", icon: <Package className="h-4 w-4" /> };
   }
-}
-
-// ── External navigation helpers ───────────────────────────────────────
-// La polyline del mapa es SOLO la vista previa de la ruta; el botón abre la
-// app de navegación del dispositivo hacia las coordenadas exactas del tramo
-// actual (recolección o entrega).
-
-function isIOSDevice(): boolean {
-  if (typeof navigator === "undefined") return false;
-  const ua = navigator.userAgent;
-  if (/iPad|iPhone|iPod/.test(ua)) return true;
-  // iPadOS se anuncia como Mac, pero con pantalla táctil
-  return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
 }
 
 /**
- * URL de navegación por plataforma:
- * - iOS → Apple Maps (maps.apple.com abre la app en el dispositivo)
- * - Android/desktop → Google Maps (en Android abre la app; en desktop, la web)
- * El `destination` puede ser "lat,lng" (coordenadas exactas) o una dirección.
+ * Verifica que las coordenadas sean válidas (no NaN, no 0,0).
  */
-function buildDirectionsUrl(destination: string): string {
-  const encoded = encodeURIComponent(destination);
-  if (isIOSDevice()) {
-    return `https://maps.apple.com/?daddr=${encoded}&dirflg=d`;
-  }
-  return `https://www.google.com/maps/dir/?api=1&destination=${encoded}&travelmode=driving`;
-}
-
 function hasValidCoords(lat: number, lng: number): boolean {
   return Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0);
 }
@@ -235,6 +224,25 @@ function aheadCameraPoint(map: google.maps.Map, driver: RoutePoint, headingDeg: 
 }
 
 /**
+ * Aplica la cámara en UNA llamada vía map.moveCamera (compose de
+ * center/heading/tilt/zoom, mapa vectorial): evita los saltos y la doble
+ * animación de setCenter/setHeading/setZoom por separado. Con mapa raster
+ * (sin Map ID) moveCamera no existe: cae a setCenter + setHeading.
+ */
+function moveMapCamera(
+  map: google.maps.Map,
+  camera: google.maps.CameraOptions
+): void {
+  if (typeof map.moveCamera === "function") {
+    map.moveCamera(camera);
+    return;
+  }
+  // Fallback transitorio raster: mismo encuadre, sin tilt.
+  map.setCenter(camera.center as google.maps.LatLngLiteral);
+  if (camera.heading != null) map.setHeading(camera.heading);
+}
+
+/**
  * Encuadra la cámara sobre los puntos de la ruta vial (repartidor + trayecto
  * completo hasta el destino). Nunca se usa la línea recta entre extremos.
  */
@@ -269,27 +277,6 @@ function frameRouteView(map: google.maps.Map, points: RoutePoint[]): void {
  * Si las coordenadas no existen (0/0), se cae al texto de la dirección real
  * del pedido en lugar de abrir la app en un punto inventado.
  */
-function getOrderLegTarget(
-  order: DriverOrder,
-  action: string
-): { destination: string; hasCoordinates: boolean } | null {
-  if (action !== "navigate_pickup" && action !== "navigate_delivery") return null;
-  const isPickup = action === "navigate_pickup";
-  const lat = isPickup ? order.storeLat : order.destLat;
-  const lng = isPickup ? order.storeLng : order.destLng;
-  const fallbackLabel = isPickup
-    ? (order.mandadoOriginLabel ?? order.storeName)
-    : (order.mandadoDestinationLabel ?? order.destLabel);
-  const hasCoordinates = Number.isFinite(lat) && Number.isFinite(lng) && !(lat === 0 && lng === 0);
-  if (hasCoordinates) {
-    return { destination: `${lat},${lng}`, hasCoordinates: true };
-  }
-  if (fallbackLabel) {
-    return { destination: fallbackLabel, hasCoordinates: false };
-  }
-  return null;
-}
-
 function getOrderAction(order: DriverOrder) {
   return order.serviceKind === "mandado"
     ? getMandadoAction(order)
@@ -339,6 +326,8 @@ export default function DrivePage() {
   const { isLoaded: mapsLoaded } = useJsApiLoader({
     id: "driver-app-google-maps",
     googleMapsApiKey: apiKey,
+    // Carga el mapa vectorial asociado al Map ID (rotación/tilt habilitados).
+    ...(DRIVE_MAP_ID ? { mapIds: [DRIVE_MAP_ID] } : {}),
   });
 
   const { state, loading, error: stateError, refetch } = useDriverState();
@@ -626,13 +615,19 @@ export default function DrivePage() {
   const applyHeading = useCallback((deg: number) => {
     const map = mapRef.current;
     if (!map) return;
-    visualHeadingRef.current = normalizeDeg(deg);
-    setDriverHeading(normalizeDeg(deg));
-    map.setHeading(normalizeDeg(deg));
+    const norm = normalizeDeg(deg);
+    visualHeadingRef.current = norm;
+    setDriverHeading(norm);
     // Re-anclar en cada paso de rotación: el conductor se mantiene en la zona
-    // inferior mientras el mapa gira debajo de él.
+    // inferior mientras el mapa rota debajo de él (center+heading compuestos).
     const pos = currentLocationRef.current;
-    if (pos) map.setCenter(aheadCameraPoint(map, pos, normalizeDeg(deg)));
+    if (pos) {
+      moveMapCamera(map, {
+        center: aheadCameraPoint(map, pos, norm),
+        heading: norm,
+        tilt: NAV_TILT,
+      });
+    }
   }, []);
 
   /** Rotación suave hacia `target` (siempre por el arco más corto). */
@@ -678,7 +673,10 @@ export default function DrivePage() {
     visualHeadingRef.current = null;
     setDriverHeading(0);
     const map = mapRef.current;
-    if (map && map.getHeading?.()) map.setHeading(0);
+    // Norte arriba y sin tilt: vista de exploración tras el gesto del usuario.
+    if (map && map.getHeading?.()) {
+      moveMapCamera(map, { heading: 0, tilt: 0 });
+    }
   }, [stopHeadingAnimation]);
 
   const handleMapLoad = useCallback(
@@ -747,7 +745,7 @@ export default function DrivePage() {
       stopHeadingAnimation();
       visualHeadingRef.current = null;
       setDriverHeading(0);
-      map.setHeading(0);
+      moveMapCamera(map, { heading: 0, tilt: 0 });
       markInternalZoom();
       map.setZoom(DEFAULT_ZOOM);
       lastFollowPosRef.current = currentLocation;
@@ -770,7 +768,7 @@ export default function DrivePage() {
       if (visualHeadingRef.current != null) {
         visualHeadingRef.current = null;
         setDriverHeading(0);
-        map.setHeading(0);
+        moveMapCamera(map, { heading: 0, tilt: 0 });
       }
       const last = lastFollowPosRef.current;
       const dist = last ? haversineMeters(last, currentLocation) : Infinity;
@@ -799,13 +797,12 @@ export default function DrivePage() {
     if (moved < NAV_ANCHOR_UPDATE_METERS && lastCamDriverPosRef.current) return;
     lastCamDriverPosRef.current = currentLocation;
     const heading = visualHeadingRef.current ?? 0;
-    map.setCenter(aheadCameraPoint(map, currentLocation, heading));
-    // Zoom de navegación al entrar (sin pisar un zoom manual posterior).
-    const zoom = map.getZoom();
-    if (typeof zoom === "number" && (zoom < 15 || zoom > 18.5)) {
-      markInternalZoom();
-      map.setZoom(FOLLOW_NAV_ZOOM);
-    }
+    moveMapCamera(map, {
+      center: aheadCameraPoint(map, currentLocation, heading),
+      heading,
+      tilt: NAV_TILT,
+      zoom: FOLLOW_NAV_ZOOM,
+    });
   }, [
     mapsLoaded,
     followDriver,
@@ -835,13 +832,12 @@ export default function DrivePage() {
       lastFramedRouteRef.current = roadRoute;
       return;
     }
-    // Vista general del nuevo tramo, norte arriba.
-    stopHeadingAnimation();
-    visualHeadingRef.current = null;
-    setDriverHeading(0);
-    map.setHeading(0);
+    // Vista general del nuevo tramo, norte arriba: la cámara heading-up se
+    // enciende al pulsar NAVEGAR (o Centrar GPS), no de forma automática.
+    moveMapCamera(map, { heading: 0, tilt: 0 });
     markInternalZoom();
     frameRouteView(map, [currentLocation, ...roadRoute!.path]);
+    setFollowDriver(false);
     prevFramedLegKeyRef.current = legKey;
     lastFramedRouteRef.current = roadRoute;
   }, [
@@ -858,32 +854,37 @@ export default function DrivePage() {
 
   // ── Controles de cámara ─────────────────────────────────────────
 
-  // "Centrar GPS" = volver al MODO NAVEGACIÓN: posición adelantada (tercio
-  // inferior), orientación por rumbo, zoom de conducción y seguimiento activo.
-  // NUNCA encuadra todo el viaje ni recalcula routing.
-  const handleCenterGps = useCallback(() => {
+  // Enciende el MODO NAVEGACIÓN heading-up (mismo comportamiento que
+  // "Centrar GPS"): posición adelantada (tercio inferior), rumbo del viaje,
+  // tilt de navegación, zoom de conducción y seguimiento activo. NUNCA
+  // encuadra todo el viaje ni recalcula routing.
+  const enterFollowCamera = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
-    markInternalZoom();
-    map.setZoom(FOLLOW_NAV_ZOOM);
     const withRoute = Boolean(
       navTarget && roadRoute?.path && roadRoute.path.length >= 2
     );
     const target = headingResolverRef.current ? headingResolverRef.current() : null;
     if (withRoute && target != null) {
+      // Heading-up (mismo bearing que el puck) + tilt, animado por el tween.
       startHeadingTween(target);
     } else {
       stopHeadingAnimation();
       visualHeadingRef.current = null;
       setDriverHeading(0);
-      map.setHeading(0);
+      moveMapCamera(map, { heading: 0, tilt: 0 });
     }
     lastFollowPosRef.current = currentLocation;
     lastCamDriverPosRef.current = currentLocation;
     const heading = visualHeadingRef.current ?? 0;
-    map.setCenter(
-      withRoute ? aheadCameraPoint(map, currentLocation, heading) : currentLocation
-    );
+    moveMapCamera(map, {
+      center: withRoute
+        ? aheadCameraPoint(map, currentLocation, heading)
+        : currentLocation,
+      heading,
+      tilt: withRoute ? NAV_TILT : 0,
+      zoom: FOLLOW_NAV_ZOOM,
+    });
     setFollowDriver(true);
   }, [
     currentLocation,
@@ -891,8 +892,13 @@ export default function DrivePage() {
     navTarget,
     startHeadingTween,
     stopHeadingAnimation,
-    markInternalZoom,
   ]);
+
+  // "Centrar GPS" = regresar al modo navegación heading-up si el usuario
+  // arrastró el mapa y salió de él: no solo recentra, restaura rumbo + tilt.
+  const handleCenterGps = useCallback(() => {
+    enterFollowCamera();
+  }, [enterFollowCamera]);
 
   // "Ver viaje completo" = vista convencional (norte arriba, sin seguimiento):
   // fitBounds sobre la geometría vial real; no vuelve al conductor solo.
@@ -916,7 +922,7 @@ export default function DrivePage() {
     stopHeadingAnimation();
     visualHeadingRef.current = null;
     setDriverHeading(0);
-    map.setHeading(0);
+    moveMapCamera(map, { heading: 0, tilt: 0 });
     markInternalZoom();
     frameRouteView(map, points);
     // Dejar de forzar la cámara para que pueda ver el recorrido completo.
@@ -1065,14 +1071,11 @@ export default function DrivePage() {
 
   const handleAction = useCallback(
     async (action: string, orderNumber: string) => {
-      // Navigation actions open the device's maps app toward the exact
-      // coordinates of the order that owns the button (recolección o entrega)
+      // Navigation actions encienden la cámara heading-up del mapa in-app.
+      // La navegación ocurre dentro de /drive con Google Maps API; no se abre
+      // aplicación externa (Google Maps / Apple Maps).
       if (action === "navigate_pickup" || action === "navigate_delivery") {
-        const order = state?.orders.find((o) => o.orderNumber === orderNumber) ?? activeOrder;
-        const target = order ? getOrderLegTarget(order, action) : null;
-        if (target) {
-          window.open(buildDirectionsUrl(target.destination), "_blank", "noopener");
-        }
+        enterFollowCamera();
         return;
       }
 
@@ -1089,7 +1092,7 @@ export default function DrivePage() {
         setActionLoading(null);
       }
     },
-    [state?.orders, activeOrder, refetch]
+    [enterFollowCamera, refetch]
   );
 
   const handleOffer = useCallback(
@@ -1377,8 +1380,6 @@ export default function DrivePage() {
                 actionKind={orderAction.action}
                 actionLabel={orderAction.label}
                 actionIcon={orderAction.icon}
-                loading={actionLoading === order.orderNumber}
-                onAction={() => handleAction(orderAction.action, order.orderNumber)}
                 onDisconnect={() => handleSession("disconnect")}
                 disconnectLoading={actionLoading === "session"}
                 simulated={sim.active}

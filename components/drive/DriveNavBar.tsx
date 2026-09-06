@@ -20,37 +20,27 @@ type Accent = "orange" | "red" | "green" | "blue" | "gray";
 
 const ACCENT_STYLES: Record<
   Accent,
-  { iconWrap: string; title: string; chip: string; bar: string }
+  { iconWrap: string; title: string }
 > = {
   orange: {
-    iconWrap: "bg-orange-100 text-orange-600",
-    title: "text-orange-600",
-    chip: "bg-orange-50 text-orange-700",
-    bar: "bg-orange-500",
+    iconWrap: "bg-orange-500 text-white",
+    title: "text-orange-400",
   },
   red: {
-    iconWrap: "bg-red-100 text-red-600",
-    title: "text-red-600",
-    chip: "bg-red-50 text-red-700",
-    bar: "bg-red-500",
+    iconWrap: "bg-red-500 text-white",
+    title: "text-red-400",
   },
   green: {
-    iconWrap: "bg-green-100 text-green-600",
-    title: "text-green-700",
-    chip: "bg-green-50 text-green-700",
-    bar: "bg-green-500",
+    iconWrap: "bg-green-500 text-white",
+    title: "text-green-400",
   },
   blue: {
-    iconWrap: "bg-blue-100 text-blue-600",
-    title: "text-blue-600",
-    chip: "bg-blue-50 text-blue-700",
-    bar: "bg-blue-500",
+    iconWrap: "bg-blue-500 text-white",
+    title: "text-blue-400",
   },
   gray: {
-    iconWrap: "bg-gray-100 text-gray-600",
-    title: "text-gray-600",
-    chip: "bg-gray-100 text-gray-600",
-    bar: "bg-gray-400",
+    iconWrap: "bg-gray-500 text-white",
+    title: "text-gray-400",
   },
 };
 
@@ -92,9 +82,15 @@ function ManeuverIcon({ maneuver, className }: { maneuver: string | null; classN
 }
 
 /**
- * Banner de navegación (turn-by-turn) que flota sobre el mapa en la parte
- * superior. Lee de un vistazo mientras se maneja: maniobra con icono grande,
- * instrucción dominante, destino, distancia/tiempo restantes y progreso.
+ * Panel de navegación tipo GPS que flota sobre el mapa en la parte superior.
+ * Diseño oscuro de alto contraste inspirado en navegadores GPS:
+ * - Fondo oscuro/redondeado
+ * - Icono grande de maniobra
+ * - Distancia grande y legible
+ * - Vialidad claramente visible
+ * - Tiempo y distancia al destino
+ *
+ * Lee de un vistazo mientras se maneja: "¿Qué hago ahora?".
  */
 export function DriveNavBar({
   title,
@@ -131,77 +127,90 @@ export function DriveNavBar({
   const accentStyle = ACCENT_STYLES[accent];
   const hasProgress = typeof progress === "number" && progress >= 0;
 
+  // Color de acento para el panel GPS (fondo oscuro con acento)
+  const accentBarColors: Record<Accent, string> = {
+    orange: "bg-orange-500",
+    red: "bg-red-500",
+    green: "bg-green-500",
+    blue: "bg-blue-500",
+    gray: "bg-gray-500",
+  };
+  const barColor = accentBarColors[accent];
+
   return (
-    <div className="rounded-2xl bg-white/95 px-3.5 py-2.5 shadow-[0_10px_30px_rgba(3,7,18,0.28)] ring-1 ring-black/5 backdrop-blur-sm">
-      {/* Fila 1 — etapa · pedido · distancia restante */}
-      <div className="flex items-center gap-1.5">
-        <span
-          className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-md ${accentStyle.iconWrap}`}
-        >
-          {icon}
-        </span>
-        <span
-          className={`text-[10px] font-black uppercase tracking-wider ${accentStyle.title}`}
-        >
-          {title}
-        </span>
-        <span
-          className={`rounded-full px-1.5 py-px text-[10px] font-bold tabular-nums ${accentStyle.chip}`}
-        >
-          Pedido #{orderCode}
-        </span>
-        {simulated && (
-          <span className="rounded-full bg-purple-100 px-1.5 py-px text-[10px] font-bold text-purple-700">
-            🧪 SIM
+    <div
+      className="rounded-2xl bg-gray-950/95 px-3.5 py-2.5 shadow-[0_10px_40px_rgba(0,0,0,0.5)] ring-1 ring-white/10 backdrop-blur-md"
+    >
+      {/* Fila 1 — etapa + tiempo/distancia al destino */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <span
+            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-lg ${accentStyle.iconWrap}`}
+          >
+            {icon}
           </span>
-        )}
-        {distanceLabel && (
-          <span className="ml-auto text-xs font-black tabular-nums text-[#09193B]">
-            {distanceLabel}
+          <span
+            className={`text-[11px] font-black uppercase tracking-wider ${accentStyle.title}`}
+          >
+            {title}
           </span>
+          <span
+            className="rounded-full bg-white/10 px-1.5 py-px text-[10px] font-bold text-white/70"
+          >
+            #{orderCode}
+          </span>
+          {simulated && (
+            <span className="rounded-full bg-purple-900/50 px-1.5 py-px text-[10px] font-bold text-purple-300">
+              🧪 SIM
+            </span>
+          )}
+        </div>
+
+        {/* Tiempo • distancia al destino */}
+        {(durationLabel || distanceLabel) && (
+          <div className="flex items-center gap-2 text-xs font-black tabular-nums text-white/80">
+            {durationLabel && <span>{durationLabel}</span>}
+            {durationLabel && distanceLabel && <span className="text-white/40">•</span>}
+            {distanceLabel && <span>{distanceLabel}</span>}
+          </div>
         )}
       </div>
 
       {/* Fila 2 — icono grande de maniobra + instrucción dominante */}
-      <div className="mt-1.5 flex items-center gap-2.5">
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-blue-100 text-blue-700">
-          <ManeuverIcon maneuver={maneuverValue} className="h-6 w-6" />
+      <div className="mt-2 flex items-start gap-3">
+        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/10 text-white">
+          <ManeuverIcon maneuver={maneuverValue} className="h-7 w-7" />
         </span>
-        {waitingForRoute ? (
-          <p className="flex items-center gap-1.5 text-base font-semibold text-gray-500">
-            <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
-            Calculando ruta…
-          </p>
-        ) : (
-          <p className="line-clamp-2 flex-1 text-[17px] font-extrabold leading-snug text-[#0b1b3a]">
-            {mainText}
-          </p>
-        )}
+        <div className="min-w-0 flex-1">
+          {waitingForRoute ? (
+            <p className="flex items-center gap-2 text-sm font-semibold text-white/60">
+              <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
+              Calculando ruta…
+            </p>
+          ) : (
+            <>
+              <p className="text-xl font-extrabold leading-snug text-white">
+                {mainText}
+              </p>
+              {subText && !waitingForRoute && (
+                <p className="mt-0.5 truncate text-xs text-white/60">
+                  {subText}
+                </p>
+              )}
+            </>
+          )}
+        </div>
       </div>
 
-      {/* Fila 3 — destino (terciario) */}
-      {subText && !waitingForRoute && (
-        <p className="mt-1 pl-[3.375rem] truncate text-xs text-gray-500">{subText}</p>
-      )}
-
-      {/* Fila 4 — progreso geométrico + tiempo restante */}
-      {(hasProgress || durationLabel) && (
-        <div className="mt-2 flex items-center gap-2">
-          {hasProgress ? (
-            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-gray-100">
-              <div
-                className={`h-full rounded-full transition-[width] duration-300 ${accentStyle.bar}`}
-                style={{ width: `${Math.min(100, Math.max(0, progress! * 100))}%` }}
-              />
-            </div>
-          ) : (
-            <div className="flex-1" />
-          )}
-          {durationLabel && (
-            <span className="text-xs font-black tabular-nums text-gray-700">
-              {durationLabel}
-            </span>
-          )}
+      {/* Fila 3 — progreso geométrico */}
+      {hasProgress && (
+        <div className="mt-2">
+          <div className="h-1 overflow-hidden rounded-full bg-white/10">
+            <div
+              className={`h-full rounded-full transition-[width] duration-300 ${barColor}`}
+              style={{ width: `${Math.min(100, Math.max(0, progress! * 100))}%` }}
+            />
+          </div>
         </div>
       )}
     </div>

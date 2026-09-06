@@ -2,8 +2,12 @@
  * Estilos y colores de marca para el mapa del repartidor.
  *
  * Paleta de facto de ElMenu (ver Fase 0): navy #09193B + rojo #EB1902.
- * El estilo del mapa es JSON inline (sin Map ID): funciona con la clave y
- * configuración actuales, sin cambios en Google Cloud Console.
+ * Este JSON es el ESTILO DE MARCA: se importa tal cual (pestaña JSON) al
+ * crear el Map ID vectorial en Cloud Console, y vive asociado a ese Map ID.
+ * La referencia inline de DRIVE_MAP_STYLES en la página del repartidor es un
+ * fallback TRANSITORIO solo mientras NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID no
+ * exista; el estado final es Map ID + estilo de marca + rotación siempre
+ * juntos.
  *
  * La ruta vial se dibuja en azul ROUTE_BLUE para que destaque sobre el mapa
  * claro; el puck del repartidor usa el mismo azul.

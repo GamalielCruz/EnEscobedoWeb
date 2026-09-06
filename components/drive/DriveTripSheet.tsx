@@ -10,13 +10,13 @@ import { shortOrderCode } from "@/lib/dispatch/dispatch-format";
  * Hoja inferior (bottom sheet) del viaje activo del repartidor.
  *
  * Flota sobre el mapa con manija deslizable y dos estados:
- * - COLAPSADA: manija + folio/tipo de pedido + BOTÓN DE ACCIÓN PRINCIPAL
- *   siempre visible (NAVEGAR A RECOLECCIÓN / YA RECOGÍ / NAVEGAR A ENTREGA /
- *   CONFIRMAR ENTREGA según la etapa real del pedido).
+ * - COLAPSADA: manija + folio/tipo de pedido.
  * - EXPANDIDA: timeline vertical Recolección → Entrega marcando la etapa
  *   activa, distancia/tiempo/forma de pago/monto, notas del pedido y el botón
  *   de desconexión (secundario).
  *
+ * La navegación GPS ya ocurre dentro de /drive mediante DirectionsService +
+ * roadRoute + steps; no hay botón de navegación externa.
  * El cuerpo reutiliza exactamente la lógica existente de la página
  * (getOrderAction → actionKind) y los datos del pedido; aquí solo cambia la
  * presentación. La hoja se arrastra hacia abajo para colapsar y hacia arriba
@@ -27,20 +27,16 @@ export function DriveTripSheet({
   actionKind,
   actionLabel,
   actionIcon,
-  loading,
-  onAction,
   onDisconnect,
   disconnectLoading,
   simulated,
   children,
 }: {
   order: DriverOrder;
-  /** Acción resuelta de la etapa real (navigate_pickup / picked_up / navigate_delivery / delivered). */
+  /** Acción resuelta de la etapa real (picked_up / delivered). */
   actionKind: string;
   actionLabel: string;
   actionIcon: ReactNode;
-  loading: boolean;
-  onAction: () => void;
   onDisconnect: () => void;
   disconnectLoading: boolean;
   simulated?: boolean;
@@ -207,9 +203,7 @@ export function DriveTripSheet({
               </div>
             </motion.div>
           )}
-        </AnimatePresence>
-
-        {/* Barra fija: manija + folio + BOTÓN DE ACCIÓN SIEMPRE VISIBLE */}
+        </AnimatePresence>        {/* Barra fija: manija + folio + indicador de etapa actual de navegación */}
         <div className="px-4 pt-2 pb-3">
           <button
             onClick={toggle}
@@ -239,20 +233,11 @@ export function DriveTripSheet({
             </span>
           </button>
 
-          <button
-            onClick={onAction}
-            disabled={loading}
-            className="mt-2 flex w-full items-center justify-center gap-2 rounded-2xl bg-[#EB1902] py-3.5 text-sm font-black text-white shadow-lg shadow-[#EB1902]/30 transition active:scale-95 disabled:opacity-50"
-          >
-            {loading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <>
-                {actionIcon}
-                {actionLabel}
-              </>
-            )}
-          </button>
+          {/* Indicador de etapa de navegación (sin botón; navegación activa en mapa) */}
+          <div className="mt-2 flex items-center justify-center gap-1.5 rounded-xl bg-gray-50 px-3 py-1.5 text-xs font-bold text-gray-500">
+            {actionIcon}
+            {actionLabel}
+          </div>
         </div>
       </div>
     </motion.div>
