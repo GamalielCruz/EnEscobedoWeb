@@ -29,7 +29,7 @@ export type DriveSimStage = "to_pickup" | "at_pickup" | "to_delivery" | "at_deli
 export const SIM_SPEEDS = [1, 2, 5, 10] as const;
 
 /** Velocidad base (m/s) a 1× — ≈ 58 km/h urbano. */
-const SIM_BASE_METERS_PER_SECOND = 16;
+export const SIM_BASE_METERS_PER_SECOND = 16;
 /** Pausa al llegar a recolección/entrega antes de seguir (ms). */
 const SIM_ARRIVAL_HOLD_MS = 2_600;
 /** No actualizar la posición si se movió menos que esto (evita re-renders). */

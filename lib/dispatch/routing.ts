@@ -314,32 +314,65 @@ function requestDirections(origin: RoutePoint, destination: RoutePoint): Promise
   });
 }
 
+/** Distancia lateral mínima de `point` a la polyline (metros). */
+export function distanceToPathMeters(path: RoutePoint[], point: RoutePoint): number {
+  if (path.length < 2) return Infinity;
+  let best = Infinity;
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1];
+    const b = path[i];
+    const midLatRad = ((a.lat + b.lat) / 2) * (Math.PI / 180);
+    const cosLat = Math.cos(midLatRad) || 1;
+    const bx = (b.lng - a.lng) * cosLat;
+    const by = b.lat - a.lat;
+    const px = (point.lng - a.lng) * cosLat;
+    const py = point.lat - a.lat;
+    const denom = bx * bx + by * by;
+    const t = denom === 0 ? 0 : Math.min(1, Math.max(0, (px * bx + py * by) / denom));
+    const cx = px - t * bx;
+    const cy = py - t * by;
+    const distance = Math.sqrt(cx * cx + cy * cy) * 111320;
+    if (distance < best) best = distance;
+  }
+  return best;
+}
+
 /**
  * Ruta vial entre `origin` y `destination`, con caché y dedupe de llamadas
  * concurrentes. Devuelve null si no hay API disponible o la ruta falla.
+ *
+ * `force=true` omite la caché de proximidad y la caché de fallos: se usa para
+ * el RECÁLCULO por desvío, cuando el repartidor se alejó de la geometría y
+ * hace falta una ruta nueva aunque el origen siga cerca del anterior.
  */
 export async function getRoadRoute(
   origin: RoutePoint,
-  destination: RoutePoint
+  destination: RoutePoint,
+  force = false
 ): Promise<RoadRoute | null> {
   if (!isLoaded()) return null;
 
   // Caché: mismo destino y origen sin moverse más que el umbral → reutilizar
   // sin llamar a la API (las actualizaciones de GPS frecuentes caen aquí).
-  for (const entry of routeCache.values()) {
-    if (
-      haversineMeters(entry.destination, destination) < ROUTE_REUSE_METERS &&
-      haversineMeters(entry.origin, origin) < ROUTE_REUSE_METERS
-    ) {
-      return entry.route;
+  // Con force (desvío) se salta: queremos una ruta NUEVA desde la posición
+  // actual, aunque esté dentro del umbral del origen anterior.
+  if (!force) {
+    for (const entry of routeCache.values()) {
+      if (
+        haversineMeters(entry.destination, destination) < ROUTE_REUSE_METERS &&
+        haversineMeters(entry.origin, origin) < ROUTE_REUSE_METERS
+      ) {
+        return entry.route;
+      }
     }
   }
 
-  const key = cacheKeyFor(origin, destination);
+  const key = `${force ? "force|" : ""}${cacheKeyFor(origin, destination)}`;
 
   // Caché de fallos: si Directions falló hace poco para este destino, no
-  // volver a llamar a la API en cada tick de GPS.
-  if (isRecentlyFailed(destination)) return null;
+  // volver a llamar a la API en cada tick de GPS. Un recálculo por desvío
+  // (force) sí reintenta: la situación del conductor cambió.
+  if (!force && isRecentlyFailed(destination)) return null;
 
   // Dedupe de llamadas concurrentes: si ya hay una petición en vuelo para
   // el mismo tramo (misma lógica de proximidad que el caché), reutilizarla.

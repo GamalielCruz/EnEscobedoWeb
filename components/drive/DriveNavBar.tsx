@@ -103,6 +103,8 @@ export function DriveNavBar({
   durationLabel,
   progress,
   maneuver,
+  maneuverDistance,
+  recalculating,
   waitingForRoute,
   simulated,
 }: {
@@ -120,6 +122,10 @@ export function DriveNavBar({
   progress?: number | null;
   /** Maneuver de Google del step que se está mostrando (para su icono). */
   maneuver?: string | null;
+  /** Distancia formateada a la maniobra (p. ej. "en 120 m") o null. */
+  maneuverDistance?: string | null;
+  /** true mientras se recalcula la ruta por un desvío (fuera de ruta). */
+  recalculating?: boolean;
   waitingForRoute?: boolean;
   simulated?: boolean;
 }) {
@@ -178,21 +184,26 @@ export function DriveNavBar({
 
       {/* Fila 2 — icono grande de maniobra + instrucción dominante */}
       <div className="mt-2 flex items-start gap-3">
-        <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/10 text-white">
+        <span className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-white/10 text-white">
           <ManeuverIcon maneuver={maneuverValue} className="h-7 w-7" />
+          {maneuverDistance && !waitingForRoute && (
+            <span className="absolute -bottom-1.5 -right-2 rounded-md bg-white px-1 py-px text-[9px] font-black whitespace-nowrap text-gray-900 shadow-md ring-1 ring-black/10">
+              {maneuverDistance}
+            </span>
+          )}
         </span>
         <div className="min-w-0 flex-1">
-          {waitingForRoute ? (
+          {waitingForRoute || recalculating ? (
             <p className="flex items-center gap-2 text-sm font-semibold text-white/60">
-              <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
-              Calculando ruta…
+              <Loader2 className="h-4 w-4 animate-spin text-amber-400" />
+              {waitingForRoute ? "Calculando ruta…" : "Recalculando ruta…"}
             </p>
           ) : (
             <>
               <p className="text-xl font-extrabold leading-snug text-white">
                 {mainText}
               </p>
-              {subText && !waitingForRoute && (
+              {subText && (
                 <p className="mt-0.5 truncate text-xs text-white/60">
                   {subText}
                 </p>

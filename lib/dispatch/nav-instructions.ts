@@ -112,6 +112,25 @@ function phraseFromManeuver(maneuver: string, street: string | null): string {
 }
 
 /**
+ * Calle donde ocurre la maniobra ("Av. Panamericana") o null si la
+ * instrucción no menciona una vialidad. Funciona con instrucciones en
+ * español ("Gira a la izquierda en Av. X", "Continúa por X") y en inglés
+ * ("onto X", "toward X", "at X").
+ */
+export function streetFromInstruction(instruction: string): string | null {
+  const cleaned = cleanHtml(instruction ?? "");
+  if (!cleaned) return null;
+  const match = cleaned.match(
+    /\b(?:onto|on to|on|toward|towards|at|into|en|hacia|por)\s+([^,.]+?)\s*$/i
+  );
+  if (!match) return null;
+  const street = cleanHtml(match[1]).trim();
+  // Ignorar genéricos sin vialidad real ("el destino", "la izquierda", ...).
+  if (!street || /^(?:el|la|los|las|tu|su|mi|un|una|destino)\b/i.test(street)) return null;
+  return street;
+}
+
+/**
  * Normaliza una instrucción de Directions a español para la UI.
  * - Limpia cualquier resto de HTML.
  * - Traduce patrones típicos en inglés.
