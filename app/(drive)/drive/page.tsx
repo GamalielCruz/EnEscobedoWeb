@@ -830,19 +830,23 @@ export default function DrivePage() {
       // Leer el heading fused (GPS + brújula) cada frame para que los
       // cambios del sensor del dispositivo (rotación del teléfono) se reflejen
       // inmediatamente en la cámara, sin depender de un efecto externo.
+      // Usar el heading fused cada frame para que los cambios del sensor
+      // (rotación del teléfono, GPS, etc.) se reflejen inmediatamente.
       const targetHeading = headingResolverRef.current();
-      let heading = visualHeadingRef.current ?? 0;
-      if (targetHeading != null) {
+      let heading = visualHeadingRef.current ?? targetHeading ?? 0;
+      if (targetHeading != null && visualHeadingRef.current != null) {
+        // Suavizado progresivo: cada frame avanza hacia el target.
         const delta = shortestAngleDelta(targetHeading, heading);
         if (Math.abs(delta) > NAV_HEADING_SKIP_DEG) {
-          heading = normalizeDeg(heading + delta * NAV_HEADING_SMOOTH);
-          visualHeadingRef.current = heading;
-          setDriverHeading(heading);
-        } else if (visualHeadingRef.current == null) {
-          heading = targetHeading;
+          heading = normalizeDeg(heading + delta * 0.22);
           visualHeadingRef.current = heading;
           setDriverHeading(heading);
         }
+      } else if (targetHeading != null && visualHeadingRef.current == null) {
+        // Primer frame o después de exitFollowMode: saltar al target.
+        heading = targetHeading;
+        visualHeadingRef.current = heading;
+        setDriverHeading(heading);
       }
 
       // 1) Interpolar la posición del vehículo hacia la posición GPS real.
@@ -1024,19 +1028,29 @@ export default function DrivePage() {
     );
 
     if (!withRoute) {
-      // Sin ruta: seguimiento simple, norte arriba (no girar el mapa).
+      // Sin ruta: seguimiento simple con heading del dispositivo/GPS.
+      // El marcador acompaña a la posición real y el mapa se orienta según
+      // el heading disponible (GPS, movimiento o brújula) para que la
+      // experiencia sea similar a un GPS aunque la ruta aún no esté lista.
       cancelFollowLoop();
-      // El marcador acompaña a la posición real aunque no haya geometría.
       visualPosRef.current = currentLocation;
       driverMarkerRef.current?.setPosition(currentLocation);
-      if (visualHeadingRef.current != null) {
-        visualHeadingRef.current = null;
-        setDriverHeading(0);
+      const target = headingResolverRef.current();
+      if (target != null) {
+        applyHeading(target);
+        moveMapCamera(map, { heading: target, tilt: NAV_TILT });
+      } else if (visualHeadingRef.current != null) {
+        // Mantener el último heading conocido (no forzar norte arriba).
+        moveMapCamera(map, { heading: visualHeadingRef.current, tilt: NAV_TILT });
+      } else {
         moveMapCamera(map, { heading: 0, tilt: 0 });
       }
       const last = lastFollowPosRef.current;
       const dist = last ? haversineMeters(last, currentLocation) : Infinity;
-      if (dist < DRIVER_CENTER_METERS) return;
+      if (dist < DRIVER_CENTER_METERS) {
+        // Ya cerca: solo actualizar marcador, no mover cámara.
+        return;
+      }
       lastFollowPosRef.current = currentLocation;
       map.setCenter(currentLocation);
       return;
@@ -1097,6 +1111,7 @@ export default function DrivePage() {
     cancelFollowLoop,
     startHeadingTween,
     markInternalZoom,
+    applyHeading,
   ]);
 
   // ── Detección de desvío (fuera de ruta) ─────────────────────────
@@ -1189,9 +1204,18 @@ export default function DrivePage() {
       navTarget && roadRoute?.path && roadRoute.path.length >= 2
     );
     const target = headingResolverRef.current ? headingResolverRef.current() : null;
-    if (withRoute && target != null) {
-      // Heading-up (mismo bearing que el puck) + tilt, animado por el tween.
-      startHeadingTween(target);
+    if (target != null) {
+      // Heading-up (mismo bearing que el puck) + tilt.
+      // Si hay ruta, usar el tween suave; si no, aplicar de una vez para
+      // que el mapa se oriente inmediatamente aunque la ruta no esté lista.
+      if (withRoute) {
+        startHeadingTween(target);
+      } else {
+        // Sin ruta todavía: aplicar heading directamente para no dejar el
+        // mapa sin orientar (norte arriba) mientras se busca la ruta.
+        applyHeading(target);
+        moveMapCamera(map, { heading: target, tilt: NAV_TILT });
+      }
     } else {
       cancelFollowLoop();
       stopHeadingAnimation();
@@ -1226,6 +1250,7 @@ export default function DrivePage() {
     startHeadingTween,
     stopHeadingAnimation,
     markInternalZoom,
+    applyHeading,
     deviceOrientation,
   ]);
 
