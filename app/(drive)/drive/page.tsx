@@ -26,7 +26,59 @@ import {
 import { getDeploymentEnvironment } from "@/lib/deployment-environment";
 import { useDriverState, type DriverOrder, type DriverOffer } from "@/hooks/useDriverState";
 import { useDriverLocation } from "@/hooks/useDriverLocation";
+import { useDeviceOrientation, type DeviceHeadingRecord } from "@/hooks/useDeviceOrientation";
 import { useOfferAlertSound } from "@/hooks/useOfferAlertSound";
+
+/**
+ * Fusión GPS + brújula del dispositivo para obtener el heading de navegación
+ * más confiable. Estrategia híbrida:
+ *
+ *  - Si el vehículo se mueve a velocidad confiable (GPS course disponible y
+ *    movimiento medible): prioriza GPS course/course-over-ground, porque
+ *    refleja la dirección REAL de desplazamiento del vehículo y no pende de
+ *    cómo sostiene el repartidor el teléfono.
+ *  - Si está detenido o se mueve muy lento (GPS course débil o nulo): usa el
+ *    heading del dispositivo (brújula) como estabilizador para que el mapa
+ *    mantenga una orientación razonable esperando movimiento.
+ *  - Si el GPS heading es válido pero el dispositivo no tiene brújula: continúa
+ *    con GPS (no se rompe la navegación).
+ *  - Si ninguno está disponible: null (no rotar el mapa).
+ *
+ * Nota: deviceHeading expuesto por esta función NO se usa como rumbo de
+ * conducción cuando el vehículo se mueve; sirve como estabilizador/complemento
+ * mientras se espera movimiento o cuando el heading GPS es débil. Esto evita
+ * que pequeños movimientos de la mano giren el mapa durante la conducción.
+ */
+function navigationHeading(
+  gpsHeading: number | null,
+  deviceState: DeviceHeadingRecord,
+  speedMps: number,
+  movementHeading: number | null,
+  hasMotion: boolean
+): number | null {
+  // GPS con rumbo válido Y vehículo en movimiento: GPS course domina.
+  if (gpsHeading != null && hasMotion && speedMps >= 2) {
+    return gpsHeading;
+  }
+
+  // Vehículo en movimiento pero sin GPS heading válido: derivado por movimiento.
+  if (hasMotion && speedMps >= 2 && movementHeading != null) {
+    return movementHeading;
+  }
+
+  // Detenido o muy lento: usar brújula del dispositivo si está disponible.
+  if (deviceState.available === "available" && deviceState.permission === "granted") {
+    return deviceState.heading;
+  }
+
+  // Sin brújula: mantener el último heading disponible (GPS o movimiento).
+  if (gpsHeading != null) return gpsHeading;
+  if (movementHeading != null) return movementHeading;
+
+  // Nada disponible: no rotar (null). El mapa queda con la orientación actual.
+  return null;
+}
+
 import { ThinkingOrb } from "thinking-orbs";
 import { shortOrderCode } from "@/lib/dispatch/dispatch-format";
 import {
@@ -34,7 +86,6 @@ import {
   distanceToPathMeters,
   getRoadRoute,
   haversineMeters,
-  headingAlongPath,
   movePointAlong,
   pathLengthMeters,
   projectOntoPath,
@@ -369,6 +420,18 @@ export default function DrivePage() {
     state?.connected ?? false
   );
 
+  // Brújula física del dispositivo (DeviceOrientationEvent). NO pide permiso
+  // automáticamente: se activa solo cuando el repartidor comienza navegación
+  // o pulsa "Centrar navegación", con explicación previa si es necesario.
+  const deviceOrientation = useDeviceOrientation();
+
+  // Panel de diagnóstico de sensores (solo desarrollo/debug): muestra heading
+  // del dispositivo vs GPS, velocidad, fuente de heading y estado de permisos.
+  // Se oculta en producción o cuando no hay ruta activa.
+  // (declarado después de navigatingWithRoute para evitar TDZ)
+  let sensorDebugVisible = false;
+  const SHOW_SENSOR_DEBUG = false;
+
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
   // ── Sound alert for new offers ──────────────────────────────
@@ -633,6 +696,11 @@ export default function DrivePage() {
   );
   const legKey = navTarget ? `${navTarget.lat.toFixed(4)},${navTarget.lng.toFixed(4)}` : null;
 
+  // Panel de diagnóstico de sensores (solo desarrollo/debug): muestra heading
+  // del dispositivo vs GPS, velocidad, fuente de heading y estado de permisos.
+  // Se oculta en producción o cuando no hay ruta activa.
+  if (SHOW_SENSOR_DEBUG) sensorDebugVisible = Boolean(navigatingWithRoute);
+
   // El rumbo visual para el marcador se deriva de refs en cada render.
   currentLocationRef.current = currentLocation;
 
@@ -648,23 +716,32 @@ export default function DrivePage() {
 
   // Resuelve el rumbo objetivo según la fuente disponible:
   // 1) GPS real (coords.heading) · 2) derivado por movimiento · 3) geometría.
+  // Además integra brújula del dispositivo cuando corresponde (ver
+  // navigationHeading: GPS domina en movimiento; brújula estabiliza cuando
+  // está detenido o el GPS heading es débil/no existe).
   const headingResolverRef = useRef<() => number | null>(() => null);
   headingResolverRef.current = () => {
-    const pos = currentLocationRef.current;
-    const route = roadRoute;
-    // Simulación: rumbo del tramo actual de la geometría real.
-    if (sim.active && route?.path && route.path.length >= 2) {
-      return headingAlongPath(route.path, projectOntoPath(route.path, pos));
-    }
-    // GPS real con rumbo válido.
-    if (!sim.active && gpsHeading != null) return gpsHeading;
-    // Rumbo derivado del movimiento de posiciones consecutivas.
-    if (movementHeadingRef.current != null) return movementHeadingRef.current;
-    // Último respaldo: dirección de la ruta en el punto del conductor.
-    if (route?.path && route.path.length >= 2) {
-      return headingAlongPath(route.path, projectOntoPath(route.path, pos));
-    }
-    return null;
+    // Velocidad del vehículo: GPS real con derivación por movimiento; en
+    // simulación usamos la velocidad del simulador (m/s).
+    const speedMps =
+      sim.active
+        ? SIM_BASE_METERS_PER_SECOND * sim.speed
+        : movementSpeedRef.current ?? 0;
+
+    // ¿El vehículo tiene movimiento real (no simulación estática)?
+    const hasMotion =
+      sim.active ||
+      gpsHeading != null ||
+      movementHeadingRef.current != null;
+
+    // Fusión GPS + device heading según estrategia híbrida.
+    return navigationHeading(
+      gpsHeading, // heading crudo del GPS (course-over-ground)
+      deviceOrientation.state, // brújula del dispositivo
+      speedMps,
+      movementHeadingRef.current, // derivado por movimiento (respaldo)
+      hasMotion
+    );
   };
 
   const stopHeadingAnimation = useCallback(() => {
@@ -1066,6 +1143,10 @@ export default function DrivePage() {
   // tilt de navegación, zoom de conducción y seguimiento activo. La transición
   // es SUAVE: el loop de seguimiento interpola centro/tilt/zoom desde la vista
   // actual. NUNCA encuadra todo el viaje ni recalcula routing.
+  //
+  // Al entrar en navegación, se intenta activar la brújula del dispositivo si
+  // no está ya activa (iOS puede requerir permiso explícito). No se fuerza la
+  // solicitud si el dispositivo no tiene sensores (no hay nada que pedir).
   const enterFollowCamera = useCallback(() => {
     const map = mapRef.current;
     if (!map) return;
@@ -1097,6 +1178,10 @@ export default function DrivePage() {
       moveMapCamera(map, { zoom: FOLLOW_NAV_ZOOM });
     }
     setFollowDriver(true);
+    // Intentar activar brújula si no está disponible todavía (sin bloquear).
+    if (deviceOrientation.state.available !== "available") {
+      deviceOrientation.enable().catch(() => {});
+    }
   }, [
     currentLocation,
     roadRoute,
@@ -1106,13 +1191,20 @@ export default function DrivePage() {
     startHeadingTween,
     stopHeadingAnimation,
     markInternalZoom,
+    deviceOrientation,
   ]);
 
   // "Centrar GPS" = regresar al modo navegación heading-up si el usuario
   // arrastró el mapa y salió de él: no solo recentra, restaura rumbo + tilt.
   const handleCenterGps = useCallback(() => {
+    // Al centrar, también intentar activar brújula si no lo está (iOS puede
+    // requerir permiso explícito; la hook se encarga de pedirlo cuando sea
+    // necesario sin mostrar un prompt innecesario).
+    if (deviceOrientation.state.available !== "available") {
+      deviceOrientation.enable().catch(() => {});
+    }
     enterFollowCamera();
-  }, [enterFollowCamera]);
+  }, [enterFollowCamera, deviceOrientation]);
 
   // "Ver viaje completo" = vista convencional (norte arriba, sin seguimiento):
   // fitBounds sobre la geometría vial real; no vuelve al conductor solo.
@@ -1470,6 +1562,72 @@ export default function DrivePage() {
       {gpsError && connected && (
         <div className="absolute inset-x-0 top-[calc(env(safe-area-inset-top)+2.5rem)] z-20 mx-4 rounded-lg bg-amber-500/20 px-3 py-2 text-xs text-amber-300">
           ⚠️ {gpsError}
+        </div>
+      )}
+
+      {/* Aviso de permiso de sensores (solo cuando es necesario y precede a
+          la solicitud). No bloquea la aplicación: el usuario puede seguir
+          navegando con GPS incluso si rechaza. */}
+      {deviceOrientation.state.available === "permission_required" &&
+        deviceOrientation.state.permission === "prompt" &&
+        navigatingWithRoute && (
+          <div className="absolute inset-x-3 top-[calc(env(safe-area-inset-top)+11.5rem)] z-30 rounded-xl bg-white/10 px-3 py-2 text-xs text-white/70 backdrop-blur-sm ring-1 ring-white/10">
+            Para orientar el mapa según la dirección en la que apunta tu teléfono, permite el acceso a los sensores de movimiento.
+          </div>
+        )}
+
+      {/* Panel de diagnóstico de sensores (debug, oculto en producción). */}
+      {sensorDebugVisible && (
+        <div className="absolute left-3 top-[calc(env(safe-area-inset-top)+5rem)] z-40 rounded-lg bg-black/70 px-3 py-2 text-[11px] leading-5 text-white/80 shadow-lg backdrop-blur-sm">
+          <div className="font-semibold text-white/90">SENSORS</div>
+          <div className="mt-0.5">
+            <span className="text-white/60">Device heading:</span>
+            <span className="font-mono text-white/90">
+              {deviceOrientation.state.available === "unavailable"
+                ? "N/A"
+                : `${deviceOrientation.state.heading.toFixed(1)}°`}
+            </span>
+          </div>
+          <div className="mt-0.5">
+            <span className="text-white/60">GPS heading:</span>
+            <span className="font-mono text-white/90">
+              {gpsHeading != null ? `${gpsHeading.toFixed(1)}°` : "N/A"}
+            </span>
+          </div>
+          <div className="mt-0.5">
+            <span className="text-white/60">GPS speed:</span>
+            <span className="font-mono text-white/90">
+              {(movementSpeedRef.current != null
+                ? `${(movementSpeedRef.current * 3.6).toFixed(1)}`
+                : sim.active
+                  ? `${(SIM_BASE_METERS_PER_SECOND * sim.speed * 3.6).toFixed(1)}`
+                  : "0.0")} km/h
+            </span>
+          </div>
+          <div className="mt-0.5">
+            <span className="text-white/60">Heading source:</span>
+            <span className="font-mono text-white/90">
+              {deviceOrientation.state.available === "available" &&
+              deviceOrientation.state.permission === "granted" &&
+              (gpsHeading == null || movementSpeedRef.current == null || movementSpeedRef.current < 2)
+                ? "device"
+                : gpsHeading != null
+                  ? "gps"
+                  : movementHeadingRef.current != null
+                    ? "motion"
+                    : "geometry"}
+            </span>
+          </div>
+          <div className="mt-0.5 flex gap-2">
+            <span className="text-white/60">Sensor:</span>
+            <span className="font-mono text-white/90">
+              {deviceOrientation.state.available}
+            </span>
+            <span className="text-white/60">Perm:</span>
+            <span className="font-mono text-white/90">
+              {deviceOrientation.state.permission}
+            </span>
+          </div>
         </div>
       )}
 
