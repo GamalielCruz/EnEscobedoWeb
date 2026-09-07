@@ -719,8 +719,18 @@ export default function DrivePage() {
   // Además integra brújula del dispositivo cuando corresponde (ver
   // navigationHeading: GPS domina en movimiento; brújula estabiliza cuando
   // está detenido o el GPS heading es débil/no existe).
-  const headingResolverRef = useRef<() => number | null>(() => null);
-  headingResolverRef.current = () => {
+  // Resuelve el rumbo objetivo según la fuente disponible:
+  // 1) GPS real (coords.heading) · 2) derivado por movimiento · 3) geometría.
+  // Además integra brújula del dispositivo cuando corresponde (ver
+  // navigationHeading: GPS domina en movimiento; brújula estabiliza cuando
+  // está detenido o el GPS heading es débil/no existe).
+  //
+  // La función se re-crea en cada render para leer los valores frescos de
+  // gpsHeading, deviceOrientation.state, movementHeadingRef, etc. Debe estar
+  // sincronizada con los valores más recientes del sensor para que el loop de
+  // seguimiento (ensureFollowLoop) pueda leer el heading fused directamente
+  // cada frame sin depender de un efecto externo.
+  const resolveNavigationHeading = useCallback(() => {
     // Velocidad del vehículo: GPS real con derivación por movimiento; en
     // simulación usamos la velocidad del simulador (m/s).
     const speedMps =
@@ -742,7 +752,15 @@ export default function DrivePage() {
       movementHeadingRef.current, // derivado por movimiento (respaldo)
       hasMotion
     );
-  };
+  }, [
+    gpsHeading,
+    sim.active,
+    sim.speed,
+    deviceOrientation.state,
+  ]);
+
+  const headingResolverRef = useRef<() => number | null>(resolveNavigationHeading);
+  headingResolverRef.current = resolveNavigationHeading;
 
   const stopHeadingAnimation = useCallback(() => {
     if (headingRafRef.current !== null) {
@@ -809,7 +827,23 @@ export default function DrivePage() {
         followRafRef.current = null;
         return;
       }
-      const heading = visualHeadingRef.current ?? 0;
+      // Leer el heading fused (GPS + brújula) cada frame para que los
+      // cambios del sensor del dispositivo (rotación del teléfono) se reflejen
+      // inmediatamente en la cámara, sin depender de un efecto externo.
+      const targetHeading = headingResolverRef.current();
+      let heading = visualHeadingRef.current ?? 0;
+      if (targetHeading != null) {
+        const delta = shortestAngleDelta(targetHeading, heading);
+        if (Math.abs(delta) > NAV_HEADING_SKIP_DEG) {
+          heading = normalizeDeg(heading + delta * NAV_HEADING_SMOOTH);
+          visualHeadingRef.current = heading;
+          setDriverHeading(heading);
+        } else if (visualHeadingRef.current == null) {
+          heading = targetHeading;
+          visualHeadingRef.current = heading;
+          setDriverHeading(heading);
+        }
+      }
 
       // 1) Interpolar la posición del vehículo hacia la posición GPS real.
       const cur = visualPosRef.current;
@@ -1012,12 +1046,13 @@ export default function DrivePage() {
     followTargetRef.current = currentLocation;
     ensureFollowLoop();
 
-    // Rotar solo si hay una fuente real de rumbo (movimiento/GPS) o simulación;
-    // así el mapa no gira mientras el conductor está detenido sin rumbo.
+    // Iniciar tweens de rotación cuando el heading fused cambia significativamente.
+    // El loop de seguimiento (ensureFollowLoop) ya aplica suavizado frame a frame,
+    // pero este efecto asegura que los cambios grandes (p. ej. rotar el teléfono
+    // 180°) se activen inmediatamente. No hace falta gatear por hasMotion porque
+    // navigationHeading() ya decide cuándo usar brújula vs GPS.
     const target = headingResolverRef.current();
-    const hasMotion =
-      sim.active || gpsHeading != null || movementHeadingRef.current != null;
-    if (target != null && hasMotion) {
+    if (target != null) {
       const current = visualHeadingRef.current;
       if (current == null || Math.abs(shortestAngleDelta(target, current)) > NAV_HEADING_SKIP_DEG) {
         startHeadingTween(target);

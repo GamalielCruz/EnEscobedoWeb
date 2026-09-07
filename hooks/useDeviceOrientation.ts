@@ -49,19 +49,29 @@ function shortestAngleDelta(to: number, from: number): number {
   return ((to - from + 540) % 360) - 180;
 }
 
-/** True heading (magnetazo calibrado) o null cuando no está disponible. */
+/**
+ * Extrae el heading crudo del evento de orientación del dispositivo.
+ *
+ * Prioridad:
+ *  1. `webkitCompassHeading` (iOS Safari, true heading calibrado por el
+ *     magnetazo) — ya es un heading absoluto [0,360), NO requiere corrección
+ *     por screen orientation.
+ *  2. `alpha` con `absolute=true` — representa la rotación respecto al norte
+ *     magnético cuando el dispositivo está en su orientación portrait natural
+ *     (cámara arriba). Requiere corrección por screen orientation.
+ *  3. `alpha` sin absolute — valor relativo, poco fiable, ignorar.
+ *
+ * Devuelve null cuando no hay un heading usable.
+ */
 function trueHeadingFromEvent(event: DeviceOrientationEvent | null): number | null {
   if (!event) return null;
-  // iOS Safari a veces expone webkitCompassHeading (true heading calibrado).
-  // Precedence: webkitCompassHeading > absolute true heading > alpha.
-  // Usamos construcción anulable para evitar error de tipo en TS.
+  // iOS Safari: true heading calibrado por el magnetazo (ya absoluto).
   const raw = (event as unknown as { webkitCompassHeading?: number }).webkitCompassHeading;
   if (typeof raw === "number" && isFinite(raw)) {
-    return raw;
+    return raw; // ya es absoluto, NO corregir por screen orientation
   }
-  // Evento absoluto: alpha representa rotación respecto al norte magnético
-  // cuando el dispositivo está en orientation portrait natural (cámara arriba).
-  // Hay que corregir por screen orientation (ver uso en hook).
+  // Alpha absoluto: representa rotación respecto al norte magnético con el
+  // dispositivo en portrait natural. Requiere corrección por screen orientation.
   if (event.absolute && typeof event.alpha === "number" && isFinite(event.alpha)) {
     return event.alpha;
   }
@@ -69,35 +79,31 @@ function trueHeadingFromEvent(event: DeviceOrientationEvent | null): number | nu
 }
 
 /**
- * Corrección de alpha por screen orientation (portrait natural = referencia).
+ * Corrige un heading alpha (no webkitCompassHeading) por el ángulo de
+ * orientación de la pantalla.
  *
- * En iOS, DeviceOrientationEvent.alpha mide la rotación del dispositivo
- * respecto al norte MAGNÉTICO con la pantalla en su orientación "natural"
- * (habitualmente portrait con cámara arriba). Cuando el usuario rota la
- * pantalla (o el navegador la rota internamente), el valor base cambia y hay
- * que compensar.
+ * En iOS, cuando el dispositivo está en portrait natural (cámara arriba),
+ * `alpha` mide la rotación respecto al norte magnético. Cuando la pantalla se
+ * rota (landscape, upside-down, etc.), `alpha` se mide desde una referencia
+ * diferente y hay que compensar.
  *
  * screen.orientation.angle: rotación de la pantalla respecto a la orientación
- * natural (0 = portrait natural).
+ * natural (0 = portrait natural, 90 = landscape right, 180 = upside-down,
+ * 270 = landscape left).
  *
- * Estrategia: compensar para que el heading expresado siempre sea el rumbo
- * absoluto del dispositivo, independientemente de cómo esté girada la pantalla.
- *
- * Nota: esta corrección es aproximada; iPhone en PWA puede reportar valores
- * que requieren ajuste fino según cómo el navegador exponga los eventos. El
- * consumo posterior (navigationHeading) aplica fusión/suavizado y tolera
- * heading imperfecto mientras el GPS course es dominante en movimiento.
+ * NOTA: esta corrección es heurística. En PWA/Safari el comportamiento puede
+ * variar; si `webkitCompassHeading` está disponible, esa ruta es preferible
+ * porque ya da un heading absoluto sin corrección.
  */
 function screenOrientationCorrectedHeading(
-  rawHeading: number | null,
+  rawAlpha: number | null,
   screenAngleDeg: number
 ): number | null {
-  if (rawHeading == null) return null;
-  // Ajuste por rotación de pantalla: compensar el ángulo de la pantalla para
-  // obtener el rumbo absoluto del dispositivo. El signo/corrección exacto es
-  // heurístico y puede requerir ajuste por dispositivo; aquí se compensa
-  // rotando el heading por el ángulo de pantalla (sentido horario positivo).
-  const corrected = (rawHeading + screenAngleDeg) % 360;
+  if (rawAlpha == null) return null;
+  // screenAngleDeg compensa la rotación de la pantalla para obtener el
+  // heading absoluto del dispositivo. Signo heurístico: al rotar la pantalla
+  // 90° (landscape right), el alpha medido se desplaza; compenSAR restando.
+  const corrected = (rawAlpha - screenAngleDeg + 360) % 360;
   return normalizeDeg(corrected);
 }
 
@@ -117,24 +123,29 @@ export function useDeviceOrientation() {
   /**
    * Actualiza el heading suavizado a partir de lecturas crudas del sensor.
    * Aplica anti-jitter (skip angular) y clamp de velocidad angular.
+   * El suavizado utiliza la diferencia angular más corta para evitar flips
+   * de 359° → 0° (p. ej., 358° → 359° → 0° → 1° se interpreta como
+   * +1° → +1° → +1°, no como una rotación de casi 360°).
    */
   const updateSmoothed = useCallback((raw: number, now: number) => {
     const prev = lastSmoothedRef.current;
     let next = raw;
     if (prev) {
-      const delta = shortestAngleDelta(raw, prev.heading);
+      const rawDelta = shortestAngleDelta(raw, prev.heading);
+      const absDelta = Math.abs(rawDelta);
       const elapsed = Math.max(1, now - prev.ts);
-      // Clamp de velocidad angular: descartar/saltar lecturas imposibles.
-      const rate = Math.abs(delta) / (elapsed / 1000);
+      // Clamp de velocidad angular: descartar lecturas imposibles (>360°/s).
+      const rate = absDelta / (elapsed / 1000);
       if (rate > MAX_RATE_DEG_PER_SEC) {
         return; // lectura ruidosa, ignorar
       }
-      if (Math.abs(delta) <= SKIP_DEG) {
+      if (absDelta <= SKIP_DEG) {
         next = prev.heading; // mantener estable si apenas cambió
       } else {
-        // Suavizado simple: damped hacia el nuevo valor.
-        const factor = Math.min(1, Math.max(0.15, 16 / Math.max(16, elapsed)));
-        next = normalizeDeg(prev.heading + delta * factor);
+        // Suavizado: damped hacia el nuevo valor usando la diferencia más corta.
+        // Esto evita que 358° → 359° → 0° → 1° cause flips de 360°.
+        const factor = Math.min(1, Math.max(0.12, 20 / Math.max(20, elapsed)));
+        next = normalizeDeg(prev.heading + rawDelta * factor);
       }
     }
     lastSmoothedRef.current = { heading: next, ts: now };
@@ -152,27 +163,32 @@ export function useDeviceOrientation() {
       if (!mountedRef.current) return;
       const raw = trueHeadingFromEvent(event);
       if (raw == null) return;
-      let corrected = screenOrientationCorrectedHeading(raw, 0);
-      if (corrected == null) return;
 
-      // Screen orientation puede llegar asíncrono; compensar con el ángulo
-      // más reciente disponible. Se lee directamente de window.screen para
-      // no depender de state.
-      try {
-        const screen = window.screen as { orientation?: { angle: number } } | null;
-        const screenAngle =
-          screen?.orientation?.angle != null ? screen.orientation.angle : 0;
-        corrected = screenOrientationCorrectedHeading(raw, screenAngle);
-      } catch {
-        // Fallback sin corrección de pantalla.
+      // Si es webkitCompassHeading (ya absoluto), no aplicar corrección de pantalla.
+      const isCompassHeading =
+        typeof (event as unknown as { webkitCompassHeading?: number }).webkitCompassHeading === "number";
+
+      let corrected: number;
+      if (isCompassHeading) {
+        // Ya es un heading absoluto; usar directamente.
+        corrected = normalizeDeg(raw);
+      } else {
+        // Alpha con absolute: corregir por screen orientation.
+        const correctedAlpha = screenOrientationCorrectedHeading(raw, 0);
+        if (correctedAlpha == null) return;
+        try {
+          const screen = window.screen as { orientation?: { angle: number } } | null;
+          const screenAngle =
+            screen?.orientation?.angle != null ? screen.orientation.angle : 0;
+          corrected = screenOrientationCorrectedHeading(raw, screenAngle) ?? correctedAlpha;
+        } catch {
+          corrected = correctedAlpha;
+        }
       }
 
       const now = Date.now();
-      if (corrected != null) {
-        latestRawRef.current = { heading: corrected, ts: now };
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        updateSmoothed(corrected as any, now);
-      }
+      latestRawRef.current = { heading: corrected, ts: now };
+      updateSmoothed(corrected, now);
     },
     [updateSmoothed]
   );
