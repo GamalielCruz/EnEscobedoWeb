@@ -7,6 +7,7 @@ import {
   markMandadoEnRoute,
   markAtDoor,
   markDelivered,
+  markDeliveredWithPin,
 } from "@/lib/driver-actions";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,7 @@ export async function POST(request: NextRequest) {
 
   const { repartidor } = auth;
   const body = await request.json().catch(() => ({}));
-  const { action, orderNumber } = body ?? {};
+  const { action, orderNumber, pin } = body ?? {};
 
   if (!action || !orderNumber || typeof orderNumber !== "string") {
     return NextResponse.json(
@@ -47,6 +48,19 @@ export async function POST(request: NextRequest) {
     case "delivered":
       result = await markDelivered(orderNumber, repartidor._id);
       break;
+    case "delivered_with_pin": {
+      // Entrega con NIP (Entrega segura): la validación es SIEMPRE server-side
+      // (markDeliveredWithPin → validateDeliveryPin). El servidor registra
+      // intentos, bloqueos y expiración; el cliente solo envía el código.
+      if (typeof pin !== "string" || !/^\d{6}$/.test(pin)) {
+        return NextResponse.json(
+          { ok: false, error: "Ingresa el código de 6 dígitos." },
+          { status: 400 }
+        );
+      }
+      result = await markDeliveredWithPin(orderNumber, repartidor._id, pin);
+      break;
+    }
     default:
       return NextResponse.json(
         { error: `Acción "${action}" no reconocida.` },

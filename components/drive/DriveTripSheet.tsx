@@ -3,6 +3,8 @@
 import { useState, type ReactNode } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle2, ChevronDown, Loader2, MapPin, Store } from "lucide-react";
+import type { DriveNavPhase } from "@/components/drive/DriveNavBar";
+import { DriveOrderContextCard } from "@/components/drive/DriveOrderContextCard";
 import type { DriverOrder } from "@/hooks/useDriverState";
 import { shortOrderCode } from "@/lib/dispatch/dispatch-format";
 
@@ -27,6 +29,11 @@ export function DriveTripSheet({
   actionKind,
   actionLabel,
   actionIcon,
+  stage,
+  actionLoading,
+  actionError,
+  onStageAction,
+  onPinSubmit,
   onDisconnect,
   disconnectLoading,
   simulated,
@@ -37,6 +44,16 @@ export function DriveTripSheet({
   actionKind: string;
   actionLabel: string;
   actionIcon: ReactNode;
+  /** Etapa real de navegación (navPhase de la página). */
+  stage: DriveNavPhase | null;
+  /** true mientras la acción de etapa (recogí/entregué/NIP) está en curso. */
+  actionLoading: boolean;
+  /** Error de la última acción de etapa. */
+  actionError: string | null;
+  /** Ejecuta la acción backend de la etapa (lógica existente de la página). */
+  onStageAction: () => void;
+  /** Valida el NIP server-side; false = no se pudo confirmar. */
+  onPinSubmit: (pin: string) => Promise<boolean>;
   onDisconnect: () => void;
   disconnectLoading: boolean;
   simulated?: boolean;
@@ -233,11 +250,26 @@ export function DriveTripSheet({
             </span>
           </button>
 
-          {/* Indicador de etapa de navegación (sin botón; navegación activa en mapa) */}
-          <div className="mt-2 flex items-center justify-center gap-1.5 rounded-xl bg-gray-50 px-3 py-1.5 text-xs font-bold text-gray-500">
-            {actionIcon}
-            {actionLabel}
-          </div>
+          {/* Contexto del pedido: entidad + acción natural + CTA (o NIP al
+              llegar). Única tarjeta de contexto; sin etiquetas técnicas. */}
+          {stage != null ? (
+            <div className="mt-2 border-t border-gray-100 pt-2">
+              <DriveOrderContextCard
+                order={order}
+                stage={stage}
+                loading={actionLoading}
+                error={actionError}
+                onPrimaryAction={onStageAction}
+                onPinSubmit={onPinSubmit}
+              />
+            </div>
+          ) : (
+            /* Fallback técnico solo si la etapa no está representada. */
+            <div className="mt-2 flex items-center justify-center gap-1.5 rounded-xl bg-gray-50 px-3 py-1.5 text-xs font-bold text-gray-500">
+              {actionIcon}
+              {actionLabel}
+            </div>
+          )}
         </div>
       </div>
     </motion.div>

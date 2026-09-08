@@ -27,58 +27,8 @@ import type { DriveSimStage } from "@/hooks/useDriveSimulator";
 import { getDeploymentEnvironment } from "@/lib/deployment-environment";
 import { useDriverState, type DriverOrder, type DriverOffer } from "@/hooks/useDriverState";
 import { useDriverLocation } from "@/hooks/useDriverLocation";
-import { useDeviceOrientation, type DeviceHeadingRecord } from "@/hooks/useDeviceOrientation";
+import { useDeviceOrientation } from "@/hooks/useDeviceOrientation";
 import { useOfferAlertSound } from "@/hooks/useOfferAlertSound";
-
-/**
- * Fusión GPS + brújula del dispositivo para obtener el heading de navegación
- * más confiable. Estrategia híbrida:
- *
- *  - Si el vehículo se mueve a velocidad confiable (GPS course disponible y
- *    movimiento medible): prioriza GPS course/course-over-ground, porque
- *    refleja la dirección REAL de desplazamiento del vehículo y no pende de
- *    cómo sostiene el repartidor el teléfono.
- *  - Si está detenido o se mueve muy lento (GPS course débil o nulo): usa el
- *    heading del dispositivo (brújula) como estabilizador para que el mapa
- *    mantenga una orientación razonable esperando movimiento.
- *  - Si el GPS heading es válido pero el dispositivo no tiene brújula: continúa
- *    con GPS (no se rompe la navegación).
- *  - Si ninguno está disponible: null (no rotar el mapa).
- *
- * Nota: deviceHeading expuesto por esta función NO se usa como rumbo de
- * conducción cuando el vehículo se mueve; sirve como estabilizador/complemento
- * mientras se espera movimiento o cuando el heading GPS es débil. Esto evita
- * que pequeños movimientos de la mano giren el mapa durante la conducción.
- */
-function navigationHeading(
-  gpsHeading: number | null,
-  deviceState: DeviceHeadingRecord,
-  speedMps: number,
-  movementHeading: number | null,
-  hasMotion: boolean
-): number | null {
-  // GPS con rumbo válido Y vehículo en movimiento: GPS course domina.
-  if (gpsHeading != null && hasMotion && speedMps >= 2) {
-    return gpsHeading;
-  }
-
-  // Vehículo en movimiento pero sin GPS heading válido: derivado por movimiento.
-  if (hasMotion && speedMps >= 2 && movementHeading != null) {
-    return movementHeading;
-  }
-
-  // Detenido o muy lento: usar brújula del dispositivo si está disponible.
-  if (deviceState.available === "available" && deviceState.permission === "granted") {
-    return deviceState.heading;
-  }
-
-  // Sin brújula: mantener el último heading disponible (GPS o movimiento).
-  if (gpsHeading != null) return gpsHeading;
-  if (movementHeading != null) return movementHeading;
-
-  // Nada disponible: no rotar (null). El mapa queda con la orientación actual.
-  return null;
-}
 
 import { ThinkingOrb } from "thinking-orbs";
 import { shortOrderCode } from "@/lib/dispatch/dispatch-format";
@@ -297,6 +247,324 @@ function shortestAngleDelta(to: number, from: number): number {
   return ((to - from + 540) % 360) - 180;
 }
 
+// ── Resolvedor de TARGET HEADING (estabilización tipo GPS real) ──────
+// La cámara y su suavizado visual NO cambian: esto solo decide QUÉ rumbo
+// objetivo se le entrega. Estrategia:
+//
+//  - En movimiento (>= 2 m/s): el GPS domina (coords.heading, o el bearing
+//    entre ticks de GPS si el course no es válido). La brújula queda como
+//    fallback (detenido, muy lento o GPS sin rumbo).
+//  - Siguiendo la ruta: el bearing del segmento de ruta estabiliza el rumbo
+//    cuando GPS y ruta concuerdan (<= ROUTE_ALIGN_TOLERANCE_DEG), evitando
+//    oscilaciones de pocos grados entre fuentes.
+//  - Desvío real: GPS vs ruta con diferencia grande (> HEADING_DEVIATION_START_DEG)
+//    y SOSTENIDA durante ~1.2 s antes de aceptarse; se vuelve a "en ruta"
+//    solo cuando la diferencia baja claramente (< ROUTE_ALIGN_TOLERANCE_DEG)
+//    (histéresis). Samples de GPS heading aislados que ni el bearing entre
+//    ticks ni la ruta corroboran se ignoran.
+
+const ROUTE_ALIGN_TOLERANCE_DEG = 15;
+const HEADING_DEVIATION_START_DEG = 25;
+const HEADING_DEVIATION_CONFIRM_MS = 1200;
+const HEADING_DEVIATION_MIN_SAMPLES = 3;
+// Por debajo de esta velocidad la brújula puede dominar; por arriba de GPS_SPEED_DOMINANT_MPS
+// el GPS domina; entre ambas hay transición gradual.
+const GPS_SPEED_DOMINANT_MPS = 2;
+const COMPASS_SPEED_MAX_MPS = 1;
+// Velocidad (m/s) a partir de la cual un heading GPS es confiable por sí solo.
+const GPS_HEADING_MIN_SPEED_MPS = 1.5;
+
+export type DriveHeadingSource =
+  | "SIMULATOR"
+  | "GPS"
+  | "FOLLOWING_ROUTE"
+  | "DEVIATING"
+  | "COMPASS_FALLBACK";
+
+export type DriveHeadingDebugInfo = {
+  source: DriveHeadingSource;
+  speedMps: number;
+  gpsHeading: number | null;
+  movementHeading: number | null;
+  routeHeading: number | null;
+  nextSegmentBearing: number | null;
+  compassHeading: number | null;
+  gpsVsRouteDeltaDeg: number | null;
+  deviatingForMs: number;
+};
+
+/**
+ * Crea el resolvedor de heading objetivo con su estado interno (máquina de
+ * estados + refs). El estado vive en refs para que el loop rAF pueda llamar
+ * `resolve()` cada frame SIN recrear el callback ni depender de re-renders.
+ */
+function createDriveHeadingResolver(options: {
+  getSimHeading: () => { active: boolean; simHeading: number | null };
+  getGpsHeading: () => number | null;
+  getSpeedMps: () => number;
+  getMovementHeading: () => number | null;
+  getDeviceHeading: () => { heading: number; available: string; permission: string };
+  getRouteGeometry: () => {
+    path: RoutePoint[] | null;
+    /** Posición actual del vehículo (visual) para proyectar sobre la ruta. */
+    vehiclePos: RoutePoint | null;
+  };
+}) {
+  type ResolverState = {
+    deviating: boolean;
+    deviationStartedAt: number | null;
+    deviationStreak: number;
+    gpsHeadingSpikeStreak: number;
+    lastGpsTickPos: RoutePoint | null;
+    lastGpsTickTs: number | null;
+    gpsTickBearing: number | null;
+    lastGpsHeadingTs: number | null;
+    /** "Racha" de muestras GPS heading consecutivas compatibles con el rumbo aceptado. */
+    gpsHeadingConfirmStreak: number;
+    /** Último heading objetivo aceptado (para confirmar muestras nuevas). */
+    acceptedHeading: number | null;
+    debug: DriveHeadingDebugInfo | null;
+  };
+  const state: ResolverState = {
+    deviating: false,
+    deviationStartedAt: null,
+    deviationStreak: 0,
+    gpsHeadingSpikeStreak: 0,
+    lastGpsTickPos: null,
+    lastGpsTickTs: null,
+    gpsTickBearing: null,
+    lastGpsHeadingTs: null,
+    gpsHeadingConfirmStreak: 0,
+    acceptedHeading: null,
+    debug: null,
+  };
+
+  const deviceCompassUsable = () => {
+    const d = options.getDeviceHeading();
+    return d.available === "available" && d.permission === "granted";
+  };
+
+  const resolve = (): number | null => {
+    const now = Date.now();
+    const sim = options.getSimHeading();
+    const speedMps = options.getSpeedMps();
+    const gpsHeadingRaw = options.getGpsHeading();
+    const movementHeading = options.getMovementHeading();
+    const { path, vehiclePos } = options.getRouteGeometry();
+
+    // ── Simulador: prioridad absoluta, sin máquina de estados ──
+    if (sim.active && sim.simHeading != null) {
+      state.acceptedHeading = sim.simHeading;
+      state.debug = {
+        source: "SIMULATOR",
+        speedMps,
+        gpsHeading: gpsHeadingRaw,
+        movementHeading,
+        routeHeading: null,
+        nextSegmentBearing: null,
+        compassHeading: deviceCompassUsable() ? options.getDeviceHeading().heading : null,
+        gpsVsRouteDeltaDeg: null,
+        deviatingForMs: 0,
+      };
+      return sim.simHeading;
+    }
+
+    // ── Geometría de ruta: bearing del segmento actual y del siguiente ──
+    let routeHeading: number | null = null;
+    let nextSegmentBearing: number | null = null;
+    if (path && path.length >= 2 && vehiclePos) {
+      const total = pathLengthMeters(path);
+      const driven = Math.min(Math.max(projectOntoPath(path, vehiclePos), 0), total);
+      routeHeading = headingAlongPath(path, driven);
+      // Bearing del segmento INMEDIATAMENTE siguiente al punto proyectado.
+      let acc = 0;
+      for (let i = 1; i < path.length; i++) {
+        const segLen = haversineMeters(path[i - 1], path[i]);
+        if (acc + segLen > driven) {
+          nextSegmentBearing = bearingBetween(path[i - 1], path[i]);
+          break;
+        }
+        acc += segLen;
+      }
+    }
+
+    // ── Bearing entre ticks de GPS consecutivos (curso real medido) ──
+    if (vehiclePos && state.lastGpsTickPos) {
+      const tickDist = haversineMeters(state.lastGpsTickPos, vehiclePos);
+      const tickElapsed = state.lastGpsTickTs != null ? now - state.lastGpsTickTs : 0;
+      if (tickDist >= NAV_MOVEMENT_MIN_METERS && tickElapsed >= NAV_MOVEMENT_MIN_MS) {
+        state.gpsTickBearing = bearingBetween(state.lastGpsTickPos, vehiclePos);
+      }
+    }
+    if (vehiclePos && (!state.lastGpsTickPos || haversineMeters(state.lastGpsTickPos, vehiclePos) > 1)) {
+      state.lastGpsTickPos = vehiclePos;
+      state.lastGpsTickTs = now;
+    }
+
+    // ── Detección de spikes de GPS heading (sample aislado no corroborado) ──
+    // Un salto grande del coords.heading solo se acepta si el bearing entre
+    // ticks O la ruta lo respaldan; si no, exige varias muestras consecutivas.
+    const corroboratedBy = (h: number): boolean => {
+      if (state.gpsTickBearing != null && Math.abs(shortestAngleDelta(h, state.gpsTickBearing)) <= HEADING_DEVIATION_START_DEG) return true;
+      const ref = routeHeading ?? nextSegmentBearing;
+      return ref != null && Math.abs(shortestAngleDelta(h, ref)) <= HEADING_DEVIATION_START_DEG;
+    };
+    let gpsHeading = gpsHeadingRaw;
+    if (gpsHeadingRaw != null) {
+      const accepted = state.acceptedHeading;
+      const jumped = accepted != null && Math.abs(shortestAngleDelta(gpsHeadingRaw, accepted)) > HEADING_DEVIATION_START_DEG;
+      if (jumped && !corroboratedBy(gpsHeadingRaw)) {
+        state.gpsHeadingSpikeStreak += 1;
+        if (state.gpsHeadingSpikeStreak < HEADING_DEVIATION_MIN_SAMPLES) {
+          gpsHeading = null; // sample aislado: ignorar este frame
+        }
+      } else {
+        state.gpsHeadingSpikeStreak = 0;
+      }
+    }
+
+    // ── Coincidencia GPS vs ruta (histéresis) ──
+    const gpsRef = gpsHeading ?? movementHeading;
+    const gpsVsRouteDeltaDeg =
+      gpsRef != null && routeHeading != null
+        ? Math.abs(shortestAngleDelta(routeHeading, gpsRef))
+        : null;
+
+    if (gpsVsRouteDeltaDeg != null) {
+      if (!state.deviating) {
+        // Entrar en "desviado" solo con diferencia grande y sostenida.
+        if (gpsVsRouteDeltaDeg > HEADING_DEVIATION_START_DEG) {
+          state.deviationStreak += 1;
+          if (
+            state.deviationStartedAt == null &&
+            state.deviationStreak >= 2
+          ) {
+            state.deviationStartedAt = now;
+          }
+          const sustainedMs = state.deviationStartedAt != null ? now - state.deviationStartedAt : 0;
+          if (
+            sustainedMs >= HEADING_DEVIATION_CONFIRM_MS ||
+            state.deviationStreak >= HEADING_DEVIATION_MIN_SAMPLES + 2
+          ) {
+            state.deviating = true;
+          }
+        } else {
+          state.deviationStreak = 0;
+          state.deviationStartedAt = null;
+        }
+      } else {
+        // Ya en "desviado": volver a "en ruta" solo claramente (histéresis).
+        if (gpsVsRouteDeltaDeg < ROUTE_ALIGN_TOLERANCE_DEG) {
+          state.deviating = false;
+          state.deviationStreak = 0;
+          state.deviationStartedAt = null;
+        }
+      }
+    }
+    const deviatingForMs =
+      state.deviating && state.deviationStartedAt != null ? now - state.deviationStartedAt : 0;
+
+    // ── Selección de fuente por velocidad ──
+    const device = options.getDeviceHeading();
+    const compassOk = deviceCompassUsable();
+    const compassHeading = compassOk ? device.heading : null;
+
+    let heading: number | null = null;
+    let source: DriveHeadingSource = "GPS";
+
+    if (speedMps >= GPS_SPEED_DOMINANT_MPS) {
+      // En movimiento: GPS domina. La ruta solo estabiliza si concuerdan.
+      if (gpsHeading != null) {
+        heading = gpsHeading;
+        // Estabilizador de ruta: si el GPS concuerda con la ruta, suaviza el
+        // rumbo hacia ella (evita ver 83° ↔ 87° oscilando) pero SOLO cuando
+        // estamos "en ruta" (no desviados).
+        if (!state.deviating && routeHeading != null) {
+          const d = Math.abs(shortestAngleDelta(routeHeading, heading));
+          if (d <= ROUTE_ALIGN_TOLERANCE_DEG) {
+            heading = normalizeDeg(
+              heading + shortestAngleDelta(routeHeading, heading) * 0.35
+            );
+            source = "FOLLOWING_ROUTE";
+          } else {
+            source = "GPS";
+          }
+        } else {
+          source = state.deviating ? "DEVIATING" : "GPS";
+        }
+      } else if (movementHeading != null) {
+        // Sin course válido: bearing entre posiciones GPS.
+        heading = movementHeading;
+        if (!state.deviating && routeHeading != null && Math.abs(shortestAngleDelta(routeHeading, heading)) <= ROUTE_ALIGN_TOLERANCE_DEG) {
+          heading = normalizeDeg(heading + shortestAngleDelta(routeHeading, heading) * 0.35);
+          source = "FOLLOWING_ROUTE";
+        } else {
+          source = state.deviating ? "DEVIATING" : "GPS";
+        }
+      } else if (compassOk) {
+        // GPS temporalmente sin rumbo confiable: brújula como fallback.
+        heading = compassHeading;
+        source = "COMPASS_FALLBACK";
+      }
+    } else if (speedMps >= COMPASS_SPEED_MAX_MPS) {
+      // Transición gradual (1–2 m/s): mezcla GPS/movimiento con brújula.
+      const motionRef = gpsHeading ?? movementHeading;
+      const t = (speedMps - COMPASS_SPEED_MAX_MPS) / (GPS_SPEED_DOMINANT_MPS - COMPASS_SPEED_MAX_MPS);
+      if (motionRef != null && compassOk) {
+        heading = normalizeDeg(motionRef + shortestAngleDelta(device.heading, motionRef) * (1 - t));
+        source = motionRef === gpsHeading ? "GPS" : "GPS";
+      } else if (motionRef != null) {
+        heading = motionRef;
+        source = state.deviating ? "DEVIATING" : "GPS";
+      } else if (compassOk) {
+        heading = compassHeading;
+        source = "COMPASS_FALLBACK";
+      }
+    } else {
+      // Detenido / muy lento: la brújula manda si existe; si no, último rumbo.
+      if (compassOk) {
+        heading = compassHeading;
+        source = "COMPASS_FALLBACK";
+      } else if (gpsHeading != null || movementHeading != null) {
+        heading = gpsHeading ?? movementHeading;
+        source = "GPS";
+      }
+    }
+
+    if (heading != null) {
+      // Confirmación de muestras: rastrea cuántas muestras GPS consecutivas
+      // respaldan el rumbo aceptado (diagnóstico; el spike-filter usa la
+      // corroboración por bearing/ruta, más directa).
+      if (gpsHeading != null) {
+        const agrees =
+          state.acceptedHeading != null
+            ? Math.abs(shortestAngleDelta(gpsHeading, state.acceptedHeading)) <= HEADING_DEVIATION_START_DEG
+            : true;
+        state.gpsHeadingConfirmStreak = agrees ? state.gpsHeadingConfirmStreak + 1 : 1;
+      } else {
+        state.gpsHeadingConfirmStreak = 0;
+      }
+      state.acceptedHeading = heading;
+      state.lastGpsHeadingTs = gpsHeading != null ? now : state.lastGpsHeadingTs;
+    }
+
+    state.debug = {
+      source: heading == null ? "COMPASS_FALLBACK" : source,
+      speedMps,
+      gpsHeading: gpsHeadingRaw,
+      movementHeading,
+      routeHeading,
+      nextSegmentBearing,
+      compassHeading,
+      gpsVsRouteDeltaDeg,
+      deviatingForMs,
+    };
+    return heading;
+  };
+
+  return { resolve, state };
+}
+
 /**
  * Punto de CÁMARA para que el conductor quede en el tercio inferior de la
  * pantalla con la carretera por delante. Solo es un objetivo visual: nunca
@@ -452,6 +720,9 @@ export default function DrivePage() {
   const SHOW_SENSOR_DEBUG = false;
 
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  // Error de la última acción de etapa (recogí / entregué / NIP). Se muestra
+  // en la tarjeta de contexto y se limpia al iniciar otra acción.
+  const [stageActionError, setStageActionError] = useState<string | null>(null);
 
   // ── Sound alert for new offers ──────────────────────────────
   const { notifyOfferChange, stopAlertImmediate, resetAction } = useOfferAlertSound();
@@ -757,53 +1028,63 @@ export default function DrivePage() {
     }
   }, [followDriver, currentLocation]);
 
-  // Resuelve el rumbo objetivo según la fuente disponible:
-  // 1) GPS real (coords.heading) · 2) derivado por movimiento · 3) geometría.
-  // Además integra brújula del dispositivo cuando corresponde (ver
-  // navigationHeading: GPS domina en movimiento; brújula estabiliza cuando
-  // está detenido o el GPS heading es débil/no existe).
-  // Resuelve el rumbo objetivo según la fuente disponible:
-  // 1) GPS real (coords.heading) · 2) derivado por movimiento · 3) geometría.
-  // Además integra brújula del dispositivo cuando corresponde (ver
-  // navigationHeading: GPS domina en movimiento; brújula estabiliza cuando
-  // está detenido o el GPS heading es débil/no existe).
-  //
-  // La función se re-crea en cada render para leer los valores frescos de
-  // gpsHeading, deviceOrientation.state, movementHeadingRef, etc. Debe estar
-  // sincronizada con los valores más recientes del sensor para que el loop de
-  // seguimiento (ensureFollowLoop) pueda leer el heading fused directamente
-  // cada frame sin depender de un efecto externo.
-  const resolveNavigationHeading = useCallback(() => {
-    // Velocidad del vehículo: GPS real con derivación por movimiento; en
-    // simulación usamos la velocidad del simulador (m/s).
-    const speedMps =
-      sim.active
-        ? SIM_BASE_METERS_PER_SECOND * sim.speed
-        : movementSpeedRef.current ?? 0;
+  // ── Resolvedor de TARGET HEADING ──
+  // Los valores de sensor se leen vía refs para que el resolvedor (creado una
+  // sola vez) siempre vea el estado actual sin recrearse ni recrear el loop.
+  const gpsHeadingRef = useRef<number | null>(gpsHeading);
+  gpsHeadingRef.current = gpsHeading;
+  const deviceStateRef = useRef(deviceOrientation.state);
+  deviceStateRef.current = deviceOrientation.state;
 
-    // ¿El vehículo tiene movimiento real (no simulación estática)?
-    const hasMotion =
-      sim.active ||
-      gpsHeading != null ||
-      movementHeadingRef.current != null;
+  const driveHeadingResolverRef = useRef<ReturnType<
+    typeof createDriveHeadingResolver
+  > | null>(null);
+  if (driveHeadingResolverRef.current == null) {
+    driveHeadingResolverRef.current = createDriveHeadingResolver({
+      getSimHeading: () => ({
+        active: simRef.current.active,
+        simHeading: simRef.current.simHeading,
+      }),
+      getGpsHeading: () => gpsHeadingRef.current,
+      getSpeedMps: () =>
+        simRef.current.active
+          ? SIM_BASE_METERS_PER_SECOND * simRef.current.speed
+          : (movementSpeedRef.current ?? 0),
+      getMovementHeading: () => movementHeadingRef.current,
+      getDeviceHeading: () => deviceStateRef.current,
+      getRouteGeometry: () => ({
+        path: roadRouteRef.current?.path ?? null,
+        vehiclePos: visualPosRef.current,
+      }),
+    });
+  }
 
-    // Fusión GPS + device heading según estrategia híbrida.
-    return navigationHeading(
-      gpsHeading, // heading crudo del GPS (course-over-ground)
-      deviceOrientation.state, // brújula del dispositivo
-      speedMps,
-      movementHeadingRef.current, // derivado por movimiento (respaldo)
-      hasMotion
-    );
-  }, [
-    gpsHeading,
-    sim.active,
-    sim.speed,
-    deviceOrientation.state,
-  ]);
+  const driveHeadingResolver = driveHeadingResolverRef.current;
+
+  const resolveNavigationHeading = useCallback(
+    () => driveHeadingResolver.resolve(),
+    [driveHeadingResolver]
+  );
 
   const headingResolverRef = useRef<() => number | null>(resolveNavigationHeading);
   headingResolverRef.current = resolveNavigationHeading;
+
+  // Debug de heading en el teléfono: expone el estado del resolvedor cada
+  // 500 ms solo cuando window.__DRIVE_DEBUG_HEADING = true (sin logs por
+  // frame, sin impacto en rendimiento normal).
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const w = window as unknown as {
+        __DRIVE_DEBUG_HEADING?: boolean;
+        __DRIVE_HEADING_DEBUG?: DriveHeadingDebugInfo;
+      };
+      if (!w.__DRIVE_DEBUG_HEADING) return;
+      const info = driveHeadingResolverRef.current?.state.debug;
+      w.__DRIVE_HEADING_DEBUG = info ?? undefined;
+      if (info) console.log("[DRIVE HEADING DEBUG]", info);
+    }, 500);
+    return () => window.clearInterval(id);
+  }, []);
 
   const stopHeadingAnimation = useCallback(() => {
     if (headingRafRef.current !== null) {
@@ -869,29 +1150,28 @@ export default function DrivePage() {
         return;
       }
 
-      // ── Temporary runtime diagnostics (dev only, no composition changes) ──
-      // First gate: confirms the raf loop is running and reads the exact activation
-      // flags available in this scope.
+      // ── Diagnóstico del loop (solo con window.__DRIVE_DEBUG_HEADING) ──
+      // Sin logs continuos por frame salvo que el debug esté activado.
+      const dbg =
+        typeof window !== "undefined"
+          ? (window as unknown as { __DRIVE_DEBUG_HEADING?: boolean }).__DRIVE_DEBUG_HEADING
+          : undefined;
       const simulatorActive = simRef.current.active;
       const followMode = followDriver;
-      console.log("[HEADING LOOP TICK]", {
-        debug: typeof window !== "undefined" ? (window as any).__DRIVE_DEBUG_HEADING : undefined,
-        simulatorActive,
-        followMode,
-      });
-      const simNow = simRef.current;
-      console.log("[FOLLOW SIM STATE]", {
-        active: simNow.active,
-        running: simNow.running,
-        paused: simNow.paused,
-        finished: simNow.finished,
-        stage: simNow.stage,
-        simHeading: simNow.simHeading,
-        simLocation: simNow.simLocation,
-      });
-      // Leer el heading fused (GPS + brújula) cada frame para que los
-      // cambios del sensor del dispositivo (rotación del teléfono) se reflejen
-      // inmediatamente en la cámara, sin depender de un efecto externo.
+      if (dbg) {
+        const simNow = simRef.current;
+        console.log("[FOLLOW SIM STATE]", {
+          active: simNow.active,
+          running: simNow.running,
+          paused: simNow.paused,
+          finished: simNow.finished,
+          stage: simNow.stage,
+          simHeading: simNow.simHeading,
+          simLocation: simNow.simLocation,
+        });
+      }
+      // Leer el heading fused cada frame para que los cambios de sensor se
+      // reflejen inmediatamente en la cámara, sin depender de efectos externos.
       const targetHeading = headingResolverRef.current();
       let heading = visualHeadingRef.current ?? targetHeading ?? 0;
       if (targetHeading != null && visualHeadingRef.current != null) {
@@ -909,24 +1189,11 @@ export default function DrivePage() {
         setDriverHeading(heading);
       }
 
-      // (debug instrumentation placed before position smoothing, outside the camera block)
-
       // 1) Interpolar la posición del vehículo hacia la posición GPS real.
       const cur = visualPosRef.current;
       const dist = haversineMeters(cur, target);
       let next = cur;
 
-      // ── Temporary runtime diagnostics (dev only, no composition changes) ──
-      // Second gate: runs once the route ref is known in this scope and reports
-      // the exact condition evaluation before the detailed log block below.
-      const route = roadRouteRef.current;
-      console.log("[HEADING DEBUG CONDITIONS]", {
-        debug: typeof window !== "undefined" ? (window as any).__DRIVE_DEBUG_HEADING : undefined,
-        simulatorActive,
-        followMode,
-        routeExists: Boolean(route?.path),
-        routeLength: route?.path?.length ?? null,
-      });
       if (dist < 0.5) {
         next = target;
       } else {
@@ -948,46 +1215,6 @@ export default function DrivePage() {
         ? currentSim.simHeading
         : null;
       const navHeading = navHeadingForSim ?? heading;
-
-      // ── Temporary runtime heading diagnostics (dev only, no composition changes) ──
-      // Third gate: the actual detailed log, conditioned on the same activation
-      // state reported above so failures are impossible to hide.
-      const routeForDebug = roadRouteRef.current;
-      if (
-        typeof window !== "undefined" &&
-        (window as any).__DRIVE_DEBUG_HEADING &&
-        simulatorActive &&
-        followMode &&
-        routeForDebug?.path &&
-        routeForDebug.path.length >= 2
-      ) {
-        const drivenMeters = projectOntoPath(routeForDebug.path, next);
-        const routeHeading = headingAlongPath(routeForDebug.path, drivenMeters);
-        // Independent geometric bearing toward the *next* route point after the
-        // current vehicle position, for direct comparison with simHeading.
-        let nextSegmentBearing = null;
-        if (routeForDebug.path.length >= 2) {
-          const nextIdx = routeForDebug.path.findIndex(
-            (p, i) => i > 0 && haversineMeters(routeForDebug.path[i - 1], p) > 0
-          );
-          if (nextIdx > 0 && nextIdx < routeForDebug.path.length) {
-            nextSegmentBearing = bearingBetween(next, routeForDebug.path[nextIdx]);
-          }
-        }
-        const simNow2 = simRef.current;
-        console.log("[DRIVE HEADING RUNTIME]", {
-          simHeading: simNow2 && simNow2.active && simNow2.simHeading != null
-            ? simNow2.simHeading
-            : navHeadingForSim ?? null,
-          navHeading: navHeading ?? null,
-          visualHeading: visualHeadingRef.current,
-          routeHeading: routeHeading ?? null,
-          nextSegmentBearing: nextSegmentBearing ?? null,
-          drivenMeters,
-          vehicleLat: next.lat,
-          vehicleLng: next.lng,
-        });
-      }
 
       // Calcular target de cámara: punto adelantado del vehículo en el heading
       // de navegación. Este es el punto geográfico QUE LA CÁMARA MIRA.
@@ -1510,7 +1737,9 @@ export default function DrivePage() {
     switch (navPhase) {
       case "to_pickup":
         return {
-          title: "RECOLECCIÓN",
+          // Lenguaje natural de la tarea, no etiquetas técnicas: el
+          // protagonista (restaurante/punto) vive en la tarjeta inferior.
+          title: "A RECOGER",
           icon: <Package className="h-5 w-5" />,
           accent: "orange" as const,
           orderCode,
@@ -1528,11 +1757,11 @@ export default function DrivePage() {
         };
       case "at_pickup":
         return {
-          title: "RECOLECCIÓN",
+          title: "EN EL PUNTO DE RECOGIDA",
           icon: <Package className="h-5 w-5" />,
           accent: "orange" as const,
           orderCode,
-          main: "Has llegado a la recolección",
+          main: "Estás en el punto de recolección",
           sub: address,
           distance: null,
           duration: null,
@@ -1544,7 +1773,7 @@ export default function DrivePage() {
         };
       case "to_delivery":
         return {
-          title: "ENTREGA",
+          title: "EN CAMINO A ENTREGAR",
           icon: <Truck className="h-5 w-5" />,
           accent: "red" as const,
           orderCode,
@@ -1562,11 +1791,11 @@ export default function DrivePage() {
         };
       case "at_delivery":
         return {
-          title: "ENTREGA",
+          title: "EN EL DESTINO",
           icon: <MapPin className="h-5 w-5" />,
           accent: "green" as const,
           orderCode,
-          main: "Has llegado a la entrega",
+          main: "Estás en el destino",
           sub: address,
           distance: null,
           duration: null,
@@ -1628,18 +1857,76 @@ export default function DrivePage() {
 
       // Backend actions
       setActionLoading(orderNumber);
+      setStageActionError(null);
       try {
-        await fetch("/api/driver/action", {
+        const res = await fetch("/api/driver/action", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ action, orderNumber }),
         });
+        if (!res.ok) {
+          const data = (await res.json().catch(() => null)) as { error?: string } | null;
+          setStageActionError(data?.error ?? "No se pudo completar la acción.");
+        }
         await refetch();
       } finally {
         setActionLoading(null);
       }
     },
     [enterFollowCamera, refetch]
+  );
+
+  /** Acción de la etapa actual del pedido activo (recogí / entregué). */
+  const handleStageAction = useCallback(async () => {
+    // El simulador solo muestra estados; nunca muta el pedido real.
+    if (sim.active) {
+      setStageActionError("Desactiva el simulador para confirmar la acción real.");
+      return;
+    }
+    if (!activeOrder || !orderAction) return;
+    const stageActions = new Set(["picked_up", "delivered"]);
+    if (!stageActions.has(orderAction.action)) return;
+    await handleAction(orderAction.action, activeOrder.orderNumber);
+  }, [activeOrder, orderAction, handleAction, sim.active]);
+
+  /**
+   * Entrega con NIP (Entrega segura): valida server-side con el mismo gate
+   * que WhatsApp webhook. Devuelve true si la entrega se confirmó.
+   */
+  const handlePinSubmit = useCallback(
+    async (pin: string): Promise<boolean> => {
+      if (!activeOrder) return false;
+      setStageActionError(null);
+      if (sim.active) {
+        setStageActionError("Desactiva el simulador para confirmar la entrega real.");
+        return false;
+      }
+      setActionLoading(activeOrder.orderNumber);
+      try {
+        const res = await fetch("/api/driver/action", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "delivered_with_pin",
+            orderNumber: activeOrder.orderNumber,
+            pin,
+          }),
+        });
+        if (!res.ok) {
+          const data = (await res.json().catch(() => null)) as { error?: string } | null;
+          setStageActionError(data?.error ?? "No se pudo confirmar la entrega.");
+          return false;
+        }
+        await refetch();
+        return true;
+      } catch {
+        setStageActionError("No se pudo confirmar la entrega.");
+        return false;
+      } finally {
+        setActionLoading(null);
+      }
+    },
+    [activeOrder, refetch, sim.active]
   );
 
   const handleOffer = useCallback(
@@ -2017,6 +2304,11 @@ export default function DrivePage() {
                 actionKind={orderAction.action}
                 actionLabel={orderAction.label}
                 actionIcon={orderAction.icon}
+                stage={navPhase}
+                actionLoading={actionLoading === order.orderNumber}
+                actionError={stageActionError}
+                onStageAction={handleStageAction}
+                onPinSubmit={handlePinSubmit}
                 onDisconnect={() => handleSession("disconnect")}
                 disconnectLoading={actionLoading === "session"}
                 simulated={sim.active}

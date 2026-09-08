@@ -22,6 +22,10 @@ type DriverOrder = {
   mandadoDestinationReference: string | null;
   paymentLabel: string;
   totalPrice: number;
+  /** Nombre del cliente/destinatario (para el contexto de entrega). */
+  customerName: string | null;
+  /** true ⇔ la entrega requiere NIP (decidido por el gate del servidor). */
+  requiresDeliveryPin: boolean;
 };
 
 type DriverOffer = {

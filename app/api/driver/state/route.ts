@@ -4,6 +4,10 @@ import {
   fetchAssignedOrders,
   type OrderDoc,
 } from "@/lib/driver-actions";
+import {
+  checkDeliveryPinGate,
+  type DeliveryPinOrder,
+} from "@/lib/delivery-pin-gate";
 import { mandadoDriverState } from "@/lib/mandado-driver-flow";
 import { haversineKm } from "@/lib/dispatch/dispatch-core";
 import { estimateEtaMinutes } from "@/lib/dispatch/dispatch-format";
@@ -30,6 +34,10 @@ type DriverOrderDTO = {
   mandadoDestinationReference: string | null;
   paymentLabel: string;
   totalPrice: number;
+  /** Nombre del cliente/destinatario (para el contexto de entrega). */
+  customerName: string | null;
+  /** true ⇔ la entrega requiere NIP (calculado con el gate real del servidor). */
+  requiresDeliveryPin: boolean;
 };
 
 type DriverOfferDTO = {
@@ -88,6 +96,11 @@ function deriveEstado(driver: {
 }
 
 function mapOrderDTO(order: OrderDoc): DriverOrderDTO {
+  // El requisito de NIP se decide SIEMPRE con el gate real del servidor
+  // (misma lógica que WhatsApp webhook y la validación de entrega). El
+  // cliente solo recibe el booleano; nunca evalúa reglas de NIP.
+  const pinGate = checkDeliveryPinGate(order as unknown as DeliveryPinOrder);
+  const requiresDeliveryPin = pinGate.action === "request_pin";
   const storeLat = toFinite(order.storeLat);
   const storeLng = toFinite(order.storeLng);
   const destLat = toFinite(order.destLat);
@@ -117,6 +130,8 @@ function mapOrderDTO(order: OrderDoc): DriverOrderDTO {
     mandadoDestinationReference: order.mandadoDestinationReference ?? null,
     paymentLabel: paymentLabel(order.paymentMethod),
     totalPrice: Number(order.totalPrice ?? 0),
+    customerName: order.customerName?.trim() ? order.customerName.trim() : null,
+    requiresDeliveryPin,
   };
 }
 
