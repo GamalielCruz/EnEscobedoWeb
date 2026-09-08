@@ -16,9 +16,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  bearingBetween,
   haversineMeters,
+  headingAlongPath,
   pathLengthMeters,
   pointAtDistance,
+  projectOntoPath,
   routeTargets,
   type RoadRoute,
   type RoutePoint,
@@ -67,6 +70,10 @@ export function useDriveSimulator({
   const [active, setActive] = useState(false);
   const [speed, setSpeed] = useState<(typeof SIM_SPEEDS)[number]>(5);
   const [simLocation, setSimLocation] = useState<RoutePoint | null>(null);
+
+  // Heading simulado derivado de la ruta (solo desarrollo): permite validar la
+  // cámara de navegación de forma determinista sin depender de la brújula real.
+  const [simHeading, setSimHeading] = useState<number | null>(null);
 
   const startOriginRef = useRef<RoutePoint | null>(null);
   const progressRef = useRef(0);
@@ -174,6 +181,7 @@ export function useDriveSimulator({
 
       const next = pointAtDistance(routeRef.current.path, progressRef.current);
       const lastEmitted = lastEmittedPosRef.current;
+      const prevPos = lastEmittedPosRef.current;
       if (
         !lastEmitted ||
         haversineMeters(lastEmitted, next) >= SIM_MIN_STEP_METERS ||
@@ -181,6 +189,23 @@ export function useDriveSimulator({
       ) {
         lastEmittedPosRef.current = next;
         setSimLocation(next);
+        // Heading derivado de la ruta: headingAlongPath da el rumbo del tramo
+        // actual en la posición simulada. Solo disponible cuando hay ruta.
+        if (routeRef.current?.path && routeRef.current.path.length >= 2) {
+          const driven = projectOntoPath(routeRef.current.path, next);
+          const segHeading = headingAlongPath(routeRef.current.path, driven);
+          setSimHeading(segHeading);
+          if (typeof window !== "undefined" && (window as any).__DRIVE_DEBUG_HEADING__) {
+            console.log("[DriveSimHeading]", {
+              simHeading: segHeading,
+              drivenMeters: driven,
+            });
+          }
+          const h = headingAlongPath(routeRef.current.path, driven);
+          setSimHeading(h ?? 0);
+        } else {
+          setSimHeading(null);
+        }
       }
 
       if (progressRef.current >= total) {
@@ -213,22 +238,55 @@ export function useDriveSimulator({
     lastEmittedPosRef.current = null;
     routeLengthRef.current = null;
     setActive(true);
-    setSimLocation(origin);
-    goToStage("to_pickup", true);
     setRunning(true);
-  }, [canStart, origin, pickup, delivery, cancelAnimation, goToStage]);
+    console.log("[SIM STATE CHANGE]", {
+      action: "start",
+      active,
+      running,
+      paused: active && !running && stage !== "done",
+      finished: active && stage === "done",
+      stage,
+      simHeading,
+      location: simLocation,
+    });
+    console.log("[SIM START STATE REQUESTED]", {
+      active,
+      running,
+      stage,
+    });
+  }, [canStart, origin, pickup, delivery, cancelAnimation, goToStage, active, running, stage, simHeading, simLocation]);
 
   const pause = useCallback(() => {
     cancelAnimation();
     setRunning(false);
-  }, [cancelAnimation]);
+    console.log("[SIM STATE CHANGE]", {
+      action: "pause",
+      active,
+      running,
+      paused: active && !running && stage !== "done",
+      finished: active && stage === "done",
+      stage,
+      simHeading,
+      location: simLocation,
+    });
+  }, [cancelAnimation, active, running, stage, simHeading, simLocation]);
 
   const resume = useCallback(() => {
     if (!active) return;
     cancelAnimation();
     lastEmittedPosRef.current = null;
     setRunning(true);
-  }, [active, cancelAnimation]);
+    console.log("[SIM STATE CHANGE]", {
+      action: "resume",
+      active,
+      running,
+      paused: active && !running && stage !== "done",
+      finished: active && stage === "done",
+      stage,
+      simHeading,
+      location: simLocation,
+    });
+  }, [active, cancelAnimation, running, stage, simHeading, simLocation]);
 
   const restart = useCallback(() => {
     if (!active || !startOriginRef.current) return;
@@ -243,6 +301,16 @@ export function useDriveSimulator({
   }, [active, cancelAnimation, goToStage]);
 
   const stop = useCallback(() => {
+    console.log("[SIM STOP CALLED]", {
+      active,
+      running,
+      paused: active && !running && stage !== "done",
+      finished: active && stage === "done",
+      stage,
+      simHeading,
+      location: simLocation,
+      stack: new Error().stack,
+    });
     cancelAnimation();
     progressRef.current = 0;
     arrivalHandledRef.current = false;
@@ -253,10 +321,31 @@ export function useDriveSimulator({
     setActive(false);
     setRunning(false);
     setSimLocation(null);
-  }, [cancelAnimation]);
+    setSimHeading(null);
+    console.log("[SIM STATE CHANGE]", {
+      action: "stop",
+      active,
+      running,
+      paused: active && !running && stage !== "done",
+      finished: active && stage === "done",
+      stage,
+      simHeading,
+      location: simLocation,
+    });
+  }, [cancelAnimation, active, running, stage, simHeading, simLocation]);
 
   const stageLabel = STAGE_LABELS[stage];
   const finished = active && stage === "done";
+
+  useEffect(() => {
+    console.log("[SIM ACTIVE EFFECT]", {
+      active,
+      running,
+      paused: active && !running && stage !== "done",
+      finished: active && stage === "done",
+      stage,
+    });
+  }, [active, running, stage]);
 
   return {
     enabled,
@@ -270,6 +359,7 @@ export function useDriveSimulator({
     speed,
     setSpeed,
     simLocation,
+    simHeading,
     /** true mientras se espera a que llegue la ruta de la etapa actual. */
     waitingForRoute:
       active &&

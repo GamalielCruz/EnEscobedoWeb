@@ -23,6 +23,7 @@ import {
   useDriveSimulator,
   SIM_BASE_METERS_PER_SECOND,
 } from "@/hooks/useDriveSimulator";
+import type { DriveSimStage } from "@/hooks/useDriveSimulator";
 import { getDeploymentEnvironment } from "@/lib/deployment-environment";
 import { useDriverState, type DriverOrder, type DriverOffer } from "@/hooks/useDriverState";
 import { useDriverLocation } from "@/hooks/useDriverLocation";
@@ -85,6 +86,7 @@ import {
   bearingBetween,
   distanceToPathMeters,
   getRoadRoute,
+  headingAlongPath,
   haversineMeters,
   movePointAlong,
   pathLengthMeters,
@@ -116,22 +118,19 @@ const CAMERA_PADDING = 0.15;
 const DRIVER_CENTER_METERS = 20;
 // Zoom por defecto del mapa y zoom de navegación al pulsar "Centrar GPS".
 const DEFAULT_ZOOM = 15;
-const FOLLOW_NAV_ZOOM = 17;
-// Navegación tipo GPS: posición del conductor en pantalla (fracción vertical,
-// 0 = borde superior) y distancia de cámara adelantada según el viewport.
-// Con tilt de navegación (45°) la perspectiva empuja visualmente al conductor
-// un poco más abajo, por lo que 0.7 lo deja en el rango 70-75% pedido.
-const NAV_DRIVER_SCREEN_FRACTION = 0.7;
-const NAV_AHEAD_MIN_METERS = 80;
-const NAV_AHEAD_MAX_METERS = 1600;
-// Inclinación de la cámara en modo navegación (heading-up) tipo Waze. Vector
-// map permite compose center/heading/tilt/zoom con map.moveCamera; el rango
-// permitido depende del zoom (los docs de Google usan 47.5° como ejemplo).
-const NAV_TILT = 45;
+const NAV_DRIVER_SCREEN_FRACTION = 0.72;
+const NAV_ZOOM_BASE = 17.8;
+const NAV_ZOOM_MAX = 18.4;
+const NAV_ZOOM_MIN = 17.2;
+const NAV_ZOOM_SLOW = NAV_ZOOM_BASE;
+const NAV_ZOOM_FAST = NAV_ZOOM_BASE - 0.6;
 // No girar el mapa por variaciones menores de rumbo (anti-jitter).
 const NAV_HEADING_SKIP_DEG = 2.5;
 // Suavizado de rotación por frame (interpolación del ángulo más corto).
 const NAV_HEADING_SMOOTH = 0.16;
+// Velocidad angular máxima del giro de cámara en modo navegación para evitar
+// saltos instantáneos y mantener la rotación suave pero reactiva.
+const MAX_HEADING_ROTATION_DEG_PER_SEC = 150;
 // Rumbo derivado por movimiento: mínimo desplazamiento e intervalo.
 const NAV_MOVEMENT_MIN_METERS = 4;
 const NAV_MOVEMENT_MIN_MS = 400;
@@ -139,17 +138,13 @@ const NAV_MOVEMENT_MIN_MS = 400;
 // distancia restante por frame y paso mínimo (elimina la teletransportación).
 const POSITION_SMOOTH_FACTOR = 0.18;
 const POSITION_MIN_STEP_METERS = 1.5;
-// Interpolación de la cámara hacia el punto de anclaje (conductor abajo).
-const CAMERA_SMOOTH_FACTOR = 0.2;
-const CAMERA_MIN_STEP_METERS = 2;
 // Zoom dinámico de conducción: rango según velocidad y acercamiento al giro.
-const NAV_ZOOM_SLOW = 17.4; // detenido / ciudad
-const NAV_ZOOM_FAST = 16.2; // velocidad alta (más tramo por delante)
-const NAV_ZOOM_MAX = 17.9; // con bonus por giro próximo
+// Rango más cerrado que antes: el zoom base ya es la referencia de navegación.
 const NAV_SPEED_REF_MPS = 18; // velocidad que alcanza el zoom lejano (≈65 km/h)
-const NAV_ZOOM_TURN_BONUS = 0.5;
+const NAV_ZOOM_TURN_BONUS = 0.4;
 // Solo cambiar el zoom cuando la diferencia es relevante (evita zoom constante).
-const NAV_ZOOM_HYSTERESIS = 0.45;
+const NAV_ZOOM_HYSTERESIS = 0.3;
+
 // Desvío: distancia lateral a la geometría y ticks consecutivos antes de
 // recalcular la ruta (anti-jitter del GPS).
 const OFF_ROUTE_METERS = 60;
@@ -200,6 +195,29 @@ function driverArrowIcon(headingDeg: number): string {
   </g>
 </svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/**
+ * Rotación de la flecha del conductor RELATIVA AL MAPA.
+ *
+ * En heading-up, el mapa ya está rotado por mapHeading y los marcadores NO
+ * rotan con el mapa (el icono mide su rotación desde "arriba de la pantalla").
+ * Si pre-rotemos el icono por driverHeading absoluto, al sumarse la rotación
+ * del mapa la flecha termina girada en pantalla (desfase doble).
+ *
+ * La flecha debe quedar apuntando hacia arriba en pantalla cuando el mapa
+ * está bien orientado (mapHeading == driverHeading). Por eso la rotación
+ * del icono es la diferencia relativa: driverHeading - mapHeading.
+ */
+function driverArrowIconRelativeToMap(
+  driverHeadingDeg: number,
+  mapHeadingDeg: number | null
+): string {
+  // Si no hay heading de mapa (modo exploración / aún sin orientar), usar
+  // la rotación absoluta actual (comportamiento anterior, compatible).
+  if (mapHeadingDeg == null) return driverArrowIcon(driverHeadingDeg);
+  const relative = shortestAngleDelta(driverHeadingDeg, mapHeadingDeg);
+  return driverArrowIcon(relative);
 }
 
 const storePinSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
@@ -283,6 +301,10 @@ function shortestAngleDelta(to: number, from: number): number {
  * Punto de CÁMARA para que el conductor quede en el tercio inferior de la
  * pantalla con la carretera por delante. Solo es un objetivo visual: nunca
  * mueve al conductor ni la ruta.
+ *
+ * En navegación tipo Waze/Google Maps la cámara NO mira al vehículo: mira a
+ * un punto POR DELANTE del vehículo. El vehículo queda entonces en el tercio
+ * inferior y la carretera delante ocupa la mayor parte de la pantalla.
  */
 function aheadCameraPoint(map: google.maps.Map, driver: RoutePoint, headingDeg: number): RoutePoint {
   const vp = getMapViewport(map);
@@ -297,10 +319,7 @@ function aheadCameraPoint(map: google.maps.Map, driver: RoutePoint, headingDeg: 
     );
   }
   const fraction = NAV_DRIVER_SCREEN_FRACTION - 0.5;
-  const meters = Math.min(
-    NAV_AHEAD_MAX_METERS,
-    Math.max(NAV_AHEAD_MIN_METERS, viewHeightMeters * fraction)
-  );
+  const meters = Math.max(80, Math.min(420, viewHeightMeters * Math.abs(fraction)));
   return movePointAlong(driver, headingDeg, meters);
 }
 
@@ -534,6 +553,14 @@ export default function DrivePage() {
     route: roadRoute,
   });
 
+  // Ref sincronizado del hook para que los callbacks estables (ej. el loop de
+  // seguimiento) lean valores frescos sin depender del closure inicial ni sin
+  // recrear rAF cada vez que cambia el estado del simulador.
+  const simRef = useRef(sim);
+  useEffect(() => {
+    simRef.current = sim;
+  }, [sim]);
+
   // Si el pedido desaparece (o el repartidor se desconecta) con una
   // simulación en curso, detenerla: no dejar una posición fantasma.
   const simIsActive = sim.active;
@@ -548,6 +575,14 @@ export default function DrivePage() {
     if (sim.active && sim.simLocation) return sim.simLocation;
     return realLocation ?? DEFAULT_CENTER;
   }, [sim.active, sim.simLocation, realLocation]);
+
+  // Heading de navegación para el simulador: derivado de la ruta cuando está
+  // activo (sin depender de sensores reales), para validar la cámara de forma
+  // determinista. En GPS real sigue usándose navigationHeading().
+  const navHeadingForSim = useMemo(() => {
+    if (!sim.active || sim.simHeading == null) return null;
+    return sim.simHeading;
+  }, [sim.active, sim.simHeading]);
 
   // Solo pedir ruta cuando hay una ubicación del repartidor (GPS real o
   // simulada); si no hay ninguna, no se dibuja ruta desde el centro del mapa.
@@ -673,6 +708,7 @@ export default function DrivePage() {
   const movementSpeedRef = useRef<number | null>(null);
   const movementPrevRef = useRef<{ pos: RoutePoint; ts: number } | null>(null);
   const visualHeadingRef = useRef<number | null>(null);
+  const visualCameraHeadingRef = useRef<{ current: number | null; lastTs?: number }>({ current: null });
   const headingRafRef = useRef<number | null>(null);
   const internalZoomRef = useRef(false);
   const internalZoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -689,11 +725,18 @@ export default function DrivePage() {
   const offRouteStreakRef = useRef(0);
   const [followDriver, setFollowDriver] = useState(true);
   const [driverHeading, setDriverHeading] = useState(0);
+  const NAV_AHEAD_METER_BASE = 92;
   const [isRecalculating, setIsRecalculating] = useState(false);
 
   const navigatingWithRoute = Boolean(
     navTarget && mapsLoaded && driverHasLocation && roadRoute?.path
   );
+
+  // Ref de ruta para usarla en el loop de cámara sin re-suscribirlo.
+  const roadRouteRef = useRef<RoadRoute | null>(roadRoute);
+  useEffect(() => {
+    roadRouteRef.current = roadRoute;
+  }, [roadRoute]);
   const legKey = navTarget ? `${navTarget.lat.toFixed(4)},${navTarget.lng.toFixed(4)}` : null;
 
   // Panel de diagnóstico de sensores (solo desarrollo/debug): muestra heading
@@ -816,9 +859,7 @@ export default function DrivePage() {
       cancelAnimationFrame(followRafRef.current);
       followRafRef.current = null;
     }
-  }, []);
-
-  const ensureFollowLoop = useCallback(() => {
+  }, []);    const ensureFollowLoop = useCallback(() => {
     if (followRafRef.current !== null) return;
     const step = () => {
       const map = mapRef.current;
@@ -827,11 +868,30 @@ export default function DrivePage() {
         followRafRef.current = null;
         return;
       }
+
+      // ── Temporary runtime diagnostics (dev only, no composition changes) ──
+      // First gate: confirms the raf loop is running and reads the exact activation
+      // flags available in this scope.
+      const simulatorActive = simRef.current.active;
+      const followMode = followDriver;
+      console.log("[HEADING LOOP TICK]", {
+        debug: typeof window !== "undefined" ? (window as any).__DRIVE_DEBUG_HEADING : undefined,
+        simulatorActive,
+        followMode,
+      });
+      const simNow = simRef.current;
+      console.log("[FOLLOW SIM STATE]", {
+        active: simNow.active,
+        running: simNow.running,
+        paused: simNow.paused,
+        finished: simNow.finished,
+        stage: simNow.stage,
+        simHeading: simNow.simHeading,
+        simLocation: simNow.simLocation,
+      });
       // Leer el heading fused (GPS + brújula) cada frame para que los
       // cambios del sensor del dispositivo (rotación del teléfono) se reflejen
       // inmediatamente en la cámara, sin depender de un efecto externo.
-      // Usar el heading fused cada frame para que los cambios del sensor
-      // (rotación del teléfono, GPS, etc.) se reflejen inmediatamente.
       const targetHeading = headingResolverRef.current();
       let heading = visualHeadingRef.current ?? targetHeading ?? 0;
       if (targetHeading != null && visualHeadingRef.current != null) {
@@ -849,10 +909,24 @@ export default function DrivePage() {
         setDriverHeading(heading);
       }
 
+      // (debug instrumentation placed before position smoothing, outside the camera block)
+
       // 1) Interpolar la posición del vehículo hacia la posición GPS real.
       const cur = visualPosRef.current;
       const dist = haversineMeters(cur, target);
       let next = cur;
+
+      // ── Temporary runtime diagnostics (dev only, no composition changes) ──
+      // Second gate: runs once the route ref is known in this scope and reports
+      // the exact condition evaluation before the detailed log block below.
+      const route = roadRouteRef.current;
+      console.log("[HEADING DEBUG CONDITIONS]", {
+        debug: typeof window !== "undefined" ? (window as any).__DRIVE_DEBUG_HEADING : undefined,
+        simulatorActive,
+        followMode,
+        routeExists: Boolean(route?.path),
+        routeLength: route?.path?.length ?? null,
+      });
       if (dist < 0.5) {
         next = target;
       } else {
@@ -865,29 +939,95 @@ export default function DrivePage() {
       visualPosRef.current = next;
       driverMarkerRef.current?.setPosition(next);
 
-      // 2) Interpolar el CENTRO de cámara hacia el anclaje del vehículo
-      //    interpolado (conductor en la zona inferior, ruta por delante).
-      const anchorTarget = aheadCameraPoint(map, next, heading);
-      const center = map.getCenter?.() as
-        | { lat(): number; lng(): number }
-        | undefined;
-      let nextCenter = anchorTarget;
-      if (center) {
-        const currentCenter = { lat: center.lat(), lng: center.lng() };
-        const camDist = haversineMeters(currentCenter, anchorTarget);
-        if (camDist >= CAMERA_MIN_STEP_METERS) {
-          nextCenter = movePointAlong(
-            currentCenter,
-            bearingBetween(currentCenter, anchorTarget),
-            Math.min(camDist, camDist * CAMERA_SMOOTH_FACTOR)
+      // 2) Centro de cámara ANCLADO AL VEHÍCULO VISUAL + target adelantado:
+      //    la cámara mira a un punto POR DELANTE del vehículo para que la
+      //    carretera delante ocupe la mayor parte de la pantalla (comportamiento
+      //    tipo Waze). El vehículo queda en el tercio inferior.
+      const currentSim = simRef.current;
+      const navHeadingForSim = currentSim.active && currentSim.simHeading != null
+        ? currentSim.simHeading
+        : null;
+      const navHeading = navHeadingForSim ?? heading;
+
+      // ── Temporary runtime heading diagnostics (dev only, no composition changes) ──
+      // Third gate: the actual detailed log, conditioned on the same activation
+      // state reported above so failures are impossible to hide.
+      const routeForDebug = roadRouteRef.current;
+      if (
+        typeof window !== "undefined" &&
+        (window as any).__DRIVE_DEBUG_HEADING &&
+        simulatorActive &&
+        followMode &&
+        routeForDebug?.path &&
+        routeForDebug.path.length >= 2
+      ) {
+        const drivenMeters = projectOntoPath(routeForDebug.path, next);
+        const routeHeading = headingAlongPath(routeForDebug.path, drivenMeters);
+        // Independent geometric bearing toward the *next* route point after the
+        // current vehicle position, for direct comparison with simHeading.
+        let nextSegmentBearing = null;
+        if (routeForDebug.path.length >= 2) {
+          const nextIdx = routeForDebug.path.findIndex(
+            (p, i) => i > 0 && haversineMeters(routeForDebug.path[i - 1], p) > 0
           );
+          if (nextIdx > 0 && nextIdx < routeForDebug.path.length) {
+            nextSegmentBearing = bearingBetween(next, routeForDebug.path[nextIdx]);
+          }
         }
+        const simNow2 = simRef.current;
+        console.log("[DRIVE HEADING RUNTIME]", {
+          simHeading: simNow2 && simNow2.active && simNow2.simHeading != null
+            ? simNow2.simHeading
+            : navHeadingForSim ?? null,
+          navHeading: navHeading ?? null,
+          visualHeading: visualHeadingRef.current,
+          routeHeading: routeHeading ?? null,
+          nextSegmentBearing: nextSegmentBearing ?? null,
+          drivenMeters,
+          vehicleLat: next.lat,
+          vehicleLng: next.lng,
+        });
       }
-      moveMapCamera(map, { center: nextCenter, heading, tilt: NAV_TILT });
+
+      // Calcular target de cámara: punto adelantado del vehículo en el heading
+      // de navegación. Este es el punto geográfico QUE LA CÁMARA MIRA.
+      const aheadMeters = 90;
+      const desiredCenter = movePointAlong(next, navHeading, aheadMeters);
+
+      // Suavizado angular de la cámara basado en delta time para que el giro sea
+      // consistente a diferentes FPS y no salte instantáneamente ante cambios de
+      // heading del simulador o de la ruta.
+      const now = performance.now();
+      const cam = visualCameraHeadingRef.current;
+      const prevHeading = cam.current;
+      if (prevHeading != null && navHeading != null) {
+        const deltaDeg = shortestAngleDelta(navHeading, prevHeading);
+        if (Math.abs(deltaDeg) > NAV_HEADING_SKIP_DEG) {
+          const dtSec = Math.max(0.001, (now - (cam.lastTs ?? now)) / 1000);
+          const maxDeg = Math.min(Math.abs(deltaDeg), MAX_HEADING_ROTATION_DEG_PER_SEC * dtSec);
+          const sign = deltaDeg > 0 ? 1 : -1;
+          const visualCameraHeading = normalizeDeg(prevHeading + sign * maxDeg);
+          cam.current = visualCameraHeading;
+          cam.lastTs = now;
+          moveMapCamera(map, { center: desiredCenter, heading: visualCameraHeading, tilt: 0 });
+        } else {
+          cam.current = navHeading;
+          cam.lastTs = now;
+          moveMapCamera(map, { center: desiredCenter, heading: navHeading, tilt: 0 });
+        }
+      } else {
+        if (navHeading != null) {
+          cam.current = navHeading;
+          cam.lastTs = now;
+        }
+        moveMapCamera(map, { center: desiredCenter, heading: navHeading ?? 0, tilt: 0 });
+      }
+      // Calibrar: si el vehículo queda muy arriba o muy abajo, ajustar aheadMeters.
+      // El valor óptimo depende de zoom + tilt.
 
       if (dist < 0.5) {
         const c = map.getCenter?.() as { lat(): number; lng(): number } | undefined;
-        if (!c || haversineMeters({ lat: c.lat(), lng: c.lng() }, anchorTarget) < 1) {
+        if (!c || haversineMeters({ lat: c.lat(), lng: c.lng() }, desiredCenter) < 1) {
           followRafRef.current = null;
           return;
         }
@@ -922,6 +1062,11 @@ export default function DrivePage() {
   const handleMapLoad = useCallback(
     (map: google.maps.Map) => {
       mapRef.current = map;
+      // Solo dev: expone el mapa para probar en DevTools Console, p. ej.
+      // __driveMap.getRenderingType() → "VECTOR" con el Map ID configurado.
+      if (process.env.NODE_ENV !== "production") {
+        (window as unknown as { __driveMap?: google.maps.Map }).__driveMap = map;
+      }
       mapListenersRef.current.forEach((listener) => listener.remove());
       mapListenersRef.current = [
         // Pan manual → exploración.
@@ -942,6 +1087,9 @@ export default function DrivePage() {
     mapListenersRef.current.forEach((listener) => listener.remove());
     mapListenersRef.current = [];
     mapRef.current = null;
+    if (process.env.NODE_ENV !== "production") {
+      delete (window as unknown as { __driveMap?: google.maps.Map }).__driveMap;
+    }
     driverMarkerRef.current = null;
   }, [cancelFollowLoop, stopHeadingAnimation]);
 
@@ -1038,10 +1186,10 @@ export default function DrivePage() {
       const target = headingResolverRef.current();
       if (target != null) {
         applyHeading(target);
-        moveMapCamera(map, { heading: target, tilt: NAV_TILT });
+        moveMapCamera(map, { heading: target, tilt: 0 });
       } else if (visualHeadingRef.current != null) {
         // Mantener el último heading conocido (no forzar norte arriba).
-        moveMapCamera(map, { heading: visualHeadingRef.current, tilt: NAV_TILT });
+        moveMapCamera(map, { heading: visualHeadingRef.current, tilt: 0 });
       } else {
         moveMapCamera(map, { heading: 0, tilt: 0 });
       }
@@ -1075,18 +1223,19 @@ export default function DrivePage() {
 
     // Zoom DINÁMICO: más lejos al aumentar velocidad (más tramo por delante),
     // más cerca al bajar velocidad o al acercarse a un giro. Con histéresis
-    // para no cambiar el zoom constantemente.
+    // para no cambiar el zoom constantemente. El rango de zoom ahora es más
+    // cerrado (NAV_ZOOM_BASE como referencia de navegación).
     const speedMps = sim.active
       ? SIM_BASE_METERS_PER_SECOND * sim.speed
       : (movementSpeedRef.current ?? 0);
     let zoom =
       NAV_ZOOM_SLOW - (speedMps / NAV_SPEED_REF_MPS) * (NAV_ZOOM_SLOW - NAV_ZOOM_FAST);
-    zoom = Math.min(NAV_ZOOM_SLOW, Math.max(NAV_ZOOM_FAST, zoom));
+    zoom = Math.max(NAV_ZOOM_MIN, Math.min(NAV_ZOOM_MAX, zoom));
     if (
       guidance?.distanceToManeuver != null &&
       guidance.distanceToManeuver <= NEXT_MANEUVER_METERS
     ) {
-      zoom = Math.min(zoom + NAV_ZOOM_TURN_BONUS, NAV_ZOOM_MAX);
+      zoom = Math.min(zoom - 0.3, NAV_ZOOM_MIN);
     }
     if (
       lastZoomRef.current == null ||
@@ -1106,6 +1255,7 @@ export default function DrivePage() {
     gpsHeading,
     sim.active,
     sim.speed,
+    navHeadingForSim,
     guidance,
     ensureFollowLoop,
     cancelFollowLoop,
@@ -1214,7 +1364,7 @@ export default function DrivePage() {
         // Sin ruta todavía: aplicar heading directamente para no dejar el
         // mapa sin orientar (norte arriba) mientras se busca la ruta.
         applyHeading(target);
-        moveMapCamera(map, { heading: target, tilt: NAV_TILT });
+        moveMapCamera(map, { heading: target, tilt: 0 });
       }
     } else {
       cancelFollowLoop();
@@ -1231,10 +1381,10 @@ export default function DrivePage() {
     followTargetRef.current = currentLocation;
     if (withRoute) {
       ensureFollowLoop();
-      // Zoom de conducción inicial; el efecto de navegación lo ajusta luego.
+      // Zoom de navegación inicial: cerrado, enfocado al siguiente tramo.
       lastZoomRef.current = null;
       markInternalZoom();
-      moveMapCamera(map, { zoom: FOLLOW_NAV_ZOOM });
+      moveMapCamera(map, { zoom: NAV_ZOOM_BASE });
     }
     setFollowDriver(true);
     // Intentar activar brújula si no está disponible todavía (sin bloquear).
@@ -1705,7 +1855,13 @@ export default function DrivePage() {
             {/* Driver marker: flecha de navegación que se rota según rumbo.
                 La posición se controla imperativamente (setPosition) desde el
                 loop de seguimiento suave para interpolar entre ticks de GPS y
-                evitar la "teletransportación" del vehículo. */}
+                evitar la "teletransportación" del vehículo.
+
+                La rotación del icono es RELATIVA AL MAPA (F1): como los marcadores
+                NO rotan con el mapa, la flecha se compensa con
+                shortestAngleDelta(driverHeading, mapHeading) para que permanezca
+                apuntando hacia arriba en pantalla cuando el mapa está bien
+                orientado (heading-up correcto). */}
             <Marker
               position={initialDriverPosRef.current}
               onLoad={(marker) => {
@@ -1715,7 +1871,10 @@ export default function DrivePage() {
                 driverMarkerRef.current = null;
               }}
               icon={{
-                url: driverArrowIcon(driverHeading),
+                url: driverArrowIconRelativeToMap(
+                  driverHeading,
+                  visualHeadingRef.current
+                ),
                 scaledSize: new google.maps.Size(44, 44),
                 anchor: new google.maps.Point(22, 22),
               }}
