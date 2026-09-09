@@ -69,9 +69,11 @@ const DRIVER_CENTER_METERS = 20;
 // Zoom por defecto del mapa y zoom de navegación al pulsar "Centrar GPS".
 const DEFAULT_ZOOM = 15;
 const NAV_DRIVER_SCREEN_FRACTION = 0.72;
-const NAV_ZOOM_BASE = 17.8;
-const NAV_ZOOM_MAX = 18.4;
-const NAV_ZOOM_MIN = 17.2;
+// Zoom de navegación turn-by-turn (referencia 18–19). El nivel se mantiene
+// dentro de un rango estrecho según velocidad y cercanía al giro.
+const NAV_ZOOM_BASE = 18.3;
+const NAV_ZOOM_MAX = 18.8;
+const NAV_ZOOM_MIN = 17.8;
 const NAV_ZOOM_SLOW = NAV_ZOOM_BASE;
 const NAV_ZOOM_FAST = NAV_ZOOM_BASE - 0.6;
 // No girar el mapa por variaciones menores de rumbo (anti-jitter).

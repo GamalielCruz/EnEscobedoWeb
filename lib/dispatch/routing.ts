@@ -258,7 +258,16 @@ function requestDirections(origin: RoutePoint, destination: RoutePoint): Promise
     try {
       const service = new window.google.maps.DirectionsService();
       service.route(
-        { origin, destination, travelMode: window.google.maps.TravelMode.DRIVING },
+        {
+          origin,
+          destination,
+          travelMode: window.google.maps.TravelMode.DRIVING,
+          // Pedir SIEMPRE el texto ya localizado a es-MX: Google devuelve
+          // html_instructions en español y la UI no depende del traductor
+          // de respaldo (nav-instructions.ts). La capa de respaldo sigue
+          // existiendo por si algún step llega sin localizar.
+          language: "es-MX",
+        },
         (result, status) => {
           if (settled) return;
           settled = true;

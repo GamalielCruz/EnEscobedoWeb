@@ -57,7 +57,7 @@ const MANEUVER_ES: Record<string, string> = {
 /** Extrae la calle de textos tipo "… onto Av. X / on Av. X / at Av. X". */
 function extractStreet(value: string): string | null {
   const match = value.match(
-    /\b(?:onto|on to|on|toward|towards|at|into)\s+([^,.]+?)\s*$/i
+    /\b(?:onto|on to|on|toward|towards|at|into)\s+([^,]+?)\s*$/i
   );
   if (!match) return null;
   const street = cleanHtml(match[1]);
@@ -76,6 +76,12 @@ const EN_RULES: PrefixRule[] = [
   { pattern: /^turn\s+slight\s+right\s+onto\s+(.+)$/i, replace: "Gira ligeramente a la derecha en $1" },
   { pattern: /^turn\s+left\s+onto\s+(.+)$/i, replace: "Gira a la izquierda en $1" },
   { pattern: /^turn\s+right\s+onto\s+(.+)$/i, replace: "Gira a la derecha en $1" },
+  // "toward" crudo de Directions: sin estas reglas, el conector en inglés se
+  // colaba en la frase traducida ("Gira a la izquierda en toward Av. X").
+  { pattern: /^turn\s+slight\s+left\s+towards?\s+(.+)$/i, replace: "Gira ligeramente a la izquierda hacia $1" },
+  { pattern: /^turn\s+slight\s+right\s+towards?\s+(.+)$/i, replace: "Gira ligeramente a la derecha hacia $1" },
+  { pattern: /^turn\s+left\s+towards?\s+(.+)$/i, replace: "Gira a la izquierda hacia $1" },
+  { pattern: /^turn\s+right\s+towards?\s+(.+)$/i, replace: "Gira a la derecha hacia $1" },
   { pattern: /^turn\s+left\s+(?:at\s+)?(.+)$/i, replace: "Gira a la izquierda en $1" },
   { pattern: /^turn\s+right\s+(?:at\s+)?(.+)$/i, replace: "Gira a la derecha en $1" },
   { pattern: /^make\s+a\s+u-?turn\s*(?:onto\s+(.+))?$/i, replace: "Da vuelta en U" },
@@ -121,7 +127,9 @@ export function streetFromInstruction(instruction: string): string | null {
   const cleaned = cleanHtml(instruction ?? "");
   if (!cleaned) return null;
   const match = cleaned.match(
-    /\b(?:onto|on to|on|toward|towards|at|into|en|hacia|por)\s+([^,.]+?)\s*$/i
+    // La calle puede contener puntos ("Av. Emiliano Zapata"): solo la coma
+    // es separador seguro aquí.
+    /\b(?:onto|on to|on|toward|towards|at|into|en|hacia|por)\s+([^,]+?)\s*$/i
   );
   if (!match) return null;
   const street = cleanHtml(match[1]).trim();
@@ -133,12 +141,22 @@ export function streetFromInstruction(instruction: string): string | null {
 /**
  * Normaliza una instrucción de Directions a español para la UI.
  * - Limpia cualquier resto de HTML.
+ * - Elimina conectores ingleses huérfanos en texto ya traducido
+ *   ("en toward Av. X" → "en Av. X").
  * - Traduce patrones típicos en inglés.
  * - Si no se tradujo y parece inglés, usa el maneuver como respaldo.
  */
 export function instructionInSpanish(instruction: string, maneuver?: NavManeuver): string {
-  const cleaned = cleanHtml(instruction ?? "");
+  let cleaned = cleanHtml(instruction ?? "");
   if (!cleaned) return phraseFromManeuver(maneuver ?? "unknown", null);
+
+  // Texto con marcadores de español que arrastra un conector crudo de
+  // Directions ("toward", "onto"): era el origen del bug de idioma mezclado
+  // ("Gira a la izquierda en toward Av. Emiliano Zapata"). Se elimina el
+  // conector huérfano antes de cualquier otra regla.
+  if (SPANISH_MARKERS.test(cleaned) && /\b(?:towards?|onto)\b/i.test(cleaned)) {
+    cleaned = cleaned.replace(/\s*\b(?:towards?|onto)\b\s*/gi, " ").replace(/\s+/g, " ").trim();
+  }
 
   // Ya en español o sin marcas de inglés → devolver limpio tal cual.
   if (!looksEnglish(cleaned)) return cleaned;
