@@ -149,27 +149,78 @@ function driverArrowIcon(headingDeg: number): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
+// ── Rotación IMPERATIVA del marcador (por buckets de ángulo) ────────
+//
+// En heading-up, el mapa ya está rotado por mapHeading y los marcadores NO
+// rotan con el mapa (el icono mide su rotación desde "arriba de la pantalla").
+// La flecha debe quedar apuntando hacia arriba en pantalla cuando el mapa
+// está bien orientado (mapHeading == driverHeading): la rotación del icono
+// es la diferencia relativa driverHeading - mapHeading.
+//
+// La rotación se aplica con marker.setIcon() DENTRO del loop rAF (mismo hilo
+// que setPosition) y NUNCA vía estado de React: un setState por frame
+// re-renderizaba la página a 60 fps (SVG/data-URI nuevo + google.maps.Size
+// y Point nuevos en cada commit), la causa principal del jank de navegación.
+//
+// Para no reconstruir nada en el hot path se pre-generan ICON_BUCKET_DEG
+// variantes del icono (buckets de 10°) y se reutilizan: cero data-URIs y
+// cero objetos Size/Point por frame. El último bucket aplicado se recuerda
+// para no tocar el marcador si el ángulo no cambió de bucket.
+
+const ICON_SIZE_PX = 44;
+const ICON_ANCHOR_PX = ICON_SIZE_PX / 2;
+const ICON_BUCKET_DEG = 10;
+const ICON_BUCKET_COUNT = 360 / ICON_BUCKET_DEG;
+
+// Cache a nivel módulo: se construye UNA vez con google.maps ya cargado.
+let driverIconBuckets: google.maps.Icon[] | null = null;
+let driverIconScaledSize: google.maps.Size | null = null;
+let driverIconAnchor: google.maps.Point | null = null;
+let lastDriverIconBucket: number | null = null;
+
+function getDriverIconBuckets(): google.maps.Icon[] | null {
+  if (driverIconBuckets) return driverIconBuckets;
+  // google.maps solo existe tras cargar el script de Maps (SSR-safe).
+  if (typeof google === "undefined" || !google.maps) return null;
+  // Un único objeto Size/Point reutilizado por TODOS los buckets.
+  driverIconScaledSize = new google.maps.Size(ICON_SIZE_PX, ICON_SIZE_PX);
+  driverIconAnchor = new google.maps.Point(ICON_ANCHOR_PX, ICON_ANCHOR_PX);
+  driverIconBuckets = Array.from({ length: ICON_BUCKET_COUNT }, (_, i) => ({
+    url: driverArrowIcon(i * ICON_BUCKET_DEG),
+    scaledSize: driverIconScaledSize!,
+    anchor: driverIconAnchor!,
+  }));
+  return driverIconBuckets;
+}
+
 /**
- * Rotación de la flecha del conductor RELATIVA AL MAPA.
- *
- * En heading-up, el mapa ya está rotado por mapHeading y los marcadores NO
- * rotan con el mapa (el icono mide su rotación desde "arriba de la pantalla").
- * Si pre-rotemos el icono por driverHeading absoluto, al sumarse la rotación
- * del mapa la flecha termina girada en pantalla (desfase doble).
- *
- * La flecha debe quedar apuntando hacia arriba en pantalla cuando el mapa
- * está bien orientado (mapHeading == driverHeading). Por eso la rotación
- * del icono es la diferencia relativa: driverHeading - mapHeading.
+ * Aplica la rotación del marcador del conductor de forma IMPERATIVA.
+ * Igual que el render anterior (driverArrowIconRelativeToMap): la rotación
+ * del icono es relativa al mapa; sin heading de mapa (exploración), absoluta.
+ * No-op si el ángulo sigue en el mismo bucket de 10° (no toca el marcador).
  */
-function driverArrowIconRelativeToMap(
+function applyDriverMarkerIcon(
+  marker: google.maps.Marker | null,
   driverHeadingDeg: number,
   mapHeadingDeg: number | null
-): string {
-  // Si no hay heading de mapa (modo exploración / aún sin orientar), usar
-  // la rotación absoluta actual (comportamiento anterior, compatible).
-  if (mapHeadingDeg == null) return driverArrowIcon(driverHeadingDeg);
-  const relative = shortestAngleDelta(driverHeadingDeg, mapHeadingDeg);
-  return driverArrowIcon(relative);
+): void {
+  if (!marker) return;
+  const buckets = getDriverIconBuckets();
+  if (!buckets) return;
+  const relative =
+    mapHeadingDeg == null
+      ? normalizeDeg(driverHeadingDeg)
+      : shortestAngleDelta(driverHeadingDeg, mapHeadingDeg);
+  const bucket =
+    Math.round(normalizeDeg(relative) / ICON_BUCKET_DEG) % ICON_BUCKET_COUNT;
+  if (bucket === lastDriverIconBucket) return;
+  lastDriverIconBucket = bucket;
+  marker.setIcon(buckets[bucket]);
+}
+
+/** Marca el bucket como desconocido (remount del marcador / reset). */
+function resetDriverMarkerIconBucket(): void {
+  lastDriverIconBucket = null;
 }
 
 const storePinSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
@@ -997,7 +1048,6 @@ export default function DrivePage() {
   // Desvío: racha de ticks fuera de la geometría antes de recalcular.
   const offRouteStreakRef = useRef(0);
   const [followDriver, setFollowDriver] = useState(true);
-  const [driverHeading, setDriverHeading] = useState(0);
   const NAV_AHEAD_METER_BASE = 92;
   const [isRecalculating, setIsRecalculating] = useState(false);
 
@@ -1071,23 +1121,6 @@ export default function DrivePage() {
   const headingResolverRef = useRef<() => number | null>(resolveNavigationHeading);
   headingResolverRef.current = resolveNavigationHeading;
 
-  // Debug de heading en el teléfono: expone el estado del resolvedor cada
-  // 500 ms solo cuando window.__DRIVE_DEBUG_HEADING = true (sin logs por
-  // frame, sin impacto en rendimiento normal).
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      const w = window as unknown as {
-        __DRIVE_DEBUG_HEADING?: boolean;
-        __DRIVE_HEADING_DEBUG?: DriveHeadingDebugInfo;
-      };
-      if (!w.__DRIVE_DEBUG_HEADING) return;
-      const info = driveHeadingResolverRef.current?.state.debug;
-      w.__DRIVE_HEADING_DEBUG = info ?? undefined;
-      if (info) console.log("[DRIVE HEADING DEBUG]", info);
-    }, 500);
-    return () => window.clearInterval(id);
-  }, []);
-
   const stopHeadingAnimation = useCallback(() => {
     if (headingRafRef.current !== null) {
       cancelAnimationFrame(headingRafRef.current);
@@ -1095,10 +1128,69 @@ export default function DrivePage() {
     }
   }, []);
 
+  // ── Lecturas de scroll del documento SIN forzar layout ──────────
+  // Framer Motion (proyección de layout) y otros códigos leen
+  // documentElement/body.scrollLeft/scrollTop en cada commit y pasada del
+  // frame loop. Cada lectura con el getter nativo fuerza un layout
+  // síncrono contra el DOM de Google Maps (que muta cientos de atributos
+  // por frame durante la navegación). En esta pantalla el scroll del
+  // documento es siempre 0 (mapa fijo a pantalla completa con overlays
+  // absolutos; verificado en dispositivo), así que se cachean los offsets
+  // y se sirven sin layout; se refrescan en scroll/resize por corrección.
+  useEffect(() => {
+    const doc = document.documentElement;
+    const body = document.body;
+    // Getters NATIVOS capturados del prototipo: refresh() debe leer el valor
+    // real aunque los own-properties ya estén instalados.
+    const nativeLeft = Object.getOwnPropertyDescriptor(Element.prototype, "scrollLeft")?.get;
+    const nativeTop = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop")?.get;
+    const cached = { left: 0, top: 0 };
+    const refresh = () => {
+      // Se llama en scroll/resize: el layout ya está validado en ese punto,
+      // así que leer con el getter nativo es barato.
+      cached.left = (nativeLeft?.call(doc) ?? 0) || (nativeLeft?.call(body) ?? 0);
+      cached.top = (nativeTop?.call(doc) ?? 0) || (nativeTop?.call(body) ?? 0);
+    };
+    refresh();
+    const install = () => {
+      for (const [el, prop] of [
+        [doc, "scrollLeft"],
+        [doc, "scrollTop"],
+        [body, "scrollLeft"],
+        [body, "scrollTop"],
+      ] as const) {
+        if (Object.prototype.hasOwnProperty.call(el, prop)) continue;
+        Object.defineProperty(el, prop, {
+          get: () => (prop === "scrollLeft" ? cached.left : cached.top),
+          configurable: true,
+        });
+      }
+    };
+    const restore = () => {
+      for (const [el, prop] of [
+        [doc, "scrollLeft"],
+        [doc, "scrollTop"],
+        [body, "scrollLeft"],
+        [body, "scrollTop"],
+      ] as const) {
+        delete (el as unknown as Record<string, unknown>)[prop];
+      }
+    };
+    install();
+    window.addEventListener("scroll", refresh, { passive: true, capture: true });
+    window.addEventListener("resize", refresh, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", refresh, { capture: true });
+      window.removeEventListener("resize", refresh);
+      restore();
+    };
+  }, []);
+
   const applyHeading = useCallback((deg: number) => {
     const norm = normalizeDeg(deg);
     visualHeadingRef.current = norm;
-    setDriverHeading(norm);
+    // El icono del marcador lo rota el loop rAF de forma imperativa
+    // (applyDriverMarkerIcon); aquí SOLO se actualiza el heading visual.
     // El CENTRO lo maneja el loop de seguimiento suave (smoothFollowLoop): la
     // cámara rota y se desliza a la vez, sin saltos ni re-anclas bruscas.
   }, []);
@@ -1108,6 +1200,10 @@ export default function DrivePage() {
     (target: number) => {
       const map = mapRef.current;
       if (!map) return;
+      // H2: el loop de seguimiento es la ÚNICA fuente de verdad del heading
+      // visual mientras está activo (lo suaviza cada frame). Arrancar aquí un
+      // segundo rAF competiría por visualHeadingRef.current durante las curvas.
+      if (followRafRef.current !== null) return;
       const current = visualHeadingRef.current;
       const delta = current == null ? 0 : shortestAngleDelta(target, current);
       if (current == null || Math.abs(delta) <= NAV_HEADING_SKIP_DEG) {
@@ -1142,8 +1238,14 @@ export default function DrivePage() {
       cancelAnimationFrame(followRafRef.current);
       followRafRef.current = null;
     }
-  }, []);    const ensureFollowLoop = useCallback(() => {
+  }, []);
+
+  const ensureFollowLoop = useCallback(() => {
     if (followRafRef.current !== null) return;
+    // H2: al tomar el control, cancelar cualquier heading tween en vuelo para
+    // que solo un rAF escriba visualHeadingRef.current (evita el doble tirón
+    // del heading durante las curvas).
+    stopHeadingAnimation();
     const step = () => {
       const map = mapRef.current;
       const target = followTargetRef.current;
@@ -1152,26 +1254,6 @@ export default function DrivePage() {
         return;
       }
 
-      // ── Diagnóstico del loop (solo con window.__DRIVE_DEBUG_HEADING) ──
-      // Sin logs continuos por frame salvo que el debug esté activado.
-      const dbg =
-        typeof window !== "undefined"
-          ? (window as unknown as { __DRIVE_DEBUG_HEADING?: boolean }).__DRIVE_DEBUG_HEADING
-          : undefined;
-      const simulatorActive = simRef.current.active;
-      const followMode = followDriver;
-      if (dbg) {
-        const simNow = simRef.current;
-        console.log("[FOLLOW SIM STATE]", {
-          active: simNow.active,
-          running: simNow.running,
-          paused: simNow.paused,
-          finished: simNow.finished,
-          stage: simNow.stage,
-          simHeading: simNow.simHeading,
-          simLocation: simNow.simLocation,
-        });
-      }
       // Leer el heading fused cada frame para que los cambios de sensor se
       // reflejen inmediatamente en la cámara, sin depender de efectos externos.
       const targetHeading = headingResolverRef.current();
@@ -1182,13 +1264,16 @@ export default function DrivePage() {
         if (Math.abs(delta) > NAV_HEADING_SKIP_DEG) {
           heading = normalizeDeg(heading + delta * 0.22);
           visualHeadingRef.current = heading;
-          setDriverHeading(heading);
+          // Rotación imperativa del icono (sin setState): en el loop, heading
+          // del vehículo y de la cámara derivan del mismo valor visual, así
+          // que la flecha permanece apuntando hacia arriba en pantalla.
+          applyDriverMarkerIcon(driverMarkerRef.current, heading, heading);
         }
       } else if (targetHeading != null && visualHeadingRef.current == null) {
         // Primer frame o después de exitFollowMode: saltar al target.
         heading = targetHeading;
         visualHeadingRef.current = heading;
-        setDriverHeading(heading);
+        applyDriverMarkerIcon(driverMarkerRef.current, heading, heading);
       }
 
       // 1) Interpolar la posición del vehículo hacia la posición GPS real.
@@ -1264,7 +1349,7 @@ export default function DrivePage() {
       followRafRef.current = requestAnimationFrame(step);
     };
     followRafRef.current = requestAnimationFrame(step);
-  }, []);
+  }, [stopHeadingAnimation]);
 
   const markInternalZoom = useCallback(() => {
     internalZoomRef.current = true;
@@ -1280,7 +1365,8 @@ export default function DrivePage() {
     cancelFollowLoop();
     stopHeadingAnimation();
     visualHeadingRef.current = null;
-    setDriverHeading(0);
+    // Norte arriba: la flecha vuelve a rotación absoluta 0 (apunta al norte).
+    applyDriverMarkerIcon(driverMarkerRef.current, 0, null);
     const map = mapRef.current;
     // Norte arriba y sin tilt: vista de exploración tras el gesto del usuario.
     if (map && map.getHeading?.()) {
@@ -1316,6 +1402,7 @@ export default function DrivePage() {
     mapListenersRef.current.forEach((listener) => listener.remove());
     mapListenersRef.current = [];
     mapRef.current = null;
+    resetDriverMarkerIconBucket();
     if (process.env.NODE_ENV !== "production") {
       delete (window as unknown as { __driveMap?: google.maps.Map }).__driveMap;
     }
@@ -1372,7 +1459,7 @@ export default function DrivePage() {
       cancelFollowLoop();
       stopHeadingAnimation();
       visualHeadingRef.current = null;
-      setDriverHeading(0);
+      applyDriverMarkerIcon(driverMarkerRef.current, 0, null);
       moveMapCamera(map, { heading: 0, tilt: 0 });
       markInternalZoom();
       map.setZoom(DEFAULT_ZOOM);
@@ -1599,7 +1686,7 @@ export default function DrivePage() {
       cancelFollowLoop();
       stopHeadingAnimation();
       visualHeadingRef.current = null;
-      setDriverHeading(0);
+      applyDriverMarkerIcon(driverMarkerRef.current, 0, null);
       moveMapCamera(map, { heading: 0, tilt: 0 });
     }
     lastFollowPosRef.current = currentLocation;
@@ -1668,7 +1755,7 @@ export default function DrivePage() {
     stopHeadingAnimation();
     lastZoomRef.current = null;
     visualHeadingRef.current = null;
-    setDriverHeading(0);
+    applyDriverMarkerIcon(driverMarkerRef.current, 0, null);
     moveMapCamera(map, { heading: 0, tilt: 0 });
     markInternalZoom();
     frameRouteView(map, points);
@@ -2146,27 +2233,23 @@ export default function DrivePage() {
                 loop de seguimiento suave para interpolar entre ticks de GPS y
                 evitar la "teletransportación" del vehículo.
 
-                La rotación del icono es RELATIVA AL MAPA (F1): como los marcadores
-                NO rotan con el mapa, la flecha se compensa con
-                shortestAngleDelta(driverHeading, mapHeading) para que permanezca
-                apuntando hacia arriba en pantalla cuando el mapa está bien
-                orientado (heading-up correcto). */}
+                La rotación del icono es RELATIVA AL MAPA (F1) y se aplica de
+                forma IMPERATIVA con marker.setIcon() desde el loop rAF
+                (applyDriverMarkerIcon), reutilizando iconos pre-generados por
+                buckets de 10°. Aquí solo se fija el icono inicial (flecha
+                arriba): ningún setState de heading en el hot path. */}
             <Marker
               position={initialDriverPosRef.current}
               onLoad={(marker) => {
                 driverMarkerRef.current = marker;
+                // Marcador nuevo: forzar la primera aplicación del icono.
+                resetDriverMarkerIconBucket();
               }}
               onUnmount={() => {
                 driverMarkerRef.current = null;
+                resetDriverMarkerIconBucket();
               }}
-              icon={{
-                url: driverArrowIconRelativeToMap(
-                  driverHeading,
-                  visualHeadingRef.current
-                ),
-                scaledSize: new google.maps.Size(44, 44),
-                anchor: new google.maps.Point(22, 22),
-              }}
+              icon={getDriverIconBuckets()?.[0]}
             />
 
             {/* Store marker */}
