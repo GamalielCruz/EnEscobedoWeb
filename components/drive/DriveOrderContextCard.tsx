@@ -26,13 +26,24 @@ import { shortOrderCode } from "@/lib/dispatch/dispatch-format";
  * la entrega lo requiere y el repartidor ya llegó (requiresDeliveryPin lo
  * decide el gate del servidor; nunca se evalúa en el cliente).
  *
+ * Fase 4:
+ * - Indicador de progreso de la tarea ("Paso 1 de 2" / "Paso 2 de 2") para
+ *   que el repartidor siempre sepa qué sigue en el viaje.
+ * - La CTA se enfatiza al estar EN el punto (at_pickup/at_delivery): fondo
+ *   ElMenu rojo + área táctil mayor. En tramos de navegación queda navy
+ *   (prioridad en la maniobra, no en la acción).
+ *
  * Reutiliza el lenguaje visual de la app de reparto: tarjeta blanca,
- * texto #09193B, chips tintados, botón navy #09193B (igual que OrderCard)
- * y radios/bordes de DriveTripSheet. Sin gradientes ni sombras nuevas.
+ * texto #09193B, chips tintados, radios/bordes de DriveTripSheet.
+ * Sin gradientes ni sombras nuevas.
  */
 
 const PRIMARY_CTA_CLASS =
   "mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-[#09193B] py-3 text-sm font-black text-white shadow-lg transition hover:bg-[#0d2347] active:scale-95 disabled:opacity-50";
+
+/** CTA al estar EN el punto: acción inmediata → rojo de marca + táctil 48px. */
+const ACTION_CTA_CLASS =
+  "mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-[#EB1902] py-3.5 text-sm font-black text-white shadow-lg shadow-[#EB1902]/25 transition hover:bg-[#850C22] active:scale-95 disabled:opacity-50";
 
 function EntityChip({ stage }: { stage: DriveNavPhase }) {
   const tone =
@@ -93,6 +104,14 @@ export function DriveOrderContextCard({
   const isPickupStage = stage === "to_pickup" || stage === "at_pickup";
   const showPinForm = stage === "at_delivery" && order.requiresDeliveryPin;
 
+  // Progreso de la tarea del viaje: recolección = paso 1, entrega = paso 2.
+  const stepLabel =
+    stage === "to_pickup" || stage === "at_pickup"
+      ? "Paso 1 de 2"
+      : stage === "to_delivery" || stage === "at_delivery"
+        ? "Paso 2 de 2"
+        : null;
+
   const submitPin = async (event: FormEvent) => {
     event.preventDefault();
     if (pinSubmitting) return;
@@ -117,13 +136,19 @@ export function DriveOrderContextCard({
         </p>
       </div>
 
-      {/* ACCIÓN en lenguaje natural; el folio nunca es el protagonista */}
+      {/* ACCIÓN en lenguaje natural; el folio nunca es el protagonista.
+          El paso (1/2 · 2/2) da continuidad NAVIGATION → PICKUP → DELIVERY. */}
       <p className="mt-1.5 text-sm font-semibold text-gray-500">
         {stage === "to_pickup" && `Recoge el pedido #${orderCode}`}
         {stage === "at_pickup" && `Pedido #${orderCode} listo para recoger`}
         {(stage === "to_delivery" || stage === "at_delivery") &&
           `Entrega${stage === "at_delivery" ? " del" : " el"} pedido #${orderCode}`}
         {stage === "done" && "Entrega completada"}
+        {stepLabel && (
+          <span className="ml-1.5 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] font-bold text-gray-400">
+            {stepLabel}
+          </span>
+        )}
       </p>
 
       {/* INFORMACIÓN secundaria con datos reales del pedido */}
@@ -140,12 +165,13 @@ export function DriveOrderContextCard({
       {/* ACCIÓN principal según la etapa (botones/lógica existentes).
           La confirmación de recolección SOLO existe para mandados
           (picked_up); los restaurantes no tienen esa acción en la
-          arquitectura actual, así que no se inventa. */}
+          arquitectura actual, así que no se inventa.
+          EN el punto → CTA roja enfatizada (acción inmediata). */}
       {stage === "at_pickup" && order.serviceKind === "mandado" && (
         <button
           onClick={onPrimaryAction}
           disabled={loading}
-          className={PRIMARY_CTA_CLASS}
+          className={ACTION_CTA_CLASS}
         >
           {loading ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -159,7 +185,7 @@ export function DriveOrderContextCard({
         <button
           onClick={onPrimaryAction}
           disabled={loading}
-          className={PRIMARY_CTA_CLASS}
+          className={ACTION_CTA_CLASS}
         >
           {loading ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -193,7 +219,7 @@ export function DriveOrderContextCard({
           {(pinError || error) && (
             <p className="mt-1.5 text-xs font-medium text-red-500">{pinError ?? error}</p>
           )}
-          <button type="submit" disabled={pinSubmitting || loading} className={PRIMARY_CTA_CLASS}>
+          <button type="submit" disabled={pinSubmitting || loading} className={ACTION_CTA_CLASS}>
             {pinSubmitting || loading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (

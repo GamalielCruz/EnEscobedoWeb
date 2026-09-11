@@ -20,6 +20,10 @@ import { DriveNavBar, type DriveNavPhase } from "@/components/drive/DriveNavBar"
 import { DriveTripSheet } from "@/components/drive/DriveTripSheet";
 import { DriveSimPanel } from "@/components/drive/DriveSimPanel";
 import {
+  getDestinationPinVariants,
+  resetDestinationPins,
+} from "@/components/drive/DriveDestinationPins";
+import {
   useDriveSimulator,
   SIM_BASE_METERS_PER_SECOND,
 } from "@/hooks/useDriveSimulator";
@@ -45,7 +49,7 @@ import {
   type RoadRoute,
   type RoutePoint,
 } from "@/lib/dispatch/routing";
-import { instructionInSpanish, streetFromInstruction } from "@/lib/dispatch/nav-instructions";
+import { instructionInSpanish, shortInstructionInSpanish, streetFromInstruction } from "@/lib/dispatch/nav-instructions";
 import { DRIVE_MAP_STYLES, ROUTE_BLUE } from "@/lib/drive/map-styles";
 
 // ── Map config ─────────────────────────────────────────────────────
@@ -223,15 +227,8 @@ function resetDriverMarkerIconBucket(): void {
   lastDriverIconBucket = null;
 }
 
-const storePinSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
-  <path fill="#F97316" d="M14 2C9.03 2 5 6.03 5 11c0 6.75 9 15 9 15s9-8.25 9-15c0-4.97-4.03-9-9-9z"/>
-  <circle cx="14" cy="11" r="3" fill="white"/>
-</svg>`;
-
-const destPinSvg = `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">
-  <path fill="#EF4444" d="M14 2C9.03 2 5 6.03 5 11c0 6.75 9 15 9 15s9-8.25 9-15c0-4.97-4.03-9-9-9z"/>
-  <circle cx="14" cy="11" r="3" fill="white"/>
-</svg>`;
+// Pines de destino (store/entrega) movidos a DriveDestinationPins (Fase 4):
+// variantes standard/arriving pre-generadas con swap por evento de etapa.
 
 // ── Action helpers ─────────────────────────────────────────────────
 
@@ -960,6 +957,8 @@ export default function DrivePage() {
     return actionToNavPhase(orderAction?.action ?? null);
   }, [sim.active, sim.stage, orderAction]);
 
+  // Fase 4 — "llegando" SOLO con ruta del tramo vigente (ver routeOnLeg).
+
   // Progreso + siguiente maniobra basados en la geometría REAL de la ruta y
   // en los steps de Directions (no se hace ninguna llamada extra a Google).
   const guidance = useMemo(() => {
@@ -1014,6 +1013,26 @@ export default function DrivePage() {
       fractionCompleted: Math.min(1, Math.max(0, done / total)),
     };
   }, [roadRoute, currentLocation]);
+
+  // Fase 4 — "llegando" SOLO con ruta del tramo vigente. Al voltear de tramo
+  // (recolección → entrega), la guidance del tramo anterior (~30 m restantes)
+  // sobrevive un frame y dispararía un ARRIVING espurio; roadRoute.destination
+  // identifica el tramo solicitado y lo excluye.
+  const routeOnLeg = Boolean(
+    roadRoute?.destination &&
+      navTarget &&
+      haversineMeters(roadRoute.destination, navTarget) < 30
+  );
+  const arrivingActive = useMemo(
+    () =>
+      Boolean(
+        (navPhase === "to_pickup" || navPhase === "to_delivery") &&
+          routeOnLeg &&
+          guidance !== null &&
+          guidance.remaining <= NEAR_DESTINATION_METERS
+      ),
+    [navPhase, routeOnLeg, guidance]
+  );
 
   // ── Cámara (navegación tipo GPS) ────────────────────────────────
   // Modo seguimiento/navegación: la cámara acompaña al conductor con la
@@ -1403,6 +1422,7 @@ export default function DrivePage() {
     mapListenersRef.current = [];
     mapRef.current = null;
     resetDriverMarkerIconBucket();
+    resetDestinationPins();
     if (process.env.NODE_ENV !== "production") {
       delete (window as unknown as { __driveMap?: google.maps.Map }).__driveMap;
     }
@@ -1782,10 +1802,7 @@ export default function DrivePage() {
     const pickupLabel = activeOrder.mandadoOriginLabel ?? activeOrder.storeName;
     const deliveryLabel = activeOrder.mandadoDestinationLabel ?? activeOrder.destLabel;
     const hasLegMetrics = navPhase === "to_pickup" || navPhase === "to_delivery";
-    const arriving =
-      hasLegMetrics &&
-      guidance !== null &&
-      guidance.remaining <= NEAR_DESTINATION_METERS;
+    const arriving = arrivingActive;
     // Distancia/tiempo RESTANTES calculados desde currentLocation sobre la
     // geometría real (la tarjeta conserva sus valores originales del servicio).
     const distanceLabel =
@@ -1823,6 +1840,32 @@ export default function DrivePage() {
       !arriving && isTurnLike && guidance?.street ? guidance.street : null;
     const sub = maneuverStreet ?? (arriving ? `Destino de ${address}` : address);
 
+    // Fase 4 — variante visual del panel: acción en el punto, llegada
+    // inminente o maniobra. Cambiar de variante = transición de etapa
+    // (evento raro, fuera del hot path rAF/heading).
+    const variant: "maneuver" | "arriving" | "action" =
+      navPhase === "at_pickup" || navPhase === "at_delivery" || navPhase === "done"
+        ? "action"
+        : arriving
+          ? "arriving"
+          : "maneuver";
+    // Instrucción IMPERATIVA corta (la vialidad vive en `sub`); la instrucción
+    // completa sigue disponible en el sheet expandido.
+    const shortMain = guidance?.instruction
+      ? shortInstructionInSpanish(guidance.instruction, guidance.maneuver)
+      : null;
+    // Distancia glanceable para el estado colapsado del sheet ("450 m").
+    const glance =
+      hasLegMetrics && guidance ? formatMetersShort(guidance.remaining) : null;
+    // Entidad protagonista del sheet colapsado: restaurante antes de recoger,
+    // destinatario después (customerName si existe; si no, la dirección).
+    const sheetEntity =
+      navPhase === "to_pickup" || navPhase === "at_pickup"
+        ? pickupLabel
+        : activeOrder.customerName ?? deliveryLabel;
+    const sheetEntityKind: "pickup" | "delivery" =
+      navPhase === "to_pickup" || navPhase === "at_pickup" ? "pickup" : "delivery";
+
     switch (navPhase) {
       case "to_pickup":
         return {
@@ -1833,8 +1876,8 @@ export default function DrivePage() {
           accent: "orange" as const,
           orderCode,
           main: arriving
-            ? "Estás llegando"
-            : guidance?.instruction ?? "Dirígete a la recolección",
+            ? pickupLabel
+            : shortMain ?? guidance?.instruction ?? "Dirígete a la recolección",
           sub,
           distance: distanceLabel,
           duration: durationLabel,
@@ -1843,6 +1886,7 @@ export default function DrivePage() {
           maneuverDistance,
           recalculating: isRecalculating,
           waiting: !guidance && sim.active,
+          variant,
         };
       case "at_pickup":
         return {
@@ -1855,10 +1899,11 @@ export default function DrivePage() {
           distance: null,
           duration: null,
           progress: null,
-          maneuver: null,
+          maneuver: "arrive",
           maneuverDistance: null,
           recalculating: isRecalculating,
           waiting: false,
+          variant,
         };
       case "to_delivery":
         return {
@@ -1867,8 +1912,8 @@ export default function DrivePage() {
           accent: "red" as const,
           orderCode,
           main: arriving
-            ? "Estás llegando"
-            : guidance?.instruction ?? "Dirígete a la entrega",
+            ? deliveryLabel
+            : shortMain ?? guidance?.instruction ?? "Dirígete a la entrega",
           sub,
           distance: distanceLabel,
           duration: durationLabel,
@@ -1877,6 +1922,7 @@ export default function DrivePage() {
           maneuverDistance,
           recalculating: isRecalculating,
           waiting: !guidance && sim.active,
+          variant,
         };
       case "at_delivery":
         return {
@@ -1889,10 +1935,11 @@ export default function DrivePage() {
           distance: null,
           duration: null,
           progress: null,
-          maneuver: null,
+          maneuver: "arrive",
           maneuverDistance: null,
           recalculating: isRecalculating,
           waiting: false,
+          variant,
         };
       case "done":
         return {
@@ -1909,11 +1956,12 @@ export default function DrivePage() {
           maneuverDistance: null,
           recalculating: isRecalculating,
           waiting: false,
+          variant,
         };
       default:
         return null;
     }
-  }, [navPhase, activeOrder, guidance, sim.active, isRecalculating]);
+  }, [navPhase, activeOrder, guidance, sim.active, isRecalculating, arrivingActive]);
 
   // ── Actions ──────────────────────────────────────────────────────
 
@@ -2252,37 +2300,47 @@ export default function DrivePage() {
               icon={getDriverIconBuckets()?.[0]}
             />
 
-            {/* Store marker */}
-            {activeOrder && (
-              <Marker
-                position={{ lat: activeOrder.storeLat, lng: activeOrder.storeLng }}
-                icon={{
-                  url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(storePinSvg)}`,
-                  scaledSize: new google.maps.Size(28, 28),
-                  anchor: new google.maps.Point(14, 28),
-                }}
-                label={{
-                  text: activeOrder.storeName,
-                  className: "text-[10px] font-bold bg-white rounded px-1 shadow-sm whitespace-nowrap",
-                }}
-              />
-            )}
+            {/* Store marker — pines pre-generados por variante (Fase 4);
+                el swap standard→arriving es solo cambio de referencia en el
+                evento de etapa (misma filosofía que los buckets de H1). */}
+            {activeOrder &&
+              (() => {
+                const pins = getDestinationPinVariants();
+                if (!pins) return null;
+                const storeArriving = navPhase === "to_pickup" && arrivingActive;
+                return (
+                  <Marker
+                    position={{ lat: activeOrder.storeLat, lng: activeOrder.storeLng }}
+                    icon={storeArriving ? pins.store.arriving.icon : pins.store.standard.icon}
+                    label={{
+                      text: activeOrder.storeName,
+                      className:
+                        storeArriving ? pins.store.arriving.labelClass : pins.store.standard.labelClass,
+                    }}
+                  />
+                );
+              })()}
 
             {/* Destination marker */}
-            {activeOrder && (
-              <Marker
-                position={{ lat: activeOrder.destLat, lng: activeOrder.destLng }}
-                icon={{
-                  url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(destPinSvg)}`,
-                  scaledSize: new google.maps.Size(28, 28),
-                  anchor: new google.maps.Point(14, 28),
-                }}
-                label={{
-                  text: "Entrega",
-                  className: "text-[10px] font-bold bg-white rounded px-1 shadow-sm",
-                }}
-              />
-            )}
+            {activeOrder &&
+              (() => {
+                const pins = getDestinationPinVariants();
+                if (!pins) return null;
+                const destArriving =
+                  (navPhase === "to_delivery" && arrivingActive) ||
+                  navPhase === "at_delivery";
+                return (
+                  <Marker
+                    position={{ lat: activeOrder.destLat, lng: activeOrder.destLng }}
+                    icon={destArriving ? pins.dest.arriving.icon : pins.dest.standard.icon}
+                    label={{
+                      text: "Entrega",
+                      className:
+                        destArriving ? pins.dest.arriving.labelClass : pins.dest.standard.labelClass,
+                    }}
+                  />
+                );
+              })()}
 
             {/* Route line: SOLO la geometría vial real de Google Directions.
                 Nunca se dibuja una línea recta entre los dos puntos: si no
@@ -2345,6 +2403,9 @@ export default function DrivePage() {
             recalculating={navContent.recalculating}
             waitingForRoute={navContent.waiting}
             simulated={sim.active}
+            variant={navContent.variant}
+            exploring={!followDriver}
+            onRecenter={handleCenterGps}
           />
         </div>
       )}
@@ -2359,7 +2420,7 @@ export default function DrivePage() {
               onClick={handleCenterGps}
               aria-label="Centrar navegación"
               title="Centrar navegación"
-              className={`flex h-11 w-11 items-center justify-center rounded-full shadow-lg ring-1 transition active:scale-95 ${
+              className={`flex h-12 w-12 items-center justify-center rounded-full shadow-lg ring-1 transition active:scale-95 ${
                 followDriver
                   ? "bg-white text-[#09193B] ring-black/5 hover:bg-gray-50"
                   : "bg-[#EB1902] text-white ring-[#EB1902]/50 hover:bg-[#850C22]"
@@ -2371,7 +2432,7 @@ export default function DrivePage() {
               onClick={handleFullTripView}
               aria-label="Ver viaje completo"
               title="Ver viaje completo"
-              className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#09193B] shadow-lg ring-1 ring-black/5 transition hover:bg-gray-50 active:scale-95"
+              className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-[#09193B] shadow-lg ring-1 ring-black/5 transition hover:bg-gray-50 active:scale-95"
             >
               <Maximize2 className="h-5 w-5" />
             </button>
@@ -2397,6 +2458,20 @@ export default function DrivePage() {
                 onDisconnect={() => handleSession("disconnect")}
                 disconnectLoading={actionLoading === "session"}
                 simulated={sim.active}
+                arriving={arrivingActive}
+                entityLabel={
+                  navPhase === "to_pickup" || navPhase === "at_pickup"
+                    ? order.mandadoOriginLabel ?? order.storeName
+                    : order.customerName ?? order.mandadoDestinationLabel ?? order.destLabel
+                }
+                entityKind={
+                  navPhase === "to_pickup" || navPhase === "at_pickup" ? "pickup" : "delivery"
+                }
+                glanceDistance={
+                  navPhase === "to_pickup" || navPhase === "to_delivery"
+                    ? navContent?.distance?.replace(" restantes", "") ?? null
+                    : null
+                }
               >
                 {orders.slice(1).map((extra) => (
                   <OrderCard

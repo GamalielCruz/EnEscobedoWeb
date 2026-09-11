@@ -118,6 +118,25 @@ function phraseFromManeuver(maneuver: string, street: string | null): string {
 }
 
 /**
+ * Variante CORTA e imperativa de la instrucción para el panel de navegación
+ * (Fase 4): "Gira a la derecha" sin la vialidad, que se muestra como línea
+ * secundaria (streetFromInstruction). La instrucción completa sigue
+ * disponible para el sheet expandido vía instructionInSpanish.
+ */
+export function shortInstructionInSpanish(
+  instruction: string,
+  maneuver?: NavManeuver
+): string {
+  const full = instructionInSpanish(instruction, maneuver);
+  // Frase corta por maneuver cuando existe (misma tabla que el respaldo).
+  if (maneuver && MANEUVER_ES[maneuver]) return MANEUVER_ES[maneuver];
+  // Sin maneuver conocido: cortar la vialidad del final de la frase
+  // ("Continúa por Av. X" → "Continúa"). La calle va en la línea secundaria.
+  const trimmed = full.replace(/\s+(?:en|por|hacia)\s+[^,]+$/i, "").trim();
+  return trimmed || full;
+}
+
+/**
  * Calle donde ocurre la maniobra ("Av. Panamericana") o null si la
  * instrucción no menciona una vialidad. Funciona con instrucciones en
  * español ("Gira a la izquierda en Av. X", "Continúa por X") y en inglés
