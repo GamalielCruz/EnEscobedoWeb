@@ -11,6 +11,7 @@ import { CustomerAddress } from "@/lib/clickCollect";
 import { calculateDistance } from '@/lib/clickCollect';
 import { ArrowLeft, ShoppingCart } from "lucide-react";
 import Loader from "@/components/Loader";
+import { calculateOrderTotal, PLATFORM_SERVICE_FEE_MXN } from "@/lib/platform-service-fee";
 
 const isVisibleBasketProduct = (product: any) => {
   const approvalStatus = product?.approvalStatus;
@@ -186,6 +187,7 @@ export default function SelectStorePage() {
     0
   );
 
+  const total = calculateOrderTotal({ productsSubtotal: subtotal });
   return (
     <div className="container mx-auto px-4 py-8 max-w-4xl">
       {/* Header */}
@@ -274,6 +276,14 @@ export default function SelectStorePage() {
                 <div className="flex justify-between text-sm text-green-600">
                   <span>Envío:</span>
                   <span>GRATIS</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span>Tarifa de servicio:</span>
+                  <span>${PLATFORM_SERVICE_FEE_MXN.toFixed(2)} MXN</span>
+                </div>
+                <div className="flex justify-between font-semibold">
+                  <span>Total:</span>
+                  <span>${total.toFixed(2)} MXN</span>
                 </div>
               </div>
 

@@ -1,7 +1,8 @@
 import { draftMode } from "next/headers";
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import { buildUrl } from "@/lib/urls";
 
-export async function GET(request: NextRequest) {
+export async function GET() {
     await (await draftMode()).disable();
-    return NextResponse.redirect(new URL("/", request.url));
+    return NextResponse.redirect(buildUrl("/"));
 }

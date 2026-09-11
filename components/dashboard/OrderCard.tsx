@@ -242,6 +242,12 @@ export function OrderCard({ order, compact = false, updating = false, onUpdateSt
                 {item.notes && !isTechnicalItemNote(item.notes) ? (
                   <p className="mt-1.5 pl-3 text-[13px] italic text-amber-700">{item.notes}</p>
                 ) : null}
+
+                {item.allergies?.length ? (
+                  <p className="mt-1.5 rounded-md bg-red-50 px-3 py-2 text-[13px] font-medium text-red-800">
+                    Alergias: {item.allergies.join(", ")}
+                  </p>
+                ) : null}
               </li>
             ))}
           </ul>

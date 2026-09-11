@@ -9,8 +9,10 @@ import {
   LayoutDashboard,
   Menu,
   PackageCheck,
+  Radar,
   Truck,
   WalletCards,
+  Settings2,
   X,
 } from "lucide-react";
 
@@ -20,10 +22,13 @@ import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/admin", label: "Inicio", icon: LayoutDashboard },
+  { href: "/admin/dispatch", label: "Dispatch Center", icon: Radar },
   { href: "/admin/orders", label: "Pedidos", icon: ClipboardList },
   { href: "/admin/pending-products", label: "Aprobaciones", icon: PackageCheck },
   { href: "/admin/repartidores", label: "Repartidores", icon: Truck },
   { href: "/admin/finanzas", label: "Finanzas", icon: WalletCards },
+  { href: "/admin/configuracion/comercial", label: "Configuración comercial", icon: Settings2 },
+  { href: "/admin/configuracion/reparto", label: "Horarios de reparto", icon: Settings2 },
 ];
 
 export function AdminShell({ children, className }: { children: React.ReactNode; className?: string }) {

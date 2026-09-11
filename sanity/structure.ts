@@ -7,6 +7,13 @@ export const structure: StructureResolver = (S) =>
     .items([
       S.documentTypeListItem("category").title("Categories"),
       S.documentTypeListItem("promoBanner").title("Banners Promocionales"),
+      S.listItem()
+        .title("Configuración comercial")
+        .child(
+          S.document()
+            .schemaType("commercialSettings")
+            .documentId("commercial-settings")
+        ),
       S.divider(),
       S.listItem()
         .title("Solicitudes Pendientes")
@@ -22,6 +29,6 @@ export const structure: StructureResolver = (S) =>
       ...S.documentTypeListItems().filter(
         (item) =>
           item.getId() &&
-          !["category", "promoBanner", "productUpdateRequest"].includes(item.getId()!)
+          !["category", "promoBanner", "productUpdateRequest", "commercialSettings"].includes(item.getId()!)
       ),
     ]);

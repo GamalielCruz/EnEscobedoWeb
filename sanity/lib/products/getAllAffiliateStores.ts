@@ -1,5 +1,7 @@
 import { defineQuery } from "next-sanity";
 import { sanityFetch } from "../live";
+import { getCommercialSettings } from "@/lib/commercial-config";
+import { resolveEffectiveCommercialConditions } from "@/lib/commercial-rules";
 
 function cleanStoreText(value?: string | null) {
     return value
@@ -17,6 +19,7 @@ export const getAllAffiliateStores = async () => {
             _updatedAt,
             _rev,
             name,
+            slug,
             storeId,
             image,
             coverImage,
@@ -45,6 +48,10 @@ export const getAllAffiliateStores = async () => {
             manualOperationalStatus,
             highDemandMode,
             promotionalMessages,
+            commercialPlanId,
+            commercialOverrides,
+            commercialReviewRequired,
+            commercialPlanStartedAt,
             capacity,
             averageDeliveryTime,
             deliveryFee,
@@ -64,20 +71,26 @@ export const getAllAffiliateStores = async () => {
             storeCategories: s.storeCategories
         })), null, 2));
 
-        return (stores.data || []).map((store: any) => ({
-            ...store,
-            name: cleanStoreText(store.name),
-            address: store.address
-                ? {
-                    ...store.address,
-                    street: cleanStoreText(store.address.street),
-                    city: cleanStoreText(store.address.city),
-                    state: cleanStoreText(store.address.state),
-                    postalCode: cleanStoreText(store.address.postalCode),
-                    country: cleanStoreText(store.address.country),
-                }
-                : store.address,
-        }));
+        const commercialSettings = await getCommercialSettings();
+        return (stores.data || []).map((store: any) => {
+            const commercial = resolveEffectiveCommercialConditions(store, commercialSettings);
+            return {
+                ...store,
+                premiumBadgeEnabled: commercial.premiumBadgeEnabled,
+                promotionalMessagesEnabled: commercial.promotionalMessagesEnabled,
+                name: cleanStoreText(store.name),
+                address: store.address
+                    ? {
+                        ...store.address,
+                        street: cleanStoreText(store.address.street),
+                        city: cleanStoreText(store.address.city),
+                        state: cleanStoreText(store.address.state),
+                        postalCode: cleanStoreText(store.address.postalCode),
+                        country: cleanStoreText(store.address.country),
+                    }
+                    : store.address,
+            };
+        });
     } catch (error) {
         console.log("Error fetching all affiliate stores: ", error);
         return [];

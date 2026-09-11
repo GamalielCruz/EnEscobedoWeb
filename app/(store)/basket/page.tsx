@@ -9,11 +9,29 @@ import useBasketStore from "@/store/store";
 import { SignInButton, useAuth, useUser } from "@clerk/nextjs";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useRef, useMemo } from "react";
+import { useHydration } from "@/hooks/useHydration";
 import { SafeLocationBasedStoreSelector } from '@/components/SafeLocationBasedStoreSelector';
 import { calculateDistance } from '@/lib/clickCollect';
 import { Truck, Store, CreditCard, Banknote, MapPin, X, CheckCircle, Loader2 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import ModernDeliveryFlow from '@/components/ModernDeliveryFlow';
 import { getStoreOperationalState, getStoreServiceTiming } from "@/lib/storeOperationalState";
+import { FulfillmentMap } from "@/components/FulfillmentMap";
+import {
+  customerAddressStorageKey,
+  normalizeCustomerAddress,
+  parseCustomerAddress,
+  restoreCustomerAddress,
+} from "@/lib/customer-address";
+import { FulfillmentTimingPicker } from "@/components/FulfillmentTimingPicker";
+import type { FulfillmentSelection } from "@/lib/fulfillment-schedule";
+import { calculateOrderTotal, PLATFORM_SERVICE_FEE_MXN } from "@/lib/platform-service-fee";
+import MandadoCheckout from "@/components/MandadoCheckout";
+import type { MandadoDraft } from "@/lib/mandado";
+import { SegmentedTabs } from "@/components/SegmentedTabs";
+import { AddressSelector } from "@/components/AddressSelector";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import type { CustomerAddress as StoredCustomerAddress } from "@/lib/customer-address";
 
 interface SavedStoreInfo {
   storeId: string;
@@ -23,6 +41,34 @@ interface SavedStoreInfo {
   estimatedDelivery: string;
   customerAddress?: unknown;
 }
+
+type StoreServiceTypes = {
+  delivery?: boolean;
+  pickup?: boolean;
+  isOpen?: boolean;
+  manualOperationalStatus?: "open" | "closed" | "auto";
+  highDemandMode?: boolean;
+  operatingHours?: Record<string, string>;
+  commercial?: { serviceFee?: number; onlinePaymentsEnabled?: boolean; premiumBadgeEnabled?: boolean };
+  deliveryAvailability?: {
+    available: boolean;
+    provider: "restaurant" | "elmenu";
+    connectedDrivers: number | null;
+  };
+};
+
+type CheckoutDraft = {
+  version: 1;
+  updatedAt: number;
+  serviceType: "delivery" | "pickup" | null;
+  deliveryNotes: string;
+  fulfillmentSelection: FulfillmentSelection | null;
+};
+
+const CHECKOUT_DRAFT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+const checkoutDraftStorageKey = (userId: string, storeId: string) =>
+  `checkoutDraft:v1:${userId}:${storeId}`;
 
 const cleanDisplayText = (value: unknown, fallback = "") => {
   return String(value || fallback)
@@ -61,6 +107,11 @@ const isVisibleBasketProduct = (product: any) => {
   return approvalStatus !== "pending" && approvalStatus !== "rejected" && product?.isVisible !== false;
 };
 
+const PAYMENT_METHODS: Array<{ value: "card" | "cash"; label: string; icon: LucideIcon }> = [
+  { value: "card", label: "Tarjeta", icon: CreditCard },
+  { value: "cash", label: "Efectivo", icon: Banknote },
+];
+
 function BasketPage() {
   const basketItems = useBasketStore((state) => state.items);
   const groupedItems = useMemo(() => basketItems.filter((item) => isVisibleBasketProduct(item.product)), [basketItems]);
@@ -68,9 +119,15 @@ function BasketPage() {
   const { isSignedIn } = useAuth();
   const { user } = useUser();
   const router = useRouter();
+  // El JS de Clerk carga asíncrono: se renderiza su UI solo tras el montaje
+  // para evitar hydration mismatches intermitentes (SignInButton/UserButton).
+  const isHydrated = useHydration();
 
   const [isClient, setIsClient] = useState(false);
+  const [isMandadoCheckout, setIsMandadoCheckout] = useState(false);
+  const [mandadoDraft, setMandadoDraft] = useState<MandadoDraft | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [method, setMethod] = useState<"card" | "cash" | null>(null);
   const [hasStoreSaved, setHasStoreSaved] = useState(false);
   const [savedStoreInfo, setSavedStoreInfo] = useState<SavedStoreInfo | null>(null);
   const [selectedStore, setSelectedStore] = useState<any | null>(null);
@@ -92,9 +149,18 @@ function BasketPage() {
   const [cardPhoneError, setCardPhoneError] = useState("");
   const [editingPhone, setEditingPhone] = useState(false);
   const [deliveryNotes, setDeliveryNotes] = useState("");
-  const [legalAccepted, setLegalAccepted] = useState(false);
+
+  const [fulfillmentSelection, setFulfillmentSelection] = useState<FulfillmentSelection | null>(null);
+  const [storeServiceTypes, setStoreServiceTypes] = useState<StoreServiceTypes | null>(null);
+  const [hydratedDraftKey, setHydratedDraftKey] = useState<string | null>(null);
+  const [addressDialogOpen, setAddressDialogOpen] = useState(false);
+  const [changingAddress, setChangingAddress] = useState(false);
   const checkoutRef = useRef<any>(null);
   const stripeContainerRef = useRef<HTMLDivElement>(null);
+  const normalizedCustomerAddress = useMemo(
+    () => normalizeCustomerAddress(customerAddress),
+    [customerAddress]
+  );
 
   // Derive persisted phone & consent from Clerk publicMetadata (cross-device)
   const clerkPhone = (user?.publicMetadata?.phone as string) ?? "";
@@ -192,18 +258,36 @@ function BasketPage() {
   }, [clientSecret]);
 
   useEffect(() => {
+    const mandadoRequested = new URLSearchParams(window.location.search).get("service") === "mandado";
+    setIsMandadoCheckout(mandadoRequested);
+    if (mandadoRequested) {
+      try {
+        setMandadoDraft(JSON.parse(sessionStorage.getItem("mandadoCheckoutDraft") || "null"));
+      } catch {
+        sessionStorage.removeItem("mandadoCheckoutDraft");
+      }
+    }
     setIsClient(true);
+    const storedAddressValue = user?.id
+      ? localStorage.getItem(customerAddressStorageKey(user.id))
+      : null;
     
     // Verificar si hay una tienda guardada
     const checkStoreSaved = () => {
       const savedStore = localStorage.getItem('clickCollectStore');
       if (savedStore) {
-        const storeData = JSON.parse(savedStore);
-        setHasStoreSaved(true);
-        setSavedStoreInfo(storeData);
+        try {
+          const storeData = JSON.parse(savedStore);
+          setHasStoreSaved(true);
+          setSavedStoreInfo(storeData);
+          setCustomerAddress(restoreCustomerAddress(storedAddressValue, storeData.customerAddress));
+        } catch {
+          localStorage.removeItem('clickCollectStore');
+        }
       } else {
         setHasStoreSaved(false);
         setSavedStoreInfo(null);
+        setCustomerAddress(parseCustomerAddress(storedAddressValue));
       }
     };
     
@@ -222,25 +306,39 @@ function BasketPage() {
     const handleStoreSelected = () => {
       checkStoreSaved();
     };
+    const handleAddressChanged = (event: Event) => {
+      const address = normalizeCustomerAddress((event as CustomEvent).detail);
+      if (address) setCustomerAddress(address);
+    };
     
     window.addEventListener('storeSelected', handleStoreSelected);
+    window.addEventListener('customerAddressChanged', handleAddressChanged);
     
     return () => {
       window.removeEventListener('storeSelected', handleStoreSelected);
+      window.removeEventListener('customerAddressChanged', handleAddressChanged);
     };
-  }, []);
+  }, [user?.id]);
 
   // Obtener el ID de la tienda de los productos en el carrito (si aplica)
 
   const cartStoreId = (groupedItems[0]?.product?.affiliateStore as any)?._ref || (groupedItems[0]?.product?.affiliateStore as any)?._id;
+  const platformServiceFee = storeServiceTypes?.commercial?.serviceFee ?? PLATFORM_SERVICE_FEE_MXN;
+  const onlinePaymentsEnabled = storeServiceTypes?.commercial?.onlinePaymentsEnabled !== false;
   useEffect(() => {
     // Si hay un store guardado en localStorage, cargarlo
     const saved = localStorage.getItem('clickCollectStore');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        setSelectedStore(parsed);
-        setCustomerAddress(parsed.customerAddress || null);
+        if (parsed.storeId && cartStoreId && parsed.storeId !== cartStoreId) return;
+        const storedAddressValue =
+          user?.id
+            ? localStorage.getItem(customerAddressStorageKey(user.id))
+            : null;
+        const restoredAddress = restoreCustomerAddress(storedAddressValue, parsed.customerAddress);
+        setSelectedStore(restoredAddress || parsed.deliveryMethod === "pickup" ? parsed : null);
+        setCustomerAddress(restoredAddress);
         setShippingCost(parsed.shippingCost ?? null);
         setHasStoreSaved(true);
         setSavedStoreInfo(parsed);
@@ -248,7 +346,121 @@ function BasketPage() {
         // ignore
       }
     }
-  }, []);
+  }, [cartStoreId, user?.id]);
+
+  useEffect(() => {
+    if (!cartStoreId) {
+      setStoreServiceTypes(null);
+      return;
+    }
+
+    let active = true;
+    fetchStoreServiceTypes(cartStoreId).then((storeConfig) => {
+      if (active) {
+        setStoreServiceTypes(
+          storeConfig?.serviceTypes
+            ? {
+                ...storeConfig.serviceTypes,
+                deliveryAvailability: storeConfig.deliveryAvailability,
+                isOpen: storeConfig.isOpen,
+                manualOperationalStatus: storeConfig.manualOperationalStatus,
+                highDemandMode: storeConfig.highDemandMode,
+                operatingHours: storeConfig.operatingHours,
+                commercial: storeConfig.commercial,
+              }
+            : null
+        );
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [cartStoreId]);
+
+  useEffect(() => {
+    if (!storeServiceTypes) return;
+    const deliverySupported =
+      storeServiceTypes.delivery === true &&
+      storeServiceTypes.deliveryAvailability?.available !== false;
+    const pickupSupported = storeServiceTypes.pickup === true;
+
+    if (serviceType === "delivery" && !deliverySupported) {
+      setServiceType(pickupSupported ? "pickup" : null);
+    } else if (serviceType === "pickup" && !pickupSupported) {
+      setServiceType(deliverySupported ? "delivery" : null);
+    } else if (!serviceType && deliverySupported !== pickupSupported) {
+      setServiceType(deliverySupported ? "delivery" : "pickup");
+    }
+  }, [serviceType, storeServiceTypes]);
+
+  const checkoutDraftKey =
+    user?.id && cartStoreId ? checkoutDraftStorageKey(user.id, cartStoreId) : null;
+
+  useEffect(() => {
+    if (!checkoutDraftKey) return;
+    setHydratedDraftKey(null);
+    setServiceType(null);
+    setDeliveryNotes("");
+    setFulfillmentSelection(null);
+
+    try {
+      const saved = localStorage.getItem(checkoutDraftKey);
+      if (saved) {
+        const draft = JSON.parse(saved) as Partial<CheckoutDraft>;
+        const isCurrent =
+          draft.version === 1 &&
+          typeof draft.updatedAt === "number" &&
+          Date.now() - draft.updatedAt <= CHECKOUT_DRAFT_TTL_MS;
+        if (!isCurrent) {
+          localStorage.removeItem(checkoutDraftKey);
+        } else {
+          if (draft.serviceType === "delivery" || draft.serviceType === "pickup") {
+            setServiceType(draft.serviceType);
+          }
+          if (typeof draft.deliveryNotes === "string") {
+            setDeliveryNotes(draft.deliveryNotes.slice(0, 500));
+          }
+
+          const selection = draft.fulfillmentSelection;
+          if (selection?.timing === "asap") {
+            setFulfillmentSelection({ timing: "asap" });
+          } else if (
+            selection?.timing === "scheduled" &&
+            typeof selection.scheduledSlot?.startAt === "string" &&
+            typeof selection.scheduledSlot?.endAt === "string"
+          ) {
+            setFulfillmentSelection(selection as FulfillmentSelection);
+          }
+        }
+      }
+    } catch {
+      localStorage.removeItem(checkoutDraftKey);
+    } finally {
+      setHydratedDraftKey(checkoutDraftKey);
+    }
+  }, [checkoutDraftKey]);
+
+  useEffect(() => {
+    if (!checkoutDraftKey || hydratedDraftKey !== checkoutDraftKey) return;
+    const draft: CheckoutDraft = {
+      version: 1,
+      updatedAt: Date.now(),
+      serviceType,
+      deliveryNotes,
+      fulfillmentSelection,
+    };
+    try {
+      localStorage.setItem(checkoutDraftKey, JSON.stringify(draft));
+    } catch {
+      // El checkout sigue funcionando aunque el navegador bloquee almacenamiento local.
+    }
+  }, [checkoutDraftKey, deliveryNotes, fulfillmentSelection, hydratedDraftKey, serviceType]);
+
+  const clearCheckoutDraft = () => {
+    try {
+      if (checkoutDraftKey) localStorage.removeItem(checkoutDraftKey);
+    } catch {}
+  };
 
   useEffect(() => {
     if (serviceType !== 'pickup') return;
@@ -375,6 +587,8 @@ function BasketPage() {
     return <Loader />;
   }
 
+  if (isMandadoCheckout) return <MandadoCheckout draft={mandadoDraft} />;
+
   if (groupedItems.length === 0) {
     return (
       <div className="container mx-auto p-4 flex flex-col items-center justify-center min-h-[60vh] mt-20">
@@ -403,12 +617,9 @@ function BasketPage() {
 
   const handleCheckout = async (overridePhone?: string) => {
     if (!isSignedIn) return;
-    if (!legalAccepted) {
-      setCardError("Acepta los documentos legales vigentes para continuar.");
-      return;
-    }
-    if (selectedStore && !getStoreOperationalStateLegacy(selectedStore).effectiveIsOpen) {
-      setCardPhoneError("La tienda seleccionada esta cerrada temporalmente.");
+
+    if (!fulfillmentSelection) {
+      setCardPhoneError("Elige lo antes posible o un horario programado.");
       return;
     }
 
@@ -432,7 +643,7 @@ function BasketPage() {
 
     try {
       const subtotal = useBasketStore.getState().getTotalPrice();
-      const totalAmount = subtotal + (serviceType === 'delivery' ? (shippingCost ?? 0) : 0);
+      const totalAmount = calculateOrderTotal({ productsSubtotal: subtotal, shippingFee: serviceType === 'delivery' ? (shippingCost ?? 0) : 0, platformServiceFee });
       if (totalAmount < 10) {
         setCardError("El monto total mínimo para pagar con tarjeta es de $10.00 MXN. Por favor agrega más productos o selecciona un método de pago en efectivo.");
         setIsLoading(false);
@@ -448,7 +659,12 @@ function BasketPage() {
         phone: `52${digitsOnly.slice(-10)}`,
         whatsappConsent: "true",
         deliveryNotes: deliveryNotes.trim() || undefined,
-        legalAccepted,
+        legalAccepted: true,
+        fulfillmentTiming: fulfillmentSelection.timing,
+        scheduledSlot:
+          fulfillmentSelection.timing === "scheduled"
+            ? fulfillmentSelection.scheduledSlot
+            : undefined,
       };
 
       // Add delivery/pickup info if available
@@ -489,6 +705,9 @@ function BasketPage() {
 
       if (!response.ok) {
         console.error("Error en /api/checkout-session", data);
+        if (data?.code === "DELIVERY_SLOT_UNAVAILABLE") {
+          setFulfillmentSelection(null);
+        }
         const backendError = data?.details?.message || data?.error || "Error al crear la sesión de checkout";
         throw new Error(backendError);
       }
@@ -526,10 +745,6 @@ function BasketPage() {
       setCodError("Tu carrito está vacío");
       return;
     }
-    if (!legalAccepted) {
-      setCodError("Acepta los documentos legales vigentes para continuar.");
-      return;
-    }
 
     if (serviceType !== 'delivery') {
       setCodError("Este flujo solo aplica para entrega a domicilio");
@@ -541,8 +756,8 @@ function BasketPage() {
       return;
     }
 
-    if (!getStoreOperationalStateLegacy(selectedStore).effectiveIsOpen) {
-      setCodError("La tienda seleccionada esta cerrada temporalmente.");
+    if (!fulfillmentSelection) {
+      setCodError("Elige lo antes posible o un horario programado.");
       return;
     }
 
@@ -580,6 +795,8 @@ function BasketPage() {
         },
         quantity: item.quantity,
         customizations: item.customizations ?? {},
+        notes: item.notes,
+        allergies: item.allergies,
         customPrice: item.customPrice ?? item.product.price,
       }));
 
@@ -613,7 +830,12 @@ function BasketPage() {
             phone: resolvedCodPhone,
             shippingAddress: normalizedAddress,
             deliveryNotes: deliveryNotes.trim() || undefined,
-            legalAccepted,
+            legalAccepted: true,
+            fulfillmentTiming: fulfillmentSelection.timing,
+            scheduledSlot:
+              fulfillmentSelection.timing === "scheduled"
+                ? fulfillmentSelection.scheduledSlot
+                : undefined,
             storeInfo: {
               storeId: selectedStoreId,
               storeName: selectedStoreName,
@@ -630,11 +852,15 @@ function BasketPage() {
       const result = await response.json();
 
       if (!response.ok || !result.success) {
+        if (result.code === "DELIVERY_SLOT_UNAVAILABLE") {
+          setFulfillmentSelection(null);
+        }
         throw new Error(result.error || "No se pudo procesar la orden.");
       }
 
       // Persist phone to Clerk for cross-device use
       await savePhoneToClerk(resolvedCodPhone, true);
+      clearCheckoutDraft();
       clearBasket();
       window.location.href = `/success-cod?orderNumber=${orderNumber}`;
     } catch (error: any) {
@@ -661,10 +887,6 @@ function BasketPage() {
       setPickupError("Tu carrito está vacío");
       return;
     }
-    if (!legalAccepted) {
-      setPickupError("Acepta los documentos legales vigentes para continuar.");
-      return;
-    }
 
     if (serviceType !== 'pickup') {
       setPickupError("Este flujo solo aplica para retiro en local");
@@ -676,8 +898,8 @@ function BasketPage() {
       return;
     }
 
-    if (!getStoreOperationalStateLegacy(selectedStore).effectiveIsOpen) {
-      setPickupError("La sucursal seleccionada no esta disponible en este momento.");
+    if (!fulfillmentSelection) {
+      setPickupError("Elige lo antes posible o un horario programado.");
       return;
     }
 
@@ -704,6 +926,8 @@ function BasketPage() {
         },
         quantity: item.quantity,
         customizations: item.customizations ?? {},
+        notes: item.notes,
+        allergies: item.allergies,
         customPrice: item.customPrice ?? item.product.price,
       }));
 
@@ -728,20 +952,29 @@ function BasketPage() {
           storePhone: selectedStorePhone,
           estimatedDelivery,
           items: payloadItems,
-          total: useBasketStore.getState().getTotalPrice(),
+          total: calculateOrderTotal({ productsSubtotal: useBasketStore.getState().getTotalPrice(), platformServiceFee }),
           paymentMethod: "cash_on_pickup",
-          legalAccepted,
+          legalAccepted: true,
+          fulfillmentTiming: fulfillmentSelection.timing,
+          scheduledSlot:
+            fulfillmentSelection.timing === "scheduled"
+              ? fulfillmentSelection.scheduledSlot
+              : undefined,
         }),
       });
 
       const result = await response.json();
 
       if (!response.ok || !result.success) {
+        if (result.code === "DELIVERY_SLOT_UNAVAILABLE") {
+          setFulfillmentSelection(null);
+        }
         throw new Error(result.error || "No se pudo procesar la orden.");
       }
 
       // Persist phone to Clerk for cross-device use
       await savePhoneToClerk(resolvedPickupPhone, true);
+      clearCheckoutDraft();
       clearBasket();
       window.location.href = `/success-click-collect?orderNumber=${orderNumber}`;
     } catch (error: any) {
@@ -753,8 +986,140 @@ function BasketPage() {
   };
 
   const selectedStoreTiming = selectedStore ? getServiceTiming(selectedStore) : null;
-  const selectedStoreState = selectedStore ? getStoreOperationalStateLegacy(selectedStore) : null;
+  const selectedStoreSource = selectedStore?.store ?? selectedStore;
+  const selectedStoreState = selectedStore ? getStoreOperationalStateLegacy({
+    ...selectedStoreSource,
+    isOpen: storeServiceTypes?.isOpen ?? selectedStoreSource.isOpen,
+    manualOperationalStatus:
+      storeServiceTypes?.manualOperationalStatus ?? selectedStoreSource.manualOperationalStatus,
+    highDemandMode: storeServiceTypes?.highDemandMode ?? selectedStoreSource.highDemandMode,
+    operatingHours: storeServiceTypes?.operatingHours ?? selectedStoreSource.operatingHours,
+  }) : null;
   const isSelectedStoreClosed = Boolean(selectedStore && selectedStoreState && !selectedStoreState.effectiveIsOpen);
+  const deliveryConfigured = storeServiceTypes?.delivery === true;
+  const deliverySupported =
+    deliveryConfigured &&
+    storeServiceTypes.deliveryAvailability?.available !== false;
+  const pickupSupported = storeServiceTypes?.pickup === true;
+
+  // ── Cambiar dirección de entrega desde la tarjeta “Entrega en” ──
+  // Usa la libreta compartida (AddressSelector) y recalcula cobertura y tarifa
+  // con las mismas APIs que el resto del flujo (/api/delivery-pricing/quote y
+  // /api/nearest-store). La tienda se actualiza cuando corresponde.
+  const applySelectedAddress = async (selected: StoredCustomerAddress) => {
+    setAddressDialogOpen(false);
+    setChangingAddress(true);
+    setCardError("");
+    setCodError("");
+    setPickupError("");
+    try {
+      const hasCoords =
+        typeof selected.latitude === "number" &&
+        typeof selected.longitude === "number";
+      const point = hasCoords
+        ? { latitude: selected.latitude, longitude: selected.longitude }
+        : null;
+      const address = {
+        street: selected.street || selected.formattedAddress,
+        city: selected.city || "",
+        state: selected.state || "",
+        country: selected.country || "México",
+        postalCode: selected.postalCode || "",
+        latitude: point?.latitude,
+        longitude: point?.longitude,
+      };
+
+      setCustomerAddress(address);
+      if (user?.id) {
+        try {
+          localStorage.setItem(customerAddressStorageKey(user.id), JSON.stringify(selected));
+        } catch {}
+      }
+      window.dispatchEvent(new CustomEvent("customerAddressChanged", { detail: selected }));
+
+      if (!point) {
+        // Sin coordenadas: el usuario confirma el punto exacto en el mapa
+        // (mismo camino que una dirección nueva).
+        setSelectedStore(null);
+        setShippingCost(null);
+        setClientSecret(null);
+        setFulfillmentSelection(null);
+        return;
+      }
+
+      const [quoteResponse, storesResponse] = await Promise.all([
+        fetch("/api/delivery-pricing/quote", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            latitude: point.latitude,
+            longitude: point.longitude,
+            storeId: cartStoreId,
+            orderDate: new Date().toISOString(),
+          }),
+        }),
+        fetch("/api/nearest-store", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            latitude: point.latitude,
+            longitude: point.longitude,
+            filterStoreId: cartStoreId,
+          }),
+        }),
+      ]);
+
+      const quoteData = await quoteResponse.json();
+      const storeData = await storesResponse.json();
+      const quote = quoteData?.quote;
+      const store = storeData?.data?.stores?.[0];
+
+      if (!quote?.allowed || quote.finalPrice == null) {
+        setShippingCost(null);
+        setSelectedStore(null);
+        setClientSecret(null);
+        setFulfillmentSelection(null);
+        setCardError(
+          quote?.reason || "Esta ubicación está fuera de nuestras zonas de entrega."
+        );
+        return;
+      }
+
+      setShippingCost(quote.finalPrice);
+      if (store) {
+        setSelectedStore(store);
+        const timing = getServiceTiming(store);
+        try {
+          localStorage.setItem(
+            "clickCollectStore",
+            JSON.stringify({
+              deliveryMethod: "delivery",
+              storeId: store._id || store.storeId,
+              storeName: store.name,
+              storeAddress: `${store.address?.street}, ${store.address?.city}`,
+              storePhone: store.contact?.phone || store.phone || "",
+              estimatedDelivery: timing.label,
+              customerAddress: address,
+              shippingCost: quote.finalPrice,
+              distanceKm: store.distanceKm ?? undefined,
+              serviceTypes: store.serviceTypes,
+              isOpen: store.isOpen ?? true,
+              manualOperationalStatus: store.manualOperationalStatus ?? "auto",
+              highDemandMode:
+                store.highDemandMode ?? store.serviceTypes?.onDemand ?? false,
+            })
+          );
+        } catch {}
+        window.dispatchEvent(new Event("storeSelected"));
+      }
+      setClientSecret(null);
+      setFulfillmentSelection(null);
+    } catch {
+      setCardError("No pudimos actualizar la dirección. Intenta de nuevo.");
+    } finally {
+      setChangingAddress(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-50 pt-20 pb-8">
@@ -860,48 +1225,72 @@ function BasketPage() {
                       <span className="w-6 h-6 bg-[#eb1901] text-white rounded-full flex items-center justify-center text-sm">1</span>
                       Servicio
                     </h4>
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 rounded-full bg-gray-100 p-1">
                       <button
+                        type="button"
+                        disabled={!deliverySupported}
                         onClick={() => {
                           setServiceType('delivery');
                           setShippingCost(null);
                           setSelectedStore(null);
                           setCustomerAddress(null);
                           setClientSecret(null);
+                          setFulfillmentSelection(null);
                           setShowCardPhoneForm(false);
                         }}
-                        className={`p-3 rounded-lg border-2 transition-all ${
+                        className={`flex items-center justify-center gap-2 rounded-full border py-2.5 transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
                           serviceType === 'delivery'
-                            ? 'border-rose-600 bg-rose-50'
-                            : 'border-gray-200 hover:border-gray-300'
+                            ? 'border-gray-200 bg-white shadow-sm'
+                            : 'border-transparent text-gray-500 hover:text-gray-800'
                         }`}
                       >
-                        <Truck className={`w-6 h-6 mx-auto mb-1 ${serviceType === 'delivery' ? 'text-rose-600' : 'text-gray-400'}`} />
+                        <Truck className={`w-5 h-5 ${serviceType === 'delivery' ? 'text-[#eb1901]' : 'text-gray-400'}`} />
                         <span className={`text-sm font-medium ${serviceType === 'delivery' ? 'text-rose-600' : 'text-gray-600'}`}>
                           A Domicilio
                         </span>
                       </button>
                       <button
+                        type="button"
+                        disabled={!pickupSupported}
                         onClick={() => {
                           setServiceType('pickup');
                           setShippingCost(0);
                           setSelectedStore(null);
-                          setCustomerAddress(null);
+                          setCustomerAddress(
+                            user?.id
+                              ? parseCustomerAddress(localStorage.getItem(customerAddressStorageKey(user.id)))
+                              : null
+                          );
                           setClientSecret(null);
+                          setFulfillmentSelection(null);
                           setShowCardPhoneForm(false);
                         }}
-                        className={`p-3 rounded-lg border-2 transition-all ${
+                        className={`flex items-center justify-center gap-2 rounded-full border py-2.5 transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
                           serviceType === 'pickup'
-                            ? 'border-rose-600 bg-rose-50'
-                            : 'border-gray-200 hover:border-gray-300'
+                            ? 'border-gray-200 bg-white shadow-sm'
+                            : 'border-transparent text-gray-500 hover:text-gray-800'
                         }`}
                       >
-                        <Store className={`w-6 h-6 mx-auto mb-1 ${serviceType === 'pickup' ? 'text-rose-600' : 'text-gray-400'}`} />
+                        <Store className={`w-5 h-5 ${serviceType === 'pickup' ? 'text-[#eb1901]' : 'text-gray-400'}`} />
                         <span className={`text-sm font-medium ${serviceType === 'pickup' ? 'text-rose-600' : 'text-gray-600'}`}>
                           Retiro en local
                         </span>
                       </button>
                     </div>
+                    {deliveryConfigured && !deliverySupported ? (
+                      <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                        No hay repartidores de El Menú disponibles en este momento.
+                        Puedes elegir retiro en el local o intentarlo más tarde.
+                      </p>
+                    ) : storeServiceTypes && (!deliveryConfigured || !pickupSupported) ? (
+                      <p className="mt-2 text-xs text-gray-500">
+                        {deliveryConfigured
+                          ? "Esta tienda solo ofrece entrega a domicilio."
+                          : pickupSupported
+                            ? "Esta tienda solo ofrece retiro en local."
+                            : "Esta tienda no tiene modalidades de servicio activas."}
+                      </p>
+                    ) : null}
                   </div>
 
                   {/* Paso 2: Información de entrega (solo para delivery) */}
@@ -911,9 +1300,41 @@ function BasketPage() {
                         <span className="w-6 h-6 bg-[#eb1901] text-white rounded-full flex items-center justify-center text-sm">2</span>
                         Ubicación o Dirección 
                       </h4>
+
+                      {/* Entrega en: dirección guardada destacada + cambiar dirección */}
+                      {user && customerAddress && (
+                        <div className="rounded-xl border border-rose-200 bg-white p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <MapPin className="h-5 w-5 shrink-0 text-[#eb1901]" />
+                              <div className="min-w-0">
+                                <p className="text-xs font-semibold text-gray-500">Entrega en</p>
+                                <p className="truncate text-sm font-bold text-gray-900">
+                                  {customerAddress.street || customerAddress.formattedAddress || "Dirección"}
+                                </p>
+                                {customerAddress.city && (
+                                  <p className="truncate text-xs text-gray-500">
+                                    {[customerAddress.city, customerAddress.state].filter(Boolean).join(", ")}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setAddressDialogOpen(true)}
+                              className="shrink-0 rounded-full border border-rose-200 px-3 py-1.5 text-xs font-semibold text-[#eb1901] transition hover:bg-rose-50"
+                            >
+                              {changingAddress ? "Actualizando…" : "Cambiar dirección"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
                       <div className="border-2 border-rose-200 rounded-lg bg-white p-4 md:p-6">
                         <ModernDeliveryFlow
+                          userId={user!.id}
                           onComplete={(data) => {
+                            setAddressDialogOpen(false);
                             
                             setCustomerAddress(data.customerAddress);
                             setSelectedStore(data.selectedStore);
@@ -1003,132 +1424,33 @@ function BasketPage() {
                         <span className="w-6 h-6 bg-[#eb1902] text-white rounded-full flex items-center justify-center text-sm">{serviceType === 'pickup' ? '2' : '3'}</span>
                         {serviceType === 'pickup' ? 'Confirma tu retiro' : 'Método de pago'}
                       </h4>
-                      
-                      {/* Resumen de entrega para delivery */}
-                      {serviceType === 'delivery' && customerAddress && (
-                        <div className="mb-4 p-4 border border-rose-200 rounded-lg">
-                          <div className="flex items-start gap-2">
-                            <CheckCircle className="w-5 h-5 text-[#70E000] flex-shrink-0 mt-0.5" />
-                            <div className="flex-1">
-                              <p className="text-sm font-semibold text-[#000]">Todo listo</p>
-                              <p className="text-sm mt-1">
-                                {customerAddress.street}, {customerAddress.city}
-                              </p>
-                              <p className="text-sm text-gray-600 mt-1">
-                                Tiempo estimado: {selectedStoreTiming?.label}
-                              </p>
-                              {selectedStoreState?.highDemandMode && (
-                                <p className="text-sm text-amber-700 font-medium mt-1">
-                                  Alta Demanda activa: el restaurante tiene alta demanda y tu pedido puede tardar un poco mas.
-                                </p>
-                              )}
-                              {isSelectedStoreClosed && (
-                                <p className="text-sm text-red-700 font-semibold mt-2">
-                                  Tienda cerrada: esta sucursal no esta aceptando pedidos nuevos en este momento.
-                                </p>
-                              )}
-                              <br/>
-                              <span className="text-sm font-semibold  mt-1">Subtotal ({groupedItems.reduce((total, item) => total + item.quantity, 0)} {groupedItems.reduce((total, item) => total + item.quantity, 0) === 1 ? 'producto' : 'productos'})</span>
-                              <span className="text-sm font-semibold  mt-1"> ${useBasketStore.getState().getTotalPrice().toFixed(2)}</span>
-                              {shippingCost !== null && (
-                                <p className="text-sm font-semibold  mt-1">
-                                  Costo de envío: ${shippingCost} MXN
-                                </p>
-                              )}
-                             <br />
-                              <div className="flex items-baseline justify-between pt-3 border-t-2 border-rose-200">
-                                <span className="text-sm font-semibold text-gray-700">Total:</span>
-                                <span className="text-2xl font-bold text-[#000]">
-                                  ${(useBasketStore.getState().getTotalPrice() + (shippingCost ?? 0)).toFixed(2).split('.')[0]}
-                                  <span className="text-sm">.{(useBasketStore.getState().getTotalPrice() + (shippingCost ?? 0)).toFixed(2).split('.')[1]}</span>
-                                </span>
-                              </div>
 
-                            </div>
-                          </div>
-                        </div>
-                      )}
+                      <FulfillmentTimingPicker
+                        storeId={
+                          selectedStore.store?._id ||
+                          selectedStore._id ||
+                          selectedStore.storeId
+                        }
+                        type={serviceType}
+                        address={normalizedCustomerAddress}
+                        value={fulfillmentSelection}
+                        onChange={(selection) => {
+                          setFulfillmentSelection(selection);
+                          setClientSecret(null);
+                          setCardError("");
+                          setCodError("");
+                          setPickupError("");
+                        }}
+                      />
 
-                      {serviceType === 'pickup' && (
-                        <div className="mb-4 p-4 border border-rose-200 rounded-lg bg-white">
-                          <div className="flex items-start gap-2">
-                            <CheckCircle className="w-5 h-5 text-[#70E000] flex-shrink-0 mt-0.5" />
-                            <div className="flex-1">
-                              <p className="text-sm font-semibold text-[#000]">Todo listo para recoger</p>
-                              <p className="text-sm mt-1">{cleanDisplayText(selectedStore.summary?.storeName || selectedStore.storeName, 'Sucursal asignada')}</p>
-                              <p className="text-sm text-gray-600 mt-1 flex items-start gap-2">
-                                <MapPin className="w-4 h-4 flex-shrink-0 mt-0.5 text-[#eb1902]" />
-                                <span>{cleanDisplayText(selectedStore.summary?.address || selectedStore.storeAddress, 'Direccion no disponible')}</span>
-                              </p>
-                              <p className="text-sm text-gray-600 mt-1">
-                                Telefono: {cleanDisplayText(selectedStore.summary?.phone || selectedStore.storePhone, 'No disponible')}
-                              </p>
-                              <p className="text-sm text-gray-600 mt-1">
-                                Estara listo aproximadamente en {selectedStoreTiming?.label}.
-                              </p>
-                              {selectedStoreState?.highDemandMode && (
-                                <p className="text-sm text-amber-700 font-medium mt-1">
-                                  Alta Demanda activa: el restaurante tiene alta demanda y puede tardar un poco mas.
-                                </p>
-                              )}
-                              {isSelectedStoreClosed && (
-                                <p className="text-sm text-red-700 font-semibold mt-2">
-                                  Tienda cerrada: esta sucursal no esta disponible para retiro en este momento.
-                                </p>
-                              )}
-                              <p className="text-sm text-gray-600 mt-1">
-                                {clientSecret 
-                                  ? "Pagarás en línea de forma segura con tu tarjeta."
-                                  : "Puedes pagar en línea con tarjeta o al recoger en sucursal."
-                                }
-                              </p>
-                              <div className="flex items-baseline justify-between pt-3 border-t-2 border-rose-200 mt-3">
-                                <span className="text-sm font-semibold text-gray-700">Total:</span>
-                                <span className="text-2xl font-bold text-[#000]">
-                                  ${useBasketStore.getState().getTotalPrice().toFixed(2).split('.')[0]}
-                                  <span className="text-sm">.{useBasketStore.getState().getTotalPrice().toFixed(2).split('.')[1]}</span>
-                                </span>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
+                      <FulfillmentMap
+                        type={serviceType}
+                        customerAddress={normalizedCustomerAddress}
+                        store={selectedStore}
+                      />
 
-                      {serviceType === 'delivery' && !clientSecret && (
-                        <label className="block rounded-xl border border-gray-200 bg-white p-4">
-                          <span className="block text-sm font-semibold text-gray-900">Instrucciones para la entrega (opcional)</span>
-                          <span className="mt-1 block text-xs text-gray-500">Privada, condominio, edificio, acceso, referencias o indicaciones para encontrarte.</span>
-                          <textarea
-                            value={deliveryNotes}
-                            onChange={(event) => setDeliveryNotes(event.target.value.slice(0, 500))}
-                            maxLength={500}
-                            rows={3}
-                            placeholder="Ej. Privada Los Olivos, casa 12. Marcar al llegar; caseta por la entrada norte."
-                            className="mt-3 w-full resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none focus:border-[#eb1902] focus:ring-2 focus:ring-[#eb1902]/20"
-                          />
-                        </label>
-                      )}
-
-                      {!clientSecret && (
-                        <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-700">
-                          <input
-                            type="checkbox"
-                            checked={legalAccepted}
-                            onChange={(event) => setLegalAccepted(event.target.checked)}
-                            className="mt-0.5 h-4 w-4 accent-[#eb1902]"
-                          />
-                          <span>
-                            Confirmo que revisé y acepto los <Link className="underline" href="/legal/terminos-clientes" target="_blank">Términos</Link>, el <Link className="underline" href="/legal/privacidad" target="_blank">Aviso de Privacidad</Link> y la <Link className="underline" href="/legal/cancelaciones-reembolsos" target="_blank">Política de Cancelaciones</Link>.
-                          </span>
-                        </label>
-                      )}
-                       
-                      {isSelectedStoreClosed ? (
-                        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-                          <span className="font-semibold block mb-1">Tienda no disponible</span>
-                          La tienda seleccionada esta cerrada temporalmente. Cambia de servicio o espera a que vuelva a abrir para continuar.
-                        </div>
-                      ) : clientSecret ? (
+                      {/* Contenedor principal de Stripe Embedded Checkout o del selector segmentado */}
+                      {clientSecret ? (
                         <div className="space-y-3">
                           <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-sm text-rose-800">
                             <span className="font-semibold block mb-1">Pago seguro con tarjeta:</span>
@@ -1149,353 +1471,454 @@ function BasketPage() {
                           </button>
                         </div>
                       ) : (
-                        <div className="space-y-3">
+                        <div className="space-y-4">
+                          {/* ── SELECTOR SEGMENTADO (Tarjeta / Efectivo) ── */}
+                          <div className="mt-4">
+                            <SegmentedTabs
+                              value={method}
+                              onChange={(next) => {
+                                setMethod(next);
+                                setCardError("");
+                                setCodError("");
+                                setPickupError("");
+                              }}
+                              options={PAYMENT_METHODS}
+                              layoutId="basket-payment-pill"
+                            />
+                          </div>
 
-                          {/* ── TARJETA ── */}
-                          {hasPhoneAndConsent && !editingPhone ? (
-                            /* Usuario ya tiene teléfono guardado: mostrar pastilla y proceder directo */
-                            <div className="space-y-2">
-                              <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
-                                <div className="flex items-center gap-3">
-                                  <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-lg">
-                                    📱
-                                  </div>
-                                  <div>
-                                    <p className="text-xs font-medium text-emerald-700">WhatsApp confirmado</p>
-                                    <p className="text-sm font-bold text-emerald-900 tracking-wide">
-                                      +52 {clerkPhone.slice(0, 3)} {clerkPhone.slice(3, 6)} {clerkPhone.slice(6)}
-                                    </p>
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setEditingPhone(true);
-                                    setCardPhone(clerkPhone);
-                                    setCardWhatsappConsent(false);
-                                    setCardPhoneError("");
-                                  }}
-                                  className="text-xs font-semibold text-emerald-600 hover:text-emerald-800 underline underline-offset-2 transition-colors"
-                                >
-                                  Cambiar
-                                </button>
-                              </div>
-                              {cardPhoneError && (
-                                <p className="text-xs text-[#eb1902] font-medium">{cardPhoneError}</p>
-                              )}
-                              <button
-                                onClick={() => handleCheckout(clerkPhone)}
-                                disabled={isLoading}
-                                className="w-full bg-[#eb1902] text-white px-4 py-3.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
-                              >
-                                <CreditCard className="w-5 h-5" />
-                                {isLoading ? "Procesando..." : "Pagar con tarjeta"}
-                              </button>
-                            </div>
-                          ) : showCardPhoneForm || editingPhone ? (
-                            /* Formulario de captura/edición de teléfono */
-                            <div className="space-y-3 rounded-xl border-2 border-[#eb1902] bg-white p-4 shadow-sm">
-                              <div className="flex items-center gap-2">
-                                <p className="text-sm font-semibold text-gray-800">
-                                  {editingPhone ? "Actualiza tu número de WhatsApp" : "Número para notificaciones de WhatsApp"}
-                                </p>
-                              </div>
+                          {/* ── DESCRIPCIÓN CONTEXTUAL ── */}
+                          <p className="text-xs text-gray-500">
+                            {method === "card"
+                              ? "Paga de forma segura con tarjeta."
+                              : method === "cash"
+                                ? serviceType === 'delivery' ? "Paga en efectivo al recibir tu pedido." : "Paga en efectivo al recoger tu pedido."
+                                : "Elige cómo quieres pagar."}
+                          </p>
 
-                              <div className="flex items-center gap-2 rounded-lg border-2 border-gray-200 bg-gray-50 px-3 py-2.5 focus-within:border-[#eb1902] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#eb1902]/20 transition-all">
-                                <span className="text-sm font-semibold text-gray-600 whitespace-nowrap select-none">🇲🇽 +52</span>
-                                <div className="w-px h-4 bg-gray-300 mx-1" />
-                                <input
-                                  type="tel"
-                                  inputMode="numeric"
-                                  autoComplete="tel-national"
-                                  maxLength={10}
-                                  placeholder="1234567890"
-                                  value={cardPhone}
-                                  onChange={(e) => {
-                                    setCardPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
-                                    if (cardPhoneError) setCardPhoneError("");
-                                  }}
-                                  disabled={isLoading}
-                                  className="flex-1 bg-transparent text-sm font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:opacity-50"
-                                />
-                                {cardPhone.replace(/\D/g, "").length > 0 && (
+                          {/* ── DETALLES CONTEXTUALES Y FORMULARIOS DE TELÉFONO ── */}
+                          {method === "card" && (
+                            <div className="mt-2">
+                              {hasPhoneAndConsent && !editingPhone ? (
+                                <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                                  <div className="flex items-center gap-3">
+                                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-lg">
+                                      📱
+                                    </div>
+                                    <div>
+                                      <p className="text-xs font-medium text-emerald-700">WhatsApp confirmado</p>
+                                      <p className="text-sm font-bold text-emerald-900 tracking-wide">
+                                        +52 {clerkPhone.slice(0, 3)} {clerkPhone.slice(3, 6)} {clerkPhone.slice(6)}
+                                      </p>
+                                    </div>
+                                  </div>
                                   <button
                                     type="button"
-                                    onClick={() => { setCardPhone(""); setCardPhoneError(""); }}
-                                    className="ml-1 text-gray-400 hover:text-gray-600 transition-colors"
-                                    aria-label="Limpiar"
+                                    onClick={() => {
+                                      setEditingPhone(true);
+                                      setCardPhone(clerkPhone);
+                                      setCardWhatsappConsent(false);
+                                      setCardPhoneError("");
+                                    }}
+                                    className="text-xs font-semibold text-emerald-600 hover:text-emerald-800 underline underline-offset-2 transition-colors"
                                   >
-                                    <X className="w-4 h-4" />
+                                    Cambiar
                                   </button>
-                                )}
-                              </div>
+                                </div>
+                              ) : (
+                                <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                                  <p className="text-sm font-semibold text-gray-800">
+                                    {editingPhone ? "Actualiza tu número de WhatsApp" : "Número para notificaciones de WhatsApp"}
+                                  </p>
 
-                              <label className="flex items-start gap-2.5 cursor-pointer group">
-                                <input
-                                  type="checkbox"
-                                  checked={cardWhatsappConsent}
-                                  onChange={(e) => {
-                                    setCardWhatsappConsent(e.target.checked);
-                                    if (cardPhoneError) setCardPhoneError("");
-                                  }}
-                                  className="mt-0.5 h-4 w-4 accent-[#eb1902] cursor-pointer"
-                                />
-                                <span className="text-xs text-gray-600 leading-relaxed group-hover:text-gray-800 transition-colors">
-                                  Acepto recibir notificaciones de mi pedido por WhatsApp al número indicado
-                                </span>
-                              </label>
+                                  <div className="flex items-center gap-2 rounded-lg border-2 border-gray-200 bg-gray-50 px-3 py-2.5 focus-within:border-[#eb1902] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#eb1902]/20 transition-all">
+                                    <span className="text-sm font-semibold text-gray-600 whitespace-nowrap select-none">🇲🇽 +52</span>
+                                    <div className="w-px h-4 bg-gray-300 mx-1" />
+                                    <input
+                                      type="tel"
+                                      inputMode="numeric"
+                                      autoComplete="tel-national"
+                                      maxLength={10}
+                                      placeholder="1234567890"
+                                      value={cardPhone}
+                                      onChange={(e) => {
+                                        setCardPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
+                                        if (cardPhoneError) setCardPhoneError("");
+                                      }}
+                                      disabled={isLoading}
+                                      className="flex-1 bg-transparent text-sm font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:opacity-50"
+                                    />
+                                    {cardPhone.replace(/\D/g, "").length > 0 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => { setCardPhone(""); setCardPhoneError(""); }}
+                                        className="ml-1 text-gray-400 hover:text-gray-600 transition-colors"
+                                        aria-label="Limpiar"
+                                      >
+                                        <X className="w-4 h-4" />
+                                      </button>
+                                    )}
+                                  </div>
 
-                              {cardPhoneError && (
-                                <div className="flex items-center gap-1.5 text-xs text-[#eb1902] font-medium">
-                                  <span>⚠</span> {cardPhoneError}
+                                  <label className="flex items-start gap-2.5 cursor-pointer group">
+                                    <input
+                                      type="checkbox"
+                                      checked={cardWhatsappConsent}
+                                      onChange={(e) => {
+                                        setCardWhatsappConsent(e.target.checked);
+                                        if (cardPhoneError) setCardPhoneError("");
+                                      }}
+                                      className="mt-0.5 h-4 w-4 accent-[#eb1902] cursor-pointer"
+                                    />
+                                    <span className="text-xs text-gray-600 leading-relaxed group-hover:text-gray-800 transition-colors">
+                                      Acepto recibir notificaciones de mi pedido por WhatsApp al número indicado
+                                    </span>
+                                  </label>
+
+                                  {editingPhone && (
+                                    <button
+                                      type="button"
+                                      onClick={() => { setEditingPhone(false); setCardPhoneError(""); }}
+                                      disabled={isLoading}
+                                      className="w-full border border-gray-200 text-gray-600 py-2 rounded-lg hover:bg-gray-50 transition-colors font-medium text-xs mt-1"
+                                    >
+                                      Cancelar edición
+                                    </button>
+                                  )}
                                 </div>
                               )}
-
-                              <div className="flex gap-2 pt-1">
-                                {editingPhone && (
-                                  <button
-                                    type="button"
-                                    onClick={() => { setEditingPhone(false); setCardPhoneError(""); }}
-                                    disabled={isLoading}
-                                    className="flex-1 border-2 border-gray-200 text-gray-600 px-4 py-2.5 rounded-xl hover:border-gray-300 hover:text-gray-800 transition-colors font-medium text-sm"
-                                  >
-                                    Cancelar
-                                  </button>
-                                )}
-                                <button
-                                  onClick={() => handleCheckout()}
-                                  disabled={isLoading}
-                                  className="flex-1 bg-[#eb1902] text-white px-4 py-2.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-colors font-semibold text-sm shadow-sm"
-                                >
-                                  <CreditCard className="w-4 h-4" />
-                                  {isLoading ? "Procesando..." : "Continuar al pago"}
-                                </button>
-                              </div>
                             </div>
-                          ) : (
-                            /* Botón inicial para pagar con tarjeta */
-                            <button
-                              onClick={handleCardPhoneStart}
-                              disabled={isLoading}
-                              className="w-full bg-[#eb1902] text-white px-4 py-3.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
-                            >
-                              <CreditCard className="w-5 h-5" />
-                              {isLoading ? "Procesando..." : "Pagar con tarjeta"}
-                            </button>
                           )}
 
-                          {cardError && (
-                            <div className="flex items-start gap-2 text-sm text-[#eb1902] font-medium bg-rose-50 border border-rose-200 rounded-xl p-3">
+                          {method === "cash" && (
+                            <div className="mt-2">
+                              {serviceType === 'delivery' ? (
+                                <>
+                                  {hasPhoneAndConsent && !showCodPhoneForm ? (
+                                    <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5">
+                                      <div className="flex items-center gap-2 text-xs text-gray-600">
+                                        📱 <span className="font-medium">+52 {clerkPhone.slice(0, 3)} {clerkPhone.slice(3, 6)} {clerkPhone.slice(6)}</span>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setCodError("");
+                                          setCashOnDeliveryPhone(clerkPhone);
+                                          setShowCodPhoneForm(true);
+                                        }}
+                                        className="text-xs font-semibold text-gray-500 hover:text-gray-800 underline underline-offset-2 transition-colors"
+                                      >
+                                        Cambiar
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                                      <p className="text-sm font-semibold text-gray-800">📱 Teléfono de contacto</p>
+                                      <div className="flex items-center gap-2 rounded-lg border-2 border-gray-200 bg-gray-50 px-3 py-2.5 focus-within:border-[#eb1902] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#eb1902]/20 transition-all">
+                                        <span className="text-sm font-semibold text-gray-600 whitespace-nowrap select-none">🇲🇽 +52</span>
+                                        <div className="w-px h-4 bg-gray-300 mx-1" />
+                                        <input
+                                          type="tel"
+                                          inputMode="numeric"
+                                          autoComplete="tel-national"
+                                          maxLength={10}
+                                          placeholder="4421234567"
+                                          value={cashOnDeliveryPhone}
+                                          onChange={(e) => {
+                                            setCashOnDeliveryPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
+                                            if (codError) setCodError("");
+                                          }}
+                                          disabled={isLoading}
+                                          className="flex-1 bg-transparent text-sm font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:opacity-50"
+                                        />
+                                      </div>
+                                      {showCodPhoneForm && hasPhoneAndConsent && (
+                                        <button
+                                          type="button"
+                                          onClick={() => { setShowCodPhoneForm(false); setCodError(""); }}
+                                          disabled={isLoading}
+                                          className="w-full border border-gray-200 text-gray-600 py-2 rounded-lg hover:bg-gray-50 transition-colors font-medium text-xs mt-1"
+                                        >
+                                          Cancelar
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </>
+                              ) : (
+                                <>
+                                  {hasPhoneAndConsent && !showPickupPhoneForm ? (
+                                    <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5">
+                                      <div className="flex items-center gap-2 text-xs text-gray-600">
+                                        📱 <span className="font-medium">+52 {clerkPhone.slice(0, 3)} {clerkPhone.slice(3, 6)} {clerkPhone.slice(6)}</span>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setPickupError("");
+                                          setPickupPhone(clerkPhone);
+                                          setShowPickupPhoneForm(true);
+                                        }}
+                                        className="text-xs font-semibold text-gray-500 hover:text-gray-800 underline underline-offset-2 transition-colors"
+                                      >
+                                        Cambiar
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                                      <p className="text-sm font-semibold text-gray-800">📱 Teléfono de contacto</p>
+                                      <div className="flex items-center gap-2 rounded-lg border-2 border-gray-200 bg-gray-50 px-3 py-2.5 focus-within:border-green-600 focus-within:bg-white focus-within:ring-2 focus-within:ring-green-600/20 transition-all">
+                                        <span className="text-sm font-semibold text-gray-600 whitespace-nowrap select-none">🇲🇽 +52</span>
+                                        <div className="w-px h-4 bg-gray-300 mx-1" />
+                                        <input
+                                          type="tel"
+                                          inputMode="numeric"
+                                          autoComplete="tel-national"
+                                          maxLength={10}
+                                          placeholder="4421234567"
+                                          value={pickupPhone}
+                                          onChange={(e) => {
+                                            setPickupPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
+                                            if (pickupError) setPickupError("");
+                                          }}
+                                          disabled={isLoading}
+                                          className="flex-1 bg-transparent text-sm font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:opacity-50"
+                                        />
+                                      </div>
+                                      {showPickupPhoneForm && hasPhoneAndConsent && (
+                                        <button
+                                          type="button"
+                                          onClick={() => { setShowPickupPhoneForm(false); setPickupError(""); }}
+                                          disabled={isLoading}
+                                          className="w-full border border-gray-200 text-gray-600 py-2 rounded-lg hover:bg-gray-50 transition-colors font-medium text-xs mt-1"
+                                        >
+                                          Cancelar
+                                        </button>
+                                      )}
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Instrucciones de entrega (solo para delivery) y aceptación de términos legales */}
+                          {serviceType === 'delivery' && method && (
+                            <label className="block rounded-xl border border-gray-200 bg-white p-4 mt-2">
+                              <span className="block text-sm font-semibold text-gray-900">Instrucciones para la entrega (opcional)</span>
+                              <span className="mt-1 block text-xs text-gray-500">Privada, condominio, edificio, acceso, referencias o indicaciones para encontrarte.</span>
+                              <textarea
+                                value={deliveryNotes}
+                                onChange={(event) => setDeliveryNotes(event.target.value.slice(0, 500))}
+                                maxLength={500}
+                                rows={3}
+                                placeholder="Ej. Privada Los Olivos, casa 12. Marcar al llegar; caseta por la entrada norte."
+                                className="mt-3 w-full resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none focus:border-[#eb1902] focus:ring-2 focus:ring-[#eb1902]/20"
+                              />
+                            </label>
+                          )}
+
+
+
+                          {/* ── RESUMEN DE COMPRA ── */}
+                          <div className="mt-2">
+                            {serviceType === 'delivery' && customerAddress && (
+                              <div className="p-4 border border-rose-200 rounded-lg bg-white">
+                                <div className="flex items-start gap-2">
+                                  <CheckCircle className="w-5 h-5 text-[#70E000] flex-shrink-0 mt-0.5" />
+                                  <div className="flex-1">
+                                    <p className="text-sm font-semibold text-[#000]">Todo listo</p>
+                                    {/* Entrega en: dirección destacada con cambio rápido */}
+                                    <div className="mt-2 rounded-lg border border-rose-100 bg-rose-50/50 p-3">
+                                      <div className="flex items-center justify-between gap-3">
+                                        <div className="min-w-0">
+                                          <p className="text-[11px] font-bold uppercase tracking-wide text-rose-700 font-semibold">
+                                            Entrega en
+                                          </p>
+                                          <p className="truncate text-sm font-bold text-gray-900">
+                                            {customerAddress.street || customerAddress.formattedAddress || "Dirección"}
+                                          </p>
+                                          {customerAddress.city && (
+                                            <p className="truncate text-xs text-gray-500">
+                                              {[customerAddress.city, customerAddress.state].filter(Boolean).join(", ")}
+                                            </p>
+                                          )}
+                                        </div>
+                                        {user && (
+                                          <button
+                                            type="button"
+                                            onClick={() => setAddressDialogOpen(true)}
+                                            className="shrink-0 rounded-full border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-[#eb1901] transition hover:bg-rose-50"
+                                          >
+                                            {changingAddress ? "Actualizando…" : "Cambiar dirección"}
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <p className="text-sm mt-2">
+                                      {customerAddress.street}, {customerAddress.city}
+                                    </p>
+                                    <p className="text-sm text-gray-600 mt-1">
+                                      Tiempo estimado: {selectedStoreTiming?.label}
+                                    </p>
+                                    {selectedStoreState?.highDemandMode && (
+                                      <p className="text-sm text-amber-700 font-medium mt-1">
+                                        Alta Demanda activa: el restaurante tiene alta demanda y tu pedido puede tardar un poco mas.
+                                      </p>
+                                    )}
+                                    {isSelectedStoreClosed && (
+                                      <p className="text-sm text-red-700 font-semibold mt-2">
+                                        Tienda cerrada: esta sucursal no esta aceptando pedidos nuevos en este momento.
+                                      </p>
+                                    )}
+                                    <br/>
+                                    <div className="flex items-center justify-between mt-1 text-sm font-semibold">
+                                      <span>Subtotal ({groupedItems.reduce((total, item) => total + item.quantity, 0)} {groupedItems.reduce((total, item) => total + item.quantity, 0) === 1 ? 'producto' : 'productos'})</span>
+                                      <span>${useBasketStore.getState().getTotalPrice().toFixed(2)}</span>
+                                    </div>
+                                    {shippingCost !== null && (
+                                      <div className="flex items-center justify-between mt-1 text-sm font-semibold">
+                                        <span>Costo de envío</span>
+                                        <span>${shippingCost} MXN</span>
+                                      </div>
+                                    )}
+                                    <div className="flex items-center justify-between mt-1 text-sm font-semibold">
+                                      <span>Tarifa de servicio</span>
+                                      <span>${platformServiceFee.toFixed(2)} MXN</span>
+                                    </div>
+                                    <div className="flex items-baseline justify-between pt-3 border-t-2 border-rose-200 mt-3">
+                                      <span className="text-sm font-semibold text-gray-700">Total:</span>
+                                      <span className="text-2xl font-bold text-[#000]">
+                                        ${calculateOrderTotal({ productsSubtotal: useBasketStore.getState().getTotalPrice(), shippingFee: shippingCost ?? 0, platformServiceFee }).toFixed(2).split('.')[0]}
+                                        <span className="text-sm">.{calculateOrderTotal({ productsSubtotal: useBasketStore.getState().getTotalPrice(), shippingFee: shippingCost ?? 0, platformServiceFee }).toFixed(2).split('.')[1]}</span>
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {serviceType === 'pickup' && (
+                              <div className="p-4 border border-rose-200 rounded-lg bg-white">
+                                <div className="flex items-start gap-2">
+                                  <CheckCircle className="w-5 h-5 text-[#70E000] flex-shrink-0 mt-0.5" />
+                                  <div className="flex-1">
+                                    <p className="text-sm font-semibold text-[#000]">Todo listo para recoger</p>
+                                    <p className="text-sm mt-1">{cleanDisplayText(selectedStore.summary?.storeName || selectedStore.storeName, 'Sucursal asignada')}</p>
+                                    <p className="text-sm text-gray-600 mt-1 flex items-start gap-2">
+                                      <MapPin className="w-4 h-4 flex-shrink-0 mt-0.5 text-[#eb1902]" />
+                                      <span>{cleanDisplayText(selectedStore.summary?.address || selectedStore.storeAddress, 'Direccion no disponible')}</span>
+                                    </p>
+                                    <p className="text-sm text-gray-600 mt-1">
+                                      Telefono: {cleanDisplayText(selectedStore.summary?.phone || selectedStore.storePhone, 'No disponible')}
+                                    </p>
+                                    <p className="text-sm text-gray-600 mt-1">
+                                      Estara listo aproximadamente en {selectedStoreTiming?.label}.
+                                    </p>
+                                    {selectedStoreState?.highDemandMode && (
+                                      <p className="text-sm text-amber-700 font-medium mt-1">
+                                        Alta Demanda activa: el restaurante tiene alta demanda y puede tardar un poco mas.
+                                      </p>
+                                    )}
+                                    {isSelectedStoreClosed && (
+                                      <p className="text-sm text-red-700 font-semibold mt-2">
+                                        Tienda cerrada: esta sucursal no esta disponible para retiro en este momento.
+                                      </p>
+                                    )}
+                                    <br/>
+                                    <div className="flex items-center justify-between mt-1 text-sm font-semibold">
+                                      <span>Subtotal ({groupedItems.reduce((total, item) => total + item.quantity, 0)} {groupedItems.reduce((total, item) => total + item.quantity, 0) === 1 ? 'producto' : 'productos'})</span>
+                                      <span>${useBasketStore.getState().getTotalPrice().toFixed(2)}</span>
+                                    </div>
+                                    <div className="flex items-center justify-between mt-1 text-sm font-semibold">
+                                      <span>Tarifa de servicio</span>
+                                      <span>${platformServiceFee.toFixed(2)} MXN</span>
+                                    </div>
+                                    <div className="flex items-baseline justify-between pt-3 border-t-2 border-rose-200 mt-3">
+                                      <span className="text-sm font-semibold text-gray-700">Total:</span>
+                                      <span className="text-2xl font-bold text-[#000]">
+                                        ${calculateOrderTotal({ productsSubtotal: useBasketStore.getState().getTotalPrice(), platformServiceFee }).toFixed(2).split('.')[0]}
+                                        <span className="text-sm">.{calculateOrderTotal({ productsSubtotal: useBasketStore.getState().getTotalPrice(), platformServiceFee }).toFixed(2).split('.')[1]}</span>
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* ── ERRORES DE VALIDACIÓN ── */}
+                          {method === "card" && cardPhoneError && (
+                            <p className="text-xs text-[#eb1902] font-medium mt-2">⚠ {cardPhoneError}</p>
+                          )}
+                          {method === "card" && cardError && (
+                            <div className="flex items-start gap-2 text-sm text-[#eb1902] font-medium bg-rose-50 border border-rose-200 rounded-xl p-3 mt-2">
                               <span>{cardError}</span>
                             </div>
                           )}
-
-                          {/* ── PAGO AL RECIBIR (delivery) ── */}
-                          {serviceType === 'delivery' && (
-                            <div className="space-y-2">
-                              {hasPhoneAndConsent && !showCodPhoneForm ? (
-                                /* Ya tiene teléfono guardado: pastilla + botón directo */
-                                <div className="space-y-2">
-                                  <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5">
-                                    <div className="flex items-center gap-2 text-xs text-gray-600">
-                                      <span className="font-medium">
-                                        +52 {clerkPhone.slice(0, 3)} {clerkPhone.slice(3, 6)} {clerkPhone.slice(6)}
-                                      </span>
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleCashOnDeliveryStart(true)}
-                                      className="text-xs font-semibold text-gray-500 hover:text-gray-800 underline underline-offset-2 transition-colors"
-                                    >
-                                      Cambiar
-                                    </button>
-                                  </div>
-                                  <button
-                                    onClick={handleCashOnDeliverySubmit}
-                                    disabled={isLoading}
-                                    className="w-full bg-white text-[#eb1902] border-2 border-[#eb1902] px-4 py-3.5 rounded-xl hover:bg-rose-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
-                                  >
-                                    <Banknote className="w-5 h-5" />
-                                    {isLoading ? 'Procesando...' : 'Pagar al recibir (Efectivo)'}
-                                  </button>
-                                </div>
-                              ) : (
-                                /* Formulario de teléfono para COD */
-                                <div
-                                  className={`overflow-hidden transition-all duration-300 ease-out ${
-                                    showCodPhoneForm ? 'max-h-72 opacity-100' : 'max-h-0 opacity-0'
-                                  }`}
-                                >
-                                  <div className="space-y-3 rounded-xl border-2 border-[#eb1902] bg-white p-4 shadow-sm">
-                                    <p className="text-sm font-semibold text-gray-800 flex items-center gap-2">
-                                      <span>📱</span> Teléfono de contacto
-                                    </p>
-                                    <div className="flex items-center gap-2 rounded-lg border-2 border-gray-200 bg-gray-50 px-3 py-2.5 focus-within:border-[#eb1902] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#eb1902]/20 transition-all">
-                                      <span className="text-sm font-semibold text-gray-600 whitespace-nowrap select-none">🇲🇽 +52</span>
-                                      <div className="w-px h-4 bg-gray-300 mx-1" />
-                                      <input
-                                        type="tel"
-                                        inputMode="numeric"
-                                        autoComplete="tel-national"
-                                        maxLength={10}
-                                        placeholder="4421234567"
-                                        value={cashOnDeliveryPhone.replace(/\D/g, "").slice(0, 10)}
-                                        onChange={(e) => {
-                                          setCashOnDeliveryPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
-                                          if (codError) setCodError("");
-                                        }}
-                                        disabled={isLoading}
-                                        className="flex-1 bg-transparent text-sm font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:opacity-50"
-                                      />
-                                    </div>
-                                    {codError && (
-                                      <p className="text-xs text-[#eb1902] font-medium flex items-center gap-1"><span>⚠</span>{codError}</p>
-                                    )}
-                                    <div className="flex gap-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => setShowCodPhoneForm(false)}
-                                        disabled={isLoading}
-                                        className="flex-1 border-2 border-gray-200 text-gray-600 px-3 py-2.5 rounded-xl hover:border-gray-300 transition-colors font-medium text-sm"
-                                      >
-                                        Cancelar
-                                      </button>
-                                      <button
-                                        onClick={handleCashOnDeliverySubmit}
-                                        disabled={isLoading}
-                                        className="flex-1 bg-[#eb1902] text-white border-2 border-[#eb1902] px-3 py-2.5 rounded-xl hover:bg-[#c11300] disabled:opacity-50 flex items-center justify-center gap-2 transition-colors font-semibold text-sm"
-                                      >
-                                        <Banknote className="w-4 h-4" />
-                                        {isLoading ? 'Procesando...' : 'Confirmar'}
-                                      </button>
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
-
-                              {!hasPhoneAndConsent && !showCodPhoneForm && (
-                                <button
-                                  onClick={() => handleCashOnDeliveryStart()}
-                                  disabled={isLoading}
-                                  className="w-full bg-white text-[#eb1902] border-2 border-[#eb1902] px-4 py-3.5 rounded-xl hover:bg-rose-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
-                                >
-                                  <Banknote className="w-5 h-5" />
-                                  {isLoading ? 'Procesando...' : 'Pagar al recibir (Efectivo)'}
-                                </button>
-                              )}
-
-                              {codError && !showCodPhoneForm && (
-                                <p className="text-sm text-[#eb1902] font-medium flex items-center gap-1"><span>⚠</span>{codError}</p>
-                              )}
-                            </div>
+                          {method === "cash" && serviceType === "delivery" && codError && (
+                            <p className="text-sm text-[#eb1902] font-medium flex items-center gap-1 mt-2"><span>⚠</span>{codError}</p>
+                          )}
+                          {method === "cash" && serviceType === "pickup" && pickupError && (
+                            <p className="text-sm text-green-700 font-medium flex items-center gap-1 mt-2"><span>⚠</span>{pickupError}</p>
                           )}
 
-                          {/* ── PAGO EN TIENDA (pickup) ── */}
-                          {serviceType === 'pickup' && (
-                            <div className="space-y-2">
-                              {hasPhoneAndConsent && !showPickupPhoneForm ? (
-                                /* Ya tiene teléfono guardado: pastilla + botón directo */
-                                <div className="space-y-2">
-                                  <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5">
-                                    <div className="flex items-center gap-2 text-xs text-gray-600">
-                                      <span>📱</span>
-                                      <span className="font-medium">
-                                        +52 {clerkPhone.slice(0, 3)} {clerkPhone.slice(3, 6)} {clerkPhone.slice(6)}
-                                      </span>
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => handlePickupStart(true)}
-                                      className="text-xs font-semibold text-gray-500 hover:text-gray-800 underline underline-offset-2 transition-colors"
-                                    >
-                                      Cambiar
-                                    </button>
-                                  </div>
-                                  <button
-                                    onClick={handlePickupPayment}
-                                    disabled={isLoading}
-                                    className="w-full bg-white text-green-700 border-2 border-green-600 px-4 py-3.5 rounded-xl hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
-                                  >
-                                    <Banknote className="w-5 h-5" />
-                                    {isLoading ? 'Procesando...' : 'Pagar en tienda (Efectivo)'}
-                                  </button>
-                                </div>
-                              ) : (
-                                /* Formulario de teléfono para pickup */
-                                <div
-                                  className={`overflow-hidden transition-all duration-300 ease-out ${
-                                    showPickupPhoneForm ? 'max-h-72 opacity-100' : 'max-h-0 opacity-0'
-                                  }`}
-                                >
-                                  <div className="space-y-3 rounded-xl border-2 border-green-600 bg-white p-4 shadow-sm">
-                                    <p className="text-sm font-semibold text-gray-800 flex items-center gap-2">
-                                      <span>📱</span> Teléfono de contacto
-                                    </p>
-                                    <div className="flex items-center gap-2 rounded-lg border-2 border-gray-200 bg-gray-50 px-3 py-2.5 focus-within:border-green-600 focus-within:bg-white focus-within:ring-2 focus-within:ring-green-600/20 transition-all">
-                                      <span className="text-sm font-semibold text-gray-600 whitespace-nowrap select-none">🇲🇽 +52</span>
-                                      <div className="w-px h-4 bg-gray-300 mx-1" />
-                                      <input
-                                        type="tel"
-                                        inputMode="numeric"
-                                        autoComplete="tel-national"
-                                        maxLength={10}
-                                        placeholder="4421234567"
-                                        value={pickupPhone.replace(/\D/g, "").slice(0, 10)}
-                                        onChange={(e) => {
-                                          setPickupPhone(e.target.value.replace(/\D/g, "").slice(0, 10));
-                                          if (pickupError) setPickupError("");
-                                        }}
-                                        disabled={isLoading}
-                                        className="flex-1 bg-transparent text-sm font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none disabled:opacity-50"
-                                      />
-                                    </div>
-                                    {pickupError && (
-                                      <p className="text-xs text-green-700 font-medium flex items-center gap-1"><span>⚠</span>{pickupError}</p>
-                                    )}
-                                    <div className="flex gap-2">
-                                      <button
-                                        type="button"
-                                        onClick={() => setShowPickupPhoneForm(false)}
-                                        disabled={isLoading}
-                                        className="flex-1 border-2 border-gray-200 text-gray-600 px-3 py-2.5 rounded-xl hover:border-gray-300 transition-colors font-medium text-sm"
-                                      >
-                                        Cancelar
-                                      </button>
-                                      <button
-                                        onClick={handlePickupPayment}
-                                        disabled={isLoading}
-                                        className="flex-1 bg-green-600 text-white px-3 py-2.5 rounded-xl hover:bg-green-700 disabled:opacity-50 flex items-center justify-center gap-2 transition-colors font-semibold text-sm"
-                                      >
-                                        <Banknote className="w-4 h-4" />
-                                        {isLoading ? 'Procesando...' : 'Confirmar'}
-                                      </button>
-                                    </div>
-                                  </div>
-                                </div>
-                              )}
+                          {/* ── CTA PRINCIPAL ÚNICO ── */}
+                          <div className="mt-2">
+                            {isSelectedStoreClosed ? (
+                              <button
+                                disabled={true}
+                                className="w-full bg-gray-300 text-white px-4 py-3.5 rounded-xl cursor-not-allowed flex items-center justify-center gap-2.5 font-semibold shadow-sm"
+                              >
+                                Tienda Cerrada
+                              </button>
+                            ) : method === "card" ? (
+                              <button
+                                onClick={() => {
+                                  if (hasPhoneAndConsent && !editingPhone) {
+                                    handleCheckout(clerkPhone);
+                                  } else {
+                                    handleCheckout();
+                                  }
+                                }}
+                                disabled={isLoading || !onlinePaymentsEnabled}
+                                className="w-full bg-[#eb1902] text-white px-4 py-3.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
+                              >
+                                {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <CreditCard className="w-5 h-5" />}
+                                {isLoading ? "Procesando..." : onlinePaymentsEnabled ? "Pagar con tarjeta" : "Pago en línea no disponible"}
+                              </button>
+                            ) : method === "cash" ? (
+                              <button
+                                onClick={serviceType === 'delivery' ? handleCashOnDeliverySubmit : handlePickupPayment}
+                                disabled={isLoading}
+                                className="w-full bg-[#eb1902] text-white px-4 py-3.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
+                              >
+                                {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Banknote className="w-5 h-5" />}
+                                {isLoading ? 'Procesando...' : serviceType === 'pickup' ? 'Pagar en tienda (Efectivo)' : 'Pagar al recibir (Efectivo)'}
+                              </button>
+                            ) : (
+                              <button
+                                disabled={true}
+                                className="w-full bg-gray-300 text-white px-4 py-3.5 rounded-xl cursor-not-allowed flex items-center justify-center gap-2.5 font-semibold shadow-sm"
+                              >
+                                Elige un método de pago
+                              </button>
+                            )}
+                          </div>
 
-                              {!hasPhoneAndConsent && !showPickupPhoneForm && (
-                                <button
-                                  onClick={() => handlePickupStart()}
-                                  disabled={isLoading}
-                                  className="w-full bg-white text-green-700 border-2 border-green-600 px-4 py-3.5 rounded-xl hover:bg-green-50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
-                                >
-                                  <Banknote className="w-5 h-5" />
-                                  {isLoading ? 'Procesando...' : 'Pagar en tienda (Efectivo)'}
-                                </button>
-                              )}
-
-                              {pickupError && !showPickupPhoneForm && (
-                                <p className="text-sm text-green-700 font-medium flex items-center gap-1"><span>⚠</span>{pickupError}</p>
-                              )}
-                            </div>
+                          {/* ── AVISO LEGAL (estilo Mandados) ── */}
+                          {method && (
+                            <p className="mt-3 text-center text-xs leading-5 text-gray-500">
+                              Al continuar aceptas los{" "}
+                              <Link className="font-medium text-gray-600 underline underline-offset-2 transition-colors hover:text-[#eb1902]" href="/legal/terminos-clientes" target="_blank">Términos y Condiciones</Link>, el{" "}
+                              <Link className="font-medium text-gray-600 underline underline-offset-2 transition-colors hover:text-[#eb1902]" href="/legal/privacidad" target="_blank">Aviso de Privacidad</Link> y la{" "}
+                              <Link className="font-medium text-gray-600 underline underline-offset-2 transition-colors hover:text-[#eb1902]" href="/legal/cancelaciones-reembolsos" target="_blank">Política de Cancelaciones</Link>.
+                            </p>
                           )}
                         </div>
                       )}
                     </div>
                   )}
-
-
                   {/* Beneficios */}
                   {serviceType && (
                     <div className="bg-gray-50 rounded-lg p-3 space-y-2 text-xs text-gray-600">
@@ -1512,25 +1935,36 @@ function BasketPage() {
                     </div>
                   )}
                 </div>
-              ) : (
+              ) : isHydrated ? (
                 <SignInButton mode="modal">
                   <button className="mt-6 w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium">
                     Inicia sesión para continuar
                   </button>
                 </SignInButton>
-              )}
+              ) : null}
             </div>
           </div>
         </div>
       </div>
+
+      {/* Selector de dirección (libreta compartida) — se abre desde “Cambiar dirección” */}
+      {user && (
+        <Dialog open={addressDialogOpen} onOpenChange={setAddressDialogOpen}>
+          <DialogContent className="w-[calc(100vw-1.5rem)] max-w-xl overflow-hidden p-0">
+            <DialogHeader className="border-b px-5 py-4">
+              <DialogTitle>Selecciona una dirección</DialogTitle>
+            </DialogHeader>
+            <div className="max-h-[calc(85vh-6rem)] overflow-y-auto px-4 pb-5 pt-4 sm:px-5">
+              <AddressSelector
+                userId={user.id}
+                onSelect={(address) => void applySelectedAddress(address)}
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   );
 }
 
 export default BasketPage;
-
-
-
-
-
-

@@ -24,6 +24,7 @@ const ORDER_PROJECTION = `{
   paymentStatus,
   dispatchStatus,
   settlementStatus,
+  fulfillmentTiming,
   pickupCode,
   "fulfillmentType": select(orderType == "pickup" => "pickup", "delivery"),
   "customerInfo": {
@@ -44,7 +45,8 @@ const ORDER_PROJECTION = `{
     "productName": product->name,
     "productId": product->_id,
     quantity,
-    notes
+    notes,
+    allergies
   },
   "totalAmount": totalPrice,
   paymentMethod,
@@ -85,6 +87,7 @@ const ORDER_BY_NUMBER_QUERY = `*[_type == "order" && orderNumber == $orderNumber
   paymentStatus,
   dispatchStatus,
   settlementStatus,
+  fulfillmentTiming,
   readyAt,
   pickedUpAt,
   deliveredAt,
@@ -266,6 +269,7 @@ export async function PATCH(request: NextRequest) {
     if (isCancelled) {
       updateData.cancelledAt = now;
       updateData.settlementStatus = settlementStatus;
+      if (order.fulfillmentTiming === "scheduled") updateData.scheduleStatus = "cancelled";
       if (isStripeOrder) {
         updateData.requiresStripeReconciliation = true;
       } else {
@@ -277,12 +281,25 @@ export async function PATCH(request: NextRequest) {
       updateData.refundedAt = now;
       updateData.settlementStatus = "refunded";
     }
+    if (
+      order.fulfillmentTiming === "scheduled" &&
+      ["delivered", "completed", "picked_up"].includes(orderStatus)
+    ) {
+      updateData.scheduleStatus = "completed";
+    }
 
-    const updated = await writeClient.patch(order._id).set(updateData).commit();
+    let patchOp = writeClient.patch(order._id).set(updateData);
+    if (isCancelled && order.fulfillmentTiming === "scheduled") {
+      patchOp = patchOp.unset(["preassignedDriver", "preassignedAt"]); 
+    }
+    const updated = await patchOp.commit();
 
     const events: Array<{ type: OrderEventType; reason?: string; payload?: Record<string, unknown> }> = [];
     if (isCancelled && order.orderStatus !== "cancelled") {
       events.push({ type: "cancelled", reason: "admin_cancelled_order" });
+      if (order.fulfillmentTiming === "scheduled") {
+        events.push({ type: "scheduled_order_cancelled", reason: "admin_cancelled_order" });
+      }
     }
     if (orderType === "pickup" && orderStatus === "ready_for_pickup" && order.orderStatus !== "ready_for_pickup") {
       events.push({ type: "ready_for_pickup", reason: "admin_marked_ready" });
@@ -322,7 +339,6 @@ export async function PATCH(request: NextRequest) {
     if (orderType === "pickup" && orderStatus === "ready_for_pickup" && order.phone) {
       void sendPickupReadyForCustomer(
         order.phone,
-        order.customerName || "Cliente",
         order.orderNumber,
         order.storeName || "Restaurante",
         buildStoreMapsUrl({

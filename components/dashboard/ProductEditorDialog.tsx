@@ -165,6 +165,33 @@ export function ProductEditorDialog({
                   placeholder="Describe el producto para el cliente"
                 />
               </div>
+
+              <div className="grid gap-3 rounded-xl border border-black/6 bg-[#fafafb] p-4 md:grid-cols-2">
+                <label className="flex items-start gap-3">
+                  <Checkbox
+                    checked={formState.allowSpecialInstructions}
+                    onCheckedChange={(checked) =>
+                      setFormState((current) => ({ ...current, allowSpecialInstructions: checked === true }))
+                    }
+                  />
+                  <span>
+                    <span className="block text-sm font-medium">Instrucciones especiales</span>
+                    <span className="block text-xs text-gray-500">Permite notas como "sin cebolla".</span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-3">
+                  <Checkbox
+                    checked={formState.acceptsAllergyRequests}
+                    onCheckedChange={(checked) =>
+                      setFormState((current) => ({ ...current, acceptsAllergyRequests: checked === true }))
+                    }
+                  />
+                  <span>
+                    <span className="block text-sm font-medium">Solicitudes por alergia</span>
+                    <span className="block text-xs text-gray-500">Activalo solo si el restaurante puede atenderlas.</span>
+                  </span>
+                </label>
+              </div>
             </TabsContent>
 
             <TabsContent value="media" className="space-y-4 pt-4">

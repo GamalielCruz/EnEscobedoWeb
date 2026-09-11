@@ -1,6 +1,12 @@
 import { HomeIcon } from "@sanity/icons";
 import { defineField, defineType } from "sanity";
 
+const RESERVED_STORE_SLUGS = new Set([
+  "about", "admin", "api", "basket", "categories", "checkout", "dashboard",
+  "demo", "faq", "legal", "orders", "product", "search", "sign-in", "store",
+  "studio", "success", "terminos", "unete-a-elmenu",
+]);
+
 export const affiliateStoreType = defineType({
   name: "affiliateStore",
   title: "Tienda Afiliada",
@@ -19,6 +25,28 @@ export const affiliateStoreType = defineType({
       title: "Nombre de la Tienda",
       type: "string",
       validation: (Rule) => Rule.required(),
+    }),
+    defineField({
+      name: "slug",
+      title: "Enlace público",
+      type: "slug",
+      description: "Dirección corta del restaurante. Ejemplo: elmenu.site/hornea",
+      options: {
+        source: "name",
+        maxLength: 96,
+        slugify: (value) =>
+          value
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, ""),
+      },
+      validation: (Rule) =>
+        Rule.required().custom((value) =>
+          value?.current && RESERVED_STORE_SLUGS.has(value.current)
+            ? "Este enlace está reservado por ElMenu.site."
+            : true
+        ),
     }),
     defineField({
       name: "storeCategories",
@@ -91,6 +119,13 @@ export const affiliateStoreType = defineType({
       type: "array",
       hidden: true,
       of: [{ type: "reference", to: [{ type: "product" }] }],
+    }),
+    defineField({
+      name: "categoryOrder",
+      title: "Orden de categorías",
+      type: "array",
+      hidden: true,
+      of: [{ type: "reference", to: [{ type: "category" }] }],
     }),
     defineField({
       name: "categoryProductOrders",
@@ -296,7 +331,7 @@ export const affiliateStoreType = defineType({
       title: "Frases para clientes",
       type: "array",
       of: [{ type: "string" }],
-      description: "Mensajes breves que rotan cada 5 segundos en la tarjeta del restaurante.",
+      description: "Beneficio Premium: mensajes breves que rotan cada 5 segundos en la tarjeta del restaurante.",
       validation: (Rule) => Rule.max(5).unique(),
     }),
     defineField({
@@ -313,6 +348,37 @@ export const affiliateStoreType = defineType({
       description: "Porcentaje aplicado al subtotal de productos. Solo lo administra El Menu.",
       validation: (Rule) => Rule.min(0).max(100),
     }),
+    defineField({
+      name: "commercialPlanId",
+      title: "Plan comercial",
+      type: "string",
+      options: { list: [
+        { title: "Plan Comunidad", value: "community" },
+        { title: "Plan Premium del 10%", value: "premium" },
+      ] },
+    }),
+    defineField({
+      name: "commercialOverrides",
+      title: "Condiciones comerciales personalizadas",
+      type: "object",
+      fields: [
+        defineField({ name: "commissionPercent", title: "Comisión (%)", type: "number", validation: (Rule) => Rule.min(0).max(100) }),
+        defineField({ name: "monthlyCommissionCap", title: "Tope mensual (MXN)", type: "number", validation: (Rule) => Rule.min(0) }),
+        defineField({ name: "serviceFeeMode", title: "Tarifa de servicio", type: "string", options: { list: ["normal", "reduced", "free"] } }),
+        defineField({ name: "onlinePaymentsEnabled", title: "Pagos en línea", type: "boolean" }),
+        defineField({ name: "premiumBadgeEnabled", title: "Badge ElMenu Verificado", type: "boolean" }),
+        defineField({ name: "bannerEligible", title: "Elegible para banner", type: "boolean" }),
+        defineField({ name: "promotionalMessagesEnabled", title: "Frases para clientes", type: "boolean" }),
+        defineField({ name: "deliveryBenefitEnabled", title: "Beneficio de envío", type: "boolean" }),
+        defineField({ name: "deliveryDiscountAmount", title: "Descuento de envío", type: "number", validation: (Rule) => Rule.min(0) }),
+        defineField({ name: "deliveryBenefitAbsorbedBy", title: "Quién absorbe", type: "string", options: { list: ["platform", "restaurant"] } }),
+      ],
+    }),
+    defineField({ name: "commercialPlanStartedAt", title: "Inicio del plan", type: "datetime" }),
+    defineField({ name: "commercialNotes", title: "Observaciones comerciales", type: "text", rows: 3 }),
+    defineField({ name: "commercialReviewRequired", title: "Requiere revisión administrativa", type: "boolean" }),
+    defineField({ name: "commercialUpdatedAt", title: "Condiciones actualizadas", type: "datetime", readOnly: true }),
+    defineField({ name: "commercialUpdatedBy", title: "Administrador del cambio", type: "string", readOnly: true }),
     defineField({
       name: "capacity",
       title: "Capacidad de Almacenamiento",
@@ -343,6 +409,46 @@ export const affiliateStoreType = defineType({
       name: "deliveryTimeMax",
       title: "Tiempo máximo de entrega (minutos)",
       type: "number",
+    }),
+    defineField({
+      name: "scheduledOrdersEnabled",
+      title: "Pedidos programados",
+      type: "boolean",
+      initialValue: true,
+    }),
+    defineField({
+      name: "minimumPreparationMinutes",
+      title: "Preparacion minima (minutos)",
+      type: "number",
+      validation: (Rule) => Rule.min(0),
+    }),
+    defineField({
+      name: "scheduledOrderIntervalMinutes",
+      title: "Duracion de intervalos (minutos)",
+      type: "number",
+      description: "Vacio para heredar la configuracion global.",
+      validation: (Rule) => Rule.min(30),
+    }),
+    defineField({
+      name: "maximumScheduledDays",
+      title: "Dias maximos para programar",
+      type: "number",
+      description: "No puede superar el limite global.",
+      validation: (Rule) => Rule.min(1),
+    }),
+    defineField({
+      name: "lastDeliveryOrderMinutesBeforeClose",
+      title: "Ultima entrega antes del cierre (minutos)",
+      type: "number",
+      initialValue: 30,
+      validation: (Rule) => Rule.min(0),
+    }),
+    defineField({
+      name: "lastPickupOrderMinutesBeforeClose",
+      title: "Ultima recoleccion antes del cierre (minutos)",
+      type: "number",
+      initialValue: 15,
+      validation: (Rule) => Rule.min(0),
     }),
     defineField({
       name: "serviceTypes",

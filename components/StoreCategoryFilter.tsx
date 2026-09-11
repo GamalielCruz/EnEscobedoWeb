@@ -1,27 +1,19 @@
 "use client";
 
-import { cn } from "@/lib/utils";
-import { useState, useEffect, useRef, useMemo } from "react";
 import Image from "next/image";
+import { useState } from "react";
+import { cn } from "@/lib/utils";
 
 interface StoreCategoryIcon {
   type?: string;
   emoji?: string;
-  image?: {
-    asset?: {
-      _id?: string;
-      url?: string;
-    };
-    alt?: string;
-  };
+  image?: { asset?: { _id?: string; url?: string }; alt?: string };
 }
 
 interface StoreCategory {
   _id: string;
   title?: string;
-  slug?: {
-    current?: string;
-  };
+  slug?: { current?: string };
   icon?: StoreCategoryIcon;
 }
 
@@ -29,139 +21,69 @@ interface StoreCategoryFilterProps {
   categories: StoreCategory[];
   selectedCategory?: string;
   onCategoryChange?: (categoryId: string | null) => void;
+  mandadoSelected?: boolean;
+  onMandadoSelect?: () => void;
+  superSelected?: boolean;
+  onSuperSelect?: () => void;
 }
 
 export function StoreCategoryFilter({
   categories,
   selectedCategory: externalSelectedCategory,
   onCategoryChange,
+  mandadoSelected = false,
+  onMandadoSelect,
+  superSelected = false,
+  onSuperSelect,
 }: StoreCategoryFilterProps) {
-  const [mounted, setMounted] = useState(false);
-  const [internalSelectedCategory, setInternalSelectedCategory] =
-    useState<string>("");
-  const [showSwipeIndicator, setShowSwipeIndicator] = useState(false);
-  const [hasInteracted, setHasInteracted] = useState(false);
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-
-  // Initialize after mount to avoid hydration issues
-  useEffect(() => {
-    setMounted(true);
-  }, []);
-
-  // Use external state if provided, otherwise use internal state
-  const selectedCategory =
-    externalSelectedCategory !== undefined
-      ? externalSelectedCategory
-      : internalSelectedCategory;
-
-  // Check if content is scrollable and show swipe indicator (only on client after mount)
-  useEffect(() => {
-    if (!mounted) return;
-    
-    const checkScrollable = () => {
-      if (scrollContainerRef.current) {
-        const { scrollWidth, clientWidth } = scrollContainerRef.current;
-        const isScrollable = scrollWidth > clientWidth;
-        setShowSwipeIndicator(isScrollable && !hasInteracted);
-      }
-    };
-
-    // Small delay to ensure DOM is fully rendered
-    const timer = setTimeout(checkScrollable, 100);
-    window.addEventListener("resize", checkScrollable);
-
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener("resize", checkScrollable);
-    };
-  }, [categories, hasInteracted, mounted]);
-
-  // Hide indicator after user interacts
-  const handleScroll = () => {
-    setHasInteracted(true);
-    setShowSwipeIndicator(false);
-  };
+  const [internalSelectedCategory, setInternalSelectedCategory] = useState("");
+  const selectedCategory = externalSelectedCategory ?? internalSelectedCategory;
 
   const handleCategorySelect = (categoryId: string) => {
-    const newCategoryId = selectedCategory === categoryId ? "" : categoryId;
-
-    if (onCategoryChange) {
-      // If callback is provided, use it (controlled component)
-      onCategoryChange(newCategoryId || null);
-    } else {
-      // Otherwise use internal state (uncontrolled component)
-      setInternalSelectedCategory(newCategoryId);
-    }
+    const nextCategory = selectedCategory === categoryId ? null : categoryId;
+    if (onCategoryChange) onCategoryChange(nextCategory);
+    else setInternalSelectedCategory(nextCategory || "");
   };
 
   return (
-    <div className="w-full relative">
-      <div
-        ref={scrollContainerRef}
-        className="flex items-center gap-3 overflow-x-auto scrollbar-hide pb-2"
-        onScroll={handleScroll}
-        onTouchStart={handleScroll}
-        style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
-      >
-        {/* Todas las categorías */}
-        <button
-          onClick={() => handleCategorySelect("")}
-          className={cn(
-            "flex items-center gap-2 px-4 py-2 rounded-full border-2 transition-all whitespace-nowrap flex-shrink-0",
-            selectedCategory === ""
-              ? "bg-white text-[#eb1901] font-bold border-[#eb1901]"
-              : "bg-white text-black border-black hover:border-gray-400"
-          )}
-        >
-          <Image
-            src="/Todas.png"
-            alt="Todas las categorías"
-            width={24}
-            height={24}
-            className="w-6 h-6"
-            priority={false}
-          />
-          <span>Todas</span>
-        </button>
+    <div className="scrollbar-hide flex snap-x snap-mandatory items-start justify-start gap-4 overflow-x-auto pb-1 sm:gap-6" style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}>
+      <CategoryButton
+        label="Mandado"
+        selected={mandadoSelected}
+        onClick={onMandadoSelect}
+        icon={<Image src="/repartidor.png" alt="" width={72} height={72} className="h-full w-full object-contain transition-transform duration-200 group-hover:scale-105" />}
+      />
 
-        {/* Category items */}
-        {categories.map((category) => {
-          const displayName = category.title || "Sin nombre";
+      {/* Súper filter hidden */}
+      {/* <CategoryButton
+        label="Súper"
+        selected={superSelected}
+        onClick={onSuperSelect}
+        icon={<Image src="/store.svg" alt="" width={72} height={72} className="h-full w-full object-contain transition-transform duration-200 group-hover:scale-105" />}
+      /> */}
 
-          return (
-            <button
-              key={category._id}
-              onClick={() => handleCategorySelect(category._id)}
-              className={cn(
-                "flex items-center gap-2 px-4 py-2 rounded-full border-2 transition-all whitespace-nowrap flex-shrink-0",
-                selectedCategory === category._id
-                  ? "bg-white text-[#eb1901] border-[#eb1901] font-bold"
-                  : "bg-white text-black border-black hover:border-gray-400"
-              )}
-            >
-              {category.icon?.type === 'emoji' && category.icon?.emoji && (
-                <span>{category.icon.emoji}</span>
-              )}
-              {category.icon?.type === 'image' && category.icon?.image?.asset?.url && (
-                <Image
-                  src={category.icon.image.asset.url}
-                  alt={category.icon.image.alt || category.title || 'category icon'}
-                  width={24}
-                  height={24}
-                  className="w-6 h-6"
-                  priority={false}
-                />
-              )}
-              <span>{displayName}</span>
-            </button>
-          );
-        })}
-      </div>
+      {categories.map((category) => {
+        const label = category.title || "Sin nombre";
+        const selected = !mandadoSelected && selectedCategory === category._id;
+        const icon = category.icon?.type === "emoji" && category.icon.emoji
+          ? <span className="text-5xl">{category.icon.emoji}</span>
+          : category.icon?.type === "image" && category.icon.image?.asset?.url
+            ? <Image src={category.icon.image.asset.url} alt={category.icon.image.alt || label} width={80} height={80} className="h-full w-full object-contain p-1" />
+            : <span className="text-2xl font-black text-gray-400">{label.charAt(0)}</span>;
 
-      {/* Gradient fade indicator - only render after mount to avoid hydration mismatch */}
-      {mounted && showSwipeIndicator && (
-        <div className="absolute right-0 top-0 bottom-0 w-12 bg-gradient-to-l from-gray-100 to-transparent pointer-events-none" />
-      )}
+        return <CategoryButton key={category._id} label={label} selected={selected} onClick={() => handleCategorySelect(category._id)} icon={icon} />;
+      })}
     </div>
+  );
+}
+
+function CategoryButton({ label, selected, onClick, icon }: { label: string; selected: boolean; onClick?: () => void; icon: React.ReactNode }) {
+  return (
+    <button type="button" onClick={onClick} aria-pressed={selected} className="group flex w-max min-w-20 shrink-0 snap-start flex-col items-center gap-1.5 rounded-xl px-1 py-1 text-center transition-transform focus:outline-none focus-visible:ring-2 focus-visible:ring-[#eb1901] focus-visible:ring-offset-2 active:scale-95">
+      <span className={cn("flex h-16 w-16 items-center justify-center overflow-visible transition-all duration-200 sm:h-20 sm:w-20", selected ? "drop-shadow-md" : "group-hover:scale-105")}>
+        {icon}
+      </span>
+      <span className={cn("whitespace-nowrap text-sm leading-tight transition-colors", selected ? "font-bold text-[#eb1901]" : "font-semibold text-gray-900")}>{label}</span>
+    </button>
   );
 }
