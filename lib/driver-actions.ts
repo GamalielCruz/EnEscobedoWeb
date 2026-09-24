@@ -21,6 +21,8 @@ import {
   redispatchOrders,
   dispatchWaitingOrdersForDriver,
 } from "@/lib/delivery-dispatch";
+import { decideOfferAcceptance, isTerminalOfferStatus } from "@/lib/dispatch/offer-lifecycle";
+import { nextStateAfterDelivery } from "@/lib/dispatch/driver-availability";
 import { resolveSettlementStatusOnDelivery } from "@/lib/order-state";
 import { syncBaserowOrderById } from "@/lib/baserow";
 import { notifyRestaurantDriverEnRoute } from "@/lib/restaurant-notifications";
@@ -57,6 +59,11 @@ const ORDER_BY_NUMBER_QUERY = `*[_type == "order" && orderNumber == $orderNumber
   "offeredToRef": offeredTo._ref,
   deliveryOfertaEnviada,
   deliveryOfertaExpiresAt,
+  offerStatus,
+  offerId,
+  offerCreatedAt,
+  offerDeliveryDeadlineAt,
+  offerShownAt,
   mandadoPickupAtDoor,
   mandadoEnRuta,
   mandadoEntregaSegura,
@@ -97,7 +104,8 @@ const DRIVER_BY_ID_QUERY = `*[_type == "repartidor" && _id == $driverId][0]{
   telefono,
   disponible,
   disponibleHasta,
-  estadoDisponibilidad
+  estadoDisponibilidad,
+  aceptaNuevasOfertas
 }`;
 
 const ASSIGNED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._ref == $driverId && status == "shipped" && orderStatus != "delivered" && orderStatus != "cancelled" && orderStatus != "completed"] | order(orderDate asc){
@@ -131,7 +139,13 @@ const ASSIGNED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._ref == 
   "mandadoDestinationLabel": mandadoDestination.label,
   mandadoDetails,
   mandadoOriginReference,
-  mandadoDestinationReference
+  mandadoDestinationReference,
+  "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label),
+  "itemsSummary": select(
+    defined(products[0]) =>
+      products[0...3]{quantity, "name": product->name}.name
+    , null),
+  "itemsQuantity": select(defined(products[0]) => products[0].quantity, null)
 }`;
 
 const OFFER_ORDER_QUERY = `*[_type == "order" && orderNumber == $orderNumber && dispatchStatus == "offered" && defined(offeredTo) && defined(deliveryOfertaExpiresAt) && deliveryOfertaExpiresAt > $now][0]{
@@ -229,6 +243,15 @@ export type OrderDoc = {
   offeredToRef?: string;
   deliveryOfertaEnviada?: boolean;
   deliveryOfertaExpiresAt?: string;
+  /** Ciclo de vida server-driven de la oferta vigente. */
+  offerStatus?: string;
+  offerId?: string;
+  offerAttempt?: number;
+  offerCreatedAt?: string;
+  offerDeliveryDeadlineAt?: string;
+  offerShownAt?: string;
+  offerDeliveredAt?: string;
+  lastOfferStatus?: string;
   mandadoPickupAtDoor?: boolean;
   mandadoEnRuta?: boolean;
   mandadoEntregaSegura?: boolean;
@@ -253,6 +276,12 @@ export type OrderDoc = {
   mandadoDetails?: string;
   mandadoOriginReference?: string;
   mandadoDestinationReference?: string;
+  /** Dirección de la tienda/punto de recogida (información secundaria en la UI). */
+  storeAddress?: string;
+  /** Resumen de productos (nombres, hasta 3) para el destacado "qué recoger". */
+  itemsSummary?: string[];
+  /** Cantidad del primer producto (para el destacado "qué recoger"). */
+  itemsQuantity?: number;
   mandadoRecipientPhone?: string;
   mandadoNipRecipient?: string;
   nipDeliveryChannel?: string;
@@ -270,6 +299,8 @@ type DriverDoc = {
   disponible?: boolean;
   disponibleHasta?: string;
   estadoDisponibilidad?: string;
+  /** Intención: false = no quiere recibir nuevas ofertas tras su servicio activo. */
+  aceptaNuevasOfertas?: boolean;
 };
 
 export type TransitionResult =
@@ -420,7 +451,16 @@ async function completeDeliveredOrder(
     (order) => String(order._id) !== String(targetOrder._id)
   );
   const driver = await backendClient.fetch<DriverDoc>(DRIVER_BY_ID_QUERY, { driverId });
-  const nextState = filteredRemaining.length > 0 ? "busy" : getDriverNextState(driver ?? {}, nowDate);
+
+  // Resolución post-entrega (regla única en driver-availability.ts):
+  // - quedan órdenes → busy (multi-orden futuro);
+  // - intención "dejar de recibir" → offline AUNQUE la sesión siga vigente;
+  // - si no, decide la sesión vigente (available u offline).
+  const nextState = nextStateAfterDelivery({
+    hasRemainingOrders: filteredRemaining.length > 0,
+    aceptaNuevasOfertas: driver?.aceptaNuevasOfertas !== false,
+    sessionValid: getDriverNextState(driver ?? {}, nowDate) === "available",
+  });
 
   await backendClient
     .patch(driverId)
@@ -428,6 +468,10 @@ async function completeDeliveredOrder(
       disponible: nextState !== "offline",
       estadoDisponibilidad: nextState,
       ultimaActividad: now,
+      // Al resolver la intención (regreso a available) se resetea para la
+      // próxima sesión; al quedar offline el flag se conserva como registro
+      // veraz de lo que el repartidor decidió.
+      ...(filteredRemaining.length === 0 && nextState === "available" ? { aceptaNuevasOfertas: true } : {}),
     })
     .commit()
     .catch((error) =>
@@ -483,6 +527,9 @@ export async function connectDriverSession(
             }
           : {}),
         estadoDisponibilidad: "available",
+        // Sesión nueva = intención de recibir pedidos (resetea cualquier
+        // "dejar de recibir" anterior).
+        aceptaNuevasOfertas: true,
         ultimaActividad: now.toISOString(),
         esperandoSeleccionDisponibilidad: false,
         extensionPendiente: false,
@@ -528,6 +575,21 @@ export async function disconnectDriverSession(
 ): Promise<TransitionResult> {
   const driver = await backendClient.fetch<DriverDoc>(DRIVER_BY_ID_QUERY, { driverId });
   if (!driver) return { ok: false, error: "Repartidor no encontrado." };
+
+  // REGLA FUNDAMENTAL: Desconectar ≠ abandonar una orden.
+  // Con una orden activa (shipped no terminal) NO se permite terminar la
+  // sesión: el backend es la autoridad, la UI nunca decide por su cuenta.
+  const activeOrders = await fetchAssignedOrders(driverId);
+  if (activeOrders.length > 0) {
+    console.warn("[driver-actions] disconnect bloqueado por orden activa", {
+      driverId,
+      activeOrders: activeOrders.map((order) => order.orderNumber),
+    });
+    return {
+      ok: false,
+      error: "Tienes una orden activa. Termina tu servicio actual para desconectarte.",
+    };
+  }
 
   const now = new Date().toISOString();
 
@@ -588,6 +650,86 @@ export async function disconnectDriverSession(
   return { ok: true, newState: "offline", dispatchStatus: "disconnected" };
 }
 
+/**
+ * "Dejar de recibir pedidos": apaga la intención de recibir NUEVAS ofertas
+ * SIN tocar el servicio activo.
+ *
+ * - Con orden activa: solo marca aceptaNuevasOfertas=false. La orden
+ *   continúa normalmente (pickup → delivery → completed) y al completar
+ *   queda OFFLINE aunque la sesión tuviera tiempo restante.
+ * - Sin orden activa: dejar de recibir = terminar la sesión ahora
+ *   (delega en disconnectDriverSession, que libera ofertas vigentes).
+ */
+export async function stopReceivingNewOffers(
+  driverId: string
+): Promise<TransitionResult> {
+  const driver = await backendClient.fetch<DriverDoc>(DRIVER_BY_ID_QUERY, { driverId });
+  if (!driver) return { ok: false, error: "Repartidor no encontrado." };
+
+  const activeOrders = await fetchAssignedOrders(driverId);
+
+  if (activeOrders.length > 0) {
+    // Servicio activo: solo la intención. NO se tocan disponible,
+    // estadoDisponibilidad, disponibleHasta ni la orden.
+    const now = new Date().toISOString();
+    try {
+      await backendClient
+        .patch(driver._id)
+        .set({
+          aceptaNuevasOfertas: false,
+          ultimaActividad: now,
+        })
+        .commit();
+    } catch (error) {
+      console.error("[driver-actions] stopReceivingNewOffers error:", error);
+      return { ok: false, error: "No se pudo actualizar tu disponibilidad." };
+    }
+
+    return { ok: true, newState: "in_service", dispatchStatus: "stop_offers_in_service" };
+  }
+
+  // Sin servicio activo: la intención equivale a desconectar ya.
+  return disconnectDriverSession(driverId);
+}
+
+/**
+ * "Seguir recibiendo pedidos": reactiva la intención de recibir NUEVAS
+ * ofertas DURANTE un servicio activo (desde la Hoja de ruta).
+ *
+ * - Con orden activa: marca aceptaNuevasOfertas=true. Al completar la
+ *   entrega, nextStateAfterDelivery decide por sesión/estado (puede quedar
+ *   AVAILABLE si la sesión sigue vigente).
+ * - Sin orden activa: no debería ocurrir desde la UI (el switch solo vive en
+ *   la Hoja de ruta, que requiere servicio), pero es un no-op seguro.
+ */
+export async function resumeReceivingNewOffers(
+  driverId: string
+): Promise<TransitionResult> {
+  const driver = await backendClient.fetch<DriverDoc>(DRIVER_BY_ID_QUERY, { driverId });
+  if (!driver) return { ok: false, error: "Repartidor no encontrado." };
+
+  const activeOrders = await fetchAssignedOrders(driverId);
+  if (activeOrders.length === 0) {
+    return { ok: true, newState: "idle", dispatchStatus: "resume_offers_no_service" };
+  }
+
+  const now = new Date().toISOString();
+  try {
+    await backendClient
+      .patch(driver._id)
+      .set({
+        aceptaNuevasOfertas: true,
+        ultimaActividad: now,
+      })
+      .commit();
+  } catch (error) {
+    console.error("[driver-actions] resumeReceivingNewOffers error:", error);
+    return { ok: false, error: "No se pudo actualizar tu disponibilidad." };
+  }
+
+  return { ok: true, newState: "in_service", dispatchStatus: "resume_offers_in_service" };
+}
+
 // ── Location ───────────────────────────────────────────────────────
 
 export async function updateDriverLocation(
@@ -636,19 +778,21 @@ export async function acceptDriverOffer(
   const order = await fetchOrderByNumber(orderNumber);
   if (!order) return { ok: false, error: "El pedido no existe." };
 
-  if (order.repartidorAsignadoRef) {
-    if (order.repartidorAsignadoRef === driverId) {
-      return { ok: true, newState: "assigned", dispatchStatus: "accepted" };
-    }
-    return { ok: false, error: "El pedido ya fue asignado a otro repartidor." };
-  }
+  // El servidor es la autoridad final del ciclo de vida: nunca acepta una
+  // oferta EXPIRED / CANCELLED / REJECTED, aunque el frontend muestre un
+  // contador incorrecto. También es idempotente para el mismo repartidor.
+  const decision = decideOfferAcceptance({
+    offerStatus: order.offerStatus,
+    deliveryOfertaExpiresAt: order.deliveryOfertaExpiresAt,
+    offeredToRef: order.offeredToRef,
+    driverId,
+    repartidorAsignadoRef: order.repartidorAsignadoRef,
+    now: new Date(),
+  });
 
-  if (order.offeredToRef !== driverId) {
-    return { ok: false, error: "Esta oferta no es para ti." };
-  }
-
-  if (!order.deliveryOfertaExpiresAt || new Date(order.deliveryOfertaExpiresAt).getTime() <= Date.now()) {
-    return { ok: false, error: "La oferta ya expiró." };
+  if (!decision.ok) return { ok: false, error: decision.error };
+  if (decision.alreadyAssigned) {
+    return { ok: true, newState: "assigned", dispatchStatus: "accepted" };
   }
 
   const driver = await backendClient.fetch<DriverDoc>(DRIVER_BY_ID_QUERY, { driverId });
@@ -665,6 +809,16 @@ export async function acceptDriverOffer(
     actorName: driver?.nombre ?? "Drive",
     notifyDriver: false,
     skipEvents: true,
+    // Carrera aceptar vs expirar: si un intento sufre conflicto de revisión y
+    // relee datos frescos, revalida que la SIGA siendo la misma oferta vigente
+    // (mismo offerId, mismo destinatario, deadline sin cambiar). Si mientras
+    // tanto expiró o fue liberada, la asignación se aborta y queda
+    // EXPIRED + UNASSIGNED (nunca EXPIRED + ASSIGNED).
+    expectedOffer: {
+      offerId: order.offerId ?? null,
+      offeredToRef: order.offeredToRef ?? null,
+      deliveryOfertaExpiresAt: order.deliveryOfertaExpiresAt ?? null,
+    },
   });
 
   if (!result.ok) {
@@ -684,6 +838,13 @@ export async function acceptDriverOffer(
 
   // ── Side effects (matching webhook exactly) ──
 
+  // 0. Sellar el estado terminal de la oferta (best-effort)
+  await backendClient
+    .patch(order._id)
+    .set({ offerStatus: "accepted", offerAcceptedAt: now })
+    .commit()
+    .catch(() => null);
+
   // 1. Baserow sync
   after(() => syncBaserowOrderById(order._id));
 
@@ -692,6 +853,7 @@ export async function acceptDriverOffer(
     type: "offer_accepted",
     source: "driver-actions",
     actor: driverId,
+    payload: { driverId, offerId: order.offerId, acceptedAt: now },
   }).catch(() => null);
 
   await appendOrderEvent(order._id, {
@@ -742,6 +904,12 @@ export async function rejectDriverOffer(
   if (order.offeredToRef !== driverId) {
     return { ok: false, error: "Esta oferta no es para ti." };
   }
+  if (order.repartidorAsignadoRef) {
+    return { ok: false, error: "El pedido ya fue asignado." };
+  }
+  if (isTerminalOfferStatus(order.offerStatus)) {
+    return { ok: false, error: "La oferta ya no está vigente." };
+  }
 
   const driver = await backendClient.fetch<DriverDoc>(DRIVER_BY_ID_QUERY, { driverId });
   const now = new Date().toISOString();
@@ -751,7 +919,8 @@ export async function rejectDriverOffer(
   // CRITICAL: Clear pending offer fields FIRST (matches webhook order)
   await clearPendingOfferForDriver(driverId, now, nextState);
 
-  // Release the order back to the queue
+  // Release the order back to the queue. releaseOrdersForDriver → setOrdersWaiting
+  // registra el evento `offer_rejected` y sella lastOfferStatus="rejected".
   const released = await releaseOrdersForDriver([order._id], driverId, "driver_rejected_offer").catch(() => []);
   if (released.length > 0) {
     await redispatchOrders(released, [driverId]).catch((error) =>

@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { Bike, RefreshCw } from "lucide-react";
-import { ThinkingOrb } from "thinking-orbs";
 
 type AvailabilityData = {
   availableCount: number;
@@ -106,13 +105,7 @@ export default function MandadoDriverAvailability() {
       <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-100">
-            <ThinkingOrb
-              state="searching"
-              size={64}
-              theme="light"
-              aria-label="Buscando un repartidor"
-              style={{ width: 40, height: 40 }}
-            />
+            <Bike className="h-5 w-5 text-gray-400" />
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-gray-400">

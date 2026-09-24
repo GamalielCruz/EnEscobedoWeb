@@ -79,6 +79,13 @@ export const repartidorType = defineType({
       description: "Estado operativo actual del repartidor",
     }),
     defineField({
+      name: "aceptaNuevasOfertas",
+      title: "Acepta Nuevas Ofertas",
+      type: "boolean",
+      initialValue: true,
+      description: "Intención del repartidor: false = terminó de recibir nuevas ofertas (al completar su servicio activo queda fuera de servicio). La orden activa NUNCA se cancela por esto.",
+    }),
+    defineField({
       name: "ultimaActividad",
       title: "Última Actividad",
       type: "datetime",

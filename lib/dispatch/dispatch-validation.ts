@@ -22,6 +22,8 @@ export type AssignmentDriverLike = {
   disponible?: boolean;
   estadoDisponibilidad?: string;
   disponibleHasta?: string;
+  /** Intención: false = no quiere recibir nuevas ofertas. */
+  aceptaNuevasOfertas?: boolean;
   storeId?: string | null;
   activeOrders?: Array<{ _id?: string }>;
 };
@@ -186,6 +188,9 @@ export function validateAssignment(
         return "El repartidor tiene una oferta pendiente por WhatsApp; libérala antes de asignar manualmente.";
       }
       return "El repartidor está pausado o desconectado; no puede recibir asignaciones.";
+    }
+    if (driver.aceptaNuevasOfertas === false) {
+      return "El repartidor dejó de recibir nuevos pedidos; termina su servicio antes de asignar.";
     }
     if (estado === "busy" && !config.allowMultipleOrders) {
       return "El repartidor está ocupado y no se permiten múltiples pedidos.";

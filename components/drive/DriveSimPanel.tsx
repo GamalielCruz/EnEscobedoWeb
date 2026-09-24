@@ -21,8 +21,10 @@ import { SIM_SPEEDS } from "@/hooks/useDriveSimulator";
  *
  * Estilo: misma tarjeta flotante blanca que el banner de navegación y la
  * hoja del pedido (sombra profunda, ring sutil, backdrop-blur). El morado
- * queda como identidad del modo simulación (mismos chips 🧪 del banner y la
- * hoja). La funcionalidad es idéntica a la versión anterior: simular,
+ * queda como identidad del panel de desarrollo. SIN etiquetas "SIM" ni
+ * "MODO SIMULACIÓN" en la UI del conductor: la simulación es invisible para
+ * el usuario final y solo existe detrás de este panel dev
+ * (DRIVE_SIM_ENABLED = entornos no producción). La funcionalidad es idéntica a la versión anterior: simular,
  * pausar/reanudar, reiniciar, detener y velocidades 1×/2×/5×/10×.
  */
 export function DriveSimPanel({
@@ -56,7 +58,9 @@ export function DriveSimPanel({
   onStop: () => void;
   onSpeed: (speed: (typeof SIM_SPEEDS)[number]) => void;
 }) {
-  const [expanded, setExpanded] = useState(true);
+  // Colapsado por defecto: el simulador es una herramienta de dev y nunca
+  // debe tapar el flujo real del repartidor (píldora "SIM" discreta).
+  const [expanded, setExpanded] = useState(false);
   if (!visible) return null;
 
   const mainLabel = !active
@@ -75,21 +79,18 @@ export function DriveSimPanel({
   };
 
   // Minimizado: píldora compacta que vuelve a expandirse al tocarla.
+  // SIN etiquetas "SIM" visibles como identidad: la simulación es invisible
+  // para el usuario final; solo el icono de matraz (herramienta dev) la delata.
   if (!expanded) {
     return (
       <button
         onClick={() => setExpanded(true)}
         className="absolute left-3 top-[17.5rem] z-30 flex items-center gap-1.5 rounded-full bg-white/95 px-3 py-2 text-xs font-black text-purple-700 shadow-[0_10px_30px_rgba(3,7,18,0.28)] ring-1 ring-black/5 backdrop-blur transition active:scale-95"
-        aria-label="Expandir simulador"
-        title="Expandir simulador de viaje"
+        aria-label="Expandir panel de desarrollo"
+        title="Panel de desarrollo"
       >
         <FlaskConical className="h-3.5 w-3.5" />
-        SIM
-        {active && (
-          <span className="ml-1 flex items-center gap-1 rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-bold text-purple-700">
-            🧪 MODO SIMULACIÓN
-          </span>
-        )}
+        {active && <span className="h-2 w-2 rounded-full bg-purple-500" aria-hidden />}
         <ChevronUp className="h-3.5 w-3.5 text-gray-400" />
       </button>
     );
@@ -100,23 +101,16 @@ export function DriveSimPanel({
       <div className="flex items-center justify-between gap-2">
         <span className="flex items-center gap-1 font-black uppercase tracking-wide text-purple-600">
           <FlaskConical className="h-3.5 w-3.5" />
-          Simulador
+          Dev
         </span>
-        <div className="flex items-center gap-1.5">
-          {active && (
-            <span className="flex items-center gap-1 rounded-full bg-purple-100 px-2 py-0.5 text-[10px] font-bold text-purple-700">
-              🧪 MODO SIMULACIÓN
-            </span>
-          )}
-          <button
-            onClick={() => setExpanded(false)}
-            className="flex h-5 w-5 items-center justify-center rounded-md bg-gray-100 text-gray-500 transition hover:bg-gray-200"
-            aria-label="Minimizar simulador"
-            title="Minimizar simulador"
-          >
-            <ChevronDown className="h-3.5 w-3.5" />
-          </button>
-        </div>
+        <button
+          onClick={() => setExpanded(false)}
+          className="flex h-5 w-5 items-center justify-center rounded-md bg-gray-100 text-gray-500 transition hover:bg-gray-200"
+          aria-label="Minimizar panel de desarrollo"
+          title="Minimizar"
+        >
+          <ChevronDown className="h-3.5 w-3.5" />
+        </button>
       </div>
 
       <div className="mt-2 grid grid-cols-[1fr_auto_auto] gap-1.5">

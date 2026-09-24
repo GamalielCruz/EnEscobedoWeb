@@ -15,6 +15,7 @@ type RepartidorCron = {
   telefono: string
   disponibleHasta?: string
   estadoDisponibilidad?: 'available' | 'offline' | 'busy' | 'offer_pending'
+  aceptaNuevasOfertas?: boolean
   extensionPendiente?: boolean
   extensionPreguntadaAt?: string
   ofertaTipo?: 'single' | 'bundle'
@@ -215,6 +216,7 @@ export async function GET(req: NextRequest) {
         telefono,
         estadoDisponibilidad,
         disponibleHasta,
+        aceptaNuevasOfertas,
         extensionPendiente,
         extensionPreguntadaAt
       }`,
@@ -244,6 +246,21 @@ export async function GET(req: NextRequest) {
               estadoDisponibilidad: rep.estadoDisponibilidad,
               disponibleHasta: rep.disponibleHasta,
             })
+            // REGLA: la expiración de sesión NUNCA cancela una orden activa ni
+            // saca al repartidor de la navegación. Solo registra la intención:
+            // al completar la entrega quedará fuera de servicio.
+            // Idempotente: si ya se registró la intención, NO se re-avisa
+            // (el cron corre repetidamente mientras el servicio continúa).
+            if (rep.aceptaNuevasOfertas !== false) {
+              await backendClient
+                .patch(rep._id)
+                .set({ aceptaNuevasOfertas: false, ultimaActividad: nowIso })
+                .commit()
+              await sendBotMessage(
+                rep.telefono,
+                `Tu sesion de disponibilidad termino.\nSigues en servicio hasta completar tu pedido actual: al entregar quedaras fuera de servicio.`
+              ).catch(() => null)
+            }
             return
           }
 

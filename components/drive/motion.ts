@@ -42,6 +42,7 @@ export const DRIVE_RADIUS = {
   inner: "rounded-xl",
   /** Paneles flotantes (nav bar). */
   panel: "rounded-2xl",
-  /** Sheet inferior (solo esquinas superiores). */
-  sheet: "rounded-t-3xl",
+  /** Sheet inferior: RECTANGULAR (lenguaje de herramienta operativa, sin
+   *  esquinas redondeadas). El anclaje y la sombra vienen de DRIVE_ELEVATION. */
+  sheet: "",
 } as const;

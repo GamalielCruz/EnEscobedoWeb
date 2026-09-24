@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireDriver } from "@/lib/driver-auth";
-import { connectDriverSession, disconnectDriverSession } from "@/lib/driver-actions";
+import {
+  connectDriverSession,
+  disconnectDriverSession,
+  resumeReceivingNewOffers,
+  stopReceivingNewOffers,
+} from "@/lib/driver-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -57,8 +62,40 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ connected: false });
   }
 
+  // "Dejar de recibir pedidos": apaga la intención de recibir NUEVAS ofertas.
+  // Con orden activa NO desconecta: el servicio continúa y al completar queda
+  // offline. Sin orden activa equivale a desconectar ya.
+  if (action === "stop_offers") {
+    const result = await stopReceivingNewOffers(repartidor._id);
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: 409 });
+    }
+
+    return NextResponse.json({
+      connected: result.newState !== "offline",
+      acceptsNewOffers: false,
+      inService: result.newState === "in_service",
+    });
+  }
+
+  // "Seguir recibiendo pedidos": reactiva la intención de recibir NUEVAS
+  // ofertas DURANTE un servicio activo (Hoja de ruta). Se puede alternar en
+  // cualquier momento del viaje; nunca toca la orden en curso.
+  if (action === "resume_offers") {
+    const result = await resumeReceivingNewOffers(repartidor._id);
+    if (!result.ok) {
+      return NextResponse.json({ error: result.error }, { status: 409 });
+    }
+
+    return NextResponse.json({
+      connected: true,
+      acceptsNewOffers: true,
+      inService: result.newState === "in_service",
+    });
+  }
+
   return NextResponse.json(
-    { error: "Acción inválida. Usa 'connect' o 'disconnect'." },
+    { error: "Acción inválida. Usa 'connect', 'disconnect', 'stop_offers' o 'resume_offers'." },
     { status: 400 }
   );
 }

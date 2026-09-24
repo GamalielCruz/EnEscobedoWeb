@@ -1,21 +1,25 @@
-import { appendOrderEvent } from "@/lib/order-events";
+import { appendOrderEvent, type OrderEventType } from "@/lib/order-events";
 import { buildAddressMapsUrl } from "@/lib/order-maps";
 import { isOrderDispatchable } from "@/lib/order-state";
-import { isDriverDispatchEnabled } from "@/lib/fulfillment";
+import { isDriverDispatchEnabled, isOrderDispatchEnabled } from "@/lib/fulfillment";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { sendMandadoNoDriverAvailable } from "@/lib/mandado-whatsapp";
 import { getDispatchConfig } from "@/lib/dispatch/dispatch-config";
 import { sendBundleDeliveryOffer, sendDeliveryOffer, sendMandadoDeliveryOffer, sendWhatsAppInteractiveMessage, sendWhatsAppMessage } from "./whatsapp";
 import { isWhatsAppConversationOpen, buildMandadoDeliveryOfferMessage } from "./whatsapp-conversation";
 import { rankDriverCandidates } from "@/lib/dispatch/matching";
+import {
+  buildOfferTiming,
+  offerTerminalStatusForReleaseReason,
+  type OfferTiming,
+} from "@/lib/dispatch/offer-lifecycle";
 
-const OFFER_TTL_SECONDS_MANDADO = 15;
-const OFFER_TTL_SECONDS_DEFAULT = 10 * 60; // 10 minutos para restaurantes y otros
 const ADMIN_PHONE = process.env.ADMIN_WHATSAPP_PHONE;
 
 type DispatchOrder = {
   _id: string;
   _rev: string;
+  orderType?: "delivery" | "pickup";
   orderNumber: string;
   customerName?: string;
   phone?: string;
@@ -27,8 +31,16 @@ type DispatchOrder = {
   dispatchStatus?: "scheduled" | "waiting_for_driver" | "offered" | "accepted" | "at_door" | "completed";
   deliveryOfertaEnviada?: boolean;
   deliveryOfertaExpiresAt?: string;
+  /** Ciclo de vida de la oferta vigente (server-driven). */
+  offerStatus?: string;
+  offerId?: string;
+  offerAttempt?: number;
+  offerCreatedAt?: string;
+  offerDeliveryDeadlineAt?: string;
+  offerShownAt?: string;
   repartidorAsignado?: unknown;
   offeredToRef?: string;
+  lastOfferStatus?: string;
   shippingAddress?: {
     line1?: string;
     street?: string;
@@ -77,6 +89,13 @@ const ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   dispatchStatus,
   deliveryOfertaEnviada,
   deliveryOfertaExpiresAt,
+  offerStatus,
+  offerId,
+  offerAttempt,
+  offerCreatedAt,
+  offerDeliveryDeadlineAt,
+  offerShownAt,
+  lastOfferStatus,
   repartidorAsignado,
   "offeredToRef": offeredTo._ref,
   "shippingAddress": shippingAddress,
@@ -94,6 +113,7 @@ const ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
 const ORDERS_QUERY = `*[_type == "order" && _id in $orderIds]{
   _id,
   _rev,
+  orderType,
   orderNumber,
   customerName,
   phone,
@@ -105,6 +125,13 @@ const ORDERS_QUERY = `*[_type == "order" && _id in $orderIds]{
   dispatchStatus,
   deliveryOfertaEnviada,
   deliveryOfertaExpiresAt,
+  offerStatus,
+  offerId,
+  offerAttempt,
+  offerCreatedAt,
+  offerDeliveryDeadlineAt,
+  offerShownAt,
+  lastOfferStatus,
   repartidorAsignado,
   "offeredToRef": offeredTo._ref,
   "shippingAddress": shippingAddress,
@@ -116,7 +143,7 @@ const ORDERS_QUERY = `*[_type == "order" && _id in $orderIds]{
   "storeAddress": coalesce(affiliateStore->address.street, mandadoOrigin.label)
 }`;
 
-const STORE_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && disponible == true && estadoDisponibilidad == "available" && (!defined(disponibleHasta) || disponibleHasta > $now) && tiendaAsignada._ref == $storeId] | order(_updatedAt asc){
+const STORE_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && disponible == true && estadoDisponibilidad == "available" && aceptaNuevasOfertas != false && (!defined(disponibleHasta) || disponibleHasta > $now) && tiendaAsignada._ref == $storeId] | order(_updatedAt asc){
   _id,
   nombre,
   telefono,
@@ -126,7 +153,7 @@ const STORE_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && dispon
   ultimaActividad
 }`;
 
-const COMMUNITY_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && disponible == true && estadoDisponibilidad == "available" && (!defined(disponibleHasta) || disponibleHasta > $now) && !defined(tiendaAsignada)] | order(_updatedAt asc){
+const COMMUNITY_DRIVERS_QUERY = `*[_type == "repartidor" && activo == true && disponible == true && estadoDisponibilidad == "available" && aceptaNuevasOfertas != false && (!defined(disponibleHasta) || disponibleHasta > $now) && !defined(tiendaAsignada)] | order(_updatedAt asc){
   _id,
   nombre,
   telefono,
@@ -197,13 +224,6 @@ function createDriverRef(driverId: string) {
   return { _type: "reference" as const, _ref: driverId };
 }
 
-function buildOfferWindow(serviceKind?: string) {
-  const now = new Date();
-  const ttl = serviceKind === "mandado" ? OFFER_TTL_SECONDS_MANDADO : OFFER_TTL_SECONDS_DEFAULT;
-  const expiresAt = new Date(now.getTime() + ttl * 1000);
-  return { nowIso: now.toISOString(), expiresAtIso: expiresAt.toISOString() };
-}
-
 function buildAddress(order: DispatchOrder) {
   if (!order.shippingAddress) return "Ver pedido";
   return [order.shippingAddress.line1, order.shippingAddress.street, order.shippingAddress.city].filter(Boolean).join(", ").trim() || "Ver pedido";
@@ -244,6 +264,9 @@ async function fetchCandidateDrivers(order: DispatchOrder, excludedDriverIds: st
 async function setOrdersWaiting(orderIds: string[], reason: string) {
   const orders = await fetchOrders(orderIds);
   const now = new Date().toISOString();
+  // Snapshot terminal: EXPIRED / REJECTED / CANCELLED quedan visibles en el
+  // Dispatch Center aunque la orden vuelva a la cola (waiting_for_driver).
+  const terminalStatus = offerTerminalStatusForReleaseReason(reason);
 
   await Promise.allSettled(
     orders
@@ -256,80 +279,146 @@ async function setOrdersWaiting(orderIds: string[], reason: string) {
             deliveryOfertaEnviada: false,
             dispatchStatus: "waiting_for_driver",
             updatedAt: now,
+            ...(terminalStatus
+              ? {
+                  lastOfferStatus: terminalStatus,
+                  lastOfferId: order.offerId,
+                  lastOfferDriverId: order.offeredToRef,
+                  lastOfferEndedAt: now,
+                  // La oferta TERMINAL se conserva en la orden como registro
+                  // histórico/auditoría (la oferta NO se borra). Deja de ser
+                  // "activa": el Dispatch Center ya no la cuenta en la
+                  // pestaña/contador "Ofertas" y decideOfferAcceptance la
+                  // rechaza aunque llegue tarde una aceptación en vuelo.
+                  offerStatus: terminalStatus,
+                  // Deadline congelado al momento del cierre (auditoría).
+                  offerDeliveryDeadlineAt:
+                    order.offerDeliveryDeadlineAt ?? order.deliveryOfertaExpiresAt ?? null,
+                }
+              : {}),
           })
-          .unset(["deliveryOfertaExpiresAt", "offeredTo"])
+          .unset([
+            // El deadline VIGENTE se va: ya no hay oferta activa que expire.
+            "deliveryOfertaExpiresAt",
+            "offeredTo",
+            // NOTA: offerStatus/offerId/offerCreatedAt/offerDeliveryDeadlineAt/
+            // offerShownAt se CONSERVAN cuando la oferta es terminal (histórico).
+            // Se limpian solo en liberaciones SIN oferta (redispatch, modo).
+            ...(terminalStatus
+              ? []
+              : [
+                  "offerStatus",
+                  "offerId",
+                  "offerCreatedAt",
+                  "offerDeliveryDeadlineAt",
+                  "offerShownAt",
+                  "offerDeliveredAt",
+                ]),
+          ])
           .commit()
       )
   );
 
-  await Promise.allSettled(
-    orders
-      .filter((order) => !order.repartidorAsignado)
-      .map((order) =>
-        appendOrderEvent(order._id, {
-          type:
-            reason === "offer_expired"
-              ? "offer_expired"
-              : reason === "offer_cancelled"
-                ? "offer_cancelled"
-                : "offer_rejected",
-          source: "delivery-dispatch",
-          reason,
-        })
-      )
-  );
+  // Sólo las liberaciones que cierran una oferta generan evento de oferta.
+  // Volver a la cola (no_drivers_available, redispatch, cambio de modo) no es
+  // un resultado de oferta y no debe registrarse como expiración/rechazo.
+  if (terminalStatus) {
+    const eventType: OrderEventType =
+      terminalStatus === "cancelled"
+        ? "offer_cancelled"
+        : terminalStatus === "rejected"
+          ? "offer_rejected"
+          : terminalStatus === "accepted"
+            ? "offer_accepted"
+            : "offer_expired";
+
+    await Promise.allSettled(
+      orders
+        .filter((order) => !order.repartidorAsignado)
+        .map((order) =>
+          appendOrderEvent(order._id, {
+            type: eventType,
+            source: "delivery-dispatch",
+            reason,
+            payload: { offerId: order.offerId, driverId: order.offeredToRef, reason },
+          })
+        )
+    );
+  }
 
   if (orders.length > 0) {
     console.log("[delivery-dispatch] ordenes esperando repartidor", { reason, orderIds: orders.map((order) => order._id) });
   }
 }
 
-async function markOrdersAsOffered(orderIds: string[], driverId: string, expiresAtIso: string) {
+async function markOrdersAsOffered(orderIds: string[], driverId: string, timing: OfferTiming) {
   const orders = await fetchOrders(orderIds);
   const now = new Date().toISOString();
 
   await Promise.all(
-    orders.map((order) =>
-      backendClient
+    orders.map((order) => {
+      const attempt = (order.offerAttempt ?? 0) + 1;
+      return backendClient
         .patch(order._id)
         .ifRevisionId(order._rev)
         .set({
           deliveryOfertaEnviada: true,
-          deliveryOfertaExpiresAt: expiresAtIso,
+          // Mientras está PENDING_DELIVERY esta fecha es la ventana de ENTREGA.
+          // Al hacer ACK se reemplaza por shownAt + 14 s (ventana de RESPUESTA).
+          deliveryOfertaExpiresAt: timing.expiresAt,
           dispatchStatus: "offered",
           offeredTo: createDriverRef(driverId),
+          offerStatus: timing.status,
+          offerId: timing.offerId,
+          offerAttempt: attempt,
+          offerCreatedAt: timing.createdAt,
+          offerDeliveryDeadlineAt: timing.deliveryDeadlineAt,
           updatedAt: now,
         })
-        .commit()
-    )
+        .unset(["offerShownAt", "offerDeliveredAt", "offerAcceptedAt", "offerRejectedAt"])
+        .commit();
+    })
   );
 
   await Promise.allSettled(
     orders.map((order) =>
       appendOrderEvent(order._id, {
-        type: "offer_sent",
+        type: "offer_created",
         source: "delivery-dispatch",
         actor: driverId,
-        payload: { driverId, expiresAt: expiresAtIso },
+        payload: {
+          offerId: timing.offerId,
+          driverId,
+          status: timing.status,
+          attempt: (order.offerAttempt ?? 0) + 1,
+          createdAt: timing.createdAt,
+          sentAt: timing.createdAt,
+          expiresAt: timing.expiresAt,
+          deliveryDeadlineAt: timing.deliveryDeadlineAt,
+        },
       })
     )
   );
 }
 
-async function prepareDriverForOffer(driver: DispatchDriver, orderIds: string[], storeId: string | null, offerType: "single" | "bundle", nowIso: string, expiresAtIso: string) {
+async function prepareDriverForOffer(driver: DispatchDriver, orderIds: string[], storeId: string | null, offerType: "single" | "bundle", timing: OfferTiming) {
   const restaurantPatch = storeId ? { restauranteOferta: createOrderRef(storeId) } : {};
   await backendClient
     .patch(driver._id)
     .set({
       estadoDisponibilidad: "offer_pending",
       ofertaTipo: offerType,
+      ofertaStatus: timing.status,
+      ofertaId: timing.offerId,
       pedidosOfertados: orderIds.map((orderId) => createOrderRef(orderId)),
       ...restaurantPatch,
-      ofertaEnviadaAt: nowIso,
-      ofertaExpiraAt: expiresAtIso,
+      ofertaEnviadaAt: timing.createdAt,
+      // Espejo del deadline vigente: PENDING → ventana de entrega; ACTIVE → 14 s.
+      ofertaExpiraAt: timing.expiresAt,
       ultimoPedidoOfertado: createOrderRef(orderIds[orderIds.length - 1]),
-      ultimaActividad: nowIso,
+      ultimaActividad: timing.createdAt,
     })
+    .unset(["ofertaMostradaAt"])
     .commit();
 }
 
@@ -349,7 +438,17 @@ async function rollbackDriverOffer(driverId: string) {
   await backendClient
     .patch(driverId)
     .set({ estadoDisponibilidad: "available", ultimaActividad: new Date().toISOString() })
-    .unset(["ultimoPedidoOfertado", "pedidosOfertados", "restauranteOferta", "ofertaTipo", "ofertaEnviadaAt", "ofertaExpiraAt"])
+    .unset([
+      "ultimoPedidoOfertado",
+      "pedidosOfertados",
+      "restauranteOferta",
+      "ofertaTipo",
+      "ofertaStatus",
+      "ofertaId",
+      "ofertaEnviadaAt",
+      "ofertaExpiraAt",
+      "ofertaMostradaAt",
+    ])
     .commit()
     .catch(() => null);
 }
@@ -389,10 +488,10 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
   const totalLabel = buildTotalLabel(order.totalPrice);
   const paymentMethodLabel = buildPaymentMethodLabel(order.paymentMethod);
   const mapsUrl = buildAddressMapsUrl(order.shippingAddress, address);
-  const { nowIso, expiresAtIso } = buildOfferWindow(order.serviceKind);
+  const timing = buildOfferTiming(order.serviceKind, new Date(), crypto.randomUUID());
 
-  await markOrdersAsOffered([order._id], selectedDriver._id, expiresAtIso);
-  await prepareDriverForOffer(selectedDriver, [order._id], order.storeId ?? null, "single", nowIso, expiresAtIso);
+  await markOrdersAsOffered([order._id], selectedDriver._id, timing);
+  await prepareDriverForOffer(selectedDriver, [order._id], order.storeId ?? null, "single", timing);
 
   try {
     if (order.serviceKind === "mandado") {
@@ -468,7 +567,7 @@ async function dispatchSingleOffer(order: DispatchOrder, excludedDriverIds: stri
     orderNumber: order.orderNumber,
     repartidorId: selectedDriver._id,
     repartidorNombre: selectedDriver.nombre,
-    expiraAt: expiresAtIso,
+    expiraAt: timing.expiresAt,
     rankingScore: rankedDrivers[0]?.score ?? null,
   });
   return true;
@@ -504,7 +603,11 @@ export async function offerOrderToDriver(
   if (order.serviceKind !== "mandado") {
     return { ok: false, error: "El flujo de oferta solo aplica a mandados." };
   }
-  if (!isDriverDispatchEnabled(order.storeHasOwnDelivery)) {
+  if (!isOrderDispatchEnabled({
+    orderType: order.orderType,
+    serviceKind: order.serviceKind,
+    storeHasOwnDelivery: order.storeHasOwnDelivery,
+  })) {
     return { ok: false, error: "El reparto no está habilitado para este pedido." };
   }
   if (!isOrderDispatchable(order)) {
@@ -526,11 +629,11 @@ export async function offerOrderToDriver(
     return { ok: false, error: "La sesión de disponibilidad del repartidor terminó; reanúdalo antes de ofertar." };
   }
 
-  const { nowIso, expiresAtIso } = buildOfferWindow(order.serviceKind);
+  const timing = buildOfferTiming(order.serviceKind, new Date(), crypto.randomUUID());
 
   try {
-    await markOrdersAsOffered([order._id], driver._id, expiresAtIso);
-    await prepareDriverForOffer(driver, [order._id], order.storeId ?? null, "single", nowIso, expiresAtIso);
+    await markOrdersAsOffered([order._id], driver._id, timing);
+    await prepareDriverForOffer(driver, [order._id], order.storeId ?? null, "single", timing);
   } catch (error) {
     // Limpieza ante fallo parcial: si markOrdersAsOffered ya mutó la orden (o
     // prepareDriverForOffer al repartidor), se revierte el estado de oferta.
@@ -604,7 +707,7 @@ export async function offerOrderToDriver(
     orderNumber: order.orderNumber,
     repartidorId: driver._id,
     repartidorNombre: driver.nombre,
-    expiraAt: expiresAtIso,
+    expiraAt: timing.expiresAt,
     reason: options.reason,
   });
   return { ok: true };
@@ -639,7 +742,11 @@ export async function dispatchDeliveryBundle(orderIds: string[], options: Dispat
   }
 
   const orders = await fetchOrders(uniqueOrderIds);
-  if (orders.some((order) => !isDriverDispatchEnabled(order.storeHasOwnDelivery))) return false;
+  if (orders.some((order) => !isOrderDispatchEnabled({
+    orderType: order.orderType,
+    serviceKind: order.serviceKind,
+    storeHasOwnDelivery: order.storeHasOwnDelivery,
+  }))) return false;
   if (orders.length !== uniqueOrderIds.length) {
     console.error("[delivery-dispatch] faltan pedidos para bundle", { orderIds: uniqueOrderIds });
     return false;
@@ -664,9 +771,9 @@ export async function dispatchDeliveryBundle(orderIds: string[], options: Dispat
     return false;
   }
 
-  const { nowIso, expiresAtIso } = buildOfferWindow(firstOrder.serviceKind);
-  await markOrdersAsOffered(uniqueOrderIds, selectedDriver._id, expiresAtIso);
-  await prepareDriverForOffer(selectedDriver, uniqueOrderIds, firstOrder.storeId, "bundle", nowIso, expiresAtIso);
+  const timing = buildOfferTiming(firstOrder.serviceKind, new Date(), crypto.randomUUID());
+  await markOrdersAsOffered(uniqueOrderIds, selectedDriver._id, timing);
+  await prepareDriverForOffer(selectedDriver, uniqueOrderIds, firstOrder.storeId, "bundle", timing);
 
   try {
     await sendBundleDeliveryOffer(
@@ -688,7 +795,7 @@ export async function dispatchDeliveryBundle(orderIds: string[], options: Dispat
     orderNumbers: orders.map((order) => order.orderNumber),
     repartidorId: selectedDriver._id,
     repartidorNombre: selectedDriver.nombre,
-    expiraAt: expiresAtIso,
+    expiraAt: timing.expiresAt,
   });
   return true;
 }
@@ -741,8 +848,11 @@ export async function cancelOrderOffer(
         "pedidosOfertados",
         "restauranteOferta",
         "ofertaTipo",
+        "ofertaStatus",
+        "ofertaId",
         "ofertaEnviadaAt",
         "ofertaExpiraAt",
+        "ofertaMostradaAt",
       ])
       .commit()
       .catch(() => null);
@@ -764,7 +874,11 @@ export async function releaseOrdersForDriver(orderIds: string[], driverId: strin
 export async function redispatchOrders(orderIds: string[], excludedDriverIds: string[] = []): Promise<boolean> {
   const openOrders = await fetchOrders(orderIds);
   const redispatchableIds = openOrders
-    .filter((order) => isDriverDispatchEnabled(order.storeHasOwnDelivery) && isOrderDispatchable(order))
+    .filter((order) => isOrderDispatchEnabled({
+      orderType: order.orderType,
+      serviceKind: order.serviceKind,
+      storeHasOwnDelivery: order.storeHasOwnDelivery,
+    }) && isOrderDispatchable(order))
     .map((order) => order._id);
   if (redispatchableIds.length === 0) return false;
 
@@ -815,7 +929,11 @@ export async function dispatchDeliveryOffer(orderId: string, options: DispatchOp
       console.error(`[delivery-dispatch] orden no encontrada ${orderId}`);
       return false;
     }
-    if (!isDriverDispatchEnabled(order.storeHasOwnDelivery)) return false;
+    if (!isOrderDispatchEnabled({
+      orderType: order.orderType,
+      serviceKind: order.serviceKind,
+      storeHasOwnDelivery: order.storeHasOwnDelivery,
+    })) return false;
     if (!isOrderDispatchable(order)) {
       console.log("[delivery-dispatch] pedido no despachable", {
         orderId: order._id,

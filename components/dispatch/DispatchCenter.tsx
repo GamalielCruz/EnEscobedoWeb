@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   BellRing,
   CheckCircle2,
-  ClipboardList,
   Clock,
   History,
   MessagesSquare,
@@ -14,9 +13,7 @@ import {
   RefreshCw,
   Settings2,
   Sun,
-  Truck,
   Users,
-  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -37,7 +34,7 @@ import { AssignModal } from "@/components/dispatch/AssignModal";
 import { OrderDetailsModal } from "@/components/dispatch/OrderDetailsModal";
 import { NipIncidentsPanel } from "@/components/dispatch/NipIncidentsPanel";
 import { UpcomingScheduledPanel } from "@/components/dispatch/UpcomingScheduledPanel";
-import { shortOrderCode } from "@/lib/dispatch/dispatch-format";
+import { hasActiveOffer, shortOrderCode } from "@/lib/dispatch/dispatch-format";
 import { useOfferAlertSound } from "@/hooks/useOfferAlertSound";
 
 const POLL_INTERVAL_MS = 12_000;
@@ -48,10 +45,10 @@ const modeMeta: Record<DispatchMode, { label: string; hint: string; abbr: string
   assisted: { label: "Asistido", hint: "El sistema recomienda y tú confirmas.", abbr: "Asistido" },
 };
 
-const modeBanner: Record<DispatchMode, { dot: string; badge: string }> = {
-  auto: { dot: "bg-emerald-500", badge: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-300" },
-  manual: { dot: "bg-red-500", badge: "bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-300" },
-  assisted: { dot: "bg-amber-400", badge: "bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-300" },
+const modeBanner: Record<DispatchMode, { dot: string }> = {
+  auto: { dot: "bg-emerald-500" },
+  manual: { dot: "bg-red-500" },
+  assisted: { dot: "bg-amber-400" },
 };
 
 const severityStyle: Record<string, { chip: string; dot: string }> = {
@@ -59,6 +56,16 @@ const severityStyle: Record<string, { chip: string; dot: string }> = {
   warning: { chip: "bg-amber-50 text-amber-700 dark:bg-amber-500/10 dark:text-amber-300", dot: "bg-amber-400" },
   info: { chip: "bg-sky-50 text-sky-700 dark:bg-sky-500/10 dark:text-sky-300", dot: "bg-sky-400" },
 };
+
+/** Resumen operativo compacto: un dato por estado, sin barra propia. */
+function SummaryStat({ label, value, tone }: { label: string; value: number; tone: string }) {
+  return (
+    <span className="flex items-baseline gap-1.5">
+      <span className="text-[11px] text-slate-400 dark:text-slate-500">{label}</span>
+      <span className={`text-sm font-black tabular-nums ${tone}`}>{value}</span>
+    </span>
+  );
+}
 
 export function DispatchCenter() {
   const [snapshot, setSnapshot] = useState<DispatchSnapshot | null>(null);
@@ -75,13 +82,16 @@ export function DispatchCenter() {
   const [busy, setBusy] = useState(false);
   const [alertsOpen, setAlertsOpen] = useState(false);
   const [detailsOrder, setDetailsOrder] = useState<DispatchOrderCard | null>(null);
-  const [mapExpanded, setMapExpanded] = useState(false);
+  const [newOrderIds, setNewOrderIds] = useState<Set<string>>(new Set());
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Sound alert for new offers ──────────────────────────────
   const { notifyOfferChange } = useOfferAlertSound();
   const prevOfferedIdsRef = useRef<Set<string>>(new Set());
   const initializedRef = useRef(false);
+  // ── Detección de pedidos nuevos (para priorizarlos y señalarlos) ──
+  const knownOrderIdsRef = useRef<Set<string>>(new Set());
+  const ordersInitializedRef = useRef(false);
 
   const config = snapshot?.config ?? null;
   const unreadSupportTotal = (snapshot?.drivers ?? []).reduce(
@@ -127,6 +137,17 @@ export function DispatchCenter() {
     return () => { cancelled = true; };
   }, [selectedOrderId, snapshot?.orders]);
 
+  // Marcar como "visto" un pedido al seleccionarlo (deja de ser "Nuevo").
+  useEffect(() => {
+    if (!selectedOrderId) return;
+    setNewOrderIds((prev) => {
+      if (!prev.has(selectedOrderId)) return prev;
+      const next = new Set(prev);
+      next.delete(selectedOrderId);
+      return next;
+    });
+  }, [selectedOrderId]);
+
   async function changeMode(mode: DispatchMode) {
     if (!config || config.mode === mode) return;
     setBusy(true);
@@ -154,6 +175,39 @@ export function DispatchCenter() {
 
   function openAssignModal(order: DispatchOrderCard, driver: DispatchDriverCard) {
     setAssignDraft({ order, driver, isReassign: Boolean(order.driverId && order.driverId !== driver._id) });
+  }
+
+  /**
+   * Asignación EN CONTEXTO (sin modal): es el flujo normal desde las
+   * recomendaciones. Solo la reasignación (pedido ya tomado por otro
+   * repartidor) pide confirmación.
+   */
+  async function quickAssign(order: DispatchOrderCard, driver: DispatchDriverCard) {
+    const isMandado = order.serviceKind === "mandado";
+    setBusy(true);
+    try {
+      const res = await fetch("/api/admin/dispatch/assign", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          isMandado
+            ? { action: "offer", orderId: order._id, driverId: driver._id, reason: "oferta manual" }
+            : { action: "assign", orderId: order._id, driverId: driver._id, reason: "asignación manual" }
+        ),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Error");
+      notify("success", isMandado ? `Oferta enviada a ${driver.name} para #${shortOrderCode(order.orderNumber)}.` : `#${shortOrderCode(order.orderNumber)} asignado a ${driver.name}.`);
+      await fetchSnapshot();
+    } catch (err) { notify("error", err instanceof Error ? err.message : "Error"); await fetchSnapshot().catch(() => null); }
+    finally { setBusy(false); }
+  }
+
+  function handleAssign(order: DispatchOrderCard, driver: DispatchDriverCard) {
+    if (order.driverId && order.driverId !== driver._id) {
+      openAssignModal(order, driver);
+      return;
+    }
+    void quickAssign(order, driver);
   }
 
   async function confirmAssignment() {
@@ -233,8 +287,7 @@ export function DispatchCenter() {
     if (!snapshot) return;
 
     const currentOfferedIds = new Set(
-      (snapshot.orders ?? [])
-        .filter((o) => o.dispatchStatus === "offered")
+      (snapshot.orders ?? []).filter((o) => hasActiveOffer(o))
         .map((o) => o._id)
     );
 
@@ -260,93 +313,134 @@ export function DispatchCenter() {
     prevOfferedIdsRef.current = currentOfferedIds;
   }, [snapshot, notifyOfferChange]);
 
+  // Detect NEW orders (no vistos) → badge + animación, sin alertas invasivas.
+  useEffect(() => {
+    if (!snapshot) return;
+    const currentIds = new Set(snapshot.orders.map((o) => o._id));
+    if (!ordersInitializedRef.current) {
+      knownOrderIdsRef.current = currentIds;
+      ordersInitializedRef.current = true;
+      return;
+    }
+    const fresh = snapshot.orders.filter((o) => !knownOrderIdsRef.current.has(o._id) && !o.driverId);
+    if (fresh.length > 0) {
+      setNewOrderIds((prev) => {
+        const next = new Set(prev);
+        for (const order of fresh) next.add(order._id);
+        return next;
+      });
+    }
+    knownOrderIdsRef.current = currentIds;
+  }, [snapshot]);
+
   const mode = config?.mode ?? "auto";
   const unassignedOrders = (snapshot?.orders ?? []).filter((o) => !o.driverId);
   const assignedOrders = (snapshot?.orders ?? []).filter((o) => o.driverId);
   const selectedOrder = snapshot?.orders.find((o) => o._id === selectedOrderId) ?? null;
   const alertCount = (snapshot?.alerts ?? []).length;
   const hasScheduled = (snapshot?.upcomingScheduled?.length ?? 0) > 0;
+  const offeredCount = (snapshot?.orders ?? []).filter((o) => hasActiveOffer(o)).length;
+  const freshQueueCount = unassignedOrders.filter((o) => newOrderIds.has(o._id)).length;
+
+  const tabs = [
+    { key: "ops" as const, label: "Operación", shortLabel: "Ops", icon: Activity },
+    { key: "config" as const, label: "Configuración", shortLabel: "Config", icon: Settings2 },
+    { key: "history" as const, label: "Historial", shortLabel: "Historial", icon: History },
+    { key: "support" as const, label: "Mensajes", shortLabel: "Chat", icon: MessagesSquare },
+  ];
 
   return (
     <div className={`flex h-[calc(100dvh-64px)] min-h-0 flex-col overflow-hidden ${dark ? "dark" : ""}`}>
-      {/* ═══ HEADER ═══ */}
-      <header className="flex shrink-0 flex-col border-b border-slate-200 bg-white dark:border-white/10 dark:bg-[#0d1526]">
-        {/* Row 1: Title + Mode + Actions */}
-        <div className="flex items-center gap-3 px-4 py-2">
-          <div className="flex items-center gap-2">
-            <span className="relative flex h-2.5 w-2.5 shrink-0">
-              <span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 ${modeBanner[mode].dot}`} />
-              <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${modeBanner[mode].dot}`} />
-            </span>
-            <h1 className="text-sm font-bold text-[#09193B] dark:text-white lg:text-base">Dispatch Center</h1>
-          </div>
-
-          <div className="flex items-center rounded-lg bg-slate-100 p-0.5 dark:bg-white/5">
-            {(Object.keys(modeMeta) as DispatchMode[]).map((m) => (
-              <button key={m} type="button" onClick={() => changeMode(m)} disabled={busy} title={modeMeta[m].hint}
-                className={`rounded-md px-2.5 py-1 text-[11px] font-semibold transition-all sm:text-xs ${mode === m ? "bg-white text-[#EB1902] shadow-sm dark:bg-[#EB1902] dark:text-white" : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white"}`}>
-                <span className="hidden sm:inline">{modeMeta[m].label}</span>
-                <span className="sm:hidden">{modeMeta[m].abbr}</span>
-              </button>
-            ))}
-          </div>
-
-          <div className="ml-auto flex items-center gap-1.5">
-            <Button type="button" variant="outline" size="sm" onClick={() => setDark((v) => !v)}
-              className="hidden h-8 w-8 rounded-lg border-slate-200 p-0 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 md:inline-flex" aria-label="Modo oscuro">
-              {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-            </Button>
-            <Button type="button" variant="outline" size="sm" onClick={fetchSnapshot} disabled={loading}
-              className="h-8 gap-1.5 rounded-lg border-slate-200 px-2.5 text-xs dark:border-white/10 dark:bg-white/5 dark:text-slate-200">
-              <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-              <span className="hidden sm:inline">Actualizar</span>
-            </Button>
-          </div>
+      {/* ═══ CABECERA COMPACTA ═══ */}
+      <header className="flex shrink-0 items-center gap-3 border-b border-slate-200 bg-white px-4 py-2.5 dark:border-white/10 dark:bg-[#0d1526]">
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-60 ${modeBanner[mode].dot}`} />
+            <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${modeBanner[mode].dot}`} />
+          </span>
+          <h1 className="text-sm font-black text-[#09193B] dark:text-white lg:text-base">Dispatch Center</h1>
         </div>
 
-        {/* Row 2: KPIs — prominent numbers with labels */}
-        <div className="flex items-center gap-4 border-t border-slate-100 px-4 py-1.5 dark:border-white/5">
-          {[
-            { label: "Sin asignar", value: unassignedOrders.length, color: "text-[#EB1902]", icon: ClipboardList, highlight: true },
-            { label: "Ofertas", value: (snapshot?.orders ?? []).filter((o) => o.dispatchStatus === "offered").length, color: "text-amber-600", icon: Clock, highlight: false },
-            { label: "Asignados", value: assignedOrders.length, color: "text-emerald-600", icon: CheckCircle2, highlight: false },
-            { label: "Disponibles", value: snapshot?.kpis.availableDrivers ?? 0, color: "text-emerald-600", icon: Truck, highlight: false },
-            { label: "Ocupados", value: snapshot?.kpis.busyDrivers ?? 0, color: "text-amber-600", icon: Activity, highlight: false },
-          ].map((kpi) => (
-            <div key={kpi.label} className={`flex items-center gap-1.5 ${kpi.highlight ? "" : "hidden sm:flex"}`}>
-              <kpi.icon className="h-3.5 w-3.5 text-slate-400 dark:text-slate-500" />
-              <span className="text-[11px] text-slate-500 dark:text-slate-400">{kpi.label}</span>
-              <span className={`text-sm font-bold ${kpi.color}`}>{kpi.value}</span>
-            </div>
+        <div className="flex shrink-0 items-center rounded-lg bg-slate-100 p-0.5 dark:bg-white/5">
+          {(Object.keys(modeMeta) as DispatchMode[]).map((m) => (
+            <button key={m} type="button" onClick={() => changeMode(m)} disabled={busy} title={modeMeta[m].hint}
+              className={`rounded-md px-2.5 py-1 text-[11px] font-bold transition-all sm:text-xs ${mode === m ? "bg-white text-[#EB1902] shadow-sm dark:bg-[#EB1902] dark:text-white" : "text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white"}`}>
+              <span className="hidden sm:inline">{modeMeta[m].label}</span>
+              <span className="sm:hidden">{modeMeta[m].abbr}</span>
+            </button>
           ))}
-          <div className="ml-auto hidden items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400 lg:flex">
+        </div>
+
+        {/* Resumen compacto siempre visible en pantallas medianas; completo en
+            grandes. No es una segunda barra de navegación. */}
+        <span className="flex shrink-0 items-baseline gap-1.5 lg:hidden">
+          <span className="text-[11px] text-slate-400 dark:text-slate-500">Sin asignar</span>
+          <span className="text-sm font-black tabular-nums text-[#EB1902]">{unassignedOrders.length}</span>
+        </span>
+
+        <div className="hidden min-w-0 items-center gap-4 lg:flex">
+          <SummaryStat label="Sin asignar" value={unassignedOrders.length} tone="text-[#EB1902]" />
+          <SummaryStat label="Ofertas" value={offeredCount} tone="text-amber-600 dark:text-amber-400" />
+          <SummaryStat label="Asignados" value={assignedOrders.length} tone="text-emerald-600 dark:text-emerald-400" />
+          <SummaryStat label="Disponibles" value={snapshot?.kpis.availableDrivers ?? 0} tone="text-emerald-600 dark:text-emerald-400" />
+          <SummaryStat label="En servicio" value={snapshot?.kpis.busyDrivers ?? 0} tone="text-amber-600 dark:text-amber-400" />
+          <span className="flex items-center gap-1.5 text-[11px] text-slate-400 dark:text-slate-500">
             <Users className="h-3.5 w-3.5" />
-            <span>{snapshot?.kpis.connectedDrivers ?? 0}/{snapshot?.kpis.registeredDrivers ?? 0}</span>
-            <span>conectados</span>
-          </div>
+            <span className="tabular-nums">
+              {snapshot?.kpis.connectedDrivers ?? 0}/{snapshot?.kpis.registeredDrivers ?? 0}
+            </span>
+          </span>
+        </div>
+
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          <Button type="button" variant="outline" size="sm" onClick={() => setDark((v) => !v)}
+            className="hidden h-8 w-8 rounded-lg border-slate-200 p-0 dark:border-white/10 dark:bg-white/5 dark:text-slate-200 md:inline-flex" aria-label="Modo oscuro">
+            {dark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={fetchSnapshot} disabled={loading}
+            className="h-8 gap-1.5 rounded-lg border-slate-200 px-2.5 text-xs dark:border-white/10 dark:bg-white/5 dark:text-slate-200">
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            <span className="hidden sm:inline">Actualizar</span>
+          </Button>
         </div>
       </header>
 
-      {/* ═══ ALERTS / NIP / SCHEDULED — inline bar ═══ */}
+      {/* ═══ TABS (navegación sobria, separada de los indicadores) ═══ */}
+      <nav className="flex shrink-0 items-center gap-1 border-b border-slate-200 bg-white px-3 dark:border-white/10 dark:bg-[#0d1526]">
+        {tabs.map((tab) => (
+          <button key={tab.key} type="button" onClick={() => setActiveTab(tab.key)}
+            aria-current={activeTab === tab.key}
+            className={`relative flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-bold transition-colors ${activeTab === tab.key ? "border-[#EB1902] text-[#EB1902]" : "border-transparent text-slate-400 hover:text-slate-700 dark:text-slate-500 dark:hover:text-slate-200"}`}>
+            <tab.icon className="h-3.5 w-3.5" />
+            <span className="hidden sm:inline">{tab.label}</span>
+            <span className="sm:hidden">{tab.shortLabel}</span>
+            {tab.key === "support" && unreadSupportTotal > 0 && (
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-[#EB1902] px-1 text-[9px] font-bold text-white">{unreadSupportTotal}</span>
+            )}
+          </button>
+        ))}
+      </nav>
+
+      {/* ═══ ALERTAS / NIP / PROGRAMADAS ═══ */}
       {(alertCount > 0 || hasScheduled) && (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50/80 px-4 py-1.5 dark:border-white/5 dark:bg-white/[0.02]">
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-slate-100 px-4 py-1.5 dark:border-white/5">
           <NipIncidentsPanel onSelectOrder={(id) => { setSelectedOrderId(id); setAlertsOpen(false); }} notify={notify} />
           {alertCount > 0 && (
             <button type="button" onClick={() => setAlertsOpen((v) => !v)}
-              className="flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold transition hover:bg-slate-50 dark:border-white/10 dark:bg-[#0d1526]">
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold text-slate-600 transition hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-white/5">
               <BellRing className="h-3.5 w-3.5 text-[#EB1902]" />
-              <span className="text-[#09193B] dark:text-white">Alertas</span>
+              Alertas
               <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700 dark:bg-red-500/20 dark:text-red-300">{alertCount}</span>
             </button>
           )}
           {hasScheduled && (
-            <span className="flex items-center gap-1 rounded-md border border-violet-200 bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 dark:border-violet-500/20 dark:bg-violet-500/10 dark:text-violet-300">
+            <span className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-bold text-violet-600 dark:text-violet-400">
               <Clock className="h-3.5 w-3.5" />
               {snapshot!.upcomingScheduled.length} programada{snapshot!.upcomingScheduled.length !== 1 ? "s" : ""}
             </span>
           )}
           {alertsOpen && alertCount > 0 && (
-            <div className="w-full space-y-1.5 border-t border-slate-200 pt-2 dark:border-white/10">
+            <div className="w-full space-y-1.5 border-t border-slate-100 pt-2 dark:border-white/5">
               {(snapshot?.alerts ?? []).map((alert) => {
                 const style = severityStyle[alert.severity];
                 return (
@@ -366,7 +460,7 @@ export function DispatchCenter() {
         </div>
       )}
 
-      {/* ═══ SCHEDULED ORDERS — horizontal scrollable ═══ */}
+      {/* ═══ PROGRAMADAS ═══ */}
       {hasScheduled && (
         <UpcomingScheduledPanel orders={snapshot!.upcomingScheduled} onRelease={async (orderId) => {
           setBusy(true);
@@ -390,88 +484,57 @@ export function DispatchCenter() {
         </div>
       )}
 
-      {/* ═══ MAIN CONTENT ═══ */}
+      {/* ═══ CONTENIDO PRINCIPAL ═══ */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {/* Tabs */}
-        <nav className="flex shrink-0 items-center gap-0.5 border-b border-slate-200 bg-white px-4 dark:border-white/10 dark:bg-[#0d1526]">
-          {([
-            { key: "ops" as const, label: "Operación", shortLabel: "Ops", icon: Activity },
-            { key: "config" as const, label: "Configuración", shortLabel: "Config", icon: Settings2 },
-            { key: "history" as const, label: "Historial", icon: History },
-            { key: "support" as const, label: "Mensajes", shortLabel: "Chat", icon: MessagesSquare },
-          ]).map((tab) => (
-            <button key={tab.key} type="button" onClick={() => setActiveTab(tab.key)}
-              className={`relative flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-semibold transition-colors ${activeTab === tab.key ? "border-[#EB1902] text-[#EB1902]" : "border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white"}`}>
-              <tab.icon className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">{tab.label}</span>
-              <span className="sm:hidden">{tab.shortLabel ?? tab.label}</span>
-              {tab.key === "support" && unreadSupportTotal > 0 && (
-                <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-[#EB1902] px-1 text-[9px] font-bold text-white">{unreadSupportTotal}</span>
-              )}
-            </button>
-          ))}
-        </nav>
-
-        {/* Tab content */}
         {activeTab === "ops" && (
           <div className="flex min-h-0 flex-1 overflow-hidden">
             {loading && !snapshot ? (
-              <div className="grid w-full grid-cols-1 gap-3 p-3 sm:grid-cols-[1fr_320px] lg:grid-cols-[1.15fr_1fr_0.9fr]">
-                <div className="space-y-3"><Skeleton className="h-24 w-full rounded-xl" /><Skeleton className="h-24 w-full rounded-xl" /><Skeleton className="h-24 w-full rounded-xl" /></div>
-                <Skeleton className="h-64 w-full rounded-xl lg:h-full" />
-                <div className="hidden space-y-3 lg:block"><Skeleton className="h-24 w-full rounded-xl" /><Skeleton className="h-24 w-full rounded-xl" /></div>
+              <div className="grid w-full grid-cols-1 gap-3 p-3 sm:grid-cols-[1fr_320px] lg:grid-cols-[minmax(320px,1.1fr)_minmax(0,1fr)_minmax(300px,0.9fr)]">
+                <div className="space-y-3"><Skeleton className="h-24 w-full rounded-2xl" /><Skeleton className="h-24 w-full rounded-2xl" /><Skeleton className="h-24 w-full rounded-2xl" /></div>
+                <Skeleton className="h-64 w-full rounded-2xl lg:h-full" />
+                <div className="hidden space-y-3 lg:block"><Skeleton className="h-24 w-full rounded-2xl" /><Skeleton className="h-24 w-full rounded-2xl" /></div>
               </div>
             ) : (
               <>
-                {/* Desktop/Laptop: side-by-side columns */}
-                <div className="hidden w-full min-h-0 grid-cols-[1.15fr_1fr_0.9fr] gap-3 overflow-hidden p-3 sm:grid lg:grid-cols-[1.15fr_1fr_0.9fr]">
+                {/* Escritorio: cola · mapa · recomendaciones/repartidores */}
+                <div className="hidden w-full min-h-0 grid-cols-[minmax(320px,1.1fr)_minmax(0,1fr)_minmax(300px,0.9fr)] gap-3 overflow-hidden p-3 sm:grid">
                   <OrdersPanel unassigned={unassignedOrders} assigned={assignedOrders} selectedOrderId={selectedOrderId}
                     availableDrivers={snapshot?.kpis.availableDrivers ?? 0} registeredDrivers={snapshot?.kpis.registeredDrivers ?? 0}
-                    onSelectOrder={(o) => setSelectedOrderId(o._id)} onUnassign={unassign} onRedispatch={redispatch}
-                    onCancelOffer={cancelOffer} onDetails={(o) => setDetailsOrder(o)} mode={mode} />
+                    onSelectOrder={(o) => setSelectedOrderId((prev) => (prev === o._id ? null : o._id))} onUnassign={unassign} onRedispatch={redispatch}
+                    onCancelOffer={cancelOffer} onDetails={(o) => setDetailsOrder(o)} mode={mode} newOrderIds={newOrderIds} />
                   <DispatchMap orders={snapshot?.orders ?? []} stores={snapshot?.stores ?? []} zones={snapshot?.zones ?? []}
                     drivers={snapshot?.drivers ?? []} recommendations={recommendations} selectedOrderId={selectedOrderId}
                     selectedDriverId={selectedDriverId} onSelectOrder={(id) => setSelectedOrderId(id)} onSelectDriver={(id) => setSelectedDriverId(id)} dark={dark} />
                   <DriversPanel drivers={snapshot?.drivers ?? []} selectedDriverId={selectedDriverId} selectedOrder={selectedOrder}
                     recommendations={recommendations} recommendationsLoading={recommendationsLoading} mode={mode}
                     onSelectDriver={(id) => setSelectedDriverId(id)}
-                    onAssign={(d) => { if (selectedOrder) openAssignModal(selectedOrder, d); else notify("error", "Selecciona un pedido primero."); }}
-                    onDriverControl={driverControl} />
+                    onAssign={(d) => { if (selectedOrder) handleAssign(selectedOrder, d); else notify("error", "Selecciona un pedido primero."); }}
+                    onDriverControl={driverControl}
+                    onClearSelection={() => setSelectedOrderId(null)} />
                 </div>
 
-                {/* Mobile: stacked with priorities */}
+                {/* Móvil: pedidos → repartidores → mapa */}
                 <div className="flex min-h-0 flex-1 flex-col overflow-y-auto sm:hidden">
-                  {/* Priority 1: Orders — full width, always visible */}
                   <div className="min-h-0 flex-1 p-2">
                     <OrdersPanel unassigned={unassignedOrders} assigned={assignedOrders} selectedOrderId={selectedOrderId}
                       availableDrivers={snapshot?.kpis.availableDrivers ?? 0} registeredDrivers={snapshot?.kpis.registeredDrivers ?? 0}
-                      onSelectOrder={(o) => setSelectedOrderId(o._id)} onUnassign={unassign} onRedispatch={redispatch}
-                      onCancelOffer={cancelOffer} onDetails={(o) => setDetailsOrder(o)} mode={mode} />
+                      onSelectOrder={(o) => setSelectedOrderId((prev) => (prev === o._id ? null : o._id))} onUnassign={unassign} onRedispatch={redispatch}
+                      onCancelOffer={cancelOffer} onDetails={(o) => setDetailsOrder(o)} mode={mode} newOrderIds={newOrderIds} />
                   </div>
 
-                  {/* Priority 2: Drivers — compact summary */}
-                  <div className="shrink-0 border-t border-slate-200 p-2 dark:border-white/10">
+                  <div className="shrink-0 p-2">
                     <DriversPanel drivers={snapshot?.drivers ?? []} selectedDriverId={selectedDriverId} selectedOrder={selectedOrder}
                       recommendations={recommendations} recommendationsLoading={recommendationsLoading} mode={mode}
                       onSelectDriver={(id) => setSelectedDriverId(id)}
-                      onAssign={(d) => { if (selectedOrder) openAssignModal(selectedOrder, d); else notify("error", "Selecciona un pedido primero."); }}
-                      onDriverControl={driverControl} />
+                      onAssign={(d) => { if (selectedOrder) handleAssign(selectedOrder, d); else notify("error", "Selecciona un pedido primero."); }}
+                      onDriverControl={driverControl}
+                      onClearSelection={() => setSelectedOrderId(null)} />
                   </div>
 
-                  {/* Priority 3: Map — collapsible */}
-                  <div className="shrink-0 border-t border-slate-200 dark:border-white/10">
-                    <button type="button" onClick={() => setMapExpanded((v) => !v)}
-                      className="flex w-full items-center gap-2 px-3 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300">
-                      <span>Mapa de operación</span>
-                      <span className="ml-auto text-slate-400">{mapExpanded ? "▲" : "▼"}</span>
-                    </button>
-                    {mapExpanded && (
-                      <div className="h-[300px]">
-                        <DispatchMap orders={snapshot?.orders ?? []} stores={snapshot?.stores ?? []} zones={snapshot?.zones ?? []}
-                          drivers={snapshot?.drivers ?? []} recommendations={recommendations} selectedOrderId={selectedOrderId}
-                          selectedDriverId={selectedDriverId} onSelectOrder={(id) => setSelectedOrderId(id)} onSelectDriver={(id) => setSelectedDriverId(id)} dark={dark} />
-                      </div>
-                    )}
+                  <div className="h-[300px] shrink-0 px-2 pb-2">
+                    <DispatchMap orders={snapshot?.orders ?? []} stores={snapshot?.stores ?? []} zones={snapshot?.zones ?? []}
+                      drivers={snapshot?.drivers ?? []} recommendations={recommendations} selectedOrderId={selectedOrderId}
+                      selectedDriverId={selectedDriverId} onSelectOrder={(id) => setSelectedOrderId(id)} onSelectDriver={(id) => setSelectedDriverId(id)} dark={dark} />
                   </div>
                 </div>
               </>
@@ -484,7 +547,19 @@ export function DispatchCenter() {
         {activeTab === "support" && <div className="flex min-h-0 flex-1 overflow-hidden p-3"><DriverSupportPanel drivers={snapshot?.drivers ?? []} busy={busy} onChanged={fetchSnapshot} notify={notify} /></div>}
       </div>
 
-      {/* ═══ MODALS ═══ */}
+      {/* ═══ INDICADOR DE NUEVOS PEDIDOS (fuera de la vista de Operación) ═══ */}
+      {activeTab !== "ops" && freshQueueCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setActiveTab("ops")}
+          className="fixed bottom-5 left-5 z-[999] flex items-center gap-2 rounded-full bg-[#EB1902] px-4 py-2.5 text-sm font-bold text-white shadow-lg transition hover:bg-[#c81502]"
+        >
+          <BellRing className="h-4 w-4" />
+          {freshQueueCount} pedido{freshQueueCount !== 1 ? "s" : ""} nuevo{freshQueueCount !== 1 ? "s" : ""}
+        </button>
+      )}
+
+      {/* ═══ MODALES (solo reasignación y detalle) ═══ */}
       <AssignModal draft={assignDraft} busy={busy} onConfirm={confirmAssignment} onCancel={() => setAssignDraft(null)} />
       <OrderDetailsModal order={detailsOrder} onClose={() => setDetailsOrder(null)} />
       {toast && (

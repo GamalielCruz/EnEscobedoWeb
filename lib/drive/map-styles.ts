@@ -20,6 +20,12 @@ export const BRAND_RED_DARK = "#850C22";
 export const ROUTE_BLUE = "#3B82F6";
 export const PICKUP_ORANGE = "#F97316";
 export const DELIVERY_RED = "#EF4444";
+/**
+ * Línea del preview de oferta (OFFER_ROUTE_PREVIEW): violeta de contraste
+ * frente al azul de la ruta de navegación activa, para que el repartidor
+ * distinga de un vistazo el recorrido A → B mostrado durante una oferta.
+ */
+export const OFFER_PREVIEW_COLOR = "#7C3AED";
 
 /**
  * Estilo claro "de navegación": fondo neutro, vías blancas con perfil sutil,

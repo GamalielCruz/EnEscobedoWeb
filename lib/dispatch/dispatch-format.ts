@@ -26,6 +26,47 @@ export function shortOrderCode(orderNumber?: string | null): string {
 }
 
 /**
+ * Dirección CORTA para superficies de conducción ("Tu ruta"): se queda con el
+ * primer segmento (antes de la primera coma) y, si aún excede el presupuesto,
+ * recorta en límite de palabra con elipsis. Nunca devuelve la dirección
+ * completa ni el texto desbordado: la lectura debe caber en un vistazo.
+ */
+export function shortAddress(input?: string | null, maxLength = 28): string {
+  const value = String(input ?? "").replace(/\s+/g, " ").trim();
+  if (!value) return "—";
+  const firstSegment = value.split(",")[0]?.trim() || value;
+  if (firstSegment.length <= maxLength) return firstSegment;
+  const cut = firstSegment.slice(0, maxLength);
+  const lastSpace = cut.lastIndexOf(" ");
+  const base = lastSpace > Math.floor(maxLength / 2) ? cut.slice(0, lastSpace) : cut;
+  return `${base.trimEnd()}…`;
+}
+
+/** Estados terminales del ciclo de vida de una oferta (mirror de offer-lifecycle). */
+const TERMINAL_OFFER_STATUSES: ReadonlySet<string> = new Set([
+  "accepted",
+  "rejected",
+  "expired",
+  "cancelled",
+]);
+
+/**
+ * true ⇔ la orden tiene una oferta ACTIVA (requiere respuesta del repartidor).
+ *
+ * Una oferta EXPIRED / REJECTED / CANCELLED / ACCEPTED NO es una intención
+ * activa de asignación: la orden vuelve a "Sin asignar" y la oferta termina
+ * solo como registro histórico. Con esto, la pestaña "Ofertas" y su contador
+ * dejan de contar ofertas terminadas (el estado de negocio lo corrige el
+ * backend; este filtro solo refleja el estado ya corregido).
+ */
+export function hasActiveOffer(order: {
+  dispatchStatus?: string | null;
+  offerStatus?: string | null;
+}): boolean {
+  return order.dispatchStatus === "offered" && !TERMINAL_OFFER_STATUSES.has(order.offerStatus ?? "");
+}
+
+/**
  * Tiempo de espera legible. A partir de 24 h usa "X días Y h"
  * en lugar de "219 h 45 min".
  */

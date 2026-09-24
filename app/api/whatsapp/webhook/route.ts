@@ -1529,6 +1529,32 @@ export async function POST(req: NextRequest) {
         pendingOrderIds,
       })
 
+      // REGLA FUNDAMENTAL: Desconectar ≠ abandonar una orden.
+      // Con un servicio activo, FIN se interpreta como "dejar de recibir
+      // nuevos pedidos": la orden continúa y al completar queda offline.
+      const activeServiceOrders: Array<{ _id: string }> = await backendClient.fetch(
+        `*[_type == "order" && repartidorAsignado._ref == $driverId && status == "shipped" && orderStatus != "delivered" && orderStatus != "cancelled" && orderStatus != "completed"][0...3]{ _id }`,
+        { driverId: repartidor._id }
+      )
+      if (activeServiceOrders.length > 0) {
+        console.log('[webhook disponibilidad] FIN con servicio activo → deja de recibir', {
+          repartidorId: repartidor._id,
+          activeOrders: activeServiceOrders.map((order) => order._id),
+        })
+        await backendClient
+          .patch(repartidor._id)
+          .set({
+            aceptaNuevasOfertas: false,
+            ultimaActividad: now,
+          })
+          .commit()
+        void sendBotMessage(
+          fromPhone,
+          'Sigues en servicio hasta completar tu pedido actual.\nNo recibirás nuevos pedidos: al terminar la entrega quedarás fuera de servicio.'
+        ).catch(() => null)
+        return NextResponse.json({ status: 'ok' })
+      }
+
       await backendClient
         .patch(repartidor._id)
         .set({

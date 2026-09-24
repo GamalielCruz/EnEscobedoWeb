@@ -137,7 +137,7 @@ export async function processScheduledOrders(now = new Date()) {
         if (preassignedDriverId) {
           const driver = await backendClient.fetch<any>(
             `*[_type == "repartidor" && _id == $driverId][0]{
-              _id, activo, disponible, bloqueado, estadoDisponibilidad, disponibleHasta
+              _id, activo, disponible, bloqueado, estadoDisponibilidad, disponibleHasta, aceptaNuevasOfertas
             }`,
             { driverId: preassignedDriverId }
           );
@@ -147,6 +147,7 @@ export async function processScheduledOrders(now = new Date()) {
             !driver.bloqueado &&
             driver.disponible &&
             driver.estadoDisponibilidad === "available" &&
+            driver.aceptaNuevasOfertas !== false &&
             (!driver.disponibleHasta || new Date(driver.disponibleHasta).getTime() > Date.now());
 
           if (isAvailable) {

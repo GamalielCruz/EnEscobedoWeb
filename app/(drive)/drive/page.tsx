@@ -3,21 +3,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, SignIn } from "@clerk/nextjs";
 import { GoogleMap, Marker, Polyline, useJsApiLoader } from "@react-google-maps/api";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   Loader2,
   MapPin,
   Package,
   Store,
-  Clock,
   CheckCircle,
+  X,
   XCircle,
   LocateFixed,
-  Maximize2,
-  Truck,
 } from "lucide-react";
 import { DriveNavBar, type DriveNavPhase } from "@/components/drive/DriveNavBar";
 import { DriveTripSheet } from "@/components/drive/DriveTripSheet";
+import {
+  DriveRouteSheet,
+  MOVING_SPEED_MPS,
+  type RouteStop,
+} from "@/components/drive/DriveRouteSheet";
+import { DriveOrderDetails } from "@/components/drive/DriveOrderDetails";
 import { DriveSimPanel } from "@/components/drive/DriveSimPanel";
 import {
   getDestinationPinVariants,
@@ -33,9 +37,7 @@ import { useDriverState, type DriverOrder, type DriverOffer } from "@/hooks/useD
 import { useDriverLocation } from "@/hooks/useDriverLocation";
 import { useDeviceOrientation } from "@/hooks/useDeviceOrientation";
 import { useOfferAlertSound } from "@/hooks/useOfferAlertSound";
-
-import { ThinkingOrb } from "thinking-orbs";
-import { shortOrderCode } from "@/lib/dispatch/dispatch-format";
+import { shortOrderCode, shortAddress } from "@/lib/dispatch/dispatch-format";
 import {
   bearingBetween,
   distanceToPathMeters,
@@ -50,7 +52,15 @@ import {
   type RoutePoint,
 } from "@/lib/dispatch/routing";
 import { instructionInSpanish, shortInstructionInSpanish, streetFromInstruction } from "@/lib/dispatch/nav-instructions";
-import { DRIVE_MAP_STYLES, ROUTE_BLUE } from "@/lib/drive/map-styles";
+import {
+  DRIVE_MOTION_DURATION,
+  DRIVE_MOTION_EASE,
+} from "@/components/drive/motion";
+import {
+  DRIVE_MAP_STYLES,
+  OFFER_PREVIEW_COLOR,
+  ROUTE_BLUE,
+} from "@/lib/drive/map-styles";
 
 // ── Map config ─────────────────────────────────────────────────────
 
@@ -64,22 +74,24 @@ const DEFAULT_CENTER = { lat: 20.502, lng: -100.145 };
 const containerStyle = { width: "100%", height: "100%" };
 
 // ── Camera (navegación tipo GPS) ───────────────────────────────────
-// Zoom máximo al encuadrar el trayecto (evita acercarse al suelo al llegar).
-const CAMERA_MAX_ZOOM = 16.5;
 // Aire alrededor del trayecto al encuadrar (fracción del tamaño del encuadre).
 const CAMERA_PADDING = 0.15;
 // Sin ruta activa, recentrar al repartidor solo si se movió al menos esto.
 const DRIVER_CENTER_METERS = 20;
-// Zoom por defecto del mapa y zoom de navegación al pulsar "Centrar GPS".
+// Zoom por defecto del mapa (sin navegación).
 const DEFAULT_ZOOM = 15;
+// Ancalaje visual del conductor en pantalla (fracción desde arriba).
 const NAV_DRIVER_SCREEN_FRACTION = 0.72;
-// Zoom de navegación turn-by-turn (referencia 18–19). El nivel se mantiene
-// dentro de un rango estrecho según velocidad y cercanía al giro.
-const NAV_ZOOM_BASE = 18.3;
-const NAV_ZOOM_MAX = 18.8;
-const NAV_ZOOM_MIN = 17.8;
+// ── Zoom de navegación turn-by-turn ──
+// Referencia Waze/Google Maps (18.5–19). Ligeramente MÁS CERCANO que antes:
+// el repartidor distingue calles, incorporaciones y la próxima maniobra sin
+// perder el contexto de la ruta. El nivel se mantiene dentro de un rango
+// estrecho según velocidad y cercanía al giro.
+const NAV_ZOOM_BASE = 18.6;
+const NAV_ZOOM_MAX = 19;
+const NAV_ZOOM_MIN = 17.9;
 const NAV_ZOOM_SLOW = NAV_ZOOM_BASE;
-const NAV_ZOOM_FAST = NAV_ZOOM_BASE - 0.6;
+const NAV_ZOOM_FAST = NAV_ZOOM_BASE - 0.4;
 // No girar el mapa por variaciones menores de rumbo (anti-jitter).
 const NAV_HEADING_SKIP_DEG = 2.5;
 // Suavizado de rotación por frame (interpolación del ángulo más corto).
@@ -94,12 +106,36 @@ const NAV_MOVEMENT_MIN_MS = 400;
 // distancia restante por frame y paso mínimo (elimina la teletransportación).
 const POSITION_SMOOTH_FACTOR = 0.18;
 const POSITION_MIN_STEP_METERS = 1.5;
-// Zoom dinámico de conducción: rango según velocidad y acercamiento al giro.
-// Rango más cerrado que antes: el zoom base ya es la referencia de navegación.
-const NAV_SPEED_REF_MPS = 18; // velocidad que alcanza el zoom lejano (≈65 km/h)
-const NAV_ZOOM_TURN_BONUS = 0.4;
-// Solo cambiar el zoom cuando la diferencia es relevante (evita zoom constante).
-const NAV_ZOOM_HYSTERESIS = 0.3;
+// ── Zoom adaptativo en maniobras (suave, animado) ──
+// Velocidad que alcanza el zoom lejano (≈65 km/h).
+const NAV_SPEED_REF_MPS = 18;
+// Ventana de alejamiento ANTES del giro: la cámara empieza a abrirse de
+// forma GRADUAL al entrar en esta distancia a la maniobra.
+const TURN_AWARENESS_METERS = 220;
+// Ventana de recuperación DESPUÉS del giro: la cámara se cierra de nuevo
+// gradualmente durante este tramo posterior a la maniobra.
+const TURN_RECOVERY_METERS = 70;
+// Apertura de zoom máxima al llegar a la maniobra (respecto al zoom de
+// velocidad del momento): muestra el punto exacto del giro + el tramo
+// previo + el tramo posterior.
+const TURN_ZOOM_OUT = 0.9;
+// Umbrales del ángulo entre el step actual y el siguiente para considerar
+// el giro "relevante": giros leves no abren la cámara.
+const TURN_ANGLE_SIGNIFICANT_DEG = 40;
+const TURN_ANGLE_STRONG_DEG = 80;
+// Apertura extra para giros fuertes / retornos / glorietas.
+const TURN_ZOOM_OUT_STRONG = 1.25;
+// Maniobras consecutivas: si la siguiente está a menos de esto, mantener
+// una vista útil del CONJUNTO en lugar de alternar cercano/lejano.
+const CONSECUTIVE_MANEUVER_METERS = 150;
+// Suavizado del zoom por frame en el loop de cámara (fracción del delta
+// restante): transición animada y gradual, sin saltos ni parpadeos.
+const NAV_ZOOM_SMOOTH = 0.06;
+// Umbral bajo el cual la diferencia de zoom ya no se persigue.
+const NAV_ZOOM_EPSILON = 0.01;
+// Solo recomputar el zoom objetivo cuando el cambio es relevante
+// (histéresis, evita objetivo oscilando frame a frame).
+const NAV_ZOOM_HYSTERESIS = 0.18;
 
 // Desvío: distancia lateral a la geometría y ticks consecutivos antes de
 // recalcular la ruta (anti-jitter del GPS).
@@ -111,6 +147,59 @@ const INTERNAL_ZOOM_GUARD_MS = 900;
 const NEXT_MANEUVER_METERS = 120;
 // Mostrar "Estás llegando" cuando quede menos que esto para el destino.
 const NEAR_DESTINATION_METERS = 150;
+
+// ── OFFER_ROUTE_PREVIEW ─────────────────────────────────────────────
+// Preview TEMPORAL del recorrido completo del servicio (pickup → destino)
+// mientras una oferta está en pantalla. Es un estado AISLADO de la
+// navegación real: nunca toca navPhase, navTarget, roadRoute ni el estado
+// del pedido, y se destruye al aceptar / rechazar / expirar la oferta.
+
+// Margen (px) para que la ruta A → B no quede pegada a los bordes al
+// encuadrar el preview. El margen inferior es mayor: la tarjeta de oferta
+// tapa la parte baja de la pantalla.
+const OFFER_PREVIEW_CAMERA_MARGIN = { top: 72, right: 64, bottom: 320, left: 64 };
+// Zoom máximo al encuadrar el preview (mismo criterio que frameRouteView).
+const OFFER_PREVIEW_CAMERA_MAX_ZOOM = 16;
+// Restaurar la cámara solo si la oferta vivió al menos este tiempo: evita
+// animaciones de cámara sin sentido en ofertas de vida ultracorta.
+const OFFER_PREVIEW_RESTORATION_MIN_MS = 150;
+// Gracia entre ofertas consecutivas (sección 8): si la siguiente oferta llega
+// dentro de esta ventana NO se restaura la cámara en el intermedio; el
+// preview se actualiza reutilizando el contexto capturado original.
+const OFFER_PREVIEW_CAMERA_GRACE_MS = 1_000;
+
+/** Contexto de cámara capturado al llegar la oferta (sección 6). */
+type OfferPreviewCameraState = {
+  center: RoutePoint;
+  zoom: number;
+  heading: number | null;
+  tilt: number | null;
+  /** true ⇔ la cámara estaba en modo seguimiento al llegar la oferta. */
+  followDriver: boolean;
+};
+
+/**
+ * Estado del preview de oferta. OFFER PREVIEW ≠ ACTIVE NAVIGATION: esta
+ * estructura nunca alimenta la navegación del pedido (sección 10).
+ */
+type OfferPreviewState = {
+  offerKey: string;
+  orderNumber: string;
+  pickup: RoutePoint | null;
+  destination: RoutePoint | null;
+  /** Etiquetas para los marcadores temporales del preview. */
+  pickupLabel: string;
+  destinationLabel: string;
+  route: RoadRoute | null;
+  /** true ⇔ la solicitud de ruta ya se disparó (no repetirla por tick). */
+  routeRequested: boolean;
+  previousCamera: OfferPreviewCameraState | null;
+  startedAt: number;
+};
+
+// Radio de llegada AUTOMÁTICA: dentro de esta geocerca el backend marca la
+// llegada (pickup_arrival / destination_arrival) sin acción del repartidor.
+const ARRIVAL_RADIUS_METERS = 50;
 // El simulador de viaje SOLO existe fuera de producción (dev local/preview).
 const DRIVE_SIM_ENABLED = getDeploymentEnvironment() !== "production";
 const mapOptions = {
@@ -237,7 +326,8 @@ function getMandadoAction(order: DriverOrder): { label: string; action: string; 
     case "assigned":
       return { label: "RECOLECCIÓN", action: "navigate_pickup", icon: <MapPin className="h-4 w-4" /> };
     case "pickup_arrival":
-      return { label: "YA RECOGÍ EL MANDADO", action: "picked_up", icon: <Package className="h-4 w-4" /> };
+      // En el punto: la UI muestra el deslizador de confirmación de recolección.
+      return { label: "CONFIRMAR RECOLECCIÓN", action: "picked_up", icon: <Package className="h-4 w-4" /> };
     case "en_route":
       return { label: "ENTREGA", action: "navigate_delivery", icon: <MapPin className="h-4 w-4" /> };
     case "destination_arrival":
@@ -665,10 +755,40 @@ function moveMapCamera(
 }
 
 /**
- * Encuadra la cámara sobre los puntos de la ruta vial (repartidor + trayecto
- * completo hasta el destino). Nunca se usa la línea recta entre extremos.
+ * OFFER_ROUTE_PREVIEW — captura el estado de cámara ACTUAL para poder
+ * restaurarlo cuando la oferta termine sin aceptación (sección 6). Si la
+ * cámara aún no es legible (mapa recién montado) devuelve null y la
+ * restauración cae al fallback: ubicación ACTUAL del repartidor + zoom drive.
  */
-function frameRouteView(map: google.maps.Map, points: RoutePoint[]): void {
+function captureOfferPreviewCamera(
+  map: google.maps.Map,
+  followDriver: boolean
+): OfferPreviewCameraState | null {
+  const center = map.getCenter?.();
+  const zoom = map.getZoom?.();
+  if (!center || typeof zoom !== "number") return null;
+  return {
+    center: { lat: center.lat(), lng: center.lng() },
+    zoom,
+    heading: map.getHeading?.() ?? null,
+    tilt: map.getTilt?.() ?? null,
+    followDriver,
+  };
+}
+
+/**
+ * OFFER_ROUTE_PREVIEW — encuadra el recorrido completo A → B (geometría vial
+ * real si existe; si no, los dos puntos) con margen para que la ruta no
+ * quede pegada a los bordes. Una sola llamada por actualización, sin
+ * animaciones encadenadas (sección 13).
+ */
+function frameOfferPreview(
+  map: google.maps.Map,
+  pickup: RoutePoint,
+  destination: RoutePoint,
+  routePath: RoutePoint[] | null
+): void {
+  const points = routePath && routePath.length >= 2 ? routePath : [pickup, destination];
   if (points.length < 2) return;
   let minLat = Infinity;
   let maxLat = -Infinity;
@@ -680,16 +800,22 @@ function frameRouteView(map: google.maps.Map, points: RoutePoint[]): void {
     if (p.lng < minLng) minLng = p.lng;
     if (p.lng > maxLng) maxLng = p.lng;
   }
+  // Aire alrededor del recorrido (misma proporción que frameRouteView).
   const latPad = (maxLat - minLat) * CAMERA_PADDING;
   const lngPad = (maxLng - minLng) * CAMERA_PADDING;
-  map.fitBounds({
-    south: minLat - latPad,
-    west: minLng - lngPad,
-    north: maxLat + latPad,
-    east: maxLng + lngPad,
-  });
-  const zoom = map.getZoom();
-  if (typeof zoom === "number" && zoom > CAMERA_MAX_ZOOM) map.setZoom(CAMERA_MAX_ZOOM);
+  map.fitBounds(
+    {
+      south: minLat - latPad,
+      west: minLng - lngPad,
+      north: maxLat + latPad,
+      east: maxLng + lngPad,
+    },
+    OFFER_PREVIEW_CAMERA_MARGIN
+  );
+  const zoom = map.getZoom?.();
+  if (typeof zoom === "number" && zoom > OFFER_PREVIEW_CAMERA_MAX_ZOOM) {
+    map.setZoom(OFFER_PREVIEW_CAMERA_MAX_ZOOM);
+  }
 }
 
 /**
@@ -730,15 +856,6 @@ function formatMetersShort(meters: number): string {
   return `${(m / 1000).toFixed(1)} km`;
 }
 
-function formatSecondsShort(seconds: number): string {
-  const minutes = Math.max(1, Math.round(seconds / 60));
-  if (minutes >= 60) {
-    const h = Math.floor(minutes / 60);
-    return `${h} h ${minutes % 60} min`;
-  }
-  return `${minutes} min`;
-}
-
 // ── Main component ─────────────────────────────────────────────────
 
 export default function DrivePage() {
@@ -753,7 +870,7 @@ export default function DrivePage() {
   });
 
   const { state, loading, error: stateError, refetch } = useDriverState();
-  const { location: gpsLocation, heading: gpsHeading, error: gpsError } = useDriverLocation(
+  const { location: gpsLocation, heading: gpsHeading } = useDriverLocation(
     state?.connected ?? false
   );
 
@@ -771,8 +888,72 @@ export default function DrivePage() {
 
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   // Error de la última acción de etapa (recogí / entregué / NIP). Se muestra
-  // en la tarjeta de contexto y se limpia al iniciar otra acción.
+  // en el panel de detalles y se limpia al iniciar otra.
   const [stageActionError, setStageActionError] = useState<string | null>(null);
+  // Altura visible del bottom sheet COLAPSADO (px). La hoja la reporta para
+  // anclar los controles de cámara justo encima, incluso al expandir.
+  const [tripSheetCollapsedHeight, setTripSheetCollapsedHeight] = useState<number | null>(null);
+  // Estado EXPANDIDO de la hoja (la hoja lo reporta). La página lo usa para
+  // la regla de distancia única: al expandir, la barra oculta la distancia.
+  // IMPORTANTE: declarado ANTES de los early returns (Rules of Hooks).
+  const [tripSheetExpanded, setTripSheetExpanded] = useState(false);
+  // CIERRE DEL PANEL DE PEDIDO: al tocar el mapa la página incrementa este
+  // token y el panel colapsa de inmediato (sin capa alguna sobre el mapa).
+  const [tripSheetCollapseToken, setTripSheetCollapseToken] = useState(0);
+  // HOJA DE RUTA: capa INDEPENDIENTE sobre el panel de pedido. Se abre solo
+  // con "Ver ruta"; al abrirse el panel de pedido se colapsa para quedar
+  // cubierto, y al cerrarse se restaura su estado exacto.
+  const [routeSheetOpen, setRouteSheetOpen] = useState(false);
+  // Timestamp del último paneo del mapa: un arrastre NO debe contar como
+  // toque (no cierra "Tu ruta").
+  const mapDraggedAtRef = useRef(0);
+  // Intención de disponibilidad OPTIMISTA: la tarjeta de fin de ruta aparece /
+  // desaparece al instante mientras el backend confirma (luego se sincroniza).
+  const [stopOffersIntent, setStopOffersIntent] = useState<boolean | null>(null);
+  // Toast temporal con Deshacer tras elegir disponibilidad en "Tu ruta".
+  // El cambio de backend se aplica AL MOMENTO; Deshacer lo revierte.
+  const [routeToast, setRouteToast] = useState<{
+    message: string;
+    undo: () => void;
+  } | null>(null);
+  const routeToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearRouteToastTimer = useCallback(() => {
+    if (routeToastTimerRef.current) {
+      clearTimeout(routeToastTimerRef.current);
+      routeToastTimerRef.current = null;
+    }
+  }, []);
+
+  const showUndoToast = useCallback(
+    (message: string, undo: () => void) => {
+      clearRouteToastTimer();
+      setRouteToast({ message, undo });
+      routeToastTimerRef.current = setTimeout(() => setRouteToast(null), 6000);
+    },
+    [clearRouteToastTimer]
+  );
+
+  // Limpieza del timer al desmontar.
+  useEffect(() => clearRouteToastTimer, [clearRouteToastTimer]);
+  // Último pedido entregado (snapshot local): la orden sale del backend al
+  // confirmarse la entrega, pero la confirmación limpia de finalización
+  // ("Entrega completada") se muestra en el panel inferior unos segundos.
+  const [lastDelivered, setLastDelivered] = useState<{ order: DriverOrder; at: number } | null>(
+    null
+  );
+
+  // La confirmación de finalización se descarga sola: vuelve el panel de
+  // espera (o la siguiente oferta) sin acción del repartidor.
+  useEffect(() => {
+    if (!lastDelivered) return;
+    const t = setTimeout(() => setLastDelivered(null), 60_000);
+    return () => clearTimeout(t);
+  }, [lastDelivered]);
+  // Una oferta nueva manda sobre la confirmación de finalización.
+  useEffect(() => {
+    if (state?.offer) setLastDelivered(null);
+  }, [state?.offer]);
 
   // ── Sound alert for new offers ──────────────────────────────
   const { notifyOfferChange, stopAlertImmediate, resetAction } = useOfferAlertSound();
@@ -789,7 +970,12 @@ export default function DrivePage() {
     const offerDisappeared = hadOffer && !hasOffer;
 
     if (state?.offer) {
-      notifyOfferChange(state.offer.orderNumber, state.offer.offerExpiresAt);
+      // Clave estable por intento (offerId): la oferta pasa de PENDING_DELIVERY
+      // a ACTIVE sin volver a sonar (es la misma oferta, sólo cambió la ventana).
+      notifyOfferChange(
+        state.offer.orderNumber,
+        state.offer.offerId ?? state.offer.offerExpiresAt
+      );
     } else {
       notifyOfferChange(null, null);
     }
@@ -802,6 +988,29 @@ export default function DrivePage() {
 
     prevOfferRef.current = state?.offer ?? null;
   }, [state?.offer, notifyOfferChange]);
+
+  // ── ACK de presentación (OFFER_SHOWN) ───────────────────────
+  // Cuando el servidor nos entrega la oferta (PENDING_DELIVERY) y la app puede
+  // mostrarla, avisamos al backend. Sólo entonces el servidor fija los 14 s;
+  // la latencia entre el Dispatch Center y el teléfono NO descuenta tiempo.
+  const ackedOfferRef = useRef<string | null>(null);
+  useEffect(() => {
+    const pendingOffer = state?.offer;
+    if (!pendingOffer || pendingOffer.offerStatus !== "pending_delivery") return;
+    const key = pendingOffer.offerId ?? pendingOffer.orderNumber;
+    if (ackedOfferRef.current === key) return;
+    ackedOfferRef.current = key;
+    fetch("/api/driver/offer-shown", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderNumber: pendingOffer.orderNumber, offerId: pendingOffer.offerId }),
+    })
+      .then(() => refetch())
+      .catch(() => {
+        // Permite reintentar en el siguiente ciclo de polling.
+        ackedOfferRef.current = null;
+      });
+  }, [state?.offer, refetch]);
 
   // Stop sound on unmount
   useEffect(() => {
@@ -952,10 +1161,57 @@ export default function DrivePage() {
   }, [currentLocation, navTarget, mapsLoaded, driverHasLocation, sim.active, roadRoute]);
 
   // Etapa de navegación efectiva (real o simulada).
+  // Llegada AUTOMÁTICA por geocerca GPS: dentro del radio de llegada la UI
+  // avanza a "en el punto" sin acción del repartidor (sin paso visual
+  // "Llegué al punto"). El backend se marca en segundo plano (ver efecto
+  // siguiente) para que las transiciones de confirmación sean válidas.
   const navPhase = useMemo<DriveNavPhase | null>(() => {
     if (sim.active) return sim.stage as DriveNavPhase;
-    return actionToNavPhase(orderAction?.action ?? null);
-  }, [sim.active, sim.stage, orderAction]);
+    const phase = actionToNavPhase(orderAction?.action ?? null);
+    if (phase === "to_pickup" && pickupPoint && haversineMeters(currentLocation, pickupPoint) < ARRIVAL_RADIUS_METERS) {
+      return "at_pickup";
+    }
+    if (phase === "to_delivery" && deliveryPoint && haversineMeters(currentLocation, deliveryPoint) < ARRIVAL_RADIUS_METERS) {
+      return "at_delivery";
+    }
+    return phase;
+  }, [sim.active, sim.stage, orderAction, currentLocation, pickupPoint, deliveryPoint]);
+
+  // ── Marcado de llegada en segundo plano (geocerca) ─────────────
+  // Silencioso e idempotente: si falla, la confirmación manual sigue
+  // funcionando. Un solo intento por pedido+acción hasta que cambie la etapa.
+  const arrivalMarkedRef = useRef<string | null>(null);
+  const markArrival = useCallback(
+    async (orderNumber: string, action: "pickup_arrival" | "destination_arrival") => {
+      try {
+        await fetch("/api/driver/action", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, orderNumber }),
+        });
+      } catch {
+        /* silencioso */
+      }
+    },
+    []
+  );
+  useEffect(() => {
+    if (sim.active || !activeOrder || !navPhase || !currentLocation) return;
+    const action =
+      navPhase === "at_pickup"
+        ? "pickup_arrival"
+        : navPhase === "at_delivery"
+          ? "destination_arrival"
+          : null;
+    const target =
+      navPhase === "at_pickup" ? pickupPoint : navPhase === "at_delivery" ? deliveryPoint : null;
+    if (!action || !target) return;
+    if (haversineMeters(currentLocation, target) >= ARRIVAL_RADIUS_METERS) return;
+    const key = `${activeOrder.orderNumber}:${action}`;
+    if (arrivalMarkedRef.current === key) return;
+    arrivalMarkedRef.current = key;
+    void markArrival(activeOrder.orderNumber, action);
+  }, [navPhase, activeOrder, currentLocation, pickupPoint, deliveryPoint, sim.active, markArrival]);
 
   // Fase 4 — "llegando" SOLO con ruta del tramo vigente (ver routeOnLeg).
 
@@ -1049,6 +1305,11 @@ export default function DrivePage() {
   const currentLocationRef = useRef<RoutePoint>(currentLocation);
   const movementHeadingRef = useRef<number | null>(null);
   const movementSpeedRef = useRef<number | null>(null);
+  // Refs espejo para el loop rAF (lecturas frescas sin recrear el callback).
+  const movementSpeedLoopRef = useRef<number | null>(null);
+  const simSpeedLoopRef = useRef(1);
+  const simActiveLoopRef = useRef(false);
+  const simHeadingLoopRef = useRef<number | null>(null);
   const movementPrevRef = useRef<{ pos: RoutePoint; ts: number } | null>(null);
   const visualHeadingRef = useRef<number | null>(null);
   const visualCameraHeadingRef = useRef<{ current: number | null; lastTs?: number }>({ current: null });
@@ -1064,11 +1325,24 @@ export default function DrivePage() {
   const followTargetRef = useRef<RoutePoint | null>(null);
   const followRafRef = useRef<number | null>(null);
   const lastZoomRef = useRef<number | null>(null);
+  // Objetivo de zoom vigente (histéresis): el loop persigue este valor de
+  // forma exponencial frame a frame (transición suave, sin saltos).
+  const targetZoomRef = useRef<{ target: number; ts: number } | null>(null);
   // Desvío: racha de ticks fuera de la geometría antes de recalcular.
   const offRouteStreakRef = useRef(0);
   const [followDriver, setFollowDriver] = useState(true);
-  const NAV_AHEAD_METER_BASE = 92;
+  // Ancla de cámara adelantada al zoom base (m se multiplica por 2^(Δzoom)):
+  // mantiene al conductor en el tercio inferior en cualquier nivel de zoom,
+  // incluida la apertura antes de maniobras.
+  const NAV_AHEAD_BASE = 90;
   const [isRecalculating, setIsRecalculating] = useState(false);
+  // Mapa listo (onLoad del GoogleMap): los efectos que necesitan mapRef no
+  // vacío (p. ej. OFFER_ROUTE_PREVIEW) se re-ejecutan cuando cambia.
+  const [mapReady, setMapReady] = useState(false);
+  // OFFER_ROUTE_PREVIEW: estado del preview de oferta. Declarado aquí para
+  // que los efectos de cámara (más abajo) puedan leerlo sin TDZ.
+  const [offerPreview, setOfferPreview] = useState<OfferPreviewState | null>(null);
+  const offerPreviewActive = offerPreview !== null;
 
   const navigatingWithRoute = Boolean(
     navTarget && mapsLoaded && driverHasLocation && roadRoute?.path
@@ -1088,6 +1362,12 @@ export default function DrivePage() {
 
   // El rumbo visual para el marcador se deriva de refs en cada render.
   currentLocationRef.current = currentLocation;
+  // Refs sincronizados para el loop rAF: velocidad GPS suavizada y rumbo del
+  // simulador (así el hot path nunca lee valores desactualizados del closure).
+  movementSpeedLoopRef.current = movementSpeedRef.current;
+  simSpeedLoopRef.current = sim.speed;
+  simActiveLoopRef.current = sim.active;
+  simHeadingLoopRef.current = sim.simHeading;
 
   // Fuera del modo seguimiento (exploración / vista completa), el marcador
   // refleja la posición REAL en lugar de quedarse congelado en la última
@@ -1259,6 +1539,19 @@ export default function DrivePage() {
     }
   }, []);
 
+  /**
+   * Marca el próximo zoom_changed como generado por la propia cámara
+   * (Centrar GPS, encuadres, zoom de navegación): el listener no debe
+   * confundirlo con un gesto del usuario (que activaría exploración).
+   */
+  const markInternalZoom = useCallback(() => {
+    internalZoomRef.current = true;
+    if (internalZoomTimerRef.current) clearTimeout(internalZoomTimerRef.current);
+    internalZoomTimerRef.current = setTimeout(() => {
+      internalZoomRef.current = false;
+    }, INTERNAL_ZOOM_GUARD_MS);
+  }, []);
+
   const ensureFollowLoop = useCallback(() => {
     if (followRafRef.current !== null) return;
     // H2: al tomar el control, cancelar cualquier heading tween en vuelo para
@@ -1323,8 +1616,13 @@ export default function DrivePage() {
       const navHeading = navHeadingForSim ?? heading;
 
       // Calcular target de cámara: punto adelantado del vehículo en el heading
-      // de navegación. Este es el punto geográfico QUE LA CÁMARA MIRA.
-      const aheadMeters = 90;
+      // de navegación. Este es el punto geográfico QUE LA CÁMARA MIRA. Al
+      // abrirse la cámara antes de un giro, el ancla se adelanta MÁS para que
+      // el conductor no suba en pantalla y queden visibles el punto exacto de
+      // la maniobra, el tramo previo y el tramo posterior al giro.
+      const currentZoom = map.getZoom?.();
+      const zoomNow = typeof currentZoom === "number" ? currentZoom : NAV_ZOOM_BASE;
+      const aheadMeters = NAV_AHEAD_BASE * Math.pow(2, zoomNow - NAV_ZOOM_BASE);
       const desiredCenter = movePointAlong(next, navHeading, aheadMeters);
 
       // Suavizado angular de la cámara basado en delta time para que el giro sea
@@ -1355,8 +1653,98 @@ export default function DrivePage() {
         }
         moveMapCamera(map, { center: desiredCenter, heading: navHeading ?? 0, tilt: 0 });
       }
-      // Calibrar: si el vehículo queda muy arriba o muy abajo, ajustar aheadMeters.
-      // El valor óptimo depende de zoom + tilt.
+      // ── ZOOM ADAPTATIVO SUAVE (frame a frame) ──
+      // Objetivo por VELOCIDAD (más lejos al acelerar, más cerca al frenar)
+      // y por MANIOBRA: al acercarse a un giro relevante la cámara se abre
+      // GRADUALMENTE (punto del giro + tramo previo + posterior visibles) y
+      // tras completarlo se recupera progresivamente el zoom de seguimiento.
+      // El zoom REAL se interpola cada frame: transición animada sin saltos.
+      {
+        const loopSim = simRef.current;
+        const speedMps = loopSim.active
+          ? SIM_BASE_METERS_PER_SECOND * loopSim.speed
+          : (movementSpeedLoopRef.current ?? 0);
+        let target =
+          NAV_ZOOM_SLOW - (speedMps / NAV_SPEED_REF_MPS) * (NAV_ZOOM_SLOW - NAV_ZOOM_FAST);
+        target = Math.max(NAV_ZOOM_MIN, Math.min(NAV_ZOOM_MAX, target));
+        const route = roadRouteRef.current;
+        if (route?.path && route.path.length >= 2 && route.steps.length > 0) {
+          const total = pathLengthMeters(route.path);
+          const done = Math.min(Math.max(projectOntoPath(route.path, next), 0), total);
+          // Localizar el step en curso (el que aún no termina).
+          let accEnd = 0;
+          let idx = route.steps.length - 1;
+          for (let i = 0; i < route.steps.length; i++) {
+            accEnd += route.steps[i].distanceMeters;
+            if (accEnd > done) {
+              idx = i;
+              break;
+            }
+          }
+          const stepEnd = accEnd;
+          const distToTurn = Math.max(0, stepEnd - done);
+          const curStep = route.steps[idx];
+          const nextStep = route.steps[idx + 1];
+          // Maniobra que estamos preparando: si el giro siguiente es
+          // consecutivo, apreciar el CONJUNTO (no alternar cercano/lejano).
+          const preparingNext =
+            nextStep != null && distToTurn <= CONSECUTIVE_MANEUVER_METERS;
+          const activeStep = preparingNext ? nextStep : curStep;
+          const nextOfActive = preparingNext ? route.steps[idx + 2] : nextStep;
+          // Relevancia = ángulo entre el rumbo ACTUAL y el rumbo POST-GIRO
+          // del step activo. Giros leves no abren la cámara; retorno/glorieta
+          // la abren más. (El bearing del step en curso contra sí mismo era
+          // siempre 0: por eso nunca se abría.)
+          if (activeStep != null) {
+            const before = bearingBetween(activeStep.start, activeStep.end);
+            const after =
+              nextOfActive != null
+                ? bearingBetween(nextOfActive.start, nextOfActive.end)
+                : before;
+            if (before != null && after != null) {
+              const angle = Math.abs(shortestAngleDelta(after, before));
+              const strength =
+                angle >= TURN_ANGLE_STRONG_DEG
+                  ? TURN_ZOOM_OUT_STRONG
+                  : angle >= TURN_ANGLE_SIGNIFICANT_DEG
+                    ? TURN_ZOOM_OUT
+                    : 0;
+              if (strength > 0) {
+                // Perfil suave antes del giro (apertura gradual) y después
+                // (recuperación progresiva del zoom de seguimiento).
+                const rampIn = 1 - Math.min(1, distToTurn / TURN_AWARENESS_METERS);
+                const past = Math.max(0, done - stepEnd);
+                const rampOut = 1 - Math.min(1, past / TURN_RECOVERY_METERS);
+                const openFactor = strength * Math.max(rampIn, rampOut);
+                if (openFactor > 0) {
+                  target = Math.max(NAV_ZOOM_MIN - 0.4, target - openFactor);
+                }
+              }
+            }
+          }
+        }
+        // Histéresis del objetivo: no recalcular para micro-variaciones.
+        const lastTarget = targetZoomRef.current?.target ?? null;
+        if (lastTarget == null || Math.abs(target - lastTarget) >= NAV_ZOOM_HYSTERESIS) {
+          targetZoomRef.current = { target, ts: performance.now() };
+        }
+        // Persecución EXPONENCIAL del zoom (frame a frame): nunca hay salto;
+        // la cámara se abre al aproximarse y se cierra al salir de la maniobra.
+        const activeZoomTarget = targetZoomRef.current?.target ?? target;
+        const zoomDelta = activeZoomTarget - zoomNow;
+        if (Math.abs(zoomDelta) > NAV_ZOOM_EPSILON) {
+          const stepZoom = zoomNow + zoomDelta * NAV_ZOOM_SMOOTH;
+          const clamped = Math.max(
+            NAV_ZOOM_MIN - 0.4,
+            Math.min(NAV_ZOOM_MAX, stepZoom)
+          );
+          lastZoomRef.current = clamped;
+          // El zoom programático necesita el guard: sin él, zoom_changed lo
+          // interpretaría como gesto del usuario y cancelaría el seguimiento.
+          markInternalZoom();
+          moveMapCamera(map, { zoom: clamped });
+        }
+      }
 
       if (dist < 0.5) {
         const c = map.getCenter?.() as { lat(): number; lng(): number } | undefined;
@@ -1368,15 +1756,7 @@ export default function DrivePage() {
       followRafRef.current = requestAnimationFrame(step);
     };
     followRafRef.current = requestAnimationFrame(step);
-  }, [stopHeadingAnimation]);
-
-  const markInternalZoom = useCallback(() => {
-    internalZoomRef.current = true;
-    if (internalZoomTimerRef.current) clearTimeout(internalZoomTimerRef.current);
-    internalZoomTimerRef.current = setTimeout(() => {
-      internalZoomRef.current = false;
-    }, INTERNAL_ZOOM_GUARD_MS);
-  }, []);
+  }, [stopHeadingAnimation, markInternalZoom]);
 
   /** Sale del modo navegación/seguimiento (interacción manual del usuario). */
   const exitFollowMode = useCallback(() => {
@@ -1396,6 +1776,7 @@ export default function DrivePage() {
   const handleMapLoad = useCallback(
     (map: google.maps.Map) => {
       mapRef.current = map;
+      setMapReady(true);
       // Solo dev: expone el mapa para probar en DevTools Console, p. ej.
       // __driveMap.getRenderingType() → "VECTOR" con el Map ID configurado.
       if (process.env.NODE_ENV !== "production") {
@@ -1421,6 +1802,7 @@ export default function DrivePage() {
     mapListenersRef.current.forEach((listener) => listener.remove());
     mapListenersRef.current = [];
     mapRef.current = null;
+    setMapReady(false);
     resetDriverMarkerIconBucket();
     resetDestinationPins();
     if (process.env.NODE_ENV !== "production") {
@@ -1501,6 +1883,17 @@ export default function DrivePage() {
   // ── Modo navegación (conductor en el tercio inferior, rumbo, ruta por delante)
   useEffect(() => {
     const map = mapRef.current;
+    // OFFER_ROUTE_PREVIEW activo: la cámara pertenece al preview (sección 12,
+    // NO seguir al repartidor); pausar el seguimiento hasta que termine.
+    if (offerPreviewActive) {
+      cancelFollowLoop();
+      // Sección 7: SIN congelar al repartidor — el marcador continúa
+      // actualizándose con GPS (este efecto corre en cada tick de
+      // currentLocation); solo la cámara queda bajo control del preview.
+      visualPosRef.current = currentLocation;
+      driverMarkerRef.current?.setPosition(currentLocation);
+      return;
+    }
     if (!mapsLoaded || !map || !followDriver || !driverHasLocation) {
       // Sin seguimiento activo, el loop no debe seguir moviendo la cámara
       // (p. ej. tras encuadrar un tramo nuevo o explorar manualmente).
@@ -1557,34 +1950,14 @@ export default function DrivePage() {
       }
     }
 
-    // Zoom DINÁMICO: más lejos al aumentar velocidad (más tramo por delante),
-    // más cerca al bajar velocidad o al acercarse a un giro. Con histéresis
-    // para no cambiar el zoom constantemente. El rango de zoom ahora es más
-    // cerrado (NAV_ZOOM_BASE como referencia de navegación).
-    const speedMps = sim.active
-      ? SIM_BASE_METERS_PER_SECOND * sim.speed
-      : (movementSpeedRef.current ?? 0);
-    let zoom =
-      NAV_ZOOM_SLOW - (speedMps / NAV_SPEED_REF_MPS) * (NAV_ZOOM_SLOW - NAV_ZOOM_FAST);
-    zoom = Math.max(NAV_ZOOM_MIN, Math.min(NAV_ZOOM_MAX, zoom));
-    if (
-      guidance?.distanceToManeuver != null &&
-      guidance.distanceToManeuver <= NEXT_MANEUVER_METERS
-    ) {
-      zoom = Math.min(zoom - 0.3, NAV_ZOOM_MIN);
-    }
-    if (
-      lastZoomRef.current == null ||
-      Math.abs(zoom - lastZoomRef.current) >= NAV_ZOOM_HYSTERESIS
-    ) {
-      lastZoomRef.current = zoom;
-      markInternalZoom();
-      moveMapCamera(map, { zoom });
-    }
+    // El zoom dinámico (velocidad + maniobras) vive DENTRO del loop de
+    // seguimiento (ensureFollowLoop): se aplica frame a frame con transición
+    // exponencial, sin saltos ni parpadeos.
   }, [
     mapsLoaded,
     followDriver,
     driverHasLocation,
+    offerPreviewActive,
     currentLocation,
     roadRoute,
     navTarget,
@@ -1635,42 +2008,321 @@ export default function DrivePage() {
     }
   }, [currentLocation, roadRoute, navTarget, mapsLoaded, driverHasLocation, sim.active]);
 
-  // Encuadre general de un tramo NUEVO (primera ruta o cambio recolección →
-  // entrega), una sola vez y solo en modo seguimiento. Después, mientras
-  // conduce, la cámara navegación se ancla sola (arriba) sin volver a
-  // encuadrar toda la ruta.
+  // ── Encuadre inicial AL ASIGNARSE un viaje ──
+  // BUG corregido: antes se hacía un fitBounds de toda la ruta (vista
+  // alejada y genérica). Ahora la cámara prioriza el GPS real del repartidor
+  // en modo seguimiento (heading-up, zoom de navegación). Si el GPS aún no
+  // está disponible, se parte del último punto confiable (realLocation con
+  // fallback al estado del backend) y el loop de seguimiento desliza la
+  // cámara suavemente hacia adelante cuando llega la primera ubicación
+  // válida — sin saltos ni recálculos visuales agresivos.
+  const initialFocusDoneRef = useRef<string | null>(null);
   useEffect(() => {
     const map = mapRef.current;
-    const routeReady = Boolean(
-      navTarget && driverHasLocation && roadRoute?.path && roadRoute.path.length >= 2
-    );
-    if (!mapsLoaded || !map || !routeReady || !followDriver) return;
-    const legChanged = prevFramedLegKeyRef.current !== legKey;
-    const neverFramed = lastFramedRouteRef.current === null;
-    if (!legChanged && !neverFramed) {
-      lastFramedRouteRef.current = roadRoute;
-      return;
-    }
-    // Vista general del nuevo tramo, norte arriba: la cámara heading-up se
-    // enciende al pulsar NAVEGAR (o Centrar GPS), no de forma automática.
-    cancelFollowLoop();
-    moveMapCamera(map, { heading: 0, tilt: 0 });
-    markInternalZoom();
-    frameRouteView(map, [currentLocation, ...roadRoute!.path]);
-    setFollowDriver(false);
-    prevFramedLegKeyRef.current = legKey;
+    if (!mapsLoaded || !map || offerPreviewActive) return;
+    if (!driverHasLocation || !navTarget) return;
+    const orderNumber = activeOrder?.orderNumber ?? null;
+    if (!orderNumber || initialFocusDoneRef.current === orderNumber) return;
+    initialFocusDoneRef.current = orderNumber;
     lastFramedRouteRef.current = roadRoute;
+    prevFramedLegKeyRef.current = legKey;
+    // Prioridad #1: GPS real y actual del repartidor. La cámara arranca en
+    // la posición real, orientada al rumbo conocido, con zoom de navegación.
+    lastFollowPosRef.current = currentLocation;
+    visualPosRef.current = currentLocation;
+    driverMarkerRef.current?.setPosition(currentLocation);
+    followTargetRef.current = currentLocation;
+    lastZoomRef.current = null;
+    markInternalZoom();
+    moveMapCamera(map, { zoom: NAV_ZOOM_BASE });
+    const target = headingResolverRef.current();
+    if (target != null) {
+      applyHeading(target);
+      moveMapCamera(map, { heading: target, tilt: 0 });
+    }
+    // Seguimiento automático: la cámara acompaña al repartidor desde ya.
+    setFollowDriver(true);
+    if (roadRoute?.path && roadRoute.path.length >= 2) {
+      ensureFollowLoop();
+    }
+    // La brújula se activa en segundo plano (iOS puede pedir permiso).
+    if (deviceOrientation.state.available !== "available") {
+      deviceOrientation.enable().catch(() => {});
+    }
   }, [
     mapsLoaded,
-    followDriver,
+    mapReady,
+    offerPreviewActive,
+    driverHasLocation,
+    navTarget,
+    activeOrder,
+    currentLocation,
     roadRoute,
     legKey,
-    navTarget,
-    driverHasLocation,
-    currentLocation,
-    cancelFollowLoop,
+    ensureFollowLoop,
+    applyHeading,
     markInternalZoom,
+    deviceOrientation,
   ]);
+
+  // ── OFFER_ROUTE_PREVIEW (secciones 1–9, 15–17) ─────────────────
+  // Preview TEMPORAL del recorrido pickup → destino mientras la oferta está
+  // en pantalla. AISLADO de la navegación real: nunca escribe navPhase,
+  // navTarget, roadRoute ni el estado del pedido (sección 10).
+
+  // offerPreview (estado visible por el render: polyline + marcadores
+  // temporales) se declara arriba, junto a mapReady.
+  // Ref espejo para que callbacks/respuestas asíncronas lean el valor fresco
+  // sin recrearse (decisiones sobre rutas tardías, restauración, etc.).
+  const offerPreviewRef = useRef<OfferPreviewState | null>(null);
+  // Cancelación de la solicitud de ruta en vuelo (sección 16: sin callbacks
+  // modificando el mapa después de que la oferta terminó).
+  const offerRouteRequestRef = useRef<{ canceled: boolean } | null>(null);
+  // "Sesión" de preview activa: evita restaurar la cámara entre ofertas
+  // consecutivas (sección 8) y genera la clave de ignoración de rutas tardías.
+  const offerPreviewSessionRef = useRef(0);
+  // Contexto de cámara capturado para la SESIÓN de preview actual: sobrevive
+  // al intercambio A→B dentro de la gracia (sección 8) para que la oferta B
+  // herede el contexto original en lugar de recapturar.
+  const offerSavedCameraRef = useRef<OfferPreviewCameraState | null>(null);
+  // Ancla temporal para la gracia entre ofertas consecutivas (sección 8).
+  const offerEndedAtRef = useRef(0);
+  // orderNumber de la oferta que el repartidor ACEPTÓ (sección 4): suprime la
+  // restauración de cámara; la navegación normal toma el control.
+  const acceptedOfferOrderRef = useRef<string | null>(null);
+  // Marca de tiempo del último gesto del usuario sobre el mapa (pan/zoom).
+  const lastMapInteractionAtRef = useRef(0);
+
+  useEffect(() => {
+    offerPreviewRef.current = offerPreview;
+  }, [offerPreview]);
+
+  // Gesto manual durante el preview: la cámara deja de ser "autómata" y la
+  // restauración pasa al fallback (posicionamiento ACTUAL + zoom drive).
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const onInteraction = () => {
+      lastMapInteractionAtRef.current = Date.now();
+    };
+    const listeners = [
+      map.addListener("dragstart", onInteraction),
+      map.addListener("zoom_changed", () => {
+        // Los zooms PROGRAMÁTICOS (encuadre del preview, cámara drive) no son
+        // gestos del usuario: el guard internalZoomRef los excluye.
+        if (!internalZoomRef.current) onInteraction();
+      }),
+    ];
+    return () => {
+      listeners.forEach((l) => l.remove());
+    };
+  }, [mapReady]);
+
+  // Restaura la cámara al terminar la oferta SIN aceptación (secciones 6–7).
+  // "current" es la ubicación GPS ACTUAL del repartidor (no la congelada al
+  // llegar la oferta): si se movió durante el preview, el mapa regresa a su
+  // posición presente con el CONTEXTO de cámara apropiado.
+  const restoreCameraAfterOffer = useCallback(
+    (current: RoutePoint, previous: OfferPreviewCameraState | null) => {
+      const map = mapRef.current;
+      if (!map) return;
+      // Si el repartidor tocó el mapa durante el preview, no pisar su vista:
+      // solo se recupera con el botón Centrar GPS.
+      if (Date.now() - lastMapInteractionAtRef.current < OFFER_PREVIEW_CAMERA_GRACE_MS) {
+        return;
+      }
+      // Contexto de cámara válido y modo de exploración intacto → restaurarlo
+      // tal cual (center capturado; el repartidor se dibuja donde está).
+      if (previous && !previous.followDriver) {
+        markInternalZoom();
+        moveMapCamera(map, {
+          center: previous.center,
+          zoom: previous.zoom,
+          ...(previous.heading != null ? { heading: previous.heading } : {}),
+          ...(previous.tilt != null ? { tilt: previous.tilt } : {}),
+        });
+        return;
+      }
+      // Fallback (también si estaba en navegación heading-up: el modo
+      // seguimiento continúa activo y la cámara vuela sola a la posición
+      // ACTUAL; ver efecto de navegación → no recentrar dos veces aquí).
+      if (previous?.followDriver) {
+        setFollowDriver(true);
+        // Reanudar el seguimiento DESDE la posición ACTUAL del repartidor:
+        // el loop interpola la cámara de vuelta sin salto brusco.
+        followTargetRef.current = current;
+        visualPosRef.current = current;
+        driverMarkerRef.current?.setPosition(current);
+        markInternalZoom();
+        moveMapCamera(map, { zoom: NAV_ZOOM_BASE });
+        ensureFollowLoop();
+        return;
+      }
+      lastFollowPosRef.current = current;
+      markInternalZoom();
+      map.setZoom(DEFAULT_ZOOM);
+      map.setCenter(current);
+    },
+    [markInternalZoom, ensureFollowLoop]
+  );
+
+  // Solicitud de ruta del preview (pickup → destino) con TODAS las guardas de
+  // respuesta tardía (sección 15): oferta terminada, oferta reemplazada o
+  // request cancelado → se ignora. El fallo NUNCA bloquea la oferta.
+  const requestOfferPreviewRoute = useCallback(
+    (pickup: RoutePoint, destination: RoutePoint, offerKey: string, session: number) => {
+      const request = { canceled: false };
+      offerRouteRequestRef.current = request;
+      getRoadRoute(pickup, destination)
+        .then((route) => {
+          if (request.canceled) return;
+          const live = offerPreviewRef.current;
+          if (!live || live.offerKey !== offerKey) return; // oferta ya terminó
+          if (session !== offerPreviewSessionRef.current) return; // reemplazada (sección 8)
+          if (route && route.path.length >= 2) {
+            setOfferPreview((prev) =>
+              prev && prev.offerKey === offerKey ? { ...prev, route } : prev
+            );
+            const map = mapRef.current;
+            if (map) {
+              cancelFollowLoop();
+              markInternalZoom();
+              moveMapCamera(map, { heading: 0, tilt: 0 });
+              frameOfferPreview(map, pickup, destination, route.path);
+            }
+          } else {
+            // Routing falló: la oferta sigue funcionando (sección 15), el
+            // mapa se queda con los marcadores y el encuadre por puntos.
+            console.warn("OFFER_ROUTE_PREVIEW_FAILED", { orderNumber: live.orderNumber });
+          }
+        })
+        .catch(() => {
+          /* Sección 15: el fallo de routing nunca bloquea la oferta. */
+        });
+    },
+    [cancelFollowLoop, markInternalZoom]
+  );
+
+  // Ciclo de vida del preview: entrada (nueva oferta / reemplazo),
+  // expiración, rechazo y limpieza al desmontar (secciones 1, 5, 8, 9, 16).
+  // La ACEPTACIÓN no restaura nada: el flujo normal de navegación toma el
+  // control (sección 4) y este estado simplemente se destruye.
+  useEffect(() => {
+    if (!mapsLoaded) return;
+    // `offer` se lee de state: el alias de render se declara más abajo.
+    const currentOffer = state?.offer ?? null;
+    const key = currentOffer ? currentOffer.offerId ?? currentOffer.orderNumber : null;
+
+    // ── Oferta visible → activar / actualizar preview ──
+    if (currentOffer && key) {
+      const existing = offerPreviewRef.current;
+      // Oferta ya en pantalla (ciclo de polling): no re-encuadrar (evita
+      // resetear fitBounds en cada tick y no toca el temporizador, sección 14).
+      if (existing && existing.offerKey === key) {
+        // El mapa terminó de cargar DESPUÉS de la oferta: disparar el encuadre
+        // y la ruta que quedaron pendientes (routeRequested evita repetirlos).
+        if (
+          mapReady &&
+          !existing.routeRequested &&
+          existing.pickup &&
+          existing.destination
+        ) {
+          setOfferPreview((prev) =>
+            prev && prev.offerKey === key ? { ...prev, routeRequested: true } : prev
+          );
+          const map = mapRef.current;
+          if (map) {
+            cancelFollowLoop();
+            markInternalZoom();
+            moveMapCamera(map, { heading: 0, tilt: 0 });
+            frameOfferPreview(map, existing.pickup, existing.destination, null);
+          }
+          requestOfferPreviewRoute(
+            existing.pickup,
+            existing.destination,
+            key,
+            offerPreviewSessionRef.current
+          );
+        }
+        return;
+      }
+
+      acceptedOfferOrderRef.current = null;
+      const pickupValid = hasValidCoords(currentOffer.storeLat, currentOffer.storeLng);
+      const destValid = hasValidCoords(currentOffer.destLat, currentOffer.destLng);
+      const pickup = pickupValid ? { lat: currentOffer.storeLat, lng: currentOffer.storeLng } : null;
+      const destination = destValid ? { lat: currentOffer.destLat, lng: currentOffer.destLng } : null;
+      const orderNumber = currentOffer.orderNumber;
+
+      // Contexto de cámara: capturado SOLO en la primera oferta de la sesión;
+      // en reemplazo (oferta B tras A, sección 8) se conserva el original.
+      const inGrace =
+        offerEndedAtRef.current > 0 &&
+        Date.now() - offerEndedAtRef.current <= OFFER_PREVIEW_CAMERA_GRACE_MS;
+      const previousCamera = inGrace
+        ? offerSavedCameraRef.current
+        : captureOfferPreviewCamera(mapRef.current!, followDriver);
+      offerSavedCameraRef.current = previousCamera;
+      offerEndedAtRef.current = 0;
+      offerPreviewSessionRef.current += 1;
+      offerRouteRequestRef.current = { canceled: true }; // cancela ruta en vuelo de la oferta anterior
+      const session = offerPreviewSessionRef.current;
+
+      setOfferPreview({
+        offerKey: key,
+        orderNumber,
+        pickup,
+        destination,
+        pickupLabel: currentOffer.mandadoOriginLabel ?? currentOffer.storeName,
+        destinationLabel: currentOffer.mandadoDestinationLabel ?? currentOffer.destLabel,
+        route: null,
+        routeRequested: false,
+        previousCamera,
+        startedAt: Date.now(),
+      });
+
+      // Encuadre inicial POR PUNTOS (sección 1.5): A y B visibles de inmediato;
+      // la ruta vial llega después y re-encuadra con la geometría real.
+      const map = mapRef.current;
+      if (map && mapReady) {
+        cancelFollowLoop();
+        markInternalZoom();
+        moveMapCamera(map, { heading: 0, tilt: 0 });
+        if (pickup && destination) frameOfferPreview(map, pickup, destination, null);
+      }
+
+      // Ruta del preview: pickup → destino (NUNCA driver → pickup, sección 11).
+      // Reutiliza getRoadRoute + su caché; jamás una segunda implementación.
+      if (pickup && destination && mapReady) {
+        setOfferPreview((prev) =>
+          prev && prev.offerKey === key ? { ...prev, routeRequested: true } : prev
+        );
+        requestOfferPreviewRoute(pickup, destination, key, session);
+      }
+      return;
+    }
+
+    // ── Sin oferta → terminar preview (expiró o se rechazó) ──
+    const ending = offerPreviewRef.current;
+    if (!ending) return;
+    if (offerRouteRequestRef.current) offerRouteRequestRef.current.canceled = true;
+    offerPreviewRef.current = null;
+    setOfferPreview(null);
+    offerEndedAtRef.current = Date.now();
+    // ACEPTAR (sección 4): no restaurar nada; el flujo normal de navegación
+    // ("Encuadre general de un tramo NUEVO" + cámara drive) toma el control.
+    // Se exige CONFIRMACIÓN del backend (el pedido vive ya en state.orders):
+    // si el POST de aceptación falló, la expiración restaura la cámara normal.
+    const acceptedConfirmed =
+      acceptedOfferOrderRef.current === ending.orderNumber &&
+      Boolean(state?.orders?.some((o) => o.orderNumber === ending.orderNumber));
+    acceptedOfferOrderRef.current = null;
+    if (acceptedConfirmed) return;
+    // Restauración con gracia: si la oferta vivió muy poco, la cámara apenas
+    // se movió; animar de vuelta es un salto innecesario (sección 13).
+    if (Date.now() - ending.startedAt < OFFER_PREVIEW_RESTORATION_MIN_MS) return;
+    restoreCameraAfterOffer(currentLocation, ending.previousCamera);
+  }, [state, mapsLoaded, mapReady, currentLocation, followDriver, cancelFollowLoop, markInternalZoom, restoreCameraAfterOffer, requestOfferPreviewRoute]);
 
   // ── Controles de cámara ─────────────────────────────────────────
 
@@ -1717,10 +2369,10 @@ export default function DrivePage() {
     followTargetRef.current = currentLocation;
     if (withRoute) {
       ensureFollowLoop();
-      // Zoom de navegación inicial: cerrado, enfocado al siguiente tramo.
+      // NO se fuerza el zoom aquí: el objetivo de zoom de navegación se
+      // persigue de forma GRADUAL dentro del loop (transición animada, sin
+      // salto brusco desde la vista de exploración del usuario).
       lastZoomRef.current = null;
-      markInternalZoom();
-      moveMapCamera(map, { zoom: NAV_ZOOM_BASE });
     }
     setFollowDriver(true);
     // Intentar activar brújula si no está disponible todavía (sin bloquear).
@@ -1735,7 +2387,6 @@ export default function DrivePage() {
     cancelFollowLoop,
     startHeadingTween,
     stopHeadingAnimation,
-    markInternalZoom,
     applyHeading,
     deviceOrientation,
   ]);
@@ -1743,6 +2394,9 @@ export default function DrivePage() {
   // "Centrar GPS" = regresar al modo navegación heading-up si el usuario
   // arrastró el mapa y salió de él: no solo recentra, restaura rumbo + tilt.
   const handleCenterGps = useCallback(() => {
+    // Intención explícita del usuario: la restauración del preview no debe
+    // pisar esta vista cuando la oferta termine.
+    lastMapInteractionAtRef.current = Date.now();
     // Al centrar, también intentar activar brújula si no lo está (iOS puede
     // requerir permiso explícito; la hook se encarga de pedirlo cuando sea
     // necesario sin mostrar un prompt innecesario).
@@ -1752,45 +2406,31 @@ export default function DrivePage() {
     enterFollowCamera();
   }, [enterFollowCamera, deviceOrientation]);
 
-  // "Ver viaje completo" = vista convencional (norte arriba, sin seguimiento):
-  // fitBounds sobre la geometría vial real; no vuelve al conductor solo.
-  const handleFullTripView = useCallback(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    const points: RoutePoint[] = [currentLocation];
-    if (roadRoute?.path?.length) {
-      // Encuadrar SOLO la geometría vial real (nunca una línea recta).
-      points.push(...roadRoute.path);
-    } else if (activeOrder) {
-      // Sin ruta todavía: encuadrar con los puntos disponibles del pedido.
-      if (pickupPoint) points.push(pickupPoint);
-      if (deliveryPoint) points.push(deliveryPoint);
-    }
-    if (points.length < 2) {
-      // Solo hay un punto: comportarse como centrar GPS.
-      handleCenterGps();
-      return;
-    }
-    cancelFollowLoop();
-    stopHeadingAnimation();
-    lastZoomRef.current = null;
-    visualHeadingRef.current = null;
-    applyDriverMarkerIcon(driverMarkerRef.current, 0, null);
-    moveMapCamera(map, { heading: 0, tilt: 0 });
-    markInternalZoom();
-    frameRouteView(map, points);
-    // Dejar de forzar la cámara para que pueda ver el recorrido completo.
-    setFollowDriver(false);
+  // ── Reanudación AUTOMÁTICA del seguimiento al volver a conducir ──
+  // El repartidor exploró el mapa (seguimiento inactivo); al retomar la
+  // marcha se re-engancha la cámara suavemente, sin aviso textual: solo el
+  // mapa vuelve a seguirlo. El control manual sigue disponible sobre el
+  // panel de datos.
+  const autoResumeRef = useRef(0);
+  useEffect(() => {
+    if (followDriver || offerPreviewActive) return;
+    if (!driverHasLocation) return;
+    // Velocidad actual (m/s): GPS suavizada o simulador.
+    const speedMps = sim.active
+      ? SIM_BASE_METERS_PER_SECOND * sim.speed
+      : (movementSpeedRef.current ?? 0);
+    if (speedMps < MOVING_SPEED_MPS) return;
+    if (Date.now() - autoResumeRef.current < 5000) return;
+    autoResumeRef.current = Date.now();
+    enterFollowCamera();
   }, [
     currentLocation,
-    roadRoute,
-    activeOrder,
-    pickupPoint,
-    deliveryPoint,
-    handleCenterGps,
-    cancelFollowLoop,
-    stopHeadingAnimation,
-    markInternalZoom,
+    followDriver,
+    offerPreviewActive,
+    driverHasLocation,
+    sim.active,
+    sim.speed,
+    enterFollowCamera,
   ]);
 
   // ── Contenido de la barra de navegación (etapa actual) ──────────
@@ -1798,21 +2438,12 @@ export default function DrivePage() {
   const navContent = useMemo(() => {
     if (!navPhase || !activeOrder) return null;
 
-    const orderCode = shortOrderCode(activeOrder.orderNumber);
     const pickupLabel = activeOrder.mandadoOriginLabel ?? activeOrder.storeName;
     const deliveryLabel = activeOrder.mandadoDestinationLabel ?? activeOrder.destLabel;
     const hasLegMetrics = navPhase === "to_pickup" || navPhase === "to_delivery";
     const arriving = arrivingActive;
-    // Distancia/tiempo RESTANTES calculados desde currentLocation sobre la
-    // geometría real (la tarjeta conserva sus valores originales del servicio).
-    const distanceLabel =
-      hasLegMetrics && guidance
-        ? `${formatMetersShort(guidance.remaining)} restantes`
-        : null;
-    const durationLabel =
-      hasLegMetrics && guidance?.remainingSeconds != null
-        ? formatSecondsShort(guidance.remainingSeconds)
-        : null;
+    // Distancia RESTANTE calculada desde currentLocation sobre la geometría
+    // real; la zona superior ya no muestra etapa ni tiempo de etapa.
     const progress =
       hasLegMetrics && guidance ? guidance.fractionCompleted : null;
     const address =
@@ -1834,11 +2465,12 @@ export default function DrivePage() {
       distToManeuver < 2000
         ? `en ${formatMetersShort(distToManeuver)}`
         : null;
-    // La línea secundaria muestra la CALLE de la maniobra ("Av. Panamericana")
-    // cuando existe; si no, la dirección del destino.
+    // La línea secundaria muestra la CALLE de la maniobra ("Av. Emiliano
+    // Zapata") cuando existe. La dirección completa del destino vive SOLO en
+    // el sheet (fila colapsada / detalles): ningún dato se repite en pantalla.
     const maneuverStreet =
       !arriving && isTurnLike && guidance?.street ? guidance.street : null;
-    const sub = maneuverStreet ?? (arriving ? `Destino de ${address}` : address);
+    const sub = maneuverStreet;
 
     // Fase 4 — variante visual del panel: acción en el punto, llegada
     // inminente o maniobra. Cambiar de variante = transición de etapa
@@ -1854,33 +2486,19 @@ export default function DrivePage() {
     const shortMain = guidance?.instruction
       ? shortInstructionInSpanish(guidance.instruction, guidance.maneuver)
       : null;
-    // Distancia glanceable para el estado colapsado del sheet ("450 m").
-    const glance =
-      hasLegMetrics && guidance ? formatMetersShort(guidance.remaining) : null;
-    // Entidad protagonista del sheet colapsado: restaurante antes de recoger,
-    // destinatario después (customerName si existe; si no, la dirección).
-    const sheetEntity =
-      navPhase === "to_pickup" || navPhase === "at_pickup"
-        ? pickupLabel
-        : activeOrder.customerName ?? deliveryLabel;
-    const sheetEntityKind: "pickup" | "delivery" =
-      navPhase === "to_pickup" || navPhase === "at_pickup" ? "pickup" : "delivery";
+    // Distancia glanceable removida: ahora el panel la calcula directo de
+    // guidance (ver prop glanceDistance del DriveTripSheet).
 
+    // Zona superior = SOLO instrucciones giro por giro. La etapa del viaje
+    // ("En ruta a recolección", tiempos de etapa, folio) NO se muestra sobre
+    // el mapa: esos datos viven en el panel inferior.
     switch (navPhase) {
       case "to_pickup":
         return {
-          // Lenguaje natural de la tarea, no etiquetas técnicas: el
-          // protagonista (restaurante/punto) vive en la tarjeta inferior.
-          title: "A RECOGER",
-          icon: <Package className="h-5 w-5" />,
-          accent: "orange" as const,
-          orderCode,
           main: arriving
             ? pickupLabel
             : shortMain ?? guidance?.instruction ?? "Dirígete a la recolección",
           sub,
-          distance: distanceLabel,
-          duration: durationLabel,
           progress,
           maneuver,
           maneuverDistance,
@@ -1890,33 +2508,21 @@ export default function DrivePage() {
         };
       case "at_pickup":
         return {
-          title: "EN EL PUNTO DE RECOGIDA",
-          icon: <Package className="h-5 w-5" />,
-          accent: "orange" as const,
-          orderCode,
           main: "Estás en el punto de recolección",
           sub: address,
-          distance: null,
-          duration: null,
           progress: null,
           maneuver: "arrive",
           maneuverDistance: null,
           recalculating: isRecalculating,
           waiting: false,
-          variant,
+          variant: "action" as const,
         };
       case "to_delivery":
         return {
-          title: "EN CAMINO A ENTREGAR",
-          icon: <Truck className="h-5 w-5" />,
-          accent: "red" as const,
-          orderCode,
           main: arriving
             ? deliveryLabel
             : shortMain ?? guidance?.instruction ?? "Dirígete a la entrega",
           sub,
-          distance: distanceLabel,
-          duration: durationLabel,
           progress,
           maneuver,
           maneuverDistance,
@@ -1926,37 +2532,25 @@ export default function DrivePage() {
         };
       case "at_delivery":
         return {
-          title: "EN EL DESTINO",
-          icon: <MapPin className="h-5 w-5" />,
-          accent: "green" as const,
-          orderCode,
           main: "Estás en el destino",
           sub: address,
-          distance: null,
-          duration: null,
           progress: null,
           maneuver: "arrive",
           maneuverDistance: null,
           recalculating: isRecalculating,
           waiting: false,
-          variant,
+          variant: "action" as const,
         };
       case "done":
         return {
-          title: "VIAJE COMPLETADO",
-          icon: <CheckCircle className="h-5 w-5" />,
-          accent: "green" as const,
-          orderCode,
           main: "✓ Viaje completado",
           sub: address,
-          distance: null,
-          duration: null,
           progress: null,
           maneuver: null,
           maneuverDistance: null,
           recalculating: isRecalculating,
           waiting: false,
-          variant,
+          variant: "action" as const,
         };
       default:
         return null;
@@ -1966,7 +2560,7 @@ export default function DrivePage() {
   // ── Actions ──────────────────────────────────────────────────────
 
   const handleSession = useCallback(
-    async (action: "connect" | "disconnect") => {
+    async (action: "connect" | "disconnect" | "stop_offers" | "resume_offers") => {
       setActionLoading("session");
       try {
         await fetch("/api/driver/session", {
@@ -1980,6 +2574,18 @@ export default function DrivePage() {
       }
     },
     [refetch]
+  );
+
+  // Cambia la intención de disponibilidad: aplica YA en la UI (tarjeta de fin
+  // de ruta) y persiste en backend; el servicio activo nunca se altera.
+  const commitOffersStopped = useCallback(
+    (stopped: boolean) => {
+      setStopOffersIntent(stopped);
+      void handleSession(stopped ? "stop_offers" : "resume_offers").finally(() =>
+        setStopOffersIntent(null)
+      );
+    },
+    [handleSession]
   );
 
   const handleAction = useCallback(
@@ -2013,18 +2619,74 @@ export default function DrivePage() {
     [enterFollowCamera, refetch]
   );
 
-  /** Acción de la etapa actual del pedido activo (recogí / entregué). */
-  const handleStageAction = useCallback(async () => {
+  /**
+   * Acción de la etapa actual del pedido activo (recogí / entregué).
+   * Devuelve true si la acción se confirmó (el deslizador lo usa para su
+   * feedback de éxito/fallo). Al entregar, snapshot local para la pantalla
+   * de finalización (la orden sale del backend en el refetch).
+   */
+  const postDriverAction = useCallback(
+    async (action: string, orderNumber: string): Promise<{ ok: boolean; error?: string }> => {
+      try {
+        const res = await fetch("/api/driver/action", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action, orderNumber }),
+        });
+        if (res.ok) return { ok: true };
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        return { ok: false, error: data?.error ?? "No se pudo completar la acción." };
+      } catch {
+        return { ok: false, error: "No se pudo completar la acción." };
+      }
+    },
+    []
+  );
+
+  const handleStageAction = useCallback(async (): Promise<boolean> => {
     // El simulador solo muestra estados; nunca muta el pedido real.
     if (sim.active) {
       setStageActionError("Desactiva el simulador para confirmar la acción real.");
-      return;
+      return false;
     }
-    if (!activeOrder || !orderAction) return;
+    if (!activeOrder || !orderAction) return false;
     const stageActions = new Set(["picked_up", "delivered"]);
-    if (!stageActions.has(orderAction.action)) return;
-    await handleAction(orderAction.action, activeOrder.orderNumber);
-  }, [activeOrder, orderAction, handleAction, sim.active]);
+    if (!stageActions.has(orderAction.action)) return false;
+
+    setActionLoading(activeOrder.orderNumber);
+    setStageActionError(null);
+    try {
+      let result = await postDriverAction(orderAction.action, activeOrder.orderNumber);
+      // Auto-recuperación: si el deslizaje ganó la carrera a la geocerca y
+      // la llegada aún no estaba marcada (guarda "Acción no válida en estado
+      // …"), marca la llegada y reintenta UNA vez la confirmación. Las demás
+      // guardas (NIP requerido, bloqueado, expirado) se respetan tal cual.
+      if (
+        !result.ok &&
+        result.error?.includes("Acción no válida en estado")
+      ) {
+        const arriveAction =
+          orderAction.action === "picked_up" ? "pickup_arrival" : "destination_arrival";
+        const arrival = await postDriverAction(arriveAction, activeOrder.orderNumber);
+        if (arrival.ok) {
+          result = await postDriverAction(orderAction.action, activeOrder.orderNumber);
+        }
+      }
+      if (!result.ok) {
+        setStageActionError(result.error ?? "No se pudo completar la acción.");
+        return false;
+      }
+      if (orderAction.action === "delivered") {
+        // Snapshot ANTES del refetch: con la entrega confirmada la orden
+        // deja de aparecer en /api/driver/state.
+        setLastDelivered({ order: activeOrder, at: Date.now() });
+      }
+      await refetch();
+      return true;
+    } finally {
+      setActionLoading(null);
+    }
+  }, [activeOrder, orderAction, postDriverAction, refetch, sim.active]);
 
   /**
    * Entrega con NIP (Entrega segura): valida server-side con el mismo gate
@@ -2070,6 +2732,11 @@ export default function DrivePage() {
     async (action: "accept" | "reject", orderNumber: string) => {
       // Mark that user initiated an action → suppress expiration detection
       actionJustCompletedRef.current = true;
+      if (action === "accept") {
+        // ACEPTAR (sección 4): suprime la restauración de cámara cuando el
+        // preview muera; la navegación normal toma el control.
+        acceptedOfferOrderRef.current = orderNumber;
+      }
       // Stop sound immediately and suppress re-activation during action
       stopAlertImmediate();
       setActionLoading(`offer-${orderNumber}`);
@@ -2148,68 +2815,59 @@ export default function DrivePage() {
   const orders = state?.orders ?? [];
   const offer = state?.offer ?? null;
 
+  // ── TU RUTA: datos derivados (sin hooks) ──────────────────────────
+  // Paradas de "Tu ruta": máx. 2. La actual (Recoger/Entregar, "Ahora") y,
+  // solo si existe un siguiente servicio asignado, la futura ("Después").
+  // Direcciones CORTAS: nunca el detalle completo ni producto ni importe.
+  const currentStopIsPickup = navPhase === "to_pickup" || navPhase === "at_pickup";
+  const nextServiceOrder = orders.length > 1 ? orders[1] : null;
+  // Derivación SIN hook (los early returns ya pasaron: nada de useMemo aquí).
+  const routeStops: RouteStop[] = [];
+  if (activeOrder) {
+    routeStops.push({
+      kind: currentStopIsPickup ? "pickup" : "delivery",
+      label: currentStopIsPickup ? "Recoger" : "Entregar",
+      shortAddress: shortAddress(
+        currentStopIsPickup
+          ? activeOrder.storeAddress ??
+              activeOrder.mandadoOriginLabel ??
+              activeOrder.storeName
+          : activeOrder.mandadoDestinationLabel ?? activeOrder.destLabel
+      ),
+      status: "Ahora",
+    });
+    if (nextServiceOrder) {
+      routeStops.push({
+        kind: "pickup",
+        label: "Siguiente servicio",
+        shortAddress: shortAddress(
+          nextServiceOrder.mandadoOriginLabel ?? nextServiceOrder.storeName
+        ),
+        status: "Después",
+      });
+    }
+  }
+
+  // Vehículo EN MOVIMIENTO: ≥ 2 m/s (≈ 7 km/h) según velocidad GPS suavizada.
+  // En movimiento se permite CONSULTAR "Tu ruta", pero no cambiar la
+  // disponibilidad (seguridad al conducir).
+  const vehicleMoving =
+    !sim.active &&
+    movementSpeedRef.current != null &&
+    movementSpeedRef.current >= MOVING_SPEED_MPS;
+
+  // Confirmación de finalización (unos segundos) o viaje activo.
+  const donePanelVisible =
+    Boolean(lastDelivered) || (sim.active && navPhase === "done");
+  // SERVICIO ACTIVO manda: con orden activa la hoja de viaje SIEMPRE se
+  // muestra, aunque la sesión de disponibilidad haya expirado. La UI nunca
+  // asume "sin sesión → desconectado" si existe una orden activa.
+  const showingTripSheet = !donePanelVisible && orders.length > 0;
+
   // ── Main UI ──────────────────────────────────────────────────────
 
   return (
     <div className="relative h-[100dvh] w-full overflow-hidden bg-[#0d1526]">
-      {/* Status Bar — scrim suave detrás para que el texto blanco se lea
-          sobre el mapa claro de marca (sin rediseñar: solo fondo difuminado). */}
-      <div className="absolute top-0 left-0 right-0 z-20 bg-gradient-to-b from-black/40 to-transparent pb-6 safe-area-top">
-        <div className="flex items-center justify-between px-4 pt-3">
-        <div className="flex items-center gap-2">
-          <div
-            className={`h-2.5 w-2.5 rounded-full ${
-              connected ? "bg-green-400 animate-pulse" : "bg-gray-500"
-            }`}
-          />
-          <span className="text-xs font-bold uppercase tracking-wide text-white/80">
-            {connected
-              ? state?.estado === "busy"
-                ? "Ocupado"
-                : state?.estado === "offer_pending"
-                  ? "Oferta pendiente"
-                  : "Disponible"
-              : "Desconectado"}
-          </span>
-        </div>
-        {connected && state?.disponibleHasta && (
-          <span className="text-xs text-white/50">
-            <Clock className="mr-1 inline h-3 w-3" />
-            {(() => {
-              const remaining = Math.max(
-                0,
-                Math.round(
-                  (new Date(state.disponibleHasta).getTime() - Date.now()) / 60000
-                )
-              );
-              const h = Math.floor(remaining / 60);
-              const m = remaining % 60;
-              return h > 0 ? `${h}h ${m}min` : `${m}min`;
-            })()}
-          </span>
-        )}
-        </div>
-      </div>
-
-      {/* GPS Warning — debajo del status bar respetando el notch/isla
-          dinámica (env(safe-area-inset-top)). */}
-      {gpsError && connected && (
-        <div className="absolute inset-x-0 top-[calc(env(safe-area-inset-top)+2.5rem)] z-20 mx-4 rounded-lg bg-amber-500/20 px-3 py-2 text-xs text-amber-300">
-          ⚠️ {gpsError}
-        </div>
-      )}
-
-      {/* Aviso de permiso de sensores (solo cuando es necesario y precede a
-          la solicitud). No bloquea la aplicación: el usuario puede seguir
-          navegando con GPS incluso si rechaza. */}
-      {deviceOrientation.state.available === "permission_required" &&
-        deviceOrientation.state.permission === "prompt" &&
-        navigatingWithRoute && (
-          <div className="absolute inset-x-3 top-[calc(env(safe-area-inset-top)+11.5rem)] z-30 rounded-xl bg-white/10 px-3 py-2 text-xs text-white/70 backdrop-blur-sm ring-1 ring-white/10">
-            Para orientar el mapa según la dirección en la que apunta tu teléfono, permite el acceso a los sensores de movimiento.
-          </div>
-        )}
-
       {/* Panel de diagnóstico de sensores (debug, oculto en producción). */}
       {sensorDebugVisible && (
         <div className="absolute left-3 top-[calc(env(safe-area-inset-top)+5rem)] z-40 rounded-lg bg-black/70 px-3 py-2 text-[11px] leading-5 text-white/80 shadow-lg backdrop-blur-sm">
@@ -2275,6 +2933,23 @@ export default function DrivePage() {
             options={mapOptions}
             onLoad={handleMapLoad}
             onUnmount={handleMapUnmount}
+            /* Marca el paneo para no confundirlo con un toque simple. */
+            onDragEnd={() => {
+              mapDraggedAtRef.current = Date.now();
+            }}
+            /* CIERRE DE "TU RUTA" AL TOCAR EL MAPA: el evento lo emite el
+               propio mapa (sin capa invisible encima), así que después de
+               cerrar los gestos de pan/zoom/tap funcionan con normalidad. */
+            onClick={() => {
+              if (Date.now() - mapDraggedAtRef.current < 300) return;
+              // Primero cierra la capa superior (Hoja de ruta); si no está
+              // abierta, colapsa el panel de pedido.
+              if (routeSheetOpen) {
+                setRouteSheetOpen(false);
+                return;
+              }
+              if (tripSheetExpanded) setTripSheetCollapseToken((n) => n + 1);
+            }}
           >
             {/* Driver marker: flecha de navegación que se rota según rumbo.
                 La posición se controla imperativamente (setPosition) desde el
@@ -2357,6 +3032,66 @@ export default function DrivePage() {
                 }}
               />
             )}
+
+            {/* OFFER_ROUTE_PREVIEW — capa temporal de la oferta: ruta vial
+                A → B (pickup → destino, sección 11) + marcadores temporales.
+                NUNCA es la ruta de navegación: vive solo mientras la oferta
+                está en pantalla y se desmonta sola al terminar (secciones 3,
+                5, 9, 16). */}
+            {offerPreview?.route?.path && (
+              <>
+                <Polyline
+                  path={offerPreview.route.path}
+                  options={{
+                    strokeColor: "#FFFFFF",
+                    strokeWeight: 7,
+                    strokeOpacity: 0.9,
+                    geodesic: true,
+                    zIndex: 1,
+                  }}
+                />
+                <Polyline
+                  path={offerPreview.route.path}
+                  options={{
+                    strokeColor: OFFER_PREVIEW_COLOR,
+                    strokeWeight: 4,
+                    strokeOpacity: 0.95,
+                    geodesic: true,
+                    zIndex: 2,
+                  }}
+                />
+              </>
+            )}
+            {offerPreview?.pickup &&
+              (() => {
+                const pins = getDestinationPinVariants();
+                if (!pins) return null;
+                return (
+                  <Marker
+                    position={offerPreview.pickup}
+                    icon={pins.store.standard.icon}
+                    label={{
+                      text: offerPreview.pickupLabel,
+                      className: pins.store.standard.labelClass,
+                    }}
+                  />
+                );
+              })()}
+            {offerPreview?.destination &&
+              (() => {
+                const pins = getDestinationPinVariants();
+                if (!pins) return null;
+                return (
+                  <Marker
+                    position={offerPreview.destination}
+                    icon={pins.dest.standard.icon}
+                    label={{
+                      text: offerPreview.destinationLabel,
+                      className: pins.dest.standard.labelClass,
+                    }}
+                  />
+                );
+              })()}
           </GoogleMap>
         ) : (
           <div className="flex h-full items-center justify-center bg-[#0d1526]">
@@ -2383,82 +3118,100 @@ export default function DrivePage() {
               onSpeed={sim.setSpeed}
             />
           )}
-      </div>        {/* Banner de indicaciones (turn-by-turn) — flota sobre el mapa en la
-          parte superior, debajo del status bar y el aviso de GPS. La posición
-          respeta el notch/isla dinámica con env(safe-area-inset-top). */}
-      {navContent && navPhase && (
-        <div className="absolute inset-x-3 top-[calc(env(safe-area-inset-top)+5rem)] z-30">
+      </div>        {/* Barra compacta + tarjeta de maniobra (turn-by-turn) — flotan sobre
+          el mapa en la parte superior. La posición respeta el notch/isla
+          dinámica con env(safe-area-inset-top). */}
+      {/* En "done" NO hay barra superior: sin estado, folio ni etiqueta SIM.
+          La confirmación limpia de finalización vive solo en el panel inferior. */}
+      {navContent && navPhase && navPhase !== "done" && !navContent.variant.startsWith("action") && (
+        <div className="absolute inset-x-3 top-[calc(env(safe-area-inset-top)+0.75rem)] z-30">
           <DriveNavBar
-            title={navContent.title}
-            icon={navContent.icon}
-            accent={navContent.accent}
-            orderCode={navContent.orderCode}
             mainText={navContent.main}
             subText={navContent.sub}
-            distanceLabel={navContent.distance}
-            durationLabel={navContent.duration}
             progress={navContent.progress}
             maneuver={navContent.maneuver}
             maneuverDistance={navContent.maneuverDistance}
             recalculating={navContent.recalculating}
             waitingForRoute={navContent.waiting}
-            simulated={sim.active}
             variant={navContent.variant}
-            exploring={!followDriver}
-            onRecenter={handleCenterGps}
           />
         </div>
       )}
 
-      {/* Overlay inferior (flota sobre el mapa): controles de cámara + hoja
-          del pedido. */}
-      <div className="absolute inset-x-0 bottom-0 z-20">
-        {/* Controles de cámara — flotan justo encima del overlay inferior. */}
+      {/* Overlay inferior ANCLADO AL VIEWPORT (fixed bottom-0): controles de
+          cámara + hoja del pedido. Con viaje activo, el contenedor toma la
+          altura COLAPSADA de la hoja para que los controles queden justo
+          encima; la hoja expandida crece por encima sin despegarse nunca del
+          borde inferior. */}
+      <div
+        className="fixed inset-x-0 bottom-0 z-30"
+        style={
+          showingTripSheet && tripSheetCollapsedHeight != null
+            ? { height: tripSheetCollapsedHeight }
+            : undefined
+        }
+      >
+        {/* RECENTR — único control de cámara, ubicado sobre el panel de datos
+            del viaje: discreto y accesible, NO bloquea la ruta ni las
+            instrucciones. Aparece solo cuando el repartidor exploró el mapa
+            (seguimiento inactivo); el seguimiento también se recupera solo al
+            volver a conducir. */}
         {mapsLoaded && (
-          <div className="absolute right-3 -top-14 z-30 flex flex-col gap-2">
-            <button
-              onClick={handleCenterGps}
-              aria-label="Centrar navegación"
-              title="Centrar navegación"
-              className={`flex h-12 w-12 items-center justify-center rounded-full shadow-lg ring-1 transition active:scale-95 ${
-                followDriver
-                  ? "bg-white text-[#09193B] ring-black/5 hover:bg-gray-50"
-                  : "bg-[#EB1902] text-white ring-[#EB1902]/50 hover:bg-[#850C22]"
-              }`}
-            >
-              <LocateFixed className="h-5 w-5" />
-            </button>
-            <button
-              onClick={handleFullTripView}
-              aria-label="Ver viaje completo"
-              title="Ver viaje completo"
-              className="flex h-12 w-12 items-center justify-center rounded-full bg-white text-[#09193B] shadow-lg ring-1 ring-black/5 transition hover:bg-gray-50 active:scale-95"
-            >
-              <Maximize2 className="h-5 w-5" />
-            </button>
+          <div className="absolute right-3 bottom-2 z-10">
+            <AnimatePresence>
+              {!followDriver && (
+                <motion.button
+                  key="recenter-btn"
+                  initial={{ opacity: 0, scale: 0.9, y: 8 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.9, y: 8 }}
+                  transition={{ duration: DRIVE_MOTION_DURATION.fast, ease: DRIVE_MOTION_EASE.enter }}
+                  onClick={handleCenterGps}
+                  aria-label="Centrar navegación"
+                  title="Centrar navegación"
+                  className="flex h-11 w-11 items-center justify-center rounded-full bg-white text-[#09193B] shadow-lg ring-1 ring-black/10 transition hover:bg-gray-50 active:scale-95"
+                >
+                  <LocateFixed className="h-5 w-5" />
+                </motion.button>
+              )}
+            </AnimatePresence>
           </div>
         )}
 
-        {/* Viaje activo → hoja deslizable con botón de acción siempre visible */}
-        {connected && orders.length > 0 ? (
+        {/* Confirmación de finalización (unos segundos) o viaje activo.
+            En "done" el panel inferior muestra SOLO: icono verde +
+            "Entrega completada" + resumen mínimo (folio una vez, secundario). */}
+        {donePanelVisible ? (
+          <div className="relative border-t border-black/[0.06] bg-white shadow-2xl safe-area-bottom">
+            <div className="mx-auto mt-3 h-1 w-10 bg-gray-300" />
+            <div className="px-4 pb-6 pt-3">
+              <DriveOrderDetails
+                order={lastDelivered?.order ?? (activeOrder as DriverOrder)}
+                stage="done"
+                loading={false}
+                error={null}
+                onPrimaryAction={async () => true}
+                onPinSubmit={async () => false}
+              />
+            </div>
+          </div>
+        ) : orders.length > 0 ? (
           (() => {
             const order = orders[0];
-            const orderAction = getOrderAction(order);
             return (
               <DriveTripSheet
                 order={order}
-                actionKind={orderAction.action}
-                actionLabel={orderAction.label}
-                actionIcon={orderAction.icon}
                 stage={navPhase}
                 actionLoading={actionLoading === order.orderNumber}
                 actionError={stageActionError}
                 onStageAction={handleStageAction}
                 onPinSubmit={handlePinSubmit}
-                onDisconnect={() => handleSession("disconnect")}
-                disconnectLoading={actionLoading === "session"}
-                simulated={sim.active}
+                onOpenRoute={() => setRouteSheetOpen(true)}
+                hidden={routeSheetOpen}
+                collapseToken={tripSheetCollapseToken}
                 arriving={arrivingActive}
+                onCollapsedHeightChange={setTripSheetCollapsedHeight}
+                onExpandedChange={setTripSheetExpanded}
                 entityLabel={
                   navPhase === "to_pickup" || navPhase === "at_pickup"
                     ? order.mandadoOriginLabel ?? order.storeName
@@ -2468,8 +3221,8 @@ export default function DrivePage() {
                   navPhase === "to_pickup" || navPhase === "at_pickup" ? "pickup" : "delivery"
                 }
                 glanceDistance={
-                  navPhase === "to_pickup" || navPhase === "to_delivery"
-                    ? navContent?.distance?.replace(" restantes", "") ?? null
+                  (navPhase === "to_pickup" || navPhase === "to_delivery") && guidance
+                    ? formatMetersShort(guidance.remaining)
                     : null
                 }
               >
@@ -2485,29 +3238,29 @@ export default function DrivePage() {
             );
           })()
         ) : (
-          <div className="relative rounded-t-3xl bg-white shadow-2xl safe-area-bottom">
-            <div className="mx-auto mt-3 h-1 w-10 rounded-full bg-gray-300" />
+          <div className="relative border-t border-black/[0.06] bg-white shadow-2xl safe-area-bottom">
+            <div className="mx-auto mt-3 h-1 w-10 bg-gray-300" />
 
             <div className="max-h-[50vh] overflow-y-auto px-4 pb-6 pt-2">
-              {/* Not connected → INICIAR (sesión abierta, sin duración) */}
+              {/* Not connected → Fuera de servicio (sesión abierta al iniciar) */}
               {!connected && (
                 <div className="py-4 text-center">
                   <h2 className="text-lg font-bold text-[#09193B]">
-                    Estás desconectado
+                    Fuera de servicio
                   </h2>
                   <p className="mt-1 text-sm text-gray-500">
-                    Inicia para recibir pedidos
+                    No recibirás nuevos pedidos
                   </p>
 
                   <button
                     onClick={() => handleSession("connect")}
                     disabled={actionLoading === "session"}
-                    className="mt-4 w-full rounded-2xl bg-[#EB1902] py-4 text-lg font-black text-white shadow-lg shadow-[#EB1902]/30 transition active:scale-95"
+                    className="mt-4 w-full bg-[#EB1902] py-4 text-lg font-black uppercase tracking-wide text-white transition hover:bg-[#850C22] active:scale-[0.99]"
                   >
                     {actionLoading === "session" ? (
                       <Loader2 className="mx-auto h-5 w-5 animate-spin" />
                     ) : (
-                      "INICIAR"
+                      "COMENZAR A RECIBIR"
                     )}
                   </button>
                 </div>
@@ -2523,50 +3276,169 @@ export default function DrivePage() {
                 />
               )}
 
-              {/* Connected → No orders, no offer */}
+              {/* Connected → No orders, no offer: estado claro arriba
+                  (Disponible / Recibiendo pedidos) y UNA acción: dejar de
+                  recibir pedidos (= terminar la sesión, sin orden activa). */}
               {connected && orders.length === 0 && !offer && (
                 <div className="py-6 text-center">
-                  <ThinkingOrb
-                    state="searching"
-                    size={64}
-                    theme="light"
-                    speed={0.7}
-                    aria-label="Conectado, esperando pedidos"
-                    className="mx-auto mb-3"
-                  />
-                  <p className="text-base font-bold text-[#09193B]">
-                    Estás conectado
-                  </p>
-                  <p className="mt-1 text-sm font-medium text-green-600">
-                    Esperando pedidos...
-                  </p>
-                  <p className="mt-1 text-xs text-gray-400">
-                    Te notificaremos cuando haya un pedido
-                  </p>
+                  <div className="flex flex-col items-center gap-1">
+                    <span className="flex items-center gap-2 text-base font-bold text-[#09193B]">
+                      <span className="h-2 w-2 rounded-full bg-green-500" />
+                      Disponible
+                    </span>
+                    <span className="text-sm text-gray-500">
+                      Recibiendo pedidos
+                    </span>
+                  </div>
+                  <div className="mt-3">
+                    <SearchingStatusMessage />
+                  </div>
                   <button
-                    onClick={() => handleSession("disconnect")}
+                    onClick={() => handleSession("stop_offers")}
                     disabled={actionLoading === "session"}
-                    className="mt-4 rounded-xl border border-gray-200 px-6 py-2 text-sm font-medium text-gray-500 transition hover:bg-gray-50"
+                    className="mt-5 rounded-xl border border-gray-200 px-6 py-2 text-sm font-medium text-gray-500 transition hover:bg-gray-50"
                   >
-                    Desconectar
+                    {actionLoading === "session" ? (
+                      <Loader2 className="mx-auto h-5 w-5 animate-spin" />
+                    ) : (
+                      "Dejar de recibir pedidos"
+                    )}
                   </button>
                 </div>
               )}
 
-              {/* Connected → Disconnect button (when has offer) */}
+              {/* Connected → Dejar de recibir pedidos (cuando hay oferta).
+                  Sin orden activa, la intención equivale a terminar la sesión:
+                  el backend libera las ofertas vigentes y queda offline. */}
               {connected && offer && (
                 <button
-                  onClick={() => handleSession("disconnect")}
+                  onClick={() => handleSession("stop_offers")}
                   disabled={actionLoading === "session"}
                   className="mt-3 w-full rounded-xl border border-gray-200 py-2 text-xs font-medium text-gray-400 transition hover:bg-gray-50"
                 >
-                  Desconectar
+                  Dejar de recibir pedidos
                 </button>
               )}
             </div>
           </div>
         )}
       </div>
+
+      {/* ── HOJA DE RUTA (capa independiente sobre el panel de pedido) ────
+          Se abre solo con "Ver ruta", cubre por completo el panel (nunca
+          comparte superficie con "Recoge tu pedido") y termina tras su
+          propio contenido. Cierra con "×", swipe down o toque en el mapa. */}
+      <DriveRouteSheet
+        open={routeSheetOpen}
+        onClose={() => setRouteSheetOpen(false)}
+        stops={routeStops}
+        stopped={stopOffersIntent ?? state?.aceptaNuevasOfertas === false}
+        onStopOffers={() => {
+          // Agrega la tarjeta de fin de ruta al instante (sin confirmación).
+          commitOffersStopped(true);
+          showUndoToast("Dejarás de recibir pedidos al terminar", () =>
+            commitOffersStopped(false)
+          );
+        }}
+        onResumeOffers={() => {
+          // La "×" elimina la tarjeta de inmediato y deja disponible.
+          commitOffersStopped(false);
+          showUndoToast("Seguirás recibiendo pedidos", () => commitOffersStopped(true));
+        }}
+        moving={vehicleMoving}
+        coverHeight={tripSheetCollapsedHeight}
+      />
+
+      {/* Toast temporal con Deshacer (resultado de la elección). */}
+      <AnimatePresence>
+        {routeToast && (
+          <motion.div
+            key="route-toast"
+            initial={{ opacity: 0, y: 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 12 }}
+            transition={{ duration: 0.18 }}
+            className="fixed left-1/2 z-[60] flex -translate-x-1/2 items-center gap-3 bg-gray-950/95 px-4 py-2.5 text-sm font-bold text-white shadow-xl ring-1 ring-white/10 backdrop-blur"
+            style={{ bottom: (tripSheetCollapsedHeight ?? 88) + 12 }}
+            role="status"
+          >
+            <span>{routeToast.message}</span>
+            <button
+              onClick={() => {
+                clearRouteToastTimer();
+                routeToast.undo();
+                setRouteToast(null);
+              }}
+              className="text-[#ff8a75] underline underline-offset-2"
+            >
+              Deshacer
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ── Searching status message ───────────────────────────────────────
+
+// Frase de estado única del panel inferior. Rota cada pocos segundos con
+// fade-out + fade-in (crossfade percibido) sin mover el layout, y respeta
+// `prefers-reduced-motion` cambiando el texto sin animación.
+const SEARCHING_MESSAGES = [
+  "Estamos buscando pedidos cerca de ti",
+  "Te avisaremos cuando haya un pedido disponible",
+  "Mantente atento a nuevas solicitudes",
+  "Buscando oportunidades en tu zona",
+] as const;
+
+const SEARCHING_MESSAGE_INTERVAL_MS = 4000;
+const SEARCHING_MESSAGE_FADE_MS = 220;
+
+function SearchingStatusMessage() {
+  const [index, setIndex] = useState(0);
+  const [visible, setVisible] = useState(true);
+  const reducedMotionRef = useRef(false);
+
+  useEffect(() => {
+    reducedMotionRef.current =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const interval = window.setInterval(() => {
+      if (reducedMotionRef.current) {
+        setIndex((i) => (i + 1) % SEARCHING_MESSAGES.length);
+        return;
+      }
+      setVisible(false);
+    }, SEARCHING_MESSAGE_INTERVAL_MS);
+
+    return () => window.clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    if (visible) return;
+    const timer = window.setTimeout(() => {
+      setIndex((i) => (i + 1) % SEARCHING_MESSAGES.length);
+      setVisible(true);
+    }, SEARCHING_MESSAGE_FADE_MS);
+    return () => window.clearTimeout(timer);
+  }, [visible]);
+
+  return (
+    <div className="flex min-h-14 items-center justify-center px-2">
+      <p
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className={`text-base font-semibold leading-snug text-[#09193B] transition-opacity motion-reduce:transition-none ${
+          visible ? "opacity-100" : "opacity-0"
+        }`}
+        style={{ transitionDuration: `${SEARCHING_MESSAGE_FADE_MS}ms` }}
+      >
+        {SEARCHING_MESSAGES[index]}
+      </p>
     </div>
   );
 }
@@ -2584,84 +3456,124 @@ function OfferCard({
   onAccept: () => void;
   onReject: () => void;
 }) {
+  // El contador se deriva de `expiresAt` (servidor) contra el reloj del
+  // servidor, NO contra el reloj del teléfono: no hay desfases ni reinicios.
+  const isPending = offer.offerStatus === "pending_delivery";
+  const activeWindowMs =
+    offer.offerExpiresAt && offer.serverNow
+      ? Math.max(0, new Date(offer.offerExpiresAt).getTime() - new Date(offer.serverNow).getTime())
+      : null;
+
   const [timeLeft, setTimeLeft] = useState(0);
 
   useEffect(() => {
+    if (isPending || activeWindowMs == null) {
+      setTimeLeft(0);
+      return;
+    }
+    const startedAt = Date.now();
     const update = () => {
-      const remaining = Math.max(
-        0,
-        Math.round((new Date(offer.offerExpiresAt).getTime() - Date.now()) / 1000)
-      );
-      setTimeLeft(remaining);
+      const elapsed = Date.now() - startedAt;
+      setTimeLeft(Math.max(0, Math.ceil((activeWindowMs - elapsed) / 1000)));
     };
     update();
-    const timer = setInterval(update, 1000);
+    const timer = setInterval(update, 250);
     return () => clearInterval(timer);
-  }, [offer.offerExpiresAt]);
+  }, [isPending, activeWindowMs]);
 
-  const minutes = Math.floor(timeLeft / 60);
-  const seconds = timeLeft % 60;
-  const urgent = timeLeft < 120;
+  const timeLabel =
+    timeLeft >= 60
+      ? `${Math.floor(timeLeft / 60)}:${String(timeLeft % 60).padStart(2, "0")}`
+      : `${timeLeft}s`;
+  const urgent = !isPending && timeLeft <= 5;
 
   return (
     <motion.div
-      initial={{ opacity: 0, y: 20 }}
+      initial={{ opacity: 0, y: 16 }}
       animate={{ opacity: 1, y: 0 }}
-      className="rounded-2xl border-2 border-amber-400 bg-amber-50 p-4"
+      transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
+      className="border border-[#09193B]/15 bg-white"
     >
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-bold uppercase tracking-wide text-amber-600">
+      {/* CABECERA: título + cuenta regresiva secundaria + X (rechazar) */}
+      <div className="flex items-center justify-between border-b border-gray-100 bg-amber-50 px-4 py-2.5">
+        <span className="text-xs font-black uppercase tracking-widest text-amber-600">
           Nueva oferta
         </span>
-        <span
-          className={`text-sm font-black tabular-nums ${
-            urgent ? "text-red-500" : "text-amber-600"
-          }`}
-        >
-          {minutes}:{seconds.toString().padStart(2, "0")}
-        </span>
+        <div className="flex items-center gap-2">
+          {isPending ? (
+            <span className="flex items-center gap-1 text-xs font-bold text-amber-600">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Preparando…
+            </span>
+          ) : (
+            <span
+              className={`text-xs font-black tabular-nums ${
+                urgent ? "text-red-500" : "text-amber-600"
+              }`}
+            >
+              {timeLabel}
+            </span>
+          )}
+          <button
+            onClick={onReject}
+            disabled={loading}
+            aria-label="Rechazar oferta"
+            title="Rechazar oferta"
+            className="flex h-7 w-7 items-center justify-center text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 active:scale-90 disabled:opacity-40"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
-      <div className="mt-3">
-        <p className="text-base font-bold text-[#09193B]">
+      {/* CUERPO: folio → punto de inicio → métricas del viaje */}
+      <div className="px-4 pb-4 pt-3">
+        <p className="text-lg font-black text-[#09193B]">
           #{shortOrderCode(offer.orderNumber)}
         </p>
-        <p className="mt-1 flex items-center gap-1 text-sm text-gray-600">
-          <Store className="h-3.5 w-3.5" />
-          {offer.storeName}
+
+        <p className="mt-2 text-[11px] font-bold uppercase tracking-wide text-gray-400">
+          Punto de inicio
         </p>
-        <p className="mt-0.5 text-xs text-gray-400">
-          {offer.destLabel}
+        <p className="mt-0.5 flex items-start gap-1.5 text-sm font-semibold text-[#09193B]">
+          <Store className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400" />
+          <span className="leading-snug">
+            {offer.mandadoOriginLabel ?? offer.storeName}
+          </span>
         </p>
-        <div className="mt-2 flex items-center gap-3 text-xs text-gray-500">
-          {offer.routeKm != null && <span>{offer.routeKm} km</span>}
-          {offer.etaMinutes != null && <span>{offer.etaMinutes} min</span>}
-          <span className="font-bold text-[#09193B]">{offer.paymentLabel}</span>
+        {offer.destLabel && (
+          <p className="mt-0.5 text-xs text-gray-400">{offer.destLabel}</p>
+        )}
+
+        <div className="mt-3 flex items-center gap-4 border-y border-gray-100 py-2 text-sm">
+          {offer.routeKm != null && (
+            <span className="font-black tabular-nums text-[#09193B]">
+              {offer.routeKm} km
+            </span>
+          )}
+          {offer.etaMinutes != null && (
+            <span className="font-black tabular-nums text-[#09193B]">
+              {offer.etaMinutes} min
+            </span>
+          )}
+          <span className="text-gray-500">{offer.paymentLabel}</span>
           {offer.totalPrice > 0 && (
-            <span className="font-bold text-[#09193B]">
+            <span className="ml-auto font-black tabular-nums text-[#09193B]">
               ${offer.totalPrice.toFixed(2)}
             </span>
           )}
         </div>
-      </div>
 
-      <div className="mt-4 flex gap-2">
-        <button
-          onClick={onReject}
-          disabled={loading}
-          className="flex-1 rounded-xl border border-gray-200 py-3 text-sm font-bold text-gray-500 transition hover:bg-gray-50 active:scale-95"
-        >
-          RECHAZAR
-        </button>
+        {/* ÚNICA acción primaria: ACEPTAR (color principal de ElMenu) */}
         <button
           onClick={onAccept}
           disabled={loading}
-          className="flex-1 rounded-xl bg-green-500 py-3 text-sm font-black text-white shadow-lg shadow-green-500/30 transition hover:bg-green-600 active:scale-95"
+          className="mt-3 flex w-full items-center justify-center bg-[#EB1902] py-3.5 text-sm font-black uppercase tracking-wide text-white transition hover:bg-[#850C22] active:scale-[0.99] disabled:opacity-50"
         >
           {loading ? (
-            <Loader2 className="mx-auto h-4 w-4 animate-spin" />
+            <Loader2 className="h-4 w-4 animate-spin" />
           ) : (
-            "ACEPTAR"
+            "Aceptar"
           )}
         </button>
       </div>
@@ -2683,12 +3595,12 @@ function OrderCard({
   const { label, action, icon } = getOrderAction(order);
 
   return (
-    <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
+    <div className="mt-3 border border-gray-200 bg-white p-4">
       <div className="flex items-center justify-between">
         <p className="text-base font-bold text-[#09193B]">
           #{shortOrderCode(order.orderNumber)}
         </p>
-        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">
+        <span className="bg-gray-100 px-2 py-0.5 text-[10px] font-bold text-gray-500">
           {order.serviceKind === "mandado" ? "Mandado" : "Restaurante"}
         </span>
       </div>
@@ -2696,10 +3608,10 @@ function OrderCard({
       <div className="mt-2 space-y-1">
         {/* Recolección (etapa actual mientras el pedido no se ha recogido) */}
         <div
-          className={`rounded-xl border px-3 py-2 ${
+          className={`border-l-4 px-3 py-2 ${
             action === "navigate_pickup"
-              ? "border-orange-300 bg-orange-50"
-              : "border-gray-100 bg-gray-50"
+              ? "border-l-orange-400 bg-orange-50"
+              : "border-l-gray-200 bg-gray-50"
           }`}
         >
           <p
@@ -2718,12 +3630,12 @@ function OrderCard({
 
         {/* Entrega (siguiente etapa; solo destacada cuando el pedido va en ruta) */}
         <div
-          className={`rounded-xl border px-3 py-2 ${
+          className={`border-l-4 px-3 py-2 ${
             action === "navigate_delivery"
-              ? "border-red-300 bg-red-50"
+              ? "border-l-red-400 bg-red-50"
               : action === "navigate_pickup"
-                ? "border-gray-100 bg-gray-50 opacity-70"
-                : "border-gray-100 bg-gray-50"
+                ? "border-l-gray-200 bg-gray-50 opacity-70"
+                : "border-l-gray-200 bg-gray-50"
           }`}
         >
           <p
@@ -2753,7 +3665,7 @@ function OrderCard({
       </div>
 
       {order.mandadoDetails && (
-        <p className="mt-2 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-500 line-clamp-2">
+        <p className="mt-2 bg-gray-50 px-3 py-2 text-xs text-gray-500 line-clamp-2">
           📝 {order.mandadoDetails}
         </p>
       )}
@@ -2761,7 +3673,7 @@ function OrderCard({
       <button
         onClick={() => onAction(action)}
         disabled={loading}
-        className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-[#09193B] py-3 text-sm font-black text-white shadow-lg transition hover:bg-[#0d2347] active:scale-95 disabled:opacity-50"
+        className="mt-3 flex w-full items-center justify-center gap-2 bg-[#09193B] py-3 text-sm font-black text-white transition hover:bg-[#0d2347] active:scale-[0.99] disabled:opacity-50"
       >
         {loading ? (
           <Loader2 className="h-4 w-4 animate-spin" />

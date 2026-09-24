@@ -2,9 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DirectionsRenderer, GoogleMap, Marker, Polyline, Polygon, useJsApiLoader } from "@react-google-maps/api";
-import { AlertTriangle, Loader2, MapPin, Store, Truck } from "lucide-react";
+import { AlertTriangle, ChevronDown, Loader2, MapPin, Store } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { estimateEtaMinutes, shortOrderCode } from "@/lib/dispatch/dispatch-format";
 import type {
   DispatchDriverCard,
   DispatchOrderCard,
@@ -111,8 +110,8 @@ export function DispatchMap({
   });
   const mapRef = useRef<google.maps.Map | null>(null);
   const [fitKey, setFitKey] = useState(0);
+  const [legendOpen, setLegendOpen] = useState(false);
   const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
-  const [routeMeta, setRouteMeta] = useState<{ distanceText?: string; durationText?: string } | null>(null);
 
   const onLoad = useCallback((map: google.maps.Map) => {
     mapRef.current = map;
@@ -185,7 +184,6 @@ export function DispatchMap({
   // ── Ruta sugerida: repartidor → origen → destino (si hay datos reales) ──
   useEffect(() => {
     setDirections(null);
-    setRouteMeta(null);
     if (!isLoaded || !selectedOrder) return;
     if (selectedOrder.storeLat == null || selectedOrder.storeLng == null || selectedOrder.destLat == null || selectedOrder.destLng == null) {
       return; // sin coordenadas → la UI muestra "Sin estimar"
@@ -205,10 +203,6 @@ export function DispatchMap({
       if (cancelled) return;
       if (status === "OK" && result) {
         setDirections(result);
-        const leg = result.routes[0]?.legs[0];
-        if (leg) {
-          setRouteMeta({ distanceText: leg.distance?.text, durationText: leg.duration?.text });
-        }
       }
     });
     return () => {
@@ -216,14 +210,6 @@ export function DispatchMap({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoaded, routeKey]);
-
-  const eta = estimateEtaMinutes(selectedOrder?.routeKm ?? null);
-  const routeLabel =
-    routeMeta?.distanceText && routeMeta.durationText
-      ? `${routeMeta.distanceText} · ${routeMeta.durationText}`
-      : selectedOrder?.routeKm != null
-        ? `~${selectedOrder.routeKm} km · ~${eta ?? "—"} min (estimado)`
-        : "Sin estimar";
 
   const topRecDriverId = recommendations[0]?.driver._id;
 
@@ -399,84 +385,42 @@ export function DispatchMap({
         </GoogleMap>
       )}
 
-      {/* Overlay superior: leyenda y conteo */}
-      <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-col gap-1.5">
-        <div className="pointer-events-auto rounded-lg border border-black/6 bg-white/95 px-3 py-2 shadow-sm backdrop-blur dark:border-white/10 dark:bg-[#0d1526]/95">
-          <p className="flex items-center gap-1.5 text-[11px] font-bold text-[#09193B] dark:text-white">
-            <MapPin className="h-3.5 w-3.5 text-[#EB1902]" />
-            {orders.length} pedidos activos
-          </p>
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-            <span className="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400">
-              <span className="h-2 w-2 rounded-full bg-[#EB1902]" /> Restaurante
-            </span>
-            <span className="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400">
-              <span className="h-2 w-2 rounded-full bg-[#8b5cf6]" /> Mandado
-            </span>
-            <span className="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400">
-              <span className="h-2 w-2 rounded-full bg-[#10b981]" /> Repartidor
-            </span>
-            <span className="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400">
-              <span className="h-2 w-2 rounded-full bg-[#ef4444]" /> Urgente
-            </span>
-            <span className="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400">
-              <span className="h-2 w-2 rounded-full bg-[#f59e0b]" /> Alta
-            </span>
-          </div>
-        </div>
-        <div className="pointer-events-auto flex items-center gap-1.5 rounded-lg border border-black/6 bg-white/95 px-2.5 py-1.5 text-[10px] font-medium text-slate-500 shadow-sm backdrop-blur dark:border-white/10 dark:bg-[#0d1526]/95 dark:text-slate-400">
-          <Store className="h-3 w-3 text-[#EB1902]" />
-          {stores.length} tiendas
-        </div>
-        {drivers.some((d) => hasLocation(d)) && (
-          <div className="pointer-events-auto flex items-center gap-1.5 rounded-lg border border-black/6 bg-white/95 px-2.5 py-1.5 text-[10px] font-medium text-slate-500 shadow-sm backdrop-blur dark:border-white/10 dark:bg-[#0d1526]/95 dark:text-slate-400">
-            <Truck className="h-3 w-3 text-[#10b981]" />
-            {drivers.filter((d) => hasLocation(d)).length} con ubicación
+      {/* Overlay compacto: una sola píldora de estado. La leyenda y los
+          conteos secundarios se agrupan detrás de un toggle para no competir
+          con los datos operativos del mapa. */}
+      <div className="pointer-events-none absolute left-3 top-3 z-10 flex flex-col items-start gap-1.5">
+        <button
+          type="button"
+          onClick={() => setLegendOpen((v) => !v)}
+          aria-expanded={legendOpen}
+          className="pointer-events-auto flex items-center gap-1.5 rounded-lg border border-black/[0.06] bg-white/95 px-2.5 py-1.5 text-[11px] font-bold text-[#09193B] shadow-sm backdrop-blur dark:border-white/10 dark:bg-[#0d1526]/95 dark:text-white"
+        >
+          <MapPin className="h-3.5 w-3.5 text-[#EB1902]" />
+          {orders.length} pedidos · {drivers.filter((d) => hasLocation(d)).length} repartidores
+          <ChevronDown className={cn("h-3 w-3 transition-transform", legendOpen && "rotate-180")} />
+        </button>
+        {legendOpen && (
+          <div className="pointer-events-auto rounded-lg border border-black/[0.06] bg-white/95 px-3 py-2 shadow-sm backdrop-blur dark:border-white/10 dark:bg-[#0d1526]/95">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              {[
+                { color: "bg-[#EB1902]", label: "Restaurante" },
+                { color: "bg-[#8b5cf6]", label: "Mandado" },
+                { color: "bg-[#10b981]", label: "Repartidor" },
+                { color: "bg-[#ef4444]", label: "Urgente" },
+                { color: "bg-[#f59e0b]", label: "Alta" },
+              ].map((item) => (
+                <span key={item.label} className="flex items-center gap-1 text-[10px] text-slate-500 dark:text-slate-400">
+                  <span className={`h-2 w-2 rounded-full ${item.color}`} /> {item.label}
+                </span>
+              ))}
+            </div>
+            <p className="mt-1.5 flex items-center gap-1.5 border-t border-slate-100 pt-1.5 text-[10px] font-medium text-slate-500 dark:border-white/10 dark:text-slate-400">
+              <Store className="h-3 w-3 text-[#EB1902]" /> {stores.length} tiendas
+            </p>
           </div>
         )}
       </div>
 
-      {/* Detalle del pedido seleccionado */}
-      {selectedOrder && (
-        <div className="absolute bottom-3 left-3 z-10 max-w-xs rounded-xl border border-black/6 bg-white/95 p-3 shadow-lg backdrop-blur dark:border-white/10 dark:bg-[#0d1526]/95">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-black text-[#EB1902]">Pedido #{shortOrderCode(selectedOrder.orderNumber)}</span>
-            <span
-              className={cn(
-                "rounded-full px-1.5 py-0.5 text-[9px] font-bold",
-                selectedOrder.serviceKind === "mandado"
-                  ? "bg-violet-100 text-violet-700 dark:bg-violet-500/20 dark:text-violet-300"
-                  : "bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300"
-              )}
-            >
-              {selectedOrder.serviceKind === "mandado" ? "Mandado" : "Restaurante"}
-            </span>
-            <button
-              type="button"
-              onClick={() => onSelectOrder("")}
-              className="ml-auto text-[10px] font-semibold text-slate-400 hover:text-slate-600"
-            >
-              Cerrar
-            </button>
-          </div>
-          <p className="mt-1.5 text-xs font-semibold text-[#09193B] dark:text-white">
-            {selectedOrder.serviceKind === "mandado" ? (selectedOrder.mandadoOriginLabel || selectedOrder.storeName) : selectedOrder.storeName}
-          </p>
-          <p className="truncate text-[11px] text-slate-500 dark:text-slate-400">
-            {selectedOrder.serviceKind === "mandado" ? (selectedOrder.mandadoDestinationLabel || selectedOrder.destLabel) : selectedOrder.destLabel}
-          </p>
-          <p className="mt-1 text-[10px] text-slate-400 dark:text-slate-500">
-            Ruta: {routeLabel} · ${selectedOrder.totalPrice.toFixed(2)} · {selectedOrder.paymentLabel}
-          </p>
-          {selectedDriver && (
-            <p className="mt-1 flex items-center gap-1.5 rounded-md bg-[#EB1902]/[0.07] px-2 py-1 text-[10px] font-semibold text-[#EB1902]">
-              <Truck className="h-3 w-3 shrink-0" />
-              Repartidor: {selectedDriver.name}
-              {hasLocation(selectedDriver) ? " (ubicación marcada)" : " · Ubicación no disponible"}
-            </p>
-          )}
-        </div>
-      )}
     </div>
   );
 }

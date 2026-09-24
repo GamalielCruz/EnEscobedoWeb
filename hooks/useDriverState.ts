@@ -20,6 +20,12 @@ type DriverOrder = {
   mandadoDetails: string | null;
   mandadoOriginReference: string | null;
   mandadoDestinationReference: string | null;
+  /** Dirección de la tienda/punto de recogida (información secundaria). */
+  storeAddress: string | null;
+  /** Qué recoger: nombres de productos (restaurantes) hasta 3. */
+  itemsSummary: string[] | null;
+  /** Cantidad del primer producto (restaurantes). */
+  itemsQuantity: number | null;
   paymentLabel: string;
   totalPrice: number;
   /** Nombre del cliente/destinatario (para el contexto de entrega). */
@@ -41,7 +47,15 @@ type DriverOffer = {
   etaMinutes: number | null;
   paymentLabel: string;
   totalPrice: number;
+  /** Ventana vigente: PENDING_DELIVERY = entrega; ACTIVE = respuesta (14 s). */
   offerExpiresAt: string;
+  offerStatus: "pending_delivery" | "active" | null;
+  offerId: string | null;
+  offerCreatedAt: string | null;
+  offerDeliveryDeadlineAt: string | null;
+  offerShownAt: string | null;
+  /** Reloj del servidor al consultar (fuente de verdad del contador). */
+  serverNow: string;
   mandadoOriginLabel: string | null;
   mandadoDestinationLabel: string | null;
 };
@@ -54,6 +68,12 @@ type DriverState = {
   location: { lat: number; lng: number } | null;
   orders: DriverOrder[];
   offer: DriverOffer | null;
+  /** true ⇔ hay orden activa (servicio en curso, independiente de la sesión). */
+  inService?: boolean;
+  /** true ⇔ sesión de disponibilidad vigente. */
+  sessionValid?: boolean;
+  /** Intención: false = no recibirá nuevas ofertas al terminar el servicio. */
+  aceptaNuevasOfertas?: boolean;
 };
 
 // Polling intervals
@@ -81,8 +101,18 @@ export function useDriverState() {
   const fetchState = useCallback(async () => {
     try {
       const res = await fetch("/api/driver/state", { cache: "no-store" });
-      if (!res.ok) throw new Error("Error al cargar estado");
-      const data: DriverState = await res.json();
+      const payload = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        const message =
+          (payload && typeof payload === "object" && "error" in payload && typeof payload.error === "string"
+            ? payload.error
+            : null) || "Error al cargar estado";
+
+        throw new Error(message);
+      }
+
+      const data: DriverState = payload as DriverState;
       if (mountedRef.current) {
         setState(data);
         stateRef.current = data;

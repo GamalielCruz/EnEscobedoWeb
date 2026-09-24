@@ -43,10 +43,14 @@ export function haversineKm(a?: { lat?: number; lng?: number }, b?: { lat?: numb
 /**
  * Check if a driver is currently available for dispatch.
  * Mirrors the availability logic in lib/delivery-dispatch.ts:fetchCandidateDrivers().
+ *
+ * Regla única (driver-availability.ts): elegibilidad = disponible + sesión
+ * vigente + intención de recibir (aceptaNuevasOfertas) + sin orden activa.
  */
 export function isDriverCandidateAvailable(driver: any, now: number): boolean {
   if (!driver.disponible) return false;
   if (driver.estadoDisponibilidad !== "available") return false;
+  if (driver.aceptaNuevasOfertas === false) return false;
   if (driver.disponibleHasta && new Date(driver.disponibleHasta).getTime() <= now) return false;
   return true;
 }

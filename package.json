@@ -18,6 +18,8 @@
     "test:urls": "node scripts/test-public-base-url.mjs",
     "migrate:v1-orders": "node scripts/migrate-v1-orders.mjs",
     "test:scheduling": "node --experimental-strip-types --test lib/fulfillment-schedule.test.mjs lib/scheduled-order-whatsapp-config.test.mjs lib/scheduled-order-contingency.test.mjs lib/scheduled-orders.integration.test.mjs",
+    "test:offers": "node --experimental-strip-types --test lib/dispatch/offer-lifecycle.test.mjs lib/dispatch/dispatch-validation.test.mjs lib/dispatch/dispatch-observability.test.mjs",
+    "test:availability": "node --experimental-strip-types --test lib/dispatch/driver-availability.test.mjs",
     "audit:dispatch-observability": "node --experimental-strip-types scripts/audit-dispatch-observability.ts",
     "catalog:import": "node --experimental-strip-types scripts/catalog-images/import-walmart-assets.ts"
   },
@@ -62,7 +64,6 @@
     "styled-components": "^6.1.19",
     "tailwind-merge": "^3.3.1",
     "tailwindcss-animate": "^1.0.7",
-    "thinking-orbs": "^0.3.1",
     "zustand": "^5.0.6"
   },
   "devDependencies": {

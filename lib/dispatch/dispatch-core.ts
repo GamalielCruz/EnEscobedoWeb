@@ -2,7 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import { isAdminUser } from "@/lib/admin";
 import { appendOrderEvent } from "@/lib/order-events";
 import { buildLegacyStatus, isOrderDispatchable } from "@/lib/order-state";
-import { releaseOrdersForDriver } from "@/lib/delivery-dispatch";
+import { redispatchOrders, releaseOrdersForDriver } from "@/lib/delivery-dispatch";
 import { sendBotMessage, sendDriverConfirmation } from "@/lib/whatsapp";
 import {
   getDispatchConfig,
@@ -51,6 +51,12 @@ export type DispatchOrderCard = {
   storeId?: string | null;
   storeHasOwnDelivery?: boolean;
   offerExpiresAt?: string | null;
+  /** Ciclo de vida de la oferta vigente: pending_delivery | active. */
+  offerStatus?: string | null;
+  offerShownAt?: string | null;
+  offerDeliveryDeadlineAt?: string | null;
+  /** Último resultado de oferta tras volver a la cola (expired/rejected/cancelled). */
+  lastOfferStatus?: string | null;
   // Mandados: información operacional capturada por el cliente (direcciones
   // reales e indicaciones para el repartidor). Se muestran en el Dispatch Center
   // y alimentan la confirmación por WhatsApp al repartidor.
@@ -245,6 +251,10 @@ const ACTIVE_ORDERS_QUERY = `*[
   mandadoDestinationReference,
   mandadoDetails,
   deliveryOfertaExpiresAt,
+  offerStatus,
+  offerShownAt,
+  offerDeliveryDeadlineAt,
+  lastOfferStatus,
   "offerDriverId": offeredTo._ref,
   "offerDriverName": offeredTo->nombre,
   customerHelpRequested,
@@ -261,6 +271,7 @@ const DRIVERS_QUERY = `*[_type == "repartidor"] | order(prioridad desc, nombre a
   activo,
   disponible,
   bloqueado,
+  aceptaNuevasOfertas,
   prioridad,
   calificacion,
   disponibleDesde,
@@ -349,6 +360,7 @@ const ORDER_FOR_ASSIGN_QUERY = `*[_type == "order" && _id == $orderId][0]{
   fulfillmentTiming,
   dispatchStatus,
   deliveryOfertaExpiresAt,
+  offerId,
   "offeredToRef": offeredTo._ref,
   "driverId": repartidorAsignado._ref,
   "storeId": affiliateStore._ref,
@@ -377,6 +389,7 @@ const DRIVER_FOR_ASSIGN_QUERY = `*[_type == "repartidor" && _id == $driverId][0]
   bloqueado,
   disponibleHasta,
   estadoDisponibilidad,
+  aceptaNuevasOfertas,
   prioridad,
   calificacion,
   "storeId": tiendaAsignada._ref,
@@ -452,10 +465,174 @@ function buildDriverCardFromRaw(driver: any, now: number): DispatchDriverCard {
 // Backward-compatible alias used by fetchDispatchSnapshot and recommendDriversForOrder.
 export const recommendDriversFromRaw = rankDriverCandidates;
 
+/**
+ * Cierra (marca terminales) TODAS las ofertas vencidas y libera sus órdenes
+ * a la cola ("Sin asignar"). Regla de negocio: una oferta vencida deja de
+ * ser una intención activa de asignación — la pestaña/contador "Ofertas"
+ * solo muestra ofertas que requieren respuesta; la expirada queda como
+ * registro histórico (offerStatus terminal en la orden, nunca se borra).
+ *
+ * Se ejecuta al inicio de CADA snapshot del Dispatch Center (además del cron
+ * y del check del teléfono del repartidor), así el operador ve el cambio
+ * "Ofertas → Sin asignar" en el siguiente tick de polling sin refresh
+ * manual y sin esperar al cron.
+ *
+ * Idempotente y seguro ante solapamiento (cron/teléfono/snapshot en
+ * paralelo): todos los caminos filtran con los mismos predicados y la doble
+ * ejecución es un no-op.
+ */
+export async function expireStaleOffers(): Promise<{ expired: number; released: number; redispatched: boolean }> {
+  const nowIso = new Date().toISOString();
+
+  // 1) Drivers con oferta vencida → liberar y limpiar espejo de oferta.
+  //    NOTA: sin `disponible == true` a propósito — la expiración también
+  //    aplica al driver que se desconectó con la oferta puesta (donor
+  //    huérfano), exactamente igual que la segunda pasada de órdenes.
+  const staleDrivers = (await backendClient.fetch(
+    `*[
+      _type == "repartidor" &&
+      estadoDisponibilidad == "offer_pending" &&
+      defined(ofertaExpiraAt) &&
+      ofertaExpiraAt <= $now
+    ]{
+      _id,
+      telefono,
+      estadoDisponibilidad,
+      ofertaTipo,
+      ofertaExpiraAt,
+      "ultimoPedidoOfertadoRef": ultimoPedidoOfertado._ref,
+      "pedidosOfertadosRefs": pedidosOfertados[]._ref
+    }`,
+    { now: nowIso }
+  )) as Array<{
+    _id: string;
+    telefono?: string;
+    estadoDisponibilidad?: string;
+    ofertaTipo?: string;
+    ofertaExpiraAt?: string;
+    ultimoPedidoOfertadoRef?: string;
+    pedidosOfertadosRefs?: string[];
+  }>;
+
+  let expired = 0;
+  let released = 0;
+  let redispatched = false;
+
+  await Promise.allSettled(
+    staleDrivers.map(async (rep) => {
+      const orderIds = (
+        Array.isArray(rep.pedidosOfertadosRefs) && rep.pedidosOfertadosRefs.length > 0
+          ? rep.pedidosOfertadosRefs.filter(Boolean).slice(0, 2)
+          : rep.ultimoPedidoOfertadoRef
+            ? [rep.ultimoPedidoOfertadoRef]
+            : []
+      ).filter(Boolean);
+
+      try {
+        await backendClient
+          .patch(rep._id)
+          .set({ estadoDisponibilidad: "available", ultimaActividad: nowIso })
+          .unset([
+            "ultimoPedidoOfertado",
+            "pedidosOfertados",
+            "restauranteOferta",
+            "ofertaTipo",
+            "ofertaStatus",
+            "ofertaId",
+            "ofertaEnviadaAt",
+            "ofertaExpiraAt",
+            "ofertaMostradaAt",
+          ])
+          .commit();
+        expired += 1;
+
+        if (orderIds.length > 0) {
+          // releaseOrdersForDriver → setOrdersWaiting ya sella la oferta como
+          // terminal (offerStatus="expired", lastOfferStatus) y emite el evento
+          // `offer_expired` UNA sola vez; aquí solo contamos y re-despachamos.
+          const releasedOrderIds = await releaseOrdersForDriver(orderIds, rep._id, "offer_expired");
+          if (releasedOrderIds.length > 0) {
+            released += releasedOrderIds.length;
+            // MODO AUTOMÁTICO: la orden debe poder re-ofertarse sola a otro
+            // repartidor con una oferta NUEVA (nuevo offerId, nuevos 14 s).
+            // dispatchDeliveryOffer/redispatch respetan el modo del Dispatch
+            // Center: en manual/asistido NO crean ofertas automáticamente y
+            // la orden queda esperando al dispatcher (reglas existentes).
+            if (await redispatchOrders(releasedOrderIds, [rep._id])) {
+              redispatched = true;
+            }
+          }
+        }
+      } catch (error) {
+        console.error("[dispatch-core] expireStaleOffers driver", { driverId: rep._id, error });
+      }
+    })
+  );
+
+  // 2) Órdenes huérfanas: `offered` con deadline vencido cuyo driver-espejo
+  //    ya se limpió (o nunca existió). Cubre bundles expirados y cualquier
+  //    caso donde el espejo del driver no matchea.
+  const orphanOrders = (await backendClient.fetch(
+    `*[
+      _type == "order" &&
+      dispatchStatus == "offered" &&
+      !defined(repartidorAsignado) &&
+      defined(offeredTo) &&
+      defined(deliveryOfertaExpiresAt) &&
+      deliveryOfertaExpiresAt <= $now
+    ]{
+      _id,
+      orderNumber,
+      "offeredToRef": offeredTo._ref
+    }`,
+    { now: nowIso }
+  )) as Array<{ _id: string; orderNumber?: string; offeredToRef?: string }>;
+
+  const orphansByDriver = new Map<string, string[]>();
+  for (const order of orphanOrders) {
+    if (!order.offeredToRef) continue;
+    const current = orphansByDriver.get(order.offeredToRef) ?? [];
+    current.push(order._id);
+    orphansByDriver.set(order.offeredToRef, current);
+  }
+
+  await Promise.allSettled(
+    Array.from(orphansByDriver.entries()).map(async ([driverId, orderIds]) => {
+      try {
+        const releasedOrderIds = await releaseOrdersForDriver(orderIds, driverId, "offer_expired_orphan");
+        if (releasedOrderIds.length === 0) return;
+        released += releasedOrderIds.length;
+        // El evento offer_expired lo emite setOrdersWaiting (una sola vez).
+        if (await redispatchOrders(releasedOrderIds, [driverId])) {
+          redispatched = true;
+        }
+      } catch (error) {
+        console.error("[dispatch-core] expireStaleOffers orphan", { driverId, orderIds, error });
+      }
+    })
+  );
+
+  return { expired, released, redispatched };
+}
+
 export async function fetchDispatchSnapshot(): Promise<DispatchSnapshot> {
   const now = Date.now();
   // Ventana de 24 h para órdenes programadas futuras.
   const upcomingHorizon = new Date(now + 24 * 60 * 60 * 1000).toISOString();
+  // ── Barrido de expiración de ofertas (server-driven) ────────────
+  // Cierra TODO lo vencido justo antes de leer los datos: el snapshot
+  // nunca muestra ofertas "Vencidas" activas ni las cuenta en "Ofertas · N"
+  // y la orden reaparece en "Sin asignar" en el MISMO tick de polling
+  // (12 s), sin depender del cron ni del teléfono del repartidor.
+  // Seguro contra solapamiento con cron/teléfono: ambos lados filtran con
+  // los mismos predicados y la doble ejecución es un no-op.
+  try {
+    await expireStaleOffers();
+  } catch (error) {
+    // El barrido NUNCA bloquea el snapshot: si falla, se sirven los datos
+    // con lo que haya (el fallback visual "Vencida" de la tarjeta sigue).
+    console.error("[dispatch-core] expireStaleOffers failed", error);
+  }
   const [rawOrders, rawDrivers, rawUpcoming, assignmentStats, deliveryStats, zonesDoc, stores, config] = await Promise.all([
     backendClient.fetch(ACTIVE_ORDERS_QUERY),
     backendClient.fetch(DRIVERS_QUERY),
@@ -507,6 +684,10 @@ export async function fetchDispatchSnapshot(): Promise<DispatchSnapshot> {
         storeId: order.storeId ?? null,
         storeHasOwnDelivery: Boolean(order.storeHasOwnDelivery),
         offerExpiresAt: order.deliveryOfertaExpiresAt ?? null,
+        offerStatus: order.offerStatus ?? null,
+        offerShownAt: order.offerShownAt ?? null,
+        offerDeliveryDeadlineAt: order.offerDeliveryDeadlineAt ?? null,
+        lastOfferStatus: order.lastOfferStatus ?? null,
         offerDriverId: order.offerDriverId ?? null,
         offerDriverName: order.offerDriverName ?? null,
         customerHelpRequested: Boolean(order.customerHelpRequested),
@@ -802,6 +983,18 @@ type AssignOptions = {
   // webhook de WhatsApp emite offer_accepted / driver_assigned), se omite el
   // evento driver_assigned del servicio para no duplicar el historial.
   skipEvents?: boolean;
+  /**
+   * Contexto de oferta a revalidar en CADA intento (carrera aceptar vs
+   * expirar). El llamador del ciclo de ofertas (app del repartidor, webhook)
+   * lo pasa para garantizar la atomicidad del resultado: si entre intentos la
+   * oferta venció o fue liberada, la asignación se ABORTA — jamás queda
+   * offer EXPIRED + order ASSIGNED ni offer ACTIVE + order UNASSIGNED.
+   */
+  expectedOffer?: {
+    offerId?: string | null;
+    offeredToRef?: string | null;
+    deliveryOfertaExpiresAt?: string | null;
+  };
 };
 
 export type AssignResult =
@@ -858,6 +1051,36 @@ export async function assignOrderToDriver(opts: AssignOptions): Promise<AssignRe
     const error = validateAssignment(order, driver, config, opts.mode);
     if (error) {
       return { ok: false, error, code: "validation", order, driver };
+    }
+
+    // Carrera aceptar vs expirar: revalidar la vigencia de la oferta con los
+    // datos FRESCOS de este intento. Si cambió el offerId, dejó de estar
+    // dirigida a este repartidor o el deadline ya pasó, la asignación se
+    // rechaza sin mutar nada (el estado ya quedó EXPIRED + UNASSIGNED).
+    if (opts.expectedOffer) {
+      const eo = opts.expectedOffer;
+      const offerStillValid =
+        (eo.offeredToRef == null || order.offeredToRef === eo.offeredToRef) &&
+        (eo.offerId == null || order.offerId === eo.offerId) &&
+        (eo.deliveryOfertaExpiresAt == null ||
+          (typeof order.deliveryOfertaExpiresAt === "string" &&
+            order.deliveryOfertaExpiresAt === eo.deliveryOfertaExpiresAt));
+      if (!offerStillValid) {
+        console.warn("[dispatch] ASSIGNMENT_ABORTED_OFFER_CHANGED", {
+          traceId,
+          orderId: opts.orderId,
+          repartidorId: opts.driverId,
+          expectedOfferId: eo.offerId ?? null,
+          currentOfferId: (order as { offerId?: string }).offerId ?? null,
+        });
+        return {
+          ok: false,
+          error: "La oferta ya no está vigente.",
+          code: "validation",
+          order,
+          driver,
+        };
+      }
     }
 
     console.log("[dispatch] ASSIGNMENT_ATTEMPT", {
