@@ -148,7 +148,8 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
       if (method === "card") setClientSecret(result.clientSecret);
       else {
         sessionStorage.removeItem("mandadoCheckoutDraft");
-        window.location.href = `/orders?order=${encodeURIComponent(result.orderNumber)}`;
+        // UX estilo Uber: aterrizar en la pantalla de seguimiento del mandado.
+        window.location.href = `/pedido/${encodeURIComponent(result.orderNumber)}`;
       }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "No pudimos procesar tu mandado.");

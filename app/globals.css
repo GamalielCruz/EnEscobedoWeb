@@ -174,6 +174,38 @@
   }
 }
 
+/* Barra de espera del tracking (experiencia Uber): cuenta regresiva visual
+   sin números. Ciclo largo y calmado (30 s), decrece de derecha a izquierda
+   desde una barra completa; al reiniciar hace fade suave, nunca un corte. */
+@keyframes tracking-search-deplete {
+  0% {
+    transform: scaleX(1);
+    opacity: 1;
+  }
+  90% {
+    transform: scaleX(0.04);
+    opacity: 1;
+  }
+  97% {
+    transform: scaleX(0.04);
+    opacity: 0.45;
+  }
+  100% {
+    transform: scaleX(0.04);
+    opacity: 0;
+  }
+}
+
+.tracking-search-bar {
+  height: 100%;
+  width: 100%;
+  border-radius: inherit;
+  background-color: var(--color-brand-navy, #09193b);
+  transform-origin: right center; /* decrece hacia la izquierda */
+  animation: tracking-search-deplete 30s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  will-change: transform, opacity;
+}
+
 .loading-orb {
   animation: loading-orb 900ms ease-in-out infinite;
 }
@@ -189,8 +221,15 @@
 @media (prefers-reduced-motion: reduce) {
   .loading-orb,
   .cart-count-pop,
-  .ui-enter {
+  .ui-enter,
+  .tracking-search-bar {
     animation: none;
+  }
+  /* Sin animación la barra sigue comunicando espera: nivel fijo + pulso de
+     opacidad desactivado también; el texto "Buscando repartidor" es el
+     estado semántico real (sr-only + aria-live). */
+  .tracking-search-bar {
+    transform: scaleX(0.5);
   }
 }
 /* Keep the external Chatwoot launcher above El Menú's fixed mobile actions. */
