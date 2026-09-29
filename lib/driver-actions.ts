@@ -15,6 +15,11 @@
 
 import { backendClient } from "@/sanity/lib/backendClient";
 import { appendOrderEvent, type OrderEventType } from "@/lib/order-events";
+import {
+  isOrderCancellationReason,
+  orderCancellationReasonLabel,
+  CANCELLATION_NOTE_MAX_LENGTH,
+} from "@/lib/order-cancellation";
 import { mandadoDriverState, type MandadoDriverState } from "@/lib/mandado-driver-flow";
 import {
   releaseOrdersForDriver,
@@ -929,6 +934,143 @@ export async function rejectDriverOffer(
   }
 
   return { ok: true, newState: "available", dispatchStatus: "waiting_for_driver" };
+}
+
+// ── Cancelación por el repartidor ──────────────────────────────────
+
+/**
+ * Cierra el servicio activo del repartidor y resuelve su disponibilidad con
+ * la MISMA regla post-servicio que una entrega (driver-availability.ts):
+ * quedan órdenes activas → busy; intención "dejar de recibir" → offline; si
+ * no, lo decide la sesión vigente. Con `available` se le despachan los
+ * pedidos en espera (nunca se queda varado sin ofertas por una cancelación).
+ */
+async function releaseDriverAfterOrderEnds(
+  driverId: string,
+  now: string,
+  nowDate: Date
+): Promise<string> {
+  const remainingOrders = (await backendClient
+    .fetch(ACTIVE_SHIPPED_ORDERS_QUERY, { driverId })
+    .catch(() => [])) as Array<{ _id: string }>;
+
+  const driver = await backendClient.fetch<DriverDoc>(DRIVER_BY_ID_QUERY, { driverId });
+
+  const nextState = nextStateAfterDelivery({
+    hasRemainingOrders: remainingOrders.length > 0,
+    aceptaNuevasOfertas: driver?.aceptaNuevasOfertas !== false,
+    sessionValid: getDriverNextState(driver ?? {}, nowDate) === "available",
+  });
+
+  await backendClient
+    .patch(driverId)
+    .set({
+      disponible: nextState !== "offline",
+      estadoDisponibilidad: nextState,
+      ultimaActividad: now,
+      ...(remainingOrders.length === 0 && nextState === "available"
+        ? { aceptaNuevasOfertas: true }
+        : {}),
+    })
+    .commit()
+    .catch((error) =>
+      console.error("[driver-actions] releaseDriverAfterOrderEnds error:", error)
+    );
+
+  if (nextState === "available") {
+    await dispatchWaitingOrdersForDriver(driverId).catch((error) =>
+      console.error("[driver-actions] releaseDriverAfterOrderEnds redispatch error:", error)
+    );
+  }
+
+  return nextState;
+}
+
+/**
+ * Cancela el pedido asignado al repartidor y registra el motivo en Sanity.
+ *
+ * Persiste DOS cosas (trazabilidad completa):
+ *  1. `order.cancellation` — apartado de motivos del pedido (código, etiqueta
+ *     legible, detalles libres, quién y cuándo), visible en el Studio.
+ *  2. `orderEvents` — evento `cancelled` con actor/origen/motivo (bitácora).
+ *
+ * Al cerrar (status/orderStatus = cancelled) el pedido sale de la cola de
+ * dispatch y de la lista del repartidor, y NUNCA puede volver: las consultas
+ * de espera exigen `!defined(repartidorAsignado)` y estado no cancelado.
+ */
+export async function cancelOrderByDriver(
+  orderNumber: string,
+  driverId: string,
+  input: { reason?: unknown; note?: unknown }
+): Promise<TransitionResult> {
+  const order = await fetchOrderByNumber(orderNumber);
+  if (!order) return { ok: false, error: "El pedido no existe." };
+  if (order.repartidorAsignadoRef !== driverId) {
+    return { ok: false, error: "Este pedido no está asignado a ti." };
+  }
+  if (
+    ["cancelled", "delivered", "completed"].includes(
+      String(order.orderStatus ?? "")
+    )
+  ) {
+    return { ok: false, error: "Este pedido ya no puede cancelarse." };
+  }
+  if (!isOrderCancellationReason(input.reason)) {
+    return { ok: false, error: "Selecciona un motivo de cancelación." };
+  }
+
+  const reasonCode = String(input.reason);
+  const reasonLabel =
+    orderCancellationReasonLabel(reasonCode) ?? reasonCode;
+  const note =
+    typeof input.note === "string"
+      ? input.note.trim().slice(0, CANCELLATION_NOTE_MAX_LENGTH)
+      : "";
+  const now = new Date().toISOString();
+  const nowDate = new Date();
+
+  try {
+    await backendClient
+      .patch(order._id)
+      .ifRevisionId(order._rev)
+      .set({
+        status: "cancelled",
+        orderStatus: "cancelled",
+        cancelledAt: now,
+        updatedAt: now,
+        cancellation: {
+          reason: reasonCode,
+          reasonLabel,
+          ...(note ? { note } : {}),
+          cancelledBy: "driver",
+          driver: { _type: "reference", _ref: driverId },
+          cancelledAt: now,
+          source: "drive",
+        },
+      })
+      .commit();
+  } catch (error) {
+    if (isRevisionConflict(error)) {
+      return {
+        ok: false,
+        error: "El pedido cambió mientras lo cancelabas. Intenta de nuevo.",
+      };
+    }
+    console.error("[driver-actions] cancelOrderByDriver error:", error);
+    return { ok: false, error: "No se pudo cancelar el pedido." };
+  }
+
+  await appendOrderEvent(order._id, {
+    type: "cancelled",
+    source: "drive",
+    actor: driverId,
+    reason: reasonLabel,
+    payload: { reason: reasonCode, note: note || null, cancelledBy: "driver" },
+  }).catch(() => null);
+
+  const nextState = await releaseDriverAfterOrderEnds(driverId, now, nowDate);
+
+  return { ok: true, newState: nextState, dispatchStatus: "cancelled" };
 }
 
 // ── Mandado state transitions ──────────────────────────────────────

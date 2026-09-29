@@ -1,5 +1,6 @@
 import { BasketIcon } from "@sanity/icons";
 import { defineArrayMember, defineField, defineType } from "sanity";
+import { DRIVER_CANCELLATION_REASONS } from "../../lib/order-cancellation";
 
 export const orderType = defineType({
   name: "order",
@@ -385,6 +386,74 @@ export const orderType = defineType({
     defineField({ name: "pickupCode", title: "Pickup Code", type: "string", hidden: ({ document }) => document?.orderType !== "pickup" }),
     defineField({ name: "affiliateStore", title: "Store / Restaurant", type: "reference", to: [{ type: "affiliateStore" }] }),
     defineField({ name: "cancelledAt", title: "Cancelled At", type: "datetime" }),
+    defineField({
+      name: "cancellation",
+      title: "Cancelación",
+      type: "object",
+      description:
+        "Motivo y trazabilidad de la cancelación del pedido. `reason` es el código estable del catálogo en lib/order-cancellation.ts; `reasonLabel` es la etiqueta legible que vio quien canceló.",
+      fields: [
+        defineField({
+          name: "reason",
+          title: "Motivo",
+          type: "string",
+          options: {
+            list: DRIVER_CANCELLATION_REASONS.map((reason) => ({
+              title: reason.label,
+              value: reason.code,
+            })),
+          },
+        }),
+        defineField({
+          name: "reasonLabel",
+          title: "Motivo (texto)",
+          type: "string",
+          readOnly: true,
+          description: "Snapshot legible del motivo al momento de cancelar.",
+        }),
+        defineField({
+          name: "note",
+          title: "Detalles",
+          type: "text",
+          rows: 3,
+          description: "Explicación libre opcional de quien canceló el pedido.",
+        }),
+        defineField({
+          name: "cancelledBy",
+          title: "Cancelado por",
+          type: "string",
+          options: {
+            list: [
+              { title: "Repartidor", value: "driver" },
+              { title: "Tienda", value: "store" },
+              { title: "Cliente", value: "customer" },
+              { title: "Administrador", value: "admin" },
+              { title: "Sistema", value: "system" },
+            ],
+          },
+        }),
+        defineField({
+          name: "driver",
+          title: "Repartidor",
+          type: "reference",
+          to: [{ type: "repartidor" }],
+          description: "Repartidor que canceló el pedido (solo si cancelledBy = driver).",
+        }),
+        defineField({
+          name: "cancelledAt",
+          title: "Cancelado el",
+          type: "datetime",
+          readOnly: true,
+        }),
+        defineField({
+          name: "source",
+          title: "Origen",
+          type: "string",
+          readOnly: true,
+          description: 'Superficie donde se canceló, p. ej. "drive".',
+        }),
+      ],
+    }),
     defineField({ name: "refundedAt", title: "Refunded At", type: "datetime" }),
     defineField({ name: "settlementDate", title: "Settlement Date", type: "datetime" }),
     defineField({

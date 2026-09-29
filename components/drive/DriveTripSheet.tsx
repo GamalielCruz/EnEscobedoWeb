@@ -9,13 +9,22 @@ import {
   type ReactNode,
 } from "react";
 import {
+  AnimatePresence,
   animate,
   motion,
   useDragControls,
   useMotionValue,
   type PanInfo,
 } from "framer-motion";
-import { ChevronDown, ChevronUp, MapPin, Route, Store } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronUp,
+  MapPin,
+  MoreVertical,
+  Route,
+  Store,
+  XCircle,
+} from "lucide-react";
 import type { DriveNavPhase } from "@/components/drive/DriveNavBar";
 import { DriveOrderDetails } from "@/components/drive/DriveOrderDetails";
 import type { DriverOrder } from "@/hooks/useDriverState";
@@ -61,6 +70,8 @@ export function DriveTripSheet({
   onPinSubmit,
   /** Abre la Hoja de ruta (capa independiente por encima de este panel). */
   onOpenRoute,
+  /** Abre el flujo de cancelación del pedido (hoja de motivos). */
+  onRequestCancel,
   /** true mientras la Hoja de ruta está abierta: este panel se colapsa para
    *  quedar oculto detrás de ella (y se restaura al cerrarse). */
   hidden = false,
@@ -94,6 +105,8 @@ export function DriveTripSheet({
   /** Valida el NIP server-side; false = no se pudo confirmar. */
   onPinSubmit: (pin: string) => Promise<boolean>;
   onOpenRoute?: () => void;
+  /** Sin handler, el menú ⋮ no se muestra (p. ej. simulador). */
+  onRequestCancel?: () => void;
   hidden?: boolean;
   collapseToken?: number;
   arriving?: boolean;
@@ -115,6 +128,9 @@ export function DriveTripSheet({
   const [expanded, setExpanded] = useState(false);
   const [headerHeight, setHeaderHeight] = useState(0);
   const [sheetHeight, setSheetHeight] = useState(0);
+  /** Menú ⋮ del pedido activo (acciones sobre el servicio en curso). */
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRootRef = useRef<HTMLDivElement | null>(null);
 
   const maxY = Math.max(0, sheetHeight - headerHeight);
   maxYRef.current = maxY;
@@ -204,6 +220,33 @@ export function DriveTripSheet({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hidden, animateTo]);
+
+  // ── MENÚ ⋮ (acciones del pedido en curso) ───────────────────────
+  // Cierra al tocar fuera, con Escape o cuando el panel queda cubierto
+  // (Hoja de ruta). El menú vive DENTRO de la cabecera, anclado encima de
+  // ella, así que nunca compite con el gesto de arrastre (que solo escucha
+  // la cabecera) siempre que el botón detenga la propagación del pointerdown.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const root = menuRootRef.current;
+      if (root && event.target instanceof Node && root.contains(event.target)) return;
+      setMenuOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [menuOpen]);
+
+  useEffect(() => {
+    if (hidden) setMenuOpen(false);
+  }, [hidden]);
 
   // ── CIERRE POR TOQUE EN EL MAPA ─────────────────────────────────
   // La página incrementa `collapseToken` cuando el usuario toca el mapa. El
@@ -306,10 +349,11 @@ export function DriveTripSheet({
         </div>
 
         {stage !== "done" && (
+          <div className="flex items-center pr-0.5">
           <button
             type="button"
             onClick={() => animateTo(!expanded)}
-            className="flex w-full items-center gap-3 px-4 pb-2.5 pt-1 text-left"
+            className="flex min-w-0 flex-1 items-center gap-3 px-4 pb-2.5 pt-1 text-left"
             aria-expanded={expanded}
             aria-label={
               expanded ? "Ocultar el pedido" : "Ver el pedido"
@@ -351,6 +395,58 @@ export function DriveTripSheet({
               <ChevronUp className="h-5 w-5 shrink-0 text-gray-400" />
             )}
           </button>
+
+          {/* ── MENÚ ⋮ DEL SERVICIO EN CURSO ────────────────────────
+              Acciones sobre el pedido que se está realizando. La primera
+              (única por ahora) es "Cancelar pedido". El panel se ancla
+              ENCIMA de la cabecera para no tapar el pedido ni el cuerpo. */}
+          {onRequestCancel && (
+            <div ref={menuRootRef} className="relative shrink-0">
+              <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => setMenuOpen((open) => !open)}
+                aria-label="Más opciones del pedido"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                className="flex h-9 w-9 items-center justify-center text-gray-400 transition active:text-[#09193B]"
+              >
+                <MoreVertical className="h-5 w-5" />
+              </button>
+
+              <AnimatePresence>
+                {menuOpen && (
+                  <motion.div
+                    role="menu"
+                    aria-label="Opciones del pedido"
+                    initial={{ opacity: 0, y: 6 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: 6 }}
+                    transition={{
+                      duration: DRIVE_MOTION_DURATION.fast,
+                      ease: DRIVE_MOTION_EASE.enter,
+                    }}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    className="absolute right-0 bottom-full z-30 mb-2 w-52 border border-gray-200 bg-white py-1 shadow-2xl"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        onRequestCancel();
+                      }}
+                      className="flex w-full items-center gap-2.5 px-4 py-3 text-left text-sm font-bold text-[#EB1902] transition active:bg-gray-50"
+                    >
+                      <XCircle className="h-4 w-4 shrink-0" strokeWidth={2.5} />
+                      Cancelar pedido
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          )}
+          </div>
         )}
       </div>
 
