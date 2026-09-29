@@ -13,6 +13,7 @@ import {
   X,
   XCircle,
   LocateFixed,
+  Home as HomeIcon,
 } from "lucide-react";
 import { DriveNavBar, type DriveNavPhase } from "@/components/drive/DriveNavBar";
 import { DriveTripSheet } from "@/components/drive/DriveTripSheet";
@@ -22,6 +23,7 @@ import {
   type RouteStop,
 } from "@/components/drive/DriveRouteSheet";
 import { DriveCancelOrderSheet } from "@/components/drive/DriveCancelOrderSheet";
+import { DriveHome } from "@/components/drive/DriveHome";
 import { DriveOrderDetails } from "@/components/drive/DriveOrderDetails";
 import { DriveSimPanel } from "@/components/drive/DriveSimPanel";
 import {
@@ -913,6 +915,18 @@ export default function DrivePage() {
   // pedido. Igual que la Hoja de ruta, es una capa independiente que cubre el
   // panel mientras está abierta (el panel se colapsa detrás).
   const [cancelSheetOpen, setCancelSheetOpen] = useState(false);
+  // HOME DEL REPARTIDOR (solo UI): pantalla de inicio con acceso al mapa y
+  // las secciones Notificaciones y Wallet (placeholders). Solo se ofrece
+  // cuando NO hay viaje activo (desconectado o disponible).
+  const [homeOpen, setHomeOpen] = useState(false);
+  // Si mientras el Home está abierto llega un viaje u oferta, se cierra solo:
+  // el repartidor debe volver al mapa para atenderlo.
+  const activeWorkRef = useRef(0);
+  useEffect(() => {
+    const work = (state?.orders?.length ?? 0) + (state?.offer ? 1 : 0);
+    if (work > activeWorkRef.current) setHomeOpen(false);
+    activeWorkRef.current = work;
+  }, [state?.orders?.length, state?.offer]);
   // Timestamp del último paneo del mapa: un arrastre NO debe contar como
   // toque (no cierra "Tu ruta").
   const mapDraggedAtRef = useRef(0);
@@ -3299,6 +3313,14 @@ export default function DrivePage() {
               {/* Not connected → Fuera de servicio (sesión abierta al iniciar) */}
               {!connected && (
                 <div className="py-4 text-center">
+                  {/* Solo UI/UX: acceso al Home del repartidor. */}
+                  <button
+                    onClick={() => setHomeOpen(true)}
+                    className="mx-auto mb-3 flex h-10 items-center gap-2 border border-gray-200 px-4 text-sm font-bold text-[#09193B] transition active:bg-gray-50"
+                  >
+                    <HomeIcon className="h-4 w-4" />
+                    Inicio
+                  </button>
                   <h2 className="text-lg font-bold text-[#09193B]">
                     Fuera de servicio
                   </h2>
@@ -3335,6 +3357,14 @@ export default function DrivePage() {
                   recibir pedidos (= terminar la sesión, sin orden activa). */}
               {connected && orders.length === 0 && !offer && (
                 <div className="py-6 text-center">
+                  {/* Solo UI/UX: acceso al Home del repartidor. */}
+                  <button
+                    onClick={() => setHomeOpen(true)}
+                    className="mx-auto mb-3 flex h-10 items-center gap-2 border border-gray-200 px-4 text-sm font-bold text-[#09193B] transition active:bg-gray-50"
+                  >
+                    <HomeIcon className="h-4 w-4" />
+                    Inicio
+                  </button>
                   <div className="flex flex-col items-center gap-1">
                     <span className="flex items-center gap-2 text-base font-bold text-[#09193B]">
                       <span className="h-2 w-2 rounded-full bg-green-500" />
@@ -3408,6 +3438,18 @@ export default function DrivePage() {
           Capa independiente por encima de la Hoja de ruta: registra el motivo
           elegido en la orden (order.cancellation) y refresca el estado al
           confirmar. */}
+      {/* ── HOME DEL REPARTIDOR (solo UI/UX) ─────────────────────────
+          Capa a pantalla completa con acceso de regreso al mapa/conexión y
+          las secciones Notificaciones y Wallet (placeholders, sin función).
+          Se abre con el botón "Inicio" del panel inferior. */}
+      <DriveHome
+        open={homeOpen}
+        onClose={() => setHomeOpen(false)}
+        connected={connected}
+        onConnect={() => handleSession("connect")}
+        connecting={actionLoading === "session"}
+      />
+
       <DriveCancelOrderSheet
         open={cancelSheetOpen}
         onClose={() => setCancelSheetOpen(false)}
