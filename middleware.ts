@@ -21,20 +21,6 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
   const hostHeader = forwardedHost ?? req.headers.get("host") ?? "";
   const requestHostname = hostHeader.split(":")[0].toLowerCase();
 
-  // ── TEMPORARY DIAGNOSTIC LOG (remove after confirming fix) ──────
-  console.log(
-    "[middleware] host=",
-    req.headers.get("host"),
-    "forwardedHost=",
-    forwardedHost,
-    "hostname=",
-    requestHostname,
-    "path=",
-    pathname,
-    "isDrive=",
-    requestHostname.startsWith("drive."),
-  );
-
   if (
     requestHostname.startsWith("drive.") &&
     pathname === "/" &&

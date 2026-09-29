@@ -6,6 +6,7 @@ import {
   requireAdmin,
 } from "@/lib/dispatch/dispatch-core";
 import { getDispatchConfig } from "@/lib/dispatch/dispatch-config";
+import { isRevisionConflict } from "@/lib/dispatch/dispatch-validation";
 import { cancelOrderOffer, dispatchDeliveryOffer, offerOrderToDriver } from "@/lib/delivery-dispatch";
 import { backendClient } from "@/sanity/lib/backendClient";
 
@@ -168,6 +169,18 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ error: "Acción inválida." }, { status: 400 });
   } catch (error) {
+    // Un conflicto de revisión de Sanity (409) NO es un fallo del servidor: es
+    // concurrencia (otro operador/cron/webhook mutó la orden). Se responde 409
+    // para que la UI pida refrescar y reintentar sin presentarlo como 500.
+    if (isRevisionConflict(error)) {
+      console.warn("[admin/dispatch/assign] conflicto de concurrencia", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return NextResponse.json(
+        { error: "El pedido cambió mientras se procesaba la acción. Refresca la vista y reintenta." },
+        { status: 409 }
+      );
+    }
     console.error("[admin/dispatch/assign]", error);
     return NextResponse.json({ error: "No se pudo completar la acción." }, { status: 500 });
   }

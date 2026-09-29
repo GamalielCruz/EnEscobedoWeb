@@ -23,9 +23,13 @@ export default async function PedidoTrackingPage({
     redirect(`/sign-in?redirect_url=${encodeURIComponent(`/pedido/${orderNumber}`)}`);
   }
 
+  // El filtro `clerkUserId == $userId` impide consultar pedidos ajenos, por lo
+  // que el userId resuelto por Clerk SIEMPRE debe enviarse como parámetro.
+  // Omitirlo provoca el error de Sanity "param $userId referenced, but not
+  // provided". El redirect previo garantiza que aquí userId es una cadena.
   const order = await client.fetch(
     `*[_type == "order" && (orderNumber == $orderNumber || _id == $orderNumber) && clerkUserId == $userId][0]{ _id }`,
-    { orderNumber }
+    { orderNumber, userId }
   );
 
   if (!order) {

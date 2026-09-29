@@ -90,15 +90,24 @@ function getPollInterval(state: DriverState | null): number {
   return IDLE_POLL_MS;
 }
 
-export function useDriverState() {
+export function useDriverState({ enabled = true }: { enabled?: boolean } = {}) {
   const [state, setState] = useState<DriverState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
   const stateRef = useRef<DriverState | null>(null);
+  // `enabled` vive también en un ref para que `fetchState` (identidad estable)
+  // y `rescheduleInterval` puedan cortar el sondeo sin recrearse.
+  const enabledRef = useRef(enabled);
+  useEffect(() => {
+    enabledRef.current = enabled;
+  }, [enabled]);
 
   const fetchState = useCallback(async () => {
+    // Sin sesión activa no se consulta /api/driver/state: evita los 401
+    // repetidos mientras Clerk aún no confirma el inicio de sesión.
+    if (!enabledRef.current) return;
     try {
       const res = await fetch("/api/driver/state", { cache: "no-store" });
       const payload = await res.json().catch(() => null);
@@ -131,23 +140,37 @@ export function useDriverState() {
   // Called after each fetch completes to adjust polling rate.
   const rescheduleInterval = useCallback(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
-    if (!mountedRef.current) return;
+    if (!mountedRef.current || !enabledRef.current) return;
     const ms = getPollInterval(stateRef.current);
     intervalRef.current = setInterval(fetchState, ms);
   }, [fetchState]);
 
-  // Setup polling
+  // Setup polling (solo cuando hay sesión).
   useEffect(() => {
     mountedRef.current = true;
+
+    const stop = () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    };
+
+    if (!enabled) {
+      stop();
+      return () => {
+        mountedRef.current = false;
+        stop();
+      };
+    }
+
     fetchState().then(() => {
       if (mountedRef.current) rescheduleInterval();
     });
 
     return () => {
       mountedRef.current = false;
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      stop();
     };
-  }, [fetchState, rescheduleInterval]);
+  }, [enabled, fetchState, rescheduleInterval]);
 
   // Re-adjust interval when state changes (offer appears/disappears)
   useEffect(() => {
@@ -161,6 +184,7 @@ export function useDriverState() {
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === "visible") {
+        if (!enabledRef.current) return;
         fetchState().then(() => {
           if (mountedRef.current) rescheduleInterval();
         });

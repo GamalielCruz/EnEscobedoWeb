@@ -48,7 +48,15 @@ const nextConfig: NextConfig = {
             key: 'Referrer-Policy',
             value: 'origin-when-cross-origin',
           },
-          // Mejorar caching para móviles
+        ],
+      },
+      // Caché inmutable SOLO para assets versionados. NUNCA en HTML: un HTML
+      // cacheado durante un año hace que el cliente siga ejecutando el JS de un
+      // deployment anterior y falle al invocar Server Actions
+      // ("Failed to find Server Action ... older or newer deployment").
+      {
+        source: '/_next/static/:path*',
+        headers: [
           {
             key: 'Cache-Control',
             value: 'public, max-age=31536000, immutable',

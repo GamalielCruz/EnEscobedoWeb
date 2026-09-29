@@ -28,9 +28,6 @@ export const OFFER_ACTIVE_TTL_SECONDS = 14;
  */
 export const OFFER_PENDING_WINDOW_SECONDS = 45;
 
-/** TTL de ofertas que NO usan ACK de presentación (WhatsApp: restaurantes). */
-export const OFFER_WA_TTL_SECONDS_DEFAULT = 10 * 60;
-
 export type DriverOfferStatus =
   | "pending_delivery"
   | "active"
@@ -59,13 +56,19 @@ export function isActiveOfferStatus(status?: string | null): boolean {
 }
 
 /**
- * Solo los mandados pasan por el ciclo PENDING_DELIVERY → ACTIVE, porque son
- * los que se presentan en la app del repartidor (Drive). El resto de ofertas
- * (WhatsApp/restaurantes) conservan su TTL existente y se consideran activas
- * desde que se envían (no hay ACK de presentación).
+ * TODA oferta despachada a un repartidor se presenta en la app (Drive): los
+ * pedidos de restaurante reciben además un aviso por WhatsApp, pero la ventana
+ * de RESPUESTA se fija cuando la oferta queda presentada en la app (ACK).
+ *
+ * Antes solo los mandados usaban este ciclo; el resto nacía ACTIVE con el TTL
+ * de WhatsApp (10 min), lo que producía ofertas de 600 s visibles en Drive y
+ * hacía que el contador pareciera reiniciarse al expirar/redespachar.
  */
 export function offerUsesPresentationAck(serviceKind?: string | null): boolean {
-  return serviceKind === "mandado";
+  // El parámetro se conserva para compatibilidad de firmas; actualmente TODA
+  // oferta se presenta en la app y por lo tanto usa ACK.
+  void serviceKind;
+  return true;
 }
 
 export type OfferTiming = {
@@ -81,34 +84,28 @@ export type OfferTiming = {
 /**
  * Construye la ventana inicial de una oferta recién creada.
  *
- * - Mandados  → PENDING_DELIVERY. `expiresAt` es la ventana de entrega y NO
- *   arranca los 14 s; éstos se fijan al hacer ACK.
- * - Otros    → ACTIVE inmediato con el TTL existente (WhatsApp).
+ * TODAS las ofertas nacen en PENDING_DELIVERY: `expiresAt` es la ventana de
+ * ENTREGA (presentación al repartidor) y NO arranca los 14 s de respuesta;
+ * éstos se fijan al hacer ACK de presentación en la app (Drive).
+ *
+ * El backend es la fuente de verdad: la expiración es un timestamp ABSOLUTO
+ * del servidor (~45 s de entrega + ~14 s de respuesta), nunca un contador
+ * fijo que el cliente pueda reiniciar.
  */
 export function buildOfferTiming(
   serviceKind: string | null | undefined,
   now: Date,
   offerId: string
 ): OfferTiming {
+  void serviceKind; // Todas las ofertas usan la misma ventana (ver arriba).
   const createdAt = now.toISOString();
-
-  if (offerUsesPresentationAck(serviceKind)) {
-    const deadline = new Date(now.getTime() + OFFER_PENDING_WINDOW_SECONDS * 1000).toISOString();
-    return {
-      status: "pending_delivery",
-      offerId,
-      createdAt,
-      expiresAt: deadline,
-      deliveryDeadlineAt: deadline,
-    };
-  }
-
+  const deadline = new Date(now.getTime() + OFFER_PENDING_WINDOW_SECONDS * 1000).toISOString();
   return {
-    status: "active",
+    status: "pending_delivery",
     offerId,
     createdAt,
-    expiresAt: new Date(now.getTime() + OFFER_WA_TTL_SECONDS_DEFAULT * 1000).toISOString(),
-    deliveryDeadlineAt: createdAt,
+    expiresAt: deadline,
+    deliveryDeadlineAt: deadline,
   };
 }
 
