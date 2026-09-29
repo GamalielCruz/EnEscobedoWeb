@@ -8,6 +8,7 @@ import {
   markAtDoor,
   markDelivered,
   markDeliveredWithPin,
+  cancelOrderByDriver,
 } from "@/lib/driver-actions";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +19,7 @@ export async function POST(request: NextRequest) {
 
   const { repartidor } = auth;
   const body = await request.json().catch(() => ({}));
-  const { action, orderNumber, pin } = body ?? {};
+  const { action, orderNumber, pin, reason, note } = body ?? {};
 
   if (!action || !orderNumber || typeof orderNumber !== "string") {
     return NextResponse.json(
@@ -61,6 +62,15 @@ export async function POST(request: NextRequest) {
       result = await markDeliveredWithPin(orderNumber, repartidor._id, pin);
       break;
     }
+    case "cancel_order":
+      // Cancelación desde el menú ⋮ de "Ver ruta". El motivo se valida
+      // server-side contra el catálogo (lib/order-cancellation.ts) y queda
+      // registrado en la propia orden (order.cancellation) además de la bitácora.
+      result = await cancelOrderByDriver(orderNumber, repartidor._id, {
+        reason,
+        note,
+      });
+      break;
     default:
       return NextResponse.json(
         { error: `Acción "${action}" no reconocida.` },

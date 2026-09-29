@@ -1,13 +1,18 @@
 "use client";
 
-import { type PointerEvent as ReactPointerEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   AnimatePresence,
   motion,
   useDragControls,
   type PanInfo,
 } from "framer-motion";
-import { CircleSlash, X } from "lucide-react";
+import { CircleSlash, MoreVertical, X, XCircle } from "lucide-react";
 import {
   DRIVE_MOTION_DURATION,
   DRIVE_MOTION_EASE,
@@ -29,6 +34,11 @@ import {
  * - "×" arriba a la derecha (área táctil 44 px).
  * - Swipe down desde el handle.
  * - Tocar el mapa fuera de la hoja (lo detecta la página en el propio mapa).
+ *
+ * MENÚ ⋮ (acciones del viaje en curso): vive en la parada ACTUAL ("Ahora"), no
+ * en el panel de pedido, porque es el tramo que el repartidor está realizando.
+ * Su panel desplegable se ancla al propio botón midiendo el rectángulo (el
+ * cuerpo de la hoja tiene scroll, así que un desplegable en flujo se recortaría).
  *
  * SEGURIDAD AL CONDUCIR: con el vehículo en movimiento (≥ 2 m/s ≈ 7 km/h) la
  * consulta sigue permitida, pero los cambios de disponibilidad se deshabilitan
@@ -63,6 +73,9 @@ export function DriveRouteSheet({
   moving = false,
   /** Altura visible del panel de pedido: la hoja nunca puede ser más baja. */
   coverHeight,
+  /** Abre el flujo de cancelación del viaje en curso (hoja de motivos).
+   *  Sin handler, el menú ⋮ no se muestra. */
+  onRequestCancel,
 }: {
   open: boolean;
   onClose: () => void;
@@ -72,8 +85,60 @@ export function DriveRouteSheet({
   onResumeOffers: () => void;
   moving?: boolean;
   coverHeight?: number | null;
+  onRequestCancel?: () => void;
 }) {
   const dragControls = useDragControls();
+  const sheetRef = useRef<HTMLDivElement | null>(null);
+  const menuButtonRef = useRef<HTMLButtonElement | null>(null);
+  const menuPanelRef = useRef<HTMLDivElement | null>(null);
+  /** Posición del desplegable, RELATIVA a la hoja (px). null = cerrado. */
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
+
+  // El desplegable se ancla midiendo el botón: el cuerpo de la hoja scrollea y
+  // recortaría cualquier panel que viviera dentro de él.
+  const openMenu = () => {
+    const button = menuButtonRef.current;
+    const sheet = sheetRef.current;
+    if (!button || !sheet) return;
+    const buttonRect = button.getBoundingClientRect();
+    const sheetRect = sheet.getBoundingClientRect();
+    setMenuPos({
+      top: buttonRect.bottom - sheetRect.top + 6,
+      right: Math.max(8, sheetRect.right - buttonRect.right),
+    });
+  };
+
+  // Cierra al tocar fuera, con Escape o al redimensionar (la posición dejaría
+  // de ser válida). Quedan excluidos el botón (para permitir el toggle) y el
+  // propio panel: si se desmontara al pointerdown, el click del item se
+  // perdería y "Cancelar pedido" no abriría la hoja de motivos.
+  useEffect(() => {
+    if (!menuPos) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof Node ? event.target : null;
+      if (!target) return;
+      if (menuButtonRef.current?.contains(target)) return;
+      if (menuPanelRef.current?.contains(target)) return;
+      setMenuPos(null);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMenuPos(null);
+    };
+    const onResize = () => setMenuPos(null);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", onResize);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [menuPos]);
+
+  // Al cerrarse la hoja (o al cambiar de viaje) el menú no sobrevive.
+  useEffect(() => {
+    if (!open) setMenuPos(null);
+  }, [open]);
 
   // La tarjeta de fin de ruta solo cabe si no hay siguiente servicio (que
   // tiene prioridad sobre la tarjeta).
@@ -84,6 +149,7 @@ export function DriveRouteSheet({
     <AnimatePresence>
       {open && (
         <motion.div
+          ref={sheetRef}
           key="route-sheet"
           role="dialog"
           aria-modal="true"
@@ -135,11 +201,17 @@ export function DriveRouteSheet({
             </div>
           </div>
 
-          <div className="min-h-0 overflow-y-auto px-5 pb-5">
+          <div
+            className="min-h-0 overflow-y-auto px-5 pb-5"
+            onScroll={() => setMenuPos(null)}
+          >
             {/* Línea vertical simple: punto → línea → punto / tarjeta. */}
             <div>
               {stops.map((stop, index) => {
                 const isLast = index === stops.length - 1 && !showStopCard;
+                // La parada ACTUAL es la que el repartidor está realizando: ahí
+                // viven las acciones del viaje (⋮), no en el panel de pedido.
+                const isCurrent = stop.status === "Ahora";
                 return (
                   <div key={`${stop.label}-${index}`} className="flex gap-3.5">
                     <div className="flex w-5 shrink-0 flex-col items-center">
@@ -168,6 +240,26 @@ export function DriveRouteSheet({
                         {stop.status}
                       </p>
                     </div>
+
+                    {/* ── MENÚ ⋮ DEL VIAJE EN CURSO ──────────────────────
+                        Solo en la parada actual. Su desplegable se dibuja en la
+                        raíz de la hoja (ver más abajo) para no quedar recortado
+                        por el scroll del cuerpo. */}
+                    {isCurrent && onRequestCancel && (
+                      <div className="shrink-0">
+                        <button
+                          ref={menuButtonRef}
+                          type="button"
+                          onClick={() => (menuPos ? setMenuPos(null) : openMenu())}
+                          aria-label="Más opciones del viaje"
+                          aria-haspopup="menu"
+                          aria-expanded={menuPos != null}
+                          className="-mr-3 -mt-1 flex h-11 w-11 items-center justify-center text-gray-400 transition active:text-[#09193B]"
+                        >
+                          <MoreVertical className="h-5 w-5" />
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -224,6 +316,41 @@ export function DriveRouteSheet({
               </>
             )}
           </div>
+
+          {/* ── DESPLEGABLE DEL ⋮ ──────────────────────────────────────
+              Anclado al botón de la parada actual (coordenadas medidas), por
+              fuera del cuerpo con scroll para que nunca se recorte. */}
+          <AnimatePresence>
+            {menuPos && onRequestCancel && (
+              <motion.div
+                ref={menuPanelRef}
+                role="menu"
+                aria-label="Opciones del viaje"
+                initial={{ opacity: 0, y: -6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{
+                  duration: DRIVE_MOTION_DURATION.fast,
+                  ease: DRIVE_MOTION_EASE.enter,
+                }}
+                style={{ top: menuPos.top, right: menuPos.right }}
+                className="absolute z-50 w-56 border border-gray-200 bg-white py-1 shadow-2xl"
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuPos(null);
+                    onRequestCancel();
+                  }}
+                  className="flex w-full items-center gap-2.5 px-4 py-3 text-left text-sm font-bold text-[#EB1902] transition active:bg-gray-50"
+                >
+                  <XCircle className="h-4 w-4 shrink-0" strokeWidth={2.5} />
+                  Cancelar pedido
+                </button>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </motion.div>
       )}
     </AnimatePresence>

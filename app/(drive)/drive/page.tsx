@@ -21,6 +21,7 @@ import {
   MOVING_SPEED_MPS,
   type RouteStop,
 } from "@/components/drive/DriveRouteSheet";
+import { DriveCancelOrderSheet } from "@/components/drive/DriveCancelOrderSheet";
 import { DriveOrderDetails } from "@/components/drive/DriveOrderDetails";
 import { DriveSimPanel } from "@/components/drive/DriveSimPanel";
 import {
@@ -869,7 +870,11 @@ export default function DrivePage() {
     ...(DRIVE_MAP_ID ? { mapIds: [DRIVE_MAP_ID] } : {}),
   });
 
-  const { state, loading, error: stateError, refetch } = useDriverState();
+  // El sondeo solo arranca cuando Clerk confirma la sesión: sin sesión no se
+  // llama /api/driver/state (evita los 401 repetidos en la subdominio Drive).
+  const { state, loading, error: stateError, refetch } = useDriverState({
+    enabled: isSignedIn === true,
+  });
   const { location: gpsLocation, heading: gpsHeading } = useDriverLocation(
     state?.connected ?? false
   );
@@ -904,6 +909,10 @@ export default function DrivePage() {
   // con "Ver ruta"; al abrirse el panel de pedido se colapsa para quedar
   // cubierto, y al cerrarse se restaura su estado exacto.
   const [routeSheetOpen, setRouteSheetOpen] = useState(false);
+  // CANCELACIÓN DEL PEDIDO ACTIVO: segundo nivel del menú ⋮ del panel de
+  // pedido. Igual que la Hoja de ruta, es una capa independiente que cubre el
+  // panel mientras está abierta (el panel se colapsa detrás).
+  const [cancelSheetOpen, setCancelSheetOpen] = useState(false);
   // Timestamp del último paneo del mapa: un arrastre NO debe contar como
   // toque (no cierra "Tu ruta").
   const mapDraggedAtRef = useRef(0);
@@ -2728,6 +2737,51 @@ export default function DrivePage() {
     [activeOrder, refetch, sim.active]
   );
 
+  /**
+   * Cancela el pedido activo con el motivo elegido en la hoja de cancelación.
+   * El motivo se valida y persiste server-side en la propia orden
+   * (`order.cancellation`) + bitácora de eventos; al confirmarse, el refetch
+   * retira el pedido de la lista del repartidor.
+   */
+  const handleCancelOrder = useCallback(
+    async ({
+      reason,
+      note,
+    }: {
+      reason: string;
+      note: string;
+    }): Promise<{ ok: boolean; error?: string }> => {
+      if (!activeOrder) return { ok: false, error: "No hay un pedido activo." };
+      if (sim.active) {
+        return { ok: false, error: "Desactiva el simulador para cancelar el pedido real." };
+      }
+      try {
+        const res = await fetch("/api/driver/action", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            action: "cancel_order",
+            orderNumber: activeOrder.orderNumber,
+            reason,
+            note,
+          }),
+        });
+        if (!res.ok) {
+          const data = (await res.json().catch(() => null)) as { error?: string } | null;
+          return { ok: false, error: data?.error ?? "No se pudo cancelar el pedido." };
+        }
+        await refetch();
+        // El pedido ya no está asignado al repartidor: se cierra la Hoja de
+        // ruta que quedaba detrás (la hoja de motivos se cierra sola con ok).
+        setRouteSheetOpen(false);
+        return { ok: true };
+      } catch {
+        return { ok: false, error: "No se pudo cancelar el pedido." };
+      }
+    },
+    [activeOrder, refetch, sim.active]
+  );
+
   const handleOffer = useCallback(
     async (action: "accept" | "reject", orderNumber: string) => {
       // Mark that user initiated an action → suppress expiration detection
@@ -3207,7 +3261,7 @@ export default function DrivePage() {
                 onStageAction={handleStageAction}
                 onPinSubmit={handlePinSubmit}
                 onOpenRoute={() => setRouteSheetOpen(true)}
-                hidden={routeSheetOpen}
+                hidden={routeSheetOpen || cancelSheetOpen}
                 collapseToken={tripSheetCollapseToken}
                 arriving={arrivingActive}
                 onCollapsedHeightChange={setTripSheetCollapsedHeight}
@@ -3347,6 +3401,19 @@ export default function DrivePage() {
         }}
         moving={vehicleMoving}
         coverHeight={tripSheetCollapsedHeight}
+        onRequestCancel={() => setCancelSheetOpen(true)}
+      />
+
+      {/* ── HOJA DE CANCELACIÓN (segundo nivel del menú ⋮ de "Tu ruta") ──
+          Capa independiente por encima de la Hoja de ruta: registra el motivo
+          elegido en la orden (order.cancellation) y refresca el estado al
+          confirmar. */}
+      <DriveCancelOrderSheet
+        open={cancelSheetOpen}
+        onClose={() => setCancelSheetOpen(false)}
+        orderNumber={orders[0]?.orderNumber ?? null}
+        onConfirm={handleCancelOrder}
+        coverHeight={tripSheetCollapsedHeight}
       />
 
       {/* Toast temporal con Deshacer (resultado de la elección). */}
@@ -3456,30 +3523,44 @@ function OfferCard({
   onAccept: () => void;
   onReject: () => void;
 }) {
-  // El contador se deriva de `expiresAt` (servidor) contra el reloj del
-  // servidor, NO contra el reloj del teléfono: no hay desfases ni reinicios.
+  // El contador se ancla a un deadline ABSOLUTO derivado del servidor
+  // (`offerExpiresAt`) y se convierte al reloj del teléfono UNA sola vez por
+  // oferta (offerId + expiresAt). Mientras el polling reciba la MISMA oferta,
+  // el deadline no cambia y el temporizador continúa: nunca se reinicia a 15 s
+  // por una respuesta nueva.
   const isPending = offer.offerStatus === "pending_delivery";
-  const activeWindowMs =
-    offer.offerExpiresAt && offer.serverNow
-      ? Math.max(0, new Date(offer.offerExpiresAt).getTime() - new Date(offer.serverNow).getTime())
-      : null;
+  const offerKey = `${offer.offerId ?? offer.orderNumber}|${offer.offerExpiresAt}`;
+  const deadlineRef = useRef<{ key: string; at: number } | null>(null);
 
   const [timeLeft, setTimeLeft] = useState(0);
 
   useEffect(() => {
-    if (isPending || activeWindowMs == null) {
+    if (isPending || !offer.offerExpiresAt) {
+      deadlineRef.current = null;
       setTimeLeft(0);
       return;
     }
-    const startedAt = Date.now();
-    const update = () => {
-      const elapsed = Date.now() - startedAt;
-      setTimeLeft(Math.max(0, Math.ceil((activeWindowMs - elapsed) / 1000)));
-    };
+    const expiresMs = new Date(offer.offerExpiresAt).getTime();
+    if (!Number.isFinite(expiresMs)) {
+      setTimeLeft(0);
+      return;
+    }
+    // Ancla única: traduce el deadline del servidor al reloj del cliente con el
+    // desfase medido en la PRIMERA observación de esta oferta.
+    if (!deadlineRef.current || deadlineRef.current.key !== offerKey) {
+      const serverNowMs = offer.serverNow ? new Date(offer.serverNow).getTime() : Date.now();
+      const skewMs = Number.isFinite(serverNowMs) ? serverNowMs - Date.now() : 0;
+      deadlineRef.current = { key: offerKey, at: expiresMs - skewMs };
+    }
+    const deadlineAt = deadlineRef.current.at;
+    const update = () => setTimeLeft(Math.max(0, Math.ceil((deadlineAt - Date.now()) / 1000)));
     update();
     const timer = setInterval(update, 250);
     return () => clearInterval(timer);
-  }, [isPending, activeWindowMs]);
+    // Depende del deadline derivado (offerId + expiresAt), nunca del `serverNow`
+    // que cambia en cada polling: el tick no se reinicia.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPending, offerKey]);
 
   const timeLabel =
     timeLeft >= 60
