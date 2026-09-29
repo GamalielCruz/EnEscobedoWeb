@@ -70,6 +70,7 @@ export default function DashboardPage() {
     productsLoading,
     refreshingProducts,
     availableCategories,
+    categoryOrdering,
     activeOrders,
     todayOrders,
     historyOrders,
@@ -92,6 +93,7 @@ export default function DashboardPage() {
     submitProduct,
     updateProductAvailability,
     saveProductOrder,
+    saveCategoryOrder,
     submitStoreChanges,
     refreshActiveOrders,
     refreshTodayOrders,
@@ -202,12 +204,14 @@ export default function DashboardPage() {
           loading={productsLoading}
           refreshing={refreshingProducts}
           availableCategories={availableCategories}
+          categoryOrdering={categoryOrdering}
           loadCategories={loadCategories}
           onCreateCategory={createCategory}
           onRefresh={refreshProducts}
           onSubmitProduct={submitProduct}
           onUpdateAvailability={updateProductAvailability}
           onSaveProductOrder={saveProductOrder}
+          onSaveCategoryOrder={saveCategoryOrder}
           onImageUpload={uploadProductImage}
         />
       ) : null}

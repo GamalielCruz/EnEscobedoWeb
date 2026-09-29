@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { LoadingOrbs } from "@/components/Loader";
@@ -10,6 +10,7 @@ import useBasketStore from "@/store/store";
 
 export default function SuccessPage() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const orderNumber = searchParams?.get("orderNumber") ?? "";
 const sessionId = searchParams?.get("session_id") ?? "";
   const clearBasket = useBasketStore((state) => state.clearBasket);
@@ -21,8 +22,15 @@ const sessionId = searchParams?.get("session_id") ?? "";
   useEffect(() => {
     if (orderNumber) {
       clearBasket();
+      // UX estilo Uber: pedidos a domicilio y mandados van directo a la
+      // pantalla de seguimiento tras confirmar el pago. Pickup conserva esta
+      // página de confirmación (no hay repartidor que esperar).
+      const isMandado = searchParams?.get("service") === "mandado";
+      if (isMandado || searchParams?.get("track") !== "0") {
+        router.replace(`/pedido/${encodeURIComponent(orderNumber)}?session_id=${encodeURIComponent(sessionId)}`);
+      }
     }
-  }, [orderNumber, clearBasket]);
+  }, [orderNumber, sessionId, searchParams, clearBasket, router]);
 
   useEffect(() => {
     if (!sessionId) {

@@ -75,6 +75,8 @@ export function createEmptyProductForm(): ProductFormState {
     image: null,
     categories: [],
     optionGroups: [],
+    allowSpecialInstructions: true,
+    acceptsAllergyRequests: false,
   };
 }
 
@@ -89,6 +91,8 @@ export function productToFormState(product: Product): ProductFormState {
       ? product.categories.map((category: { _id: string }) => category._id)
       : [],
     optionGroups: Array.isArray(product?.optionGroups) ? product.optionGroups : [],
+    allowSpecialInstructions: product.allowSpecialInstructions !== false,
+    acceptsAllergyRequests: product.acceptsAllergyRequests === true,
   };
 }
 
@@ -170,6 +174,12 @@ export function buildStoreSettingsDraft(storeConfig: StoreConfig | null): StoreS
       onDemand: storeConfig?.serviceTypes?.onDemand ?? false,
       onDemandExtraMinutes: Number(storeConfig?.serviceTypes?.onDemandExtraMinutes ?? 15),
     },
+    scheduledOrdersEnabled: storeConfig?.scheduledOrdersEnabled !== false,
+    minimumPreparationMinutes: Number(storeConfig?.minimumPreparationMinutes ?? storeConfig?.deliveryTimeMin ?? 30),
+    scheduledOrderIntervalMinutes: Number(storeConfig?.scheduledOrderIntervalMinutes ?? 30),
+    maximumScheduledDays: Number(storeConfig?.maximumScheduledDays ?? 7),
+    lastDeliveryOrderMinutesBeforeClose: Number(storeConfig?.lastDeliveryOrderMinutesBeforeClose ?? 30),
+    lastPickupOrderMinutesBeforeClose: Number(storeConfig?.lastPickupOrderMinutesBeforeClose ?? 15),
   };
 }
 
@@ -202,6 +212,16 @@ export function buildStoreChangesPayload(original: StoreConfig | null, draft: St
   };
   if (JSON.stringify(baselineServiceTypes) !== JSON.stringify(normalizedServiceTypes)) {
     changes.serviceTypes = normalizedServiceTypes;
+  }
+  for (const key of [
+    "scheduledOrdersEnabled",
+    "minimumPreparationMinutes",
+    "scheduledOrderIntervalMinutes",
+    "maximumScheduledDays",
+    "lastDeliveryOrderMinutesBeforeClose",
+    "lastPickupOrderMinutesBeforeClose",
+  ] as const) {
+    if (baseline[key] !== draft[key]) changes[key] = draft[key];
   }
 
   return changes;

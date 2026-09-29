@@ -18,6 +18,8 @@ const PRODUCTS_QUERY = `*[_type == "product" && affiliateStore._ref == $storeId]
   image,
   categories[]->{ _id, title },
   optionGroups,
+  allowSpecialInstructions,
+  acceptsAllergyRequests,
   approvalStatus,
   isVisible,
   pendingChanges,
@@ -114,7 +116,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { name, price, description, storeId, stock, categories, optionGroups, image } = body;
+    const { name, price, description, storeId, stock, categories, optionGroups, image, allowSpecialInstructions, acceptsAllergyRequests } = body;
 
     if (!name || price == null || !storeId) {
       return NextResponse.json(
@@ -155,6 +157,8 @@ export async function POST(request: NextRequest) {
       submittedBy: userId,
       submittedAt: new Date().toISOString(),
       isVisible: false,
+      allowSpecialInstructions: allowSpecialInstructions !== false,
+      acceptsAllergyRequests: acceptsAllergyRequests === true,
       ...(description && {
         description: [
           {
@@ -219,7 +223,7 @@ export async function PATCH(request: NextRequest) {
 
     const body = await request.json();
     console.log('[dashboard/store-products PATCH] incoming body:', JSON.stringify(body));
-    const { productId, name, price, description, storeId, stock, categories, optionGroups, image, visibilityOnly, isVisible, productOrder } = body;
+    const { productId, name, price, description, storeId, stock, categories, optionGroups, image, allowSpecialInstructions, acceptsAllergyRequests, visibilityOnly, isVisible, productOrder } = body;
 
     if (!storeId) {
       return NextResponse.json({ error: "storeId es requerido" }, { status: 400 });
@@ -357,6 +361,8 @@ export async function PATCH(request: NextRequest) {
         ? categories.map((catId: string) => ({ _type: "reference", _ref: catId, _key: `cat-${catId}-${Date.now()}` }))
         : [];
     }
+    if (allowSpecialInstructions != null) pending.allowSpecialInstructions = Boolean(allowSpecialInstructions);
+    if (acceptsAllergyRequests != null) pending.acceptsAllergyRequests = Boolean(acceptsAllergyRequests);
     if (optionGroups != null) {
       pending.optionGroups = Array.isArray(optionGroups) && optionGroups.length > 0
         ? optionGroups.map((group: any, idx: number) => ({

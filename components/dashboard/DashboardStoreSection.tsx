@@ -70,7 +70,11 @@ export function DashboardStoreSection({
 
   const requestOwnDelivery = async (enabled: boolean) => {
     const success = await onSubmitChanges({ hasOwnDelivery: enabled });
-    setMessage(success ? "Solicitud de reparto enviada correctamente." : "No se pudo enviar la solicitud.");
+    setMessage(
+      success
+        ? `Solicitud para ${enabled ? "activar" : "desactivar"} repartidores propios enviada al administrador.`
+        : "No se pudo enviar la solicitud."
+    );
   };
 
   return (
@@ -379,32 +383,50 @@ export function DashboardStoreSection({
             <div className="rounded-xl border border-black/6 bg-[#fafafb] px-4 py-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="font-medium text-gray-900">
-                    {storeConfig?.hasOwnDelivery ? "Repartidores propios habilitados" : "¿Cuentas con repartidores propios?"}
-                  </p>
+                  <p className="font-medium text-gray-900">Repartidores propios</p>
                   <p className="mt-1 text-[13px] text-gray-600">
                     {storeConfig?.hasOwnDelivery
-                      ? "El costo de envio corresponde a tu restaurante y se calcula con tus zonas."
-                      : "Solicita administrar tus propias zonas y costos de entrega."}
+                      ? "Activo. Puedes administrar tus zonas y precios de entrega abajo."
+                      : "Inactivo. El mapa y los precios propios permanecen ocultos."}
                   </p>
                   <p className="mt-1 text-[13px] text-gray-600">
-                    Comision de El Menu sobre productos: {storeConfig?.platformCommissionPercent != null
-                      ? `${storeConfig.platformCommissionPercent}%`
-                      : "segun convenio"}.
+                    Esta configuracion aplica solo a tu tienda y cualquier cambio requiere aprobacion del administrador.
                   </p>
+                  <div className="mt-2 grid gap-1 text-[13px] text-gray-600 sm:grid-cols-2">
+                    <p>Plan: {storeConfig?.commercial?.reviewRequired ? "Pendiente de revisión" : storeConfig?.commercial?.name || "Sin asignar"}</p>
+                    <p>Comisión sobre productos: {storeConfig?.commercial ? `${storeConfig.commercial.commissionPercent}%` : "según convenio"}</p>
+                    <p>Tope mensual: {storeConfig?.commercial?.monthlyCommissionCap ? `$${storeConfig.commercial.monthlyCommissionCap.toFixed(2)} MXN` : "Sin tope"}</p>
+                    <p>Tarifa de servicio: {storeConfig?.commercial ? `$${storeConfig.commercial.serviceFee.toFixed(2)} MXN` : "Según convenio"}</p>
+                    <p>Pagos en línea: {storeConfig?.commercial?.onlinePaymentsEnabled ? "Activos" : "Inactivos"}</p>
+                    <p>Badge: {storeConfig?.commercial?.premiumBadgeEnabled ? "Activo" : "Inactivo"}</p>
+                  </div>
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={submitting || pendingOwnDeliveryRequest}
-                  onClick={() => requestOwnDelivery(!storeConfig?.hasOwnDelivery)}
-                >
-                  {pendingOwnDeliveryRequest
-                    ? "Solicitud pendiente"
-                    : storeConfig?.hasOwnDelivery
-                      ? "Solicitar reparto de El Menu"
-                      : "Solicitar entregas propias"}
-                </Button>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium text-gray-700">
+                    {pendingOwnDeliveryRequest
+                      ? "Solicitud pendiente"
+                      : storeConfig?.hasOwnDelivery
+                        ? "Habilitado"
+                        : "Deshabilitado"}
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label="Repartidores propios"
+                    aria-checked={Boolean(storeConfig?.hasOwnDelivery)}
+                    disabled={submitting || pendingOwnDeliveryRequest}
+                    onClick={() => requestOwnDelivery(!storeConfig?.hasOwnDelivery)}
+                    className={`relative h-7 w-12 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                      storeConfig?.hasOwnDelivery ? "bg-[#20096F]" : "bg-gray-300"
+                    }`}
+                  >
+                    <span
+                      className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                        storeConfig?.hasOwnDelivery ? "translate-x-5" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -465,6 +487,55 @@ export function DashboardStoreSection({
                 }
               />
             </div>
+          ))}
+        </DashboardPanelBody>
+      </DashboardPanel>
+
+      <DashboardPanel>
+        <DashboardPanelHeader>
+          <DashboardEyebrow>Pedidos programados</DashboardEyebrow>
+          <DashboardTitle className="text-[17px]">Preparación y límites</DashboardTitle>
+          <DashboardDescription>
+            Puedes reducir tus límites, pero el horario global de reparto siempre tiene prioridad.
+          </DashboardDescription>
+        </DashboardPanelHeader>
+        <DashboardPanelBody className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <label className="flex items-center gap-2 rounded-xl border border-black/8 p-3 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={draft.scheduledOrdersEnabled}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  scheduledOrdersEnabled: event.target.checked,
+                }))
+              }
+            />
+            Aceptar pedidos programados
+          </label>
+          {([
+            ["minimumPreparationMinutes", "Preparación mínima (min)"],
+            ["scheduledOrderIntervalMinutes", "Duración del intervalo (min)"],
+            ["maximumScheduledDays", "Días máximos"],
+            ["lastDeliveryOrderMinutesBeforeClose", "Última entrega antes de cerrar (min)"],
+            ["lastPickupOrderMinutesBeforeClose", "Última recolección antes de cerrar (min)"],
+          ] as Array<[keyof StoreSettingsDraft, string]>).map(([key, label]) => (
+            <label key={key} className="text-sm">
+              <span className="mb-1 block font-medium text-gray-700">{label}</span>
+              <Input
+                type="number"
+                min={key === "scheduledOrderIntervalMinutes" ? 30 : 0}
+                step={key === "scheduledOrderIntervalMinutes" ? 30 : 1}
+                className="h-10 rounded-lg border-black/8 shadow-none"
+                value={Number(draft[key])}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    [key]: Number(event.target.value),
+                  }))
+                }
+              />
+            </label>
           ))}
         </DashboardPanelBody>
       </DashboardPanel>

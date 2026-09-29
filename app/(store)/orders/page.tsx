@@ -20,7 +20,9 @@ import { OrdersStatusNotifications } from "@/components/OrdersStatusNotification
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { DeliveryPinCard } from "@/components/DeliveryPinCard";
-import { revealDeliveryPin } from "@/lib/delivery-pin";
+import { NipStatusCard } from "@/components/NipStatusCard";
+import { orderRequiresDeliveryPin, revealDeliveryPin } from "@/lib/delivery-pin";
+import { buildNipSenderView } from "@/lib/nip-sender-view";
 
 const BRAND_COLOR = "#eb1902";
 
@@ -41,6 +43,8 @@ interface ExtendedOrder {
       image?: any;
     };
     quantity?: number;
+    notes?: string;
+    allergies?: string[];
   }>;
   isClickCollect?: boolean;
   pickupCode?: string;
@@ -51,8 +55,25 @@ interface ExtendedOrder {
   };
   amountDiscount?: number;
   orderType?: string;
+  serviceKind?: string;
+  mandadoMode?: "pickup" | "purchase";
+  mandadoOrigin?: { label?: string };
+  mandadoDestination?: { label?: string };
+  mandadoOriginReference?: string;
+  mandadoDestinationReference?: string;
+  mandadoDetails?: string;
+  mandadoEntregaSegura?: boolean;
   deliveryPinCiphertext?: string;
   deliveryVerificationStatus?: string;
+  nipDeliveryStatus?: string;
+  deliveryPinExpiresAt?: string;
+  deliveryPinRegenCount?: number;
+  deliveryPinRegenCooldownUntil?: string;
+  nipResendCooldownUntil?: string;
+  mandadoNipRecipient?: string;
+  mandadoRecipientWhatsAppDeclared?: boolean;
+  mandadoRecipientName?: string;
+  mandadoRecipientPhone?: string;
 }
 
 const getOrderStep = (status: string | undefined) => {
@@ -97,16 +118,18 @@ const getStatusLabel = (status: string | undefined, isClickCollect?: boolean) =>
 const OrderStepper = ({
   status,
   isClickCollect,
+  isMandado,
 }: {
   status: string | undefined;
   isClickCollect: boolean | undefined;
+  isMandado?: boolean;
 }) => {
   const currentStep = getOrderStep(status);
   const progress = currentStep > 0 ? ((currentStep - 1) / 3) * 100 : 0;
 
   const steps = [
     { id: 1, label: "Recibido", icon: Bell },
-    { id: 2, label: "Preparando", icon: ChefHat },
+    { id: 2, label: isMandado ? "Asignando" : "Preparando", icon: isMandado ? Truck : ChefHat },
     {
       id: 3,
       label: isClickCollect ? "Listo para Recoger" : "En Camino",
@@ -155,9 +178,32 @@ const OrderStepper = ({
 
 const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
   const createdAt = order.orderDate ?? order.createdAt;
-  const deliveryPin = order.orderType === "delivery" && order.deliveryPinCiphertext && order.deliveryVerificationStatus === "pending"
-    ? revealDeliveryPin(order.deliveryPinCiphertext)
-    : null;
+  // Regla única de NIP: se muestra solo si la orden REALMENTE lo requiere
+  // (mandados: Entrega segura activa; restaurantes: método pin pendiente).
+  // La existencia de un NIP almacenado NO implica requisito.
+  // Restaurantes: el PIN se revela al cliente como hoy (cliente = destinatario).
+  // Mandados: el PIN NO se revela aquí; lo decide NipStatusCard según el canal
+  // (nunca al remitente cuando el canal es el destinatario).
+  const isMandado = order.serviceKind === "mandado";
+  const deliveryPin =
+    !isMandado &&
+    order.orderType === "delivery" &&
+    order.deliveryPinCiphertext &&
+    orderRequiresDeliveryPin(order as ExtendedOrder)
+      ? revealDeliveryPin(order.deliveryPinCiphertext)
+      : null;
+
+  // Experiencia del remitente (CASOS 1-8): view model puro, humano, sin estados
+  // técnicos de Meta. El PIN solo se revela cuando el canal es el remitente y el
+  // mensaje fue enviado/entregado/falló (showPinToSender).
+  const nipView =
+    isMandado && orderRequiresDeliveryPin(order as ExtendedOrder)
+      ? buildNipSenderView(order as ExtendedOrder)
+      : null;
+  const nipPin =
+    nipView?.showPinToSender && order.deliveryPinCiphertext
+      ? revealDeliveryPin(order.deliveryPinCiphertext)
+      : undefined;
 
   return (
     <Card className="overflow-hidden border border-gray-200 shadow-sm">
@@ -191,7 +237,8 @@ const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
 
       <CardContent className="pt-5">
         {deliveryPin && <DeliveryPinCard pin={deliveryPin} />}
-        <OrderStepper status={order.status} isClickCollect={order.isClickCollect} />
+        {nipView && order._id && <NipStatusCard orderId={order._id} view={nipView} pin={nipPin} />}
+        <OrderStepper status={order.status} isClickCollect={order.isClickCollect} isMandado={order.serviceKind === "mandado"} />
 
         <div className="mt-4 rounded-lg border border-gray-100 bg-gray-50 p-4">
           {order.isClickCollect && order.status === "ready_for_pickup" && order.pickupCode && (
@@ -205,10 +252,18 @@ const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
 
           <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-gray-700">
             <ShoppingBag className="h-4 w-4" />
-            Resumen del pedido
+            {order.serviceKind === "mandado" ? "Resumen del mandado" : "Resumen del pedido"}
           </p>
 
-          <ul className="space-y-2">
+          {order.serviceKind === "mandado" ? (
+            <div className="space-y-3 rounded-md border border-gray-100 bg-white p-4 text-sm">
+              <p><strong>{order.mandadoMode === "purchase" ? "Comprar en:" : "Recoger en:"}</strong> {order.mandadoOrigin?.label}</p>
+              {order.mandadoOriginReference && <p className="text-xs text-gray-500">💬 Indicaciones para el repartidor: {order.mandadoOriginReference}</p>}
+              <p><strong>Entregar en:</strong> {order.mandadoDestination?.label}</p>
+              {order.mandadoDestinationReference && <p className="text-xs text-gray-500">💬 Indicaciones para el repartidor: {order.mandadoDestinationReference}</p>}
+              <p className="rounded-lg bg-gray-50 p-3 text-gray-700">{order.mandadoDetails}</p>
+            </div>
+          ) : <ul className="space-y-2">
             {order.products?.map((item, idx) => (
               <li
                 key={idx}
@@ -227,8 +282,16 @@ const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
                   )}
                   <div className="min-w-0">
                     <p className="truncate font-medium text-gray-900">
-                      {item.quantity}x {item.product?.name}
                     </p>
+                      {item.quantity}x {item.product?.name}
+                    {item.notes ? (
+                      <p className="mt-1 text-xs text-amber-700">Instrucciones: {item.notes}</p>
+                    ) : null}
+                    {item.allergies?.length ? (
+                      <p className="mt-1 text-xs font-medium text-red-700">
+                        Alergias: {item.allergies.join(", ")}
+                      </p>
+                    ) : null}
                   </div>
                 </div>
                 <span className="shrink-0 font-medium text-gray-700">
@@ -236,7 +299,7 @@ const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
                 </span>
               </li>
             ))}
-          </ul>
+          </ul>}
 
           {order.amountDiscount ? (
             <p className="mt-3 text-right text-sm font-medium" style={{ color: BRAND_COLOR }}>
@@ -263,7 +326,7 @@ const PastOrderCard = ({ order }: { order: ExtendedOrder }) => {
             {order.isClickCollect && <Badge variant="outline" className="h-5 text-[10px]">Click & Collect</Badge>}
           </div>
           <p className="mt-1 text-sm text-gray-500">
-            {createdAt ? new Date(createdAt).toLocaleDateString("es-MX") : ""} · {order.products?.length ?? 0} productos
+            {createdAt ? new Date(createdAt).toLocaleDateString("es-MX") : ""} · {order.serviceKind === "mandado" ? "Mandado" : `${order.products?.length ?? 0} productos`}
           </p>
           <Badge
             variant="secondary"

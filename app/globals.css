@@ -4,6 +4,11 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  /* Paleta de marca ElMenu (Fase 0: paleta de facto navy + rojo). */
+  --color-brand-navy: #09193b;
+  --color-brand-navy-deep: #0d1526;
+  --color-brand-red: #eb1902;
+  --color-brand-red-dark: #850c22;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
@@ -121,6 +126,16 @@
   }
 }
 
+/* Safe areas de iOS: la pantalla del repartidor vive bajo el notch/home
+   indicator. Definidas como utilidades reales (antes eran clases muertas). */
+@utility safe-area-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+@utility safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
 /* Custom scrollbar styles */
 .scrollbar-hide {
   -ms-overflow-style: none;  /* Internet Explorer 10+ */
@@ -159,6 +174,28 @@
   }
 }
 
+/* Barra de espera del tracking: indicador INDETERMINADO (no un countdown).
+   Un segmento recorre el carril en bucle continuo, sin implicar que la
+   búsqueda esté "a punto de terminar". Antes era un barra que se agotaba en
+   30 s y volvía a empezar (parecía un temporizador reiniciándose). */
+@keyframes tracking-search-indeterminate {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(260%);
+  }
+}
+
+.tracking-search-bar {
+  height: 100%;
+  width: 42%;
+  border-radius: inherit;
+  background-color: var(--color-brand-navy, #09193b);
+  animation: tracking-search-indeterminate 1.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+  will-change: transform;
+}
+
 .loading-orb {
   animation: loading-orb 900ms ease-in-out infinite;
 }
@@ -174,13 +211,31 @@
 @media (prefers-reduced-motion: reduce) {
   .loading-orb,
   .cart-count-pop,
-  .ui-enter {
+  .ui-enter,
+  .tracking-search-bar {
     animation: none;
+  }
+  /* Sin animación la barra sigue comunicando espera: nivel fijo + pulso de
+     opacidad desactivado también; el texto "Buscando repartidor" es el
+     estado semántico real (sr-only + aria-live). */
+  .tracking-search-bar {
+    transform: scaleX(0.5);
   }
 }
 /* Keep the external Chatwoot launcher above El Menú's fixed mobile actions. */
 @media (max-width: 666px) {
   body .woot-widget-bubble {
     bottom: calc(6rem + env(safe-area-inset-bottom)) !important;
+  }
+}
+
+/* Safari en iPhone amplía la página al enfocar campos menores de 16 px y no
+   siempre restablece el zoom. En móvil mantenemos ese mínimo solo en controles
+   de captura; los textos y el diseño general conservan su escala habitual. */
+@media (max-width: 767px) {
+  input,
+  select,
+  textarea {
+    font-size: 16px !important;
   }
 }

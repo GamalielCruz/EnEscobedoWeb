@@ -71,6 +71,13 @@ export function OrderItemDetails({ item }: OrderItemDetailsProps) {
           {/* Renderizar personalizaciones y notas */}
           {renderCustomizations()}
           {renderNotes()}
+          {item.allergies?.length ? (
+            <div className="mt-2 rounded bg-red-50 p-3 text-xs">
+              <p className="mb-1 font-semibold text-red-700">Solicitudes por alergia:</p>
+              <p className="text-red-700">{item.allergies.join(", ")}</p>
+            </div>
+          ) : null}
+
         </div>
         
         <span className="text-gray-500 font-medium ml-3">

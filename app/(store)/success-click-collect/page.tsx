@@ -17,14 +17,21 @@ export default function SuccessClickCollectPage() {
   const router = useRouter();
   const orderNumber = searchParams?.get("orderNumber") ?? "";
   const pickupCodeFromUrl = searchParams?.get("pickupCode") ?? "";
+  const isTrackingRedirect = searchParams?.get("track") !== "0";
 
   useEffect(() => {
     if (!orderNumber) {
       router.push("/");
+      return;
     }
-  }, [orderNumber, router]);
+    // UX coherente: el retiro también aterriza en su seguimiento
+    // (sin búsqueda de repartidor: muestra el estado y el código).
+    if (isTrackingRedirect) {
+      router.replace(`/pedido/${encodeURIComponent(orderNumber)}`);
+    }
+  }, [orderNumber, router, searchParams, isTrackingRedirect]);
 
-  if (!orderNumber) {
+  if (!orderNumber || isTrackingRedirect) {
     return <Loader />;
   }
 

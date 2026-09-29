@@ -1,5 +1,691 @@
 [
   {
+    "type": "type",
+    "name": "order.reference",
+    "value": {
+      "type": "object",
+      "attributes": {
+        "_ref": {
+          "type": "objectAttribute",
+          "value": {
+            "type": "string"
+          }
+        },
+        "_type": {
+          "type": "objectAttribute",
+          "value": {
+            "type": "string",
+            "value": "reference"
+          }
+        },
+        "_weak": {
+          "type": "objectAttribute",
+          "value": {
+            "type": "boolean"
+          },
+          "optional": true
+        }
+      },
+      "dereferencesTo": "order"
+    }
+  },
+  {
+    "name": "whatsappTemplateDelivery",
+    "type": "document",
+    "attributes": {
+      "_id": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "_type": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string",
+          "value": "whatsappTemplateDelivery"
+        }
+      },
+      "_createdAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "_updatedAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "_rev": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "order": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "inline",
+          "name": "order.reference"
+        },
+        "optional": true
+      },
+      "idempotencyKey": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "templateName": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "status": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "pending"
+            },
+            {
+              "type": "string",
+              "value": "sent"
+            },
+            {
+              "type": "string",
+              "value": "delivered"
+            },
+            {
+              "type": "string",
+              "value": "read"
+            },
+            {
+              "type": "string",
+              "value": "failed"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "claimToken": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "attemptedAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "sentAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "deliveredAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "readAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "failedAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "metaMessageId": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "errorMessage": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "simulated": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
+        },
+        "optional": true
+      }
+    }
+  },
+  {
+    "name": "deliveryScheduleConfig",
+    "type": "document",
+    "attributes": {
+      "_id": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "_type": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string",
+          "value": "deliveryScheduleConfig"
+        }
+      },
+      "_createdAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "_updatedAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "_rev": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "timezone": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "weeklySchedule": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "object",
+          "attributes": {
+            "monday": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "object",
+                "attributes": {
+                  "enabled": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "boolean"
+                    },
+                    "optional": true
+                  },
+                  "startTime": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "string"
+                    },
+                    "optional": true
+                  },
+                  "endTime": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "string"
+                    },
+                    "optional": true
+                  },
+                  "scheduledOrdersEnabled": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "boolean"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              "optional": true
+            },
+            "tuesday": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "object",
+                "attributes": {
+                  "enabled": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "boolean"
+                    },
+                    "optional": true
+                  },
+                  "startTime": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "string"
+                    },
+                    "optional": true
+                  },
+                  "endTime": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "string"
+                    },
+                    "optional": true
+                  },
+                  "scheduledOrdersEnabled": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "boolean"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              "optional": true
+            },
+            "wednesday": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "object",
+                "attributes": {
+                  "enabled": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "boolean"
+                    },
+                    "optional": true
+                  },
+                  "startTime": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "string"
+                    },
+                    "optional": true
+                  },
+                  "endTime": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "string"
+                    },
+                    "optional": true
+                  },
+                  "scheduledOrdersEnabled": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "boolean"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              "optional": true
+            },
+            "thursday": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "object",
+                "attributes": {
+                  "enabled": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "boolean"
+                    },
+                    "optional": true
+                  },
+                  "startTime": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "string"
+                    },
+                    "optional": true
+                  },
+                  "endTime": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "string"
+                    },
+                    "optional": true
+                  },
+                  "scheduledOrdersEnabled": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "boolean"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              "optional": true
+            },
+            "friday": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "object",
+                "attributes": {
+                  "enabled": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "boolean"
+                    },
+                    "optional": true
+                  },
+                  "startTime": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "string"
+                    },
+                    "optional": true
+                  },
+                  "endTime": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "string"
+                    },
+                    "optional": true
+                  },
+                  "scheduledOrdersEnabled": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "boolean"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              "optional": true
+            },
+            "saturday": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "object",
+                "attributes": {
+                  "enabled": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "boolean"
+                    },
+                    "optional": true
+                  },
+                  "startTime": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "string"
+                    },
+                    "optional": true
+                  },
+                  "endTime": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "string"
+                    },
+                    "optional": true
+                  },
+                  "scheduledOrdersEnabled": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "boolean"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              "optional": true
+            },
+            "sunday": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "object",
+                "attributes": {
+                  "enabled": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "boolean"
+                    },
+                    "optional": true
+                  },
+                  "startTime": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "string"
+                    },
+                    "optional": true
+                  },
+                  "endTime": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "string"
+                    },
+                    "optional": true
+                  },
+                  "scheduledOrdersEnabled": {
+                    "type": "objectAttribute",
+                    "value": {
+                      "type": "boolean"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              "optional": true
+            }
+          }
+        },
+        "optional": true
+      },
+      "scheduledOrdersEnabled": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
+        },
+        "optional": true
+      },
+      "minimumAdvanceMinutes": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "maximumScheduledDays": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "slotMinutes": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "operationalMarginMinutes": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "driverAssignmentMarginMinutes": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "estimatedTravelMinutes": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "riskBeforeMinutes": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "adminAlertBeforeMinutes": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "contingencyBeforeMinutes": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "exceptions": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "array",
+          "of": {
+            "type": "object",
+            "attributes": {
+              "date": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "string"
+                },
+                "optional": true
+              },
+              "deliveryEnabled": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "boolean"
+                },
+                "optional": true
+              },
+              "startTime": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "string"
+                },
+                "optional": true
+              },
+              "endTime": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "string"
+                },
+                "optional": true
+              },
+              "reason": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "string"
+                },
+                "optional": true
+              }
+            },
+            "rest": {
+              "type": "object",
+              "attributes": {
+                "_key": {
+                  "type": "objectAttribute",
+                  "value": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "optional": true
+      },
+      "pause": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "object",
+          "attributes": {
+            "active": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "boolean"
+              },
+              "optional": true
+            },
+            "startAt": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "string"
+              },
+              "optional": true
+            },
+            "estimatedResumeAt": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "string"
+              },
+              "optional": true
+            },
+            "reason": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "string"
+              },
+              "optional": true
+            },
+            "allowFutureScheduling": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "boolean"
+              },
+              "optional": true
+            }
+          }
+        },
+        "optional": true
+      },
+      "maximumOrdersPerSlot": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "maximumDeliveryOrdersPerSlot": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "maximumPickupOrdersPerSlot": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      }
+    }
+  },
+  {
     "name": "deliveryPricingConfig",
     "type": "document",
     "attributes": {
@@ -1405,6 +2091,23 @@
         },
         "optional": true
       },
+      "fulfillmentType": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "delivery"
+            },
+            {
+              "type": "string",
+              "value": "pickup"
+            }
+          ]
+        },
+        "optional": true
+      },
       "paymentMethod": {
         "type": "objectAttribute",
         "value": {
@@ -1593,6 +2296,16 @@
                 "type": "objectAttribute",
                 "value": {
                   "type": "string"
+                },
+                "optional": true
+              },
+              "allergies": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "array",
+                  "of": {
+                    "type": "string"
+                  }
                 },
                 "optional": true
               }
@@ -1810,6 +2523,266 @@
         },
         "optional": true
       },
+      "fulfillmentTiming": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "asap"
+            },
+            {
+              "type": "string",
+              "value": "scheduled"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "scheduledSlot": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "object",
+          "attributes": {
+            "startAt": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "string"
+              },
+              "optional": true
+            },
+            "endAt": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "string"
+              },
+              "optional": true
+            },
+            "timezone": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "string"
+              },
+              "optional": true
+            }
+          }
+        },
+        "optional": true
+      },
+      "estimatedPreparationMinutes": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "storeScheduleSnapshot": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "object",
+          "attributes": {
+            "openingTime": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "string"
+              },
+              "optional": true
+            },
+            "closingTime": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "string"
+              },
+              "optional": true
+            }
+          }
+        },
+        "optional": true
+      },
+      "deliveryScheduleSnapshot": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "object",
+          "attributes": {
+            "openingTime": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "string"
+              },
+              "optional": true
+            },
+            "closingTime": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "string"
+              },
+              "optional": true
+            }
+          }
+        },
+        "optional": true
+      },
+      "scheduleStatus": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "not_required"
+            },
+            {
+              "type": "string",
+              "value": "scheduled"
+            },
+            {
+              "type": "string",
+              "value": "ready_for_dispatch"
+            },
+            {
+              "type": "string",
+              "value": "dispatching"
+            },
+            {
+              "type": "string",
+              "value": "completed"
+            },
+            {
+              "type": "string",
+              "value": "cancelled"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "scheduledPreparationAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "scheduledDispatchAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "preparationStartedAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "preparationStatus": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "not_started"
+            },
+            {
+              "type": "string",
+              "value": "in_preparation"
+            },
+            {
+              "type": "string",
+              "value": "completed"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "scheduledDispatchStartedAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "scheduleRiskLevel": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "none"
+            },
+            {
+              "type": "string",
+              "value": "watch"
+            },
+            {
+              "type": "string",
+              "value": "risk"
+            },
+            {
+              "type": "string",
+              "value": "alert"
+            },
+            {
+              "type": "string",
+              "value": "contingency"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "scheduleRiskAlertedAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "scheduleCustomerChoice": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "wait_for_driver"
+            },
+            {
+              "type": "string",
+              "value": "pickup"
+            },
+            {
+              "type": "string",
+              "value": "help"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "scheduleCustomerChoiceAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "customerPickupConsentAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "customerHelpRequested": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
+        },
+        "optional": true
+      },
       "fulfillmentProvider": {
         "type": "objectAttribute",
         "value": {
@@ -1973,6 +2946,130 @@
         "optional": true
       },
       "deliveryPinLockedUntil": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "nipDeliveryStatus": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "string",
+              "value": "not_required"
+            },
+            {
+              "type": "string",
+              "value": "pending"
+            },
+            {
+              "type": "string",
+              "value": "sent"
+            },
+            {
+              "type": "string",
+              "value": "delivered"
+            },
+            {
+              "type": "string",
+              "value": "failed"
+            },
+            {
+              "type": "string",
+              "value": "expired"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "nipSentAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "nipDeliveredAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "deliveryPinRegenCount": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "deliveryPinRegenCooldownUntil": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "nipResendCooldownUntil": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "nipIncidentAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "nipIncidentType": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "stringLiteral",
+              "value": "not_delivered"
+            },
+            {
+              "type": "stringLiteral",
+              "value": "expired"
+            },
+            {
+              "type": "stringLiteral",
+              "value": "no_whatsapp"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "nipDeliveryChannel": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "union",
+          "of": [
+            {
+              "type": "stringLiteral",
+              "value": "whatsapp_sender"
+            },
+            {
+              "type": "stringLiteral",
+              "value": "whatsapp_recipient"
+            },
+            {
+              "type": "stringLiteral",
+              "value": "none"
+            }
+          ]
+        },
+        "optional": true
+      },
+      "nipDeliveryPhone": {
         "type": "objectAttribute",
         "value": {
           "type": "string"
@@ -2417,6 +3514,10 @@
             },
             {
               "type": "string",
+              "value": "scheduled"
+            },
+            {
+              "type": "string",
               "value": "waiting_for_driver"
             },
             {
@@ -2667,36 +3768,6 @@
         },
         "optional": true
       }
-    }
-  },
-  {
-    "type": "type",
-    "name": "order.reference",
-    "value": {
-      "type": "object",
-      "attributes": {
-        "_ref": {
-          "type": "objectAttribute",
-          "value": {
-            "type": "string"
-          }
-        },
-        "_type": {
-          "type": "objectAttribute",
-          "value": {
-            "type": "string",
-            "value": "reference"
-          }
-        },
-        "_weak": {
-          "type": "objectAttribute",
-          "value": {
-            "type": "boolean"
-          },
-          "optional": true
-        }
-      },
-      "dereferencesTo": "order"
     }
   },
   {
@@ -3113,6 +4184,55 @@
               },
               "optional": true
             },
+            "hasOwnDelivery": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "boolean"
+              },
+              "optional": true
+            },
+            "scheduledOrdersEnabled": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "boolean"
+              },
+              "optional": true
+            },
+            "minimumPreparationMinutes": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "number"
+              },
+              "optional": true
+            },
+            "scheduledOrderIntervalMinutes": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "number"
+              },
+              "optional": true
+            },
+            "maximumScheduledDays": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "number"
+              },
+              "optional": true
+            },
+            "lastDeliveryOrderMinutesBeforeClose": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "number"
+              },
+              "optional": true
+            },
+            "lastPickupOrderMinutesBeforeClose": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "number"
+              },
+              "optional": true
+            },
             "contact": {
               "type": "objectAttribute",
               "value": {
@@ -3468,6 +4588,20 @@
               "type": "objectAttribute",
               "value": {
                 "type": "number"
+              },
+              "optional": true
+            },
+            "allowSpecialInstructions": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "boolean"
+              },
+              "optional": true
+            },
+            "acceptsAllergyRequests": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "boolean"
               },
               "optional": true
             },
@@ -4264,6 +5398,20 @@
         },
         "optional": true
       },
+      "allowSpecialInstructions": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
+        },
+        "optional": true
+      },
+      "acceptsAllergyRequests": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
+        },
+        "optional": true
+      },
       "approvalStatus": {
         "type": "objectAttribute",
         "value": {
@@ -4315,6 +5463,20 @@
               "type": "objectAttribute",
               "value": {
                 "type": "number"
+              },
+              "optional": true
+            },
+            "allowSpecialInstructions": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "boolean"
+              },
+              "optional": true
+            },
+            "acceptsAllergyRequests": {
+              "type": "objectAttribute",
+              "value": {
+                "type": "boolean"
               },
               "optional": true
             },
@@ -4558,6 +5720,73 @@
         "optional": true
       },
       "rejectionReason": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      }
+    }
+  },
+  {
+    "name": "category",
+    "type": "document",
+    "attributes": {
+      "_id": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "_type": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string",
+          "value": "category"
+        }
+      },
+      "_createdAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "_updatedAt": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "_rev": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        }
+      },
+      "affiliateStore": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "inline",
+          "name": "affiliateStore.reference"
+        },
+        "optional": true
+      },
+      "title": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "string"
+        },
+        "optional": true
+      },
+      "slug": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "inline",
+          "name": "slug"
+        },
+        "optional": true
+      },
+      "description": {
         "type": "objectAttribute",
         "value": {
           "type": "string"
@@ -4813,6 +6042,110 @@
         },
         "optional": true
       },
+      "productOrder": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "array",
+          "of": {
+            "type": "object",
+            "attributes": {
+              "_key": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "string"
+                }
+              }
+            },
+            "rest": {
+              "type": "inline",
+              "name": "product.reference"
+            }
+          }
+        },
+        "optional": true
+      },
+      "categoryOrder": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "array",
+          "of": {
+            "type": "object",
+            "attributes": {
+              "_key": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "string"
+                }
+              }
+            },
+            "rest": {
+              "type": "inline",
+              "name": "category.reference"
+            }
+          }
+        },
+        "optional": true
+      },
+      "categoryProductOrders": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "array",
+          "of": {
+            "type": "object",
+            "attributes": {
+              "category": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "inline",
+                  "name": "category.reference"
+                },
+                "optional": true
+              },
+              "products": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "array",
+                  "of": {
+                    "type": "object",
+                    "attributes": {
+                      "_key": {
+                        "type": "objectAttribute",
+                        "value": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "rest": {
+                      "type": "inline",
+                      "name": "product.reference"
+                    }
+                  }
+                },
+                "optional": true
+              },
+              "_type": {
+                "type": "objectAttribute",
+                "value": {
+                  "type": "string",
+                  "value": "categoryProductOrder"
+                }
+              }
+            },
+            "rest": {
+              "type": "object",
+              "attributes": {
+                "_key": {
+                  "type": "objectAttribute",
+                  "value": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "optional": true
+      },
       "address": {
         "type": "objectAttribute",
         "value": {
@@ -4975,6 +6308,13 @@
         },
         "optional": true
       },
+      "homepageOrder": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
       "isOpen": {
         "type": "objectAttribute",
         "value": {
@@ -5010,10 +6350,27 @@
         },
         "optional": true
       },
+      "promotionalMessages": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "array",
+          "of": {
+            "type": "string"
+          }
+        },
+        "optional": true
+      },
       "hasOwnDelivery": {
         "type": "objectAttribute",
         "value": {
           "type": "boolean"
+        },
+        "optional": true
+      },
+      "platformCommissionPercent": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
         },
         "optional": true
       },
@@ -5046,6 +6403,48 @@
         "optional": true
       },
       "deliveryTimeMax": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "scheduledOrdersEnabled": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "boolean"
+        },
+        "optional": true
+      },
+      "minimumPreparationMinutes": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "scheduledOrderIntervalMinutes": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "maximumScheduledDays": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "lastDeliveryOrderMinutesBeforeClose": {
+        "type": "objectAttribute",
+        "value": {
+          "type": "number"
+        },
+        "optional": true
+      },
+      "lastPickupOrderMinutesBeforeClose": {
         "type": "objectAttribute",
         "value": {
           "type": "number"
@@ -5100,65 +6499,6 @@
               "optional": true
             }
           }
-        },
-        "optional": true
-      }
-    }
-  },
-  {
-    "name": "category",
-    "type": "document",
-    "attributes": {
-      "_id": {
-        "type": "objectAttribute",
-        "value": {
-          "type": "string"
-        }
-      },
-      "_type": {
-        "type": "objectAttribute",
-        "value": {
-          "type": "string",
-          "value": "category"
-        }
-      },
-      "_createdAt": {
-        "type": "objectAttribute",
-        "value": {
-          "type": "string"
-        }
-      },
-      "_updatedAt": {
-        "type": "objectAttribute",
-        "value": {
-          "type": "string"
-        }
-      },
-      "_rev": {
-        "type": "objectAttribute",
-        "value": {
-          "type": "string"
-        }
-      },
-      "title": {
-        "type": "objectAttribute",
-        "value": {
-          "type": "string"
-        },
-        "optional": true
-      },
-      "slug": {
-        "type": "objectAttribute",
-        "value": {
-          "type": "inline",
-          "name": "slug"
-        },
-        "optional": true
-      },
-      "description": {
-        "type": "objectAttribute",
-        "value": {
-          "type": "string"
         },
         "optional": true
       }

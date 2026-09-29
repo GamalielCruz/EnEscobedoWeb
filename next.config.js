@@ -3,13 +3,16 @@
 const nextConfig = {
   env: {
     NEXT_PUBLIC_VERCEL_ENV: process.env.VERCEL_ENV || "development",
-    NEXT_PUBLIC_VERCEL_URL: process.env.VERCEL_URL || "",
   },
   images: {
     remotePatterns: [
       {
         protocol: "https",
         hostname: "cdn.sanity.io",
+      },
+      {
+        protocol: "https",
+        hostname: "coreva-normal.trae.ai",
       },
     ],
     formats: ['image/webp', 'image/avif'],
