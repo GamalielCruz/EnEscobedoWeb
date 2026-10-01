@@ -165,6 +165,39 @@ export function deriveNipIncidentType(
 }
 
 /**
+ * ¿Esta orden debe aparecer en la bandeja de incidencias de NIP (Dispatch
+ * Center) y con qué tipo? `null` = sin incidencia.
+ *
+ * - Mandados: la regla de siempre (`deriveNipIncidentType`): el código no llegó
+ *   al canal configurado, o el TTL venció.
+ * - Restaurantes: SOLO el TTL vencido. Es el único estado que bloquea de verdad
+ *   la entrega del repartidor (`validateDeliveryPin` rechaza `expired`) y no
+ *   hay otra salida en Drive; listar además "no entregado" llenaría la bandeja
+ *   con cada pedido activo, porque en restaurantes el código vive en la
+ *   web/app del cliente (no depende de un mensaje de WhatsApp).
+ */
+export function selectNipIncident(
+  order: {
+    serviceKind?: string;
+    mandadoEntregaSegura?: boolean;
+    deliveryVerificationMethod?: string;
+    deliveryVerificationStatus?: string;
+    nipDeliveryStatus?: string;
+    deliveryPinExpiresAt?: string;
+    mandadoNipRecipient?: string;
+    mandadoRecipientWhatsAppDeclared?: boolean;
+  },
+  now: Date = new Date()
+): NipIncidentType | null {
+  const status = effectiveNipStatus(order, now);
+  if (status === "no_pin" || status === "verified" || status === "delivered") return null;
+  if (String(order.serviceKind ?? "") !== "mandado") {
+    return status === "expired" ? "expired" : null;
+  }
+  return deriveNipIncidentType(order, status === "expired" ? "expired" : "not_delivered");
+}
+
+/**
  * Razón por la que el gate de mandados bloquea el NIP en la puerta, o `null` si
  * se puede solicitar. Restaurantes → siempre `null` (conservan su flujo actual).
  * Deriva de `effectiveNipStatus` (única fuente de verdad del ciclo de vida).

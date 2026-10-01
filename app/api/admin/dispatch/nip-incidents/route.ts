@@ -2,26 +2,34 @@ import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/dispatch/dispatch-core";
 import { maskPhone } from "@/lib/nip-sender-view";
 import {
-  deriveNipIncidentType,
   effectiveNipStatus,
+  selectNipIncident,
   type NipIncidentType,
 } from "@/lib/nip-delivery";
 import { backendClient } from "@/sanity/lib/backendClient";
 
 export const dynamic = "force-dynamic";
 
-// Órdenes activas de mandado con Entrega segura cuyo código NO fue entregado al
-// canal configurado (o expiró). Es la fuente de la bandeja de incidencias de NIP
-// del Dispatch Center. Sin teléfonos completos: solo últimos 4 dígitos.
+// Órdenes ACTIVAS con Entrega segura que requieren atención de operación:
+//  - mandados: el código no llegó al canal configurado, o el TTL venció;
+//  - restaurantes: SOLO el TTL vencido — es el único estado que bloquea de
+//    verdad la entrega del repartidor (validateDeliveryPin rechaza `expired`)
+//    y no hay otra salida en Drive.
+// Es la fuente de la bandeja de incidencias de NIP del Dispatch Center. La
+// selección final la decide `selectNipIncident` (lib/nip-delivery.ts). Sin
+// teléfonos completos: solo últimos 4 dígitos.
 const NIP_INCIDENTS_QUERY = `*[_type == "order" &&
   !(_id in path("drafts.**")) &&
-  serviceKind == "mandado" &&
-  mandadoEntregaSegura == true &&
-  status != "cancelled" && status != "delivered" && status != "refunded" &&
+  (
+    (serviceKind == "mandado" && mandadoEntregaSegura == true) ||
+    (coalesce(serviceKind, "restaurant") != "mandado" && deliveryVerificationMethod == "pin")
+  ) &&
+  status != "cancelled" && status != "delivered" && status != "refunded" && status != "completed" &&
   orderStatus != "cancelled" && orderStatus != "delivered" && orderStatus != "completed" && orderStatus != "picked_up"
 ] | order(orderDate desc)[0...100]{
   _id,
   orderNumber,
+  serviceKind,
   customerName,
   phone,
   mandadoRecipientName,
@@ -80,12 +88,15 @@ export async function GET() {
     const incidents: NipIncident[] = [];
     for (const order of raw) {
       const orderRecord = order as Record<string, unknown>;
+      const isMandado = String(orderRecord.serviceKind ?? "") === "mandado";
       // Estado EFECTIVO canónico (la misma evaluación de /orders y del gate de
-      // entrega): verificado > expirado > estado del mensaje. Solo incidencias
-      // reales: código no entregado al canal, expirado, o canal remitente por
-      // destinatario sin WhatsApp. NUNCA se inventa que fue entregado.
+      // entrega): verificado > expirado > estado del mensaje. NUNCA se inventa
+      // que fue entregado.
       const status = effectiveNipStatus(orderRecord as never, now);
-      if (status === "delivered" || status === "verified" || status === "no_pin") continue;
+      // Selección de incidencia (regla única, testeada): restaurantes solo
+      // entran por TTL vencido; mandados conservan su regla completa.
+      const incidentType = selectNipIncident(orderRecord as never, now);
+      if (!incidentType) continue;
 
       const regenCount = Number(orderRecord.deliveryPinRegenCount ?? 0);
       const regenCooldownUntil = orderRecord.deliveryPinRegenCooldownUntil
@@ -99,19 +110,26 @@ export async function GET() {
         _id: String(orderRecord._id),
         orderNumber: String(orderRecord.orderNumber ?? ""),
         customerName: String(orderRecord.customerName ?? ""),
-        recipientName: String(orderRecord.mandadoRecipientName ?? "") || undefined,
-        recipientPhoneMasked: maskPhone(String(orderRecord.mandadoRecipientPhone ?? "")),
-        channel: String(orderRecord.mandadoNipRecipient ?? "") === "recipient" ? "recipient" : "sender",
+        // Destinatario a mostrar: en mandados es quien recibe el código; en
+        // restaurantes, el cliente del pedido.
+        recipientName:
+          String(
+            (isMandado ? orderRecord.mandadoRecipientName : orderRecord.customerName) ?? ""
+          ) || undefined,
+        recipientPhoneMasked: maskPhone(
+          String((isMandado ? orderRecord.mandadoRecipientPhone : orderRecord.phone) ?? "")
+        ),
+        channel: isMandado
+          ? String(orderRecord.mandadoNipRecipient ?? "") === "recipient"
+            ? "recipient"
+            : "sender"
+          : "sender",
         nipDeliveryStatus: status,
         deliveryVerificationStatus: String(orderRecord.deliveryVerificationStatus ?? ""),
-        // Tipo de incidencia separado: el persistido (si existe) o el derivado
-        // de la misma regla que usa el webhook al registrarla.
-        reason:
-          (String(orderRecord.nipIncidentType ?? "") as NipIncidentType) ||
-          deriveNipIncidentType(
-            orderRecord as never,
-            status === "expired" ? "expired" : "not_delivered"
-          ),
+        // Tipo de incidencia: la regla canónica (selectNipIncident) es la
+        // única fuente de verdad — nunca se lee un tipo persistido que pueda
+        // divergir de ella.
+        reason: incidentType,
         lastAttemptAt: String(orderRecord.deliveryPinCreatedAt ?? "") || undefined,
         lastAttemptMinutesAgo: minutesAgo(orderRecord.deliveryPinCreatedAt),
         incidentAt: String(orderRecord.nipIncidentAt ?? "") || undefined,

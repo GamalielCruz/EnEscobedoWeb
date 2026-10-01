@@ -65,7 +65,7 @@ export function NipIncidentsPanel({ onSelectOrder, notify }: { onSelectOrder: (o
         <div className="absolute left-0 top-full z-50 mt-1 max-h-[60vh] w-[min(90vw,480px)] overflow-y-auto rounded-xl border border-orange-200 bg-white p-3 shadow-xl dark:border-orange-500/25 dark:bg-[#0d1526]">
           <div className="mb-2 flex items-center gap-2">
             <ShieldAlert className="h-4 w-4 text-orange-600 dark:text-orange-400" />
-            <span className="text-sm font-bold text-[#09193B] dark:text-white">Códigos no entregados</span>
+            <span className="text-sm font-bold text-[#09193B] dark:text-white">Códigos con incidencia</span>
             <button type="button" onClick={() => setOpen(false)} className="ml-auto text-xs text-slate-400 hover:text-slate-600">✕</button>
           </div>
           {loading && incidents.length === 0 ? <p className="py-2 text-xs text-orange-700/70">Cargando…</p> : (
