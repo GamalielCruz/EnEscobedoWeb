@@ -42,6 +42,8 @@ export function DriveSimPanel({
   onRestart,
   onStop,
   onSpeed,
+  commitOrders,
+  onToggleCommit,
 }: {
   visible: boolean;
   canStart: boolean;
@@ -57,6 +59,9 @@ export function DriveSimPanel({
   onRestart: () => void;
   onStop: () => void;
   onSpeed: (speed: (typeof SIM_SPEEDS)[number]) => void;
+  /** true ⇔ al llegar a cada punto se ejecutan las acciones REALES del pedido. */
+  commitOrders: boolean;
+  onToggleCommit: () => void;
 }) {
   // Colapsado por defecto: el simulador es una herramienta de dev y nunca
   // debe tapar el flujo real del repartidor (píldora "SIM" discreta).
@@ -162,6 +167,35 @@ export function DriveSimPanel({
           ))}
         </div>
       </div>
+
+      {/* Completar el pedido en el servidor: el simulador ejecuta las mismas
+          acciones reales (recoger/entregar) para que Dispatch, settlement y
+          Wallet vean un servicio real. Apagado = solo vista. */}
+      <button
+        onClick={onToggleCommit}
+        aria-pressed={commitOrders}
+        className="mt-2 flex w-full items-center justify-between gap-2 rounded-xl bg-gray-50 px-2 py-1.5 text-left transition active:bg-gray-100"
+      >
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+          Completar pedido real
+        </span>
+        <span
+          className={`flex h-4 w-7 shrink-0 items-center rounded-full p-0.5 transition ${
+            commitOrders ? "bg-purple-600" : "bg-gray-300"
+          }`}
+        >
+          <span
+            className={`h-3 w-3 rounded-full bg-white transition ${
+              commitOrders ? "translate-x-3" : "translate-x-0"
+            }`}
+          />
+        </span>
+      </button>
+      {commitOrders && active && (
+        <p className="mt-1 text-[10px] leading-snug text-purple-600/80">
+          Al llegar a cada punto se ejecutan las acciones reales (recoger/entregar).
+        </p>
+      )}
 
       {active && (
         <p className="mt-1.5 truncate text-[10px] font-medium text-gray-500">

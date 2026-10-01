@@ -1113,6 +1113,12 @@ export default function DrivePage() {
     route: roadRoute,
   });
 
+  // El simulador, además de mover el mapa, puede ejecutar las acciones REALES
+  // del pedido (recoger/entregar) para dejarlo completado en el servidor —
+  // así Dispatch, settlement y Wallet ven un servicio real. Se puede apagar
+  // desde el panel dev para simular SOLO la vista.
+  const [simCommitOrders, setSimCommitOrders] = useState(true);
+
   // Ref sincronizado del hook para que los callbacks estables (ej. el loop de
   // seguimiento) lean valores frescos sin depender del closure inicial ni sin
   // recrear rAF cada vez que cambia el estado del simulador.
@@ -2673,9 +2679,67 @@ export default function DrivePage() {
     []
   );
 
+  // ── Simulador: completar el pedido REAL (solo dev/staging) ────────
+  // Al llegar a cada punto, el simulador ejecuta las MISMAS acciones de
+  // servidor que el flujo real, para que el pedido quede realmente
+  // completado (no es un estado de mentira del cliente):
+  //
+  //   mandado     at_pickup   → pickup_arrival + picked_up
+  //               at_delivery → destination_arrival + delivered
+  //   restaurante at_pickup   → (sin acción: la recolección es navegación)
+  //               at_delivery → destination_arrival + delivered
+  //
+  // Secuencial (cada acción espera a la anterior porque el servidor valida el
+  // estado intermedio) y una sola vez por pedido+etapa. Si el servidor
+  // rechaza (p. ej. la entrega requiere NIP), se muestra el error TAL CUAL y
+  // se detiene: nunca se finge un éxito que el backend no confirmó.
+  const simCommittedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!sim.active || !simCommitOrders || !activeOrder) return;
+    const stage = sim.stage;
+    if (stage !== "at_pickup" && stage !== "at_delivery") return;
+    const plan =
+      stage === "at_pickup"
+        ? activeOrder.serviceKind === "mandado"
+          ? ["pickup_arrival", "picked_up"]
+          : []
+        : ["destination_arrival", "delivered"];
+    if (plan.length === 0) return;
+
+    const orderNumber = activeOrder.orderNumber;
+    const key = `${orderNumber}:${stage}`;
+    if (simCommittedRef.current.has(key)) return;
+    simCommittedRef.current.add(key);
+
+    let cancelled = false;
+    void (async () => {
+      for (const action of plan) {
+        const result = await postDriverAction(action, orderNumber);
+        if (cancelled) return;
+        if (!result.ok) {
+          setStageActionError(
+            `Simulador · ${result.error ?? "no se pudo completar la acción."}`
+          );
+          return;
+        }
+      }
+      if (plan[plan.length - 1] === "delivered") {
+        // Snapshot ANTES del refetch: con la entrega confirmada la orden deja
+        // de aparecer en /api/driver/state.
+        setLastDelivered({ order: activeOrder, at: Date.now() });
+      }
+      await refetch();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sim.active, sim.stage, simCommitOrders, activeOrder, postDriverAction, refetch]);
+
   const handleStageAction = useCallback(async (): Promise<boolean> => {
-    // El simulador solo muestra estados; nunca muta el pedido real.
-    if (sim.active) {
+    // Con "Completar pedido real" apagado el simulador solo muestra estados;
+    // nunca muta el pedido real.
+    if (sim.active && !simCommitOrders) {
       setStageActionError("Desactiva el simulador para confirmar la acción real.");
       return false;
     }
@@ -2716,7 +2780,7 @@ export default function DrivePage() {
     } finally {
       setActionLoading(null);
     }
-  }, [activeOrder, orderAction, postDriverAction, refetch, sim.active]);
+  }, [activeOrder, orderAction, postDriverAction, refetch, sim.active, simCommitOrders]);
 
   /**
    * Entrega con NIP (Entrega segura): valida server-side con el mismo gate
@@ -2726,7 +2790,7 @@ export default function DrivePage() {
     async (pin: string): Promise<boolean> => {
       if (!activeOrder) return false;
       setStageActionError(null);
-      if (sim.active) {
+      if (sim.active && !simCommitOrders) {
         setStageActionError("Desactiva el simulador para confirmar la entrega real.");
         return false;
       }
@@ -2755,7 +2819,7 @@ export default function DrivePage() {
         setActionLoading(null);
       }
     },
-    [activeOrder, refetch, sim.active]
+    [activeOrder, refetch, sim.active, simCommitOrders]
   );
 
   /**
@@ -3206,6 +3270,8 @@ export default function DrivePage() {
               onRestart={sim.restart}
               onStop={sim.stop}
               onSpeed={sim.setSpeed}
+              commitOrders={simCommitOrders}
+              onToggleCommit={() => setSimCommitOrders((value) => !value)}
             />
           )}
       </div>        {/* Barra compacta + tarjeta de maniobra (turn-by-turn) — flotan sobre
