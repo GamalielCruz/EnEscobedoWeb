@@ -2717,6 +2717,11 @@ export default function DrivePage() {
         const result = await postDriverAction(action, orderNumber);
         if (cancelled) return;
         if (!result.ok) {
+          // El servidor rechazó la acción real (p. ej. entrega con NIP
+          // expirado): se DETIENE la simulación y se muestra el error tal
+          // cual. Dejar la simulación "completada" pintaría un éxito que el
+          // backend nunca confirmó — el pedido seguiría pendiente.
+          simRef.current.stop();
           setStageActionError(
             `Simulador · ${result.error ?? "no se pudo completar la acción."}`
           );
@@ -2735,6 +2740,13 @@ export default function DrivePage() {
       cancelled = true;
     };
   }, [sim.active, sim.stage, simCommitOrders, activeOrder, postDriverAction, refetch]);
+
+  // Al detener la simulación se limpian las marcas de acciones ya ejecutadas:
+  // un nuevo intento (tras resolver el bloqueo, p. ej. regenerar el NIP) vuelve
+  // a ejecutar las acciones reales en lugar de saltárselas.
+  useEffect(() => {
+    if (!sim.active) simCommittedRef.current.clear();
+  }, [sim.active]);
 
   const handleStageAction = useCallback(async (): Promise<boolean> => {
     // Con "Completar pedido real" apagado el simulador solo muestra estados;
@@ -3011,8 +3023,13 @@ export default function DrivePage() {
     movementSpeedRef.current >= MOVING_SPEED_MPS;
 
   // Confirmación de finalización (unos segundos) o viaje activo.
+  // IMPORTANTE: la pantalla "Entrega completada" del PROPIO simulador solo se
+  // pinta cuando la simulación es solo-vista (toggle apagado). Con
+  // "Completar pedido real" encendido, la única finalización legítima es la
+  // que confirma el SERVIDOR (lastDelivered, tras `delivered` aceptado): si la
+  // entrega real falla (p. ej. NIP expirado) NO se pinta un éxito falso.
   const donePanelVisible =
-    Boolean(lastDelivered) || (sim.active && navPhase === "done");
+    Boolean(lastDelivered) || (sim.active && navPhase === "done" && !simCommitOrders);
   // SERVICIO ACTIVO manda: con orden activa la hoja de viaje SIEMPRE se
   // muestra, aunque la sesión de disponibilidad haya expirado. La UI nunca
   // asume "sin sesión → desconectado" si existe una orden activa.
