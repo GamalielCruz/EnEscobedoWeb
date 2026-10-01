@@ -15,6 +15,7 @@ import {
   DRIVE_MOTION_DURATION,
   DRIVE_MOTION_EASE,
 } from "@/components/drive/motion";
+import { DriveWallet } from "@/components/drive/DriveWallet";
 
 /**
  * HOME DEL REPARTIDOR — pantalla de inicio (SOLO UI/UX, sin lógica).
@@ -26,10 +27,9 @@ import {
  * Contenido:
  * - Encabezado con saludo y el estado de sesión actual.
  * - Acceso de regreso al mapa (y a conectarse, si está fuera de servicio).
- * - Secciones "Notificaciones" y "Wallet" como PLACEHOLDER: solo navegan a
- *   una subpantalla "Próximamente". La función de cada una se construirá
- *   cuando exista el diseño arquitectónico (no hay handlers, ni datos, ni
- *   llamadas a APIs aquí a propósito).
+ * - Sección "Wallet": ganancias y saldo reales (DriveWallet).
+ * - Sección "Notificaciones": PLACEHOLDER (subpantalla "Próximamente") hasta
+ *   que exista su diseño arquitectónico.
  *
  * NAVEGACIÓN INTERNA: las secciones entran deslizándose desde la derecha y
  * siempre tienen "←" de regreso; al cerrar el Home todo vuelve al estado
@@ -201,9 +201,12 @@ export function DriveHome({
                       {s.description}
                     </span>
                   </span>
-                  <span className="mt-auto border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-amber-600">
-                    Próximamente
-                  </span>
+                  {/* Solo las secciones sin función llevan el aviso. */}
+                  {s.id === "notifications" && (
+                    <span className="mt-auto border border-amber-300 bg-amber-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-wide text-amber-600">
+                      Próximamente
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
@@ -240,25 +243,30 @@ export function DriveHome({
                   </h2>
                 </div>
 
-                {/* Placeholder: SOLO diseño, sin datos ni funciones. */}
-                <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-8 pb-16 text-center">
-                  <span className="flex h-16 w-16 items-center justify-center bg-gray-100 text-gray-400">
-                    <activeSection.icon className="h-7 w-7" />
-                  </span>
-                  <p className="mt-5 text-lg font-black text-[#09193B]">
-                    Próximamente
-                  </p>
-                  <p className="mt-2 max-w-xs text-sm font-medium leading-relaxed text-gray-500">
-                    {activeSection.placeholder}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setSection(null)}
-                    className="mt-6 border-2 border-gray-200 px-6 py-3 text-sm font-black text-[#09193B] transition active:bg-gray-50"
-                  >
-                    Volver al inicio
-                  </button>
-                </div>
+                {/* Contenido: Wallet ya tiene función real; el resto sigue
+                    como placeholder hasta tener su diseño. */}
+                {activeSection.id === "wallet" ? (
+                  <DriveWallet />
+                ) : (
+                  <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-8 pb-16 text-center">
+                    <span className="flex h-16 w-16 items-center justify-center bg-gray-100 text-gray-400">
+                      <activeSection.icon className="h-7 w-7" />
+                    </span>
+                    <p className="mt-5 text-lg font-black text-[#09193B]">
+                      Próximamente
+                    </p>
+                    <p className="mt-2 max-w-xs text-sm font-medium leading-relaxed text-gray-500">
+                      {activeSection.placeholder}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setSection(null)}
+                      className="mt-6 border-2 border-gray-200 px-6 py-3 text-sm font-black text-[#09193B] transition active:bg-gray-50"
+                    >
+                      Volver al inicio
+                    </button>
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
