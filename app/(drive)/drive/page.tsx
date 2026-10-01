@@ -2748,6 +2748,27 @@ export default function DrivePage() {
     if (!sim.active) simCommittedRef.current.clear();
   }, [sim.active]);
 
+  // Con "Completar pedido real" encendido, llegar a "done" con el pedido AÚN
+  // activo significa que la entrega real no se confirmó (p. ej. NIP rechazado):
+  // se detiene la simulación para no dejar una pantalla de viaje "completado"
+  // que el servidor nunca aprobó. Si la entrega sí se confirmó, la orden
+  // desaparece y el simulador se detiene solo.
+  useEffect(() => {
+    if (sim.active && sim.stage === "done" && simCommitOrders) {
+      simRef.current.stop();
+    }
+  }, [sim.active, sim.stage, simCommitOrders]);
+
+  // Cerrar la confirmación de finalización y volver a la pantalla de espera (o
+  // a la siguiente oferta) sin esperar los 60 s automáticos. Si el simulador
+  // terminó su viaje, también se detiene: su estado "completado" no debe
+  // quedarse pegado sobre el mapa.
+  const dismissDonePanel = useCallback(() => {
+    setLastDelivered(null);
+    const current = simRef.current;
+    if (current.active && current.stage === "done") current.stop();
+  }, []);
+
   const handleStageAction = useCallback(async (): Promise<boolean> => {
     // Con "Completar pedido real" apagado el simulador solo muestra estados;
     // nunca muta el pedido real.
@@ -3366,6 +3387,15 @@ export default function DrivePage() {
                 onPrimaryAction={async () => true}
                 onPinSubmit={async () => false}
               />
+              {/* Salida explícita: sin esto la tarjeta solo se iba sola a los
+                  60 s o al llegar una oferta nueva. */}
+              <button
+                type="button"
+                onClick={dismissDonePanel}
+                className="mt-3 w-full border-2 border-gray-200 py-3.5 text-sm font-black uppercase tracking-wide text-[#09193B] transition active:bg-gray-50"
+              >
+                Listo, esperar otro viaje
+              </button>
             </div>
           </div>
         ) : orders.length > 0 ? (

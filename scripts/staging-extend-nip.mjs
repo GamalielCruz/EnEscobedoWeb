@@ -2,6 +2,7 @@
 // el código sigue siendo válido, solo hay que extender su vencimiento.
 //   node --env-file=.env.local scripts/staging-extend-nip.mjs list [folioCorto]
 //   node --env-file=.env.local scripts/staging-extend-nip.mjs extend <_id> [horas]
+//   node --env-file=.env.local scripts/staging-extend-nip.mjs disable-pin <_id>
 // `list` busca por FOLIO CORTO (el # de 6 dígitos que muestra Drive), que no es
 // el orderNumber. Guarda dura: SOLO opera sobre el dataset "test" (staging).
 
@@ -90,7 +91,33 @@ if (cmd === "list") {
       `   ahora: ${newExpiry}  (+${hours} h)\n` +
       `   El código existente vuelve a ser válido: no se regeneró el hash.`
   );
+} else if (cmd === "disable-pin") {
+  // Los pedidos de prueba migrados traen Entrega segura (NIP) activada, así que
+  // NINGUNA entrega puede completarse (markDelivered exige el código y su TTL
+  // de 24 h suele estar vencido). Para probar el viaje completo y ver la
+  // ganancia en el Wallet, se apaga la Entrega segura de ese pedido.
+  if (!arg) {
+    console.error("Falta el _id del pedido.");
+    process.exit(1);
+  }
+  const before = await query(
+    `*[_id == ${JSON.stringify(arg)}][0]{orderNumber, deliveryVerificationMethod, deliveryVerificationStatus, dispatchStatus}`
+  );
+  if (!before) {
+    console.error("El pedido no existe.");
+    process.exit(1);
+  }
+  await patch(arg, {
+    deliveryVerificationMethod: "not_required",
+    deliveryVerificationStatus: "not_required",
+  });
+  console.log(
+    `#${shortOrderCode(before.orderNumber)} (${arg})\n` +
+      `   antes: metodo=${before.deliveryVerificationMethod} estado=${before.deliveryVerificationStatus}\n` +
+      `   ahora: metodo=not_required estado=not_required (dispatch=${before.dispatchStatus})\n` +
+      `   La entrega ya no exige código: el simulador puede completar el viaje.`
+  );
 } else {
-  console.error("Uso: list [folioCorto] | extend <_id> [horas]");
+  console.error("Uso: list [folioCorto] | extend <_id> [horas] | disable-pin <_id>");
   process.exit(1);
 }
