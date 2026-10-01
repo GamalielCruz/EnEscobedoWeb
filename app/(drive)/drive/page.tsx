@@ -1028,7 +1028,14 @@ export default function DrivePage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ orderNumber: pendingOffer.orderNumber, offerId: pendingOffer.offerId }),
     })
-      .then(() => refetch())
+      .then((res) => {
+        // Fail-closed: si el servidor rechaza el ACK (409 conflicto, 500, etc.),
+        // la oferta sigue en pending_delivery y DEBE reintentarse en el próximo
+        // ciclo de polling; marcarla como "ackeada" dejaría la oferta sin
+        // activar y el card sin temporizador para siempre.
+        if (!res.ok) ackedOfferRef.current = null;
+        return refetch();
+      })
       .catch(() => {
         // Permite reintentar en el siguiente ciclo de polling.
         ackedOfferRef.current = null;
@@ -2883,6 +2890,21 @@ export default function DrivePage() {
   const orders = state?.orders ?? [];
   const offer = state?.offer ?? null;
 
+  // ── Gate fail-closed de la oferta (all-or-nothing) ────────────────
+  // La tarjeta se muestra SOLO si el servidor confirmó la presentación
+  // (offerStatus "active" ⇒ deadline de 14 s ya fijado) y el deadline es un
+  // timestamp parseable: así el temporizador mostrado SIEMPRE es el correcto.
+  // Cualquier otro caso (pending_delivery, sin deadline, fecha corrupta) NO
+  // renderiza nada: ni "Preparando…", ni spinner, ni un contador inventado.
+  // Mientras el ACK viaja (~1 ciclo de polling) el repartidor ve el estado de
+  // reposo, nunca un estado intermedio mentiroso.
+  const offerRenderable =
+    offer !== null &&
+    offer.offerStatus === "active" &&
+    typeof offer.offerExpiresAt === "string" &&
+    offer.offerExpiresAt.length > 0 &&
+    Number.isFinite(new Date(offer.offerExpiresAt).getTime());
+
   // ── TU RUTA: datos derivados (sin hooks) ──────────────────────────
   // Paradas de "Tu ruta": máx. 2. La actual (Recoger/Entregar, "Ahora") y,
   // solo si existe un siguiente servicio asignado, la futura ("Después").
@@ -3342,8 +3364,10 @@ export default function DrivePage() {
                 </div>
               )}
 
-              {/* Connected → Offer */}
-              {connected && offer && (
+              {/* Connected → Offer. Gate fail-closed: solo se pinta con el
+                  temporizador oficial (active + deadline válido); mientras la
+                  oferta está en pending_delivery NO se muestra nada. */}
+              {connected && offerRenderable && offer && (
                 <OfferCard
                   offer={offer}
                   loading={!!actionLoading?.startsWith("offer-")}
@@ -3355,7 +3379,7 @@ export default function DrivePage() {
               {/* Connected → No orders, no offer: estado claro arriba
                   (Disponible / Recibiendo pedidos) y UNA acción: dejar de
                   recibir pedidos (= terminar la sesión, sin orden activa). */}
-              {connected && orders.length === 0 && !offer && (
+              {connected && orders.length === 0 && !offerRenderable && (
                 <div className="py-6 text-center">
                   {/* Solo UI/UX: acceso al Home del repartidor. */}
                   <button
@@ -3570,14 +3594,17 @@ function OfferCard({
   // oferta (offerId + expiresAt). Mientras el polling reciba la MISMA oferta,
   // el deadline no cambia y el temporizador continúa: nunca se reinicia a 15 s
   // por una respuesta nueva.
-  const isPending = offer.offerStatus === "pending_delivery";
+  //
+  // Gate fail-closed (ver offerRenderable en la página): esta tarjeta SOLO se
+  // monta con offerStatus "active" y deadline válido — el estado intermedio
+  // "Preparando…" (pending_delivery) ya no existe en la UI.
   const offerKey = `${offer.offerId ?? offer.orderNumber}|${offer.offerExpiresAt}`;
   const deadlineRef = useRef<{ key: string; at: number } | null>(null);
 
   const [timeLeft, setTimeLeft] = useState(0);
 
   useEffect(() => {
-    if (isPending || !offer.offerExpiresAt) {
+    if (!offer.offerExpiresAt) {
       deadlineRef.current = null;
       setTimeLeft(0);
       return;
@@ -3602,13 +3629,13 @@ function OfferCard({
     // Depende del deadline derivado (offerId + expiresAt), nunca del `serverNow`
     // que cambia en cada polling: el tick no se reinicia.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPending, offerKey]);
+  }, [offerKey]);
 
   const timeLabel =
     timeLeft >= 60
       ? `${Math.floor(timeLeft / 60)}:${String(timeLeft % 60).padStart(2, "0")}`
       : `${timeLeft}s`;
-  const urgent = !isPending && timeLeft <= 5;
+  const urgent = timeLeft <= 5;
 
   return (
     <motion.div
@@ -3623,20 +3650,13 @@ function OfferCard({
           Nueva oferta
         </span>
         <div className="flex items-center gap-2">
-          {isPending ? (
-            <span className="flex items-center gap-1 text-xs font-bold text-amber-600">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              Preparando…
-            </span>
-          ) : (
-            <span
-              className={`text-xs font-black tabular-nums ${
-                urgent ? "text-red-500" : "text-amber-600"
-              }`}
-            >
-              {timeLabel}
-            </span>
-          )}
+          <span
+            className={`text-xs font-black tabular-nums ${
+              urgent ? "text-red-500" : "text-amber-600"
+            }`}
+          >
+            {timeLabel}
+          </span>
           <button
             onClick={onReject}
             disabled={loading}
