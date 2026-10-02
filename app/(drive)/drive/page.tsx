@@ -2946,6 +2946,11 @@ export default function DrivePage() {
           setStageActionError(data?.error ?? "No se pudo confirmar la entrega.");
           return false;
         }
+        // Snapshot ANTES del refetch: con la entrega confirmada la orden deja
+        // de aparecer en /api/driver/state. Sin esto, la entrega CON NIP
+        // (mandados con Entrega segura) nunca mostraba el panel de
+        // finalización ni la evaluación del cliente.
+        setLastDelivered({ order: activeOrder, at: Date.now() });
         await refetch();
         return true;
       } catch {
