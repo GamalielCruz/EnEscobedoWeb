@@ -276,6 +276,12 @@ export function useDriveSimulator({
     cancelAnimation();
     lastEmittedPosRef.current = null;
     setRunning(true);
+    // Reanudar estando DETENIDO en un punto: la pausa canceló el hold
+    // pendiente, así que se reprograma. Sin esto la simulación queda varada
+    // en la etapa para siempre (el loop de movimiento solo corre en los
+    // tramos "camino a…").
+    if (stageRef.current === "at_pickup") scheduleHold("to_delivery");
+    else if (stageRef.current === "at_delivery") scheduleHold("done");
     console.log("[SIM STATE CHANGE]", {
       action: "resume",
       active,
@@ -286,7 +292,7 @@ export function useDriveSimulator({
       simHeading,
       location: simLocation,
     });
-  }, [active, cancelAnimation, running, stage, simHeading, simLocation]);
+  }, [active, cancelAnimation, scheduleHold, running, stage, simHeading, simLocation]);
 
   const restart = useCallback(() => {
     if (!active || !startOriginRef.current) return;
@@ -299,6 +305,80 @@ export function useDriveSimulator({
     goToStage("to_pickup", true);
     setRunning(true);
   }, [active, cancelAnimation, goToStage]);
+
+  // ── SALTOS RÁPIDOS (solo dev/staging, para pruebas) ──────────────
+  // Colocan la simulación en un punto del viaje sin recorrerlo. Por sí
+  // mismos NO tocan el pedido real: si "Completar pedido real" está
+  // encendido, el efecto de acciones de la página ejecuta lo que corresponda
+  // a la etapa alcanzada.
+
+  const activateIfNeeded = useCallback(() => {
+    if (active) return true;
+    if (!canStart || !origin || !pickup || !delivery) return false;
+    cancelAnimation();
+    startOriginRef.current = origin;
+    progressRef.current = 0;
+    arrivalHandledRef.current = false;
+    lastEmittedPosRef.current = null;
+    routeLengthRef.current = null;
+    setActive(true);
+    return true;
+  }, [active, canStart, origin, pickup, delivery, cancelAnimation]);
+
+  /** Salta a "en el punto de recolección": dispara las acciones reales de
+   *  recogida (si aplica) y el hold avanza solo a "camino a entrega". */
+  const skipToPickup = useCallback(() => {
+    if (!activateIfNeeded() || !pickup) return;
+    cancelAnimation();
+    progressRef.current = 0;
+    arrivalHandledRef.current = false;
+    lastEmittedPosRef.current = null;
+    routeLengthRef.current = null;
+    setSimLocation(pickup);
+    setRunning(true);
+    goToStage("at_pickup", true);
+    scheduleHold("to_delivery");
+  }, [activateIfNeeded, pickup, cancelAnimation, goToStage, scheduleHold]);
+
+  /** Salta a "en el destino": dispara las acciones reales de entrega
+   *  (llegada + entregado) y el hold cierra el viaje. */
+  const skipToDelivery = useCallback(() => {
+    if (!activateIfNeeded() || !delivery) return;
+    cancelAnimation();
+    progressRef.current = 0;
+    arrivalHandledRef.current = false;
+    lastEmittedPosRef.current = null;
+    routeLengthRef.current = null;
+    setSimLocation(delivery);
+    setRunning(true);
+    goToStage("at_delivery", true);
+    scheduleHold("done");
+  }, [activateIfNeeded, delivery, cancelAnimation, goToStage, scheduleHold]);
+
+  /** Avanza la posición al tramo final del segmento actual: deja solo
+   *  `remainingMeters` (por defecto 1 km) y reanuda para recorrerlo. */
+  const jumpNearDestination = useCallback(
+    (remainingMeters = 1000) => {
+      if (!active) return;
+      const s = stageRef.current;
+      if (s !== "to_pickup" && s !== "to_delivery") return;
+      const target = targetForStage(s);
+      const r =
+        target && routeTargets(routeRef.current, target) ? routeRef.current : null;
+      if (!r || r.path.length < 2) return;
+      cancelAnimation();
+      const total = pathLengthMeters(r.path);
+      const next = Math.max(0, total - Math.max(0, remainingMeters));
+      progressRef.current = next;
+      const point = pointAtDistance(r.path, next);
+      lastEmittedPosRef.current = point;
+      routeLengthRef.current = { route: r, total };
+      arrivalHandledRef.current = false;
+      setSimLocation(point);
+      setRunning(true);
+    },
+    [active, targetForStage, cancelAnimation]
+  );
 
   const stop = useCallback(() => {
     console.log("[SIM STOP CALLED]", {
@@ -370,5 +450,11 @@ export function useDriveSimulator({
     resume,
     restart,
     stop,
+    /** Salta a la llegada a recolección (pruebas rápidas). */
+    skipToPickup,
+    /** Salta a la llegada al destino (pruebas rápidas). */
+    skipToDelivery,
+    /** Deja el tramo actual a `remainingMeters` del punto (por defecto 1 km). */
+    jumpNearDestination,
   };
 }

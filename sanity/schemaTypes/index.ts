@@ -22,6 +22,7 @@ import { commercialAuditType } from './commercialAuditType';
 import { commercialCommissionUsageType } from './commercialCommissionUsageType';
 import { dispatchConfigType } from './dispatchConfigType';
 import { dispatchAuditType } from './dispatchAuditType';
+import { orderRatingType } from './orderRatingType';
 
 export const schema: { types: SchemaTypeDefinition[] } = {
   types: [
@@ -46,6 +47,7 @@ export const schema: { types: SchemaTypeDefinition[] } = {
     commercialAuditType,
     commercialCommissionUsageType,
     dispatchConfigType,
-    dispatchAuditType
+    dispatchAuditType,
+    orderRatingType
   ],
 };

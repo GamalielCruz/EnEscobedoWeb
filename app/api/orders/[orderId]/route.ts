@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { client, writeClient } from "@/sanity/lib/client";
+import { writeClient } from "@/sanity/lib/client";
+import { backendClient } from "@/sanity/lib/backendClient";
 import {
   buildStateFields,
   DispatchStatusValue,
@@ -22,7 +23,11 @@ export const dynamic = "force-dynamic";
 // ── Proyección mínima de solo lectura ────────────────────────────────────
 // Nunca exponer datos operativos internos (ofertas, offeredTo, NIP, teléfonos
 // del repartidor). Solo lo que la pantalla de tracking necesita mostrar.
-const TRACKING_QUERY = `*[_type == "order" && (_id == $orderNumber || orderNumber == $orderNumber) && clerkUserId == $userId][0]{
+// Lectura SIN CDN: un pedido recién creado (p. ej. pago con TARJETA, cuya
+// orden nace en /api/checkout/confirm) debe aparecer de inmediato en el
+// seguimiento; el CDN puede servirlo con retraso y romper la pantalla de
+// espera durante los primeros segundos.
+const TRACKING_QUERY = `*[_type == "order" && !(_id in path('drafts.**')) && (_id == $orderNumber || orderNumber == $orderNumber) && clerkUserId == $userId][0]{
   _id,
   orderNumber,
   orderType,
@@ -146,7 +151,7 @@ export async function GET(
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
 
-  const order = await client.fetch<TrackingDoc | null>(TRACKING_QUERY, {
+  const order = await backendClient.fetch<TrackingDoc | null>(TRACKING_QUERY, {
     orderNumber: orderId,
     userId,
   });
@@ -186,7 +191,7 @@ export async function DELETE(
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
 
-  const order = await client.fetch<TrackingDoc | null>(TRACKING_QUERY, {
+  const order = await backendClient.fetch<TrackingDoc | null>(TRACKING_QUERY, {
     orderNumber: orderId,
     userId,
   });

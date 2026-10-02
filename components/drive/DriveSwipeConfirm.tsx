@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { animate, motion, useMotionValue, useTransform } from "framer-motion";
+import { animate, motion, useDragControls, useMotionValue, useTransform } from "framer-motion";
 import { ArrowRight, CheckCircle2, Loader2 } from "lucide-react";
 
 /**
@@ -59,6 +59,10 @@ export function DriveSwipeConfirm({
   const lastTickRef = useRef(0);
   const [state, setState] = useState<SwipeState>("idle");
 
+  // El arrastre se inicia desde TODA la barra (no solo el thumb): el gesto
+  // natural es deslizar sobre el control, no apuntar a los 48 px del thumb.
+  const dragControls = useDragControls();
+
   const x = useMotionValue(0);
 
   /** Recorrido máximo del thumb (ancho del track − ancho del thumb − inset). */
@@ -103,7 +107,12 @@ export function DriveSwipeConfirm({
   return (
     <div
       ref={trackRef}
-      className="relative h-14 select-none overflow-hidden bg-[#09193B]"
+      onPointerDown={(event) => {
+        // Sin dragListener en el thumb: el pointerdown de CUALQUIER punto de la
+        // barra arranca el arrastre (comportamiento estándar de swipe-to-confirm).
+        if (state === "idle") dragControls.start(event);
+      }}
+      className="relative h-14 cursor-grab select-none overflow-hidden bg-[#09193B] active:cursor-grabbing"
       style={{ touchAction: "pan-y" }}
     >
       {/* Relleno de progreso: color principal de ElMenu */}
@@ -126,6 +135,8 @@ export function DriveSwipeConfirm({
           constraints del track limitan el recorrido a [0, maxX]) */}
       <motion.div
         drag={state === "idle" ? "x" : false}
+        dragControls={dragControls}
+        dragListener={false}
         dragConstraints={trackRef}
         dragElastic={0}
         dragMomentum={false}
@@ -148,8 +159,7 @@ export function DriveSwipeConfirm({
             animate(x, 0, { type: "spring", stiffness: 400, damping: 35 });
           }
         }}
-        onPointerDownCapture={(e) => e.stopPropagation()}
-        className="absolute bottom-1 left-1 top-1 flex w-12 cursor-grab items-center justify-center bg-white shadow-md ring-1 ring-black/5 active:cursor-grabbing"
+        className="pointer-events-none absolute bottom-1 left-1 top-1 flex w-12 items-center justify-center bg-white shadow-md ring-1 ring-black/5"
         role="button"
         tabIndex={0}
         aria-label={state === "done" ? successLabel : label}

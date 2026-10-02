@@ -9,12 +9,24 @@
 //
 // Regla de negocio v1: un servicio se cuenta como GANADO cuando el
 // pedido quedó ENTREGADO (status "delivered", con deliveredAt). Los
-// pedidos cancelled/refunded nunca cuentan. `settlementStatus`
-// "settled" marca lo YA PAGADO (retirado/liquidado); el resto del
-// total ganado es "disponible" para retiro. Nota: para pagos en
-// efectivo la conciliación real es neta (el driver recogió el total y
-// ElMenu le debe solo su fee); eso se resuelve en el settlement — la
-// vista muestra siempre su fee por servicio.
+// pedidos cancelled/refunded nunca cuentan.
+//
+// QUIÉN TIENE EL DINERO (esto decide qué está "disponible"):
+//  - EFECTIVO RECIBIDO POR EL REPARTIDOR (`cashCollectedBy` =
+//    community_driver | store_driver): el repartidor cobró el total al
+//    cliente y ya tiene su parte en la mano; ElMenu NO le debe su fee. Se
+//    cuenta como YA PAGADO (y no entra en "disponible").
+//  - PAGO EN LÍNEA/TARJETA (stripe, card_at_store…): el dinero entró a
+//    ElMenu, así que el fee del repartidor queda PENDIENTE y es lo que se
+//    acumula en la billetera para pagarle.
+//  - EFECTIVO COBRADO POR LA TIENDA (`cashCollectedBy` = "store"): el
+//    repartidor no recibió nada → su fee queda pendiente.
+//  - `settlementStatus` "settled" siempre cuenta como pagado (liquidación
+//    formal, por transferencia o por conciliación de efectivo).
+//
+// Mismo criterio que el panel de finanzas (lib/admin-finance.ts separa
+// `driverCollectedCash` de `storeCollectedCash`): aquí solo cambia que el
+// wallet del repartidor muestra SU fee, no el total cobrado.
 //
 // Este módulo es PURO para poder probarse con
 // `node --experimental-strip-types --test`.
@@ -33,6 +45,13 @@ export type WalletOrderInput = {
   settlementStatus?: string | null;
   orderStatus?: string | null;
   status?: string | null;
+  /** Cómo paga el cliente (cash_on_delivery | cash_at_store | stripe…). */
+  paymentMethod?: string | null;
+  /**
+   * Quién recibió el EFECTIVO físicamente. Valores del esquema de la orden:
+   * "store" | "community_driver" | "store_driver" | "admin" | "none".
+   */
+  cashCollectedBy?: string | null;
 };
 
 export type WalletDeliveryDTO = {
@@ -46,8 +65,13 @@ export type WalletDeliveryDTO = {
   placeLabel: string;
   /** Ganancia neta del repartidor por este servicio (MXN). */
   payout: number;
-  /** true ⇔ ya liquidado/pagado (settlementStatus "settled"). */
+  /**
+   * true ⇔ este dinero YA está resuelto a favor del repartidor: lo cobró en
+   * efectivo (lo tiene en la mano) o el servicio ya fue liquidado.
+   */
   settled: boolean;
+  /** true ⇔ el repartidor cobró el EFECTIVO de este servicio. */
+  paidInCash: boolean;
 };
 
 export type WalletSummary = {
@@ -59,9 +83,12 @@ export type WalletSummary = {
   week: number;
   /** Total histórico ganado (entregado, no cancelado/reembolsado). */
   totalEarned: number;
-  /** Parte del total ya liquidada (settlementStatus "settled"). */
+  /**
+   * Parte del total YA en manos del repartidor: efectivo que cobró él mismo o
+   * servicios liquidados (settlementStatus "settled").
+   */
   totalSettled: number;
-  /** totalEarned − totalSettled: disponible para retiro. */
+  /** totalEarned − totalSettled: lo que ElMenu todavía le debe. */
   available: number;
 };
 
@@ -85,6 +112,25 @@ function shortFolio(orderNumber: string): string {
   }
   hash = hash >>> 0;
   return String(100_000 + (hash % 900_000));
+}
+
+/** Cobros en efectivo que dejan el dinero EN MANOS DEL REPARTIDOR. */
+const CASH_COLLECTED_BY_DRIVER = new Set(["community_driver", "store_driver"]);
+
+/**
+ * ¿El repartidor ya tiene su parte en la mano por haber cobrado el efectivo?
+ *
+ * Legado sin `cashCollectedBy` (pedidos anteriores al campo): un cobro contra
+ * entrega lo recibe físicamente quien entrega, así que se asume el repartidor.
+ * Es seguro porque `resolveCashCollectedBy` (lib/payment.ts) mapea
+ * cash_on_delivery → community_driver/store_driver, nunca "store".
+ */
+function isPayoutInDriverHands(order: WalletOrderInput): boolean {
+  const collectedBy = String(order.cashCollectedBy ?? "");
+  if (CASH_COLLECTED_BY_DRIVER.has(collectedBy)) return true;
+  return (
+    collectedBy === "" && String(order.paymentMethod ?? "") === "cash_on_delivery"
+  );
 }
 
 function isDelivered(order: WalletOrderInput): boolean {
@@ -121,7 +167,8 @@ export function buildDriverWallet(
     if (!isDelivered(order)) continue;
     const payout = money(order.driverPayout ?? 0);
     const deliveredMs = new Date(order.deliveredAt!).getTime();
-    const settled = order.settlementStatus === "settled";
+    const paidInCash = isPayoutInDriverHands(order);
+    const settled = paidInCash || order.settlementStatus === "settled";
 
     summary.totalEarned = money(summary.totalEarned + payout);
     if (settled) summary.totalSettled = money(summary.totalSettled + payout);
@@ -142,6 +189,7 @@ export function buildDriverWallet(
         "Servicio",
       payout,
       settled,
+      paidInCash,
     });
   }
 

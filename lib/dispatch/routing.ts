@@ -54,6 +54,16 @@ const ROUTE_REUSE_METERS = 200;
 const ROUTE_TIMEOUT_MS = 6_000;
 const MAX_CACHE_ENTRIES = 4;
 
+/**
+ * Motivo del ÚLTIMO fallo de routing, para diagnóstico (panel dev del
+ * repartidor). No afecta la lógica: es solo texto legible.
+ */
+let lastErrorReason: string | null = null;
+
+export function getLastRoutingError(): string | null {
+  return lastErrorReason;
+}
+
 type CachedRoute = {
   origin: RoutePoint;
   destination: RoutePoint;
@@ -251,6 +261,7 @@ function requestDirections(origin: RoutePoint, destination: RoutePoint): Promise
     const timer = window.setTimeout(() => {
       if (!settled) {
         settled = true;
+        lastErrorReason = "timeout";
         resolve(null);
       }
     }, ROUTE_TIMEOUT_MS);
@@ -277,6 +288,7 @@ function requestDirections(origin: RoutePoint, destination: RoutePoint): Promise
           const leg = route?.legs?.[0];
           const path = route?.overview_path;
           if (status !== "OK" || !Array.isArray(path) || path.length < 2) {
+            lastErrorReason = status !== "OK" ? String(status) : "empty_path";
             if (status !== "OK") {
               // Diagnóstico: la causa más común es que la Directions API no esté
               // habilitada para la clave NEXT_PUBLIC_GOOGLE_MAPS_API_KEY.
@@ -288,6 +300,7 @@ function requestDirections(origin: RoutePoint, destination: RoutePoint): Promise
             return;
           }
 
+          lastErrorReason = null;
           resolve({
             path: path.map((point) => ({ lat: point.lat(), lng: point.lng() })),
             distanceMeters: leg?.distance?.value ?? null,
@@ -316,6 +329,7 @@ function requestDirections(origin: RoutePoint, destination: RoutePoint): Promise
     } catch {
       if (!settled) {
         settled = true;
+        lastErrorReason = "directions_unavailable";
         window.clearTimeout(timer);
         resolve(null);
       }
@@ -359,7 +373,10 @@ export async function getRoadRoute(
   destination: RoutePoint,
   force = false
 ): Promise<RoadRoute | null> {
-  if (!isLoaded()) return null;
+  if (!isLoaded()) {
+    lastErrorReason = "maps_api_unavailable";
+    return null;
+  }
 
   // Caché: mismo destino y origen sin moverse más que el umbral → reutilizar
   // sin llamar a la API (las actualizaciones de GPS frecuentes caen aquí).

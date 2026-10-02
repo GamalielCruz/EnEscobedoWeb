@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useOrderTracking } from "@/hooks/useOrderTracking";
 import type { CustomerTrackingPhase } from "@/lib/order-tracking";
+import { RatingSection } from "@/components/ratings/RatingSection";
 
 // ────────────────────────────────────────────────────────────────────
 // Pantalla de seguimiento del pedido (experiencia del cliente, estilo Uber).
@@ -383,6 +384,15 @@ export default function OrderTrackingScreen({ orderNumber }: { orderNumber: stri
             </div>
           )}
         </div>
+
+        {/* ── Evaluación del repartidor (solo al entregar) ── */}
+        {phase === "delivered" && (
+          <RatingSection
+            orderNumber={state.orderNumber}
+            role="customer"
+            endpoint={`/api/orders/${encodeURIComponent(state.orderNumber)}/rating`}
+          />
+        )}
 
         {/* ── Acciones discretas ── */}
         <div className="space-y-2">

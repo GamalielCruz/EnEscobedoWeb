@@ -26,6 +26,7 @@ import { DriveCancelOrderSheet } from "@/components/drive/DriveCancelOrderSheet"
 import { DriveHome } from "@/components/drive/DriveHome";
 import { DriveOrderDetails } from "@/components/drive/DriveOrderDetails";
 import { DriveSimPanel } from "@/components/drive/DriveSimPanel";
+import { RatingSection } from "@/components/ratings/RatingSection";
 import {
   getDestinationPinVariants,
   resetDestinationPins,
@@ -44,6 +45,7 @@ import { shortOrderCode, shortAddress } from "@/lib/dispatch/dispatch-format";
 import {
   bearingBetween,
   distanceToPathMeters,
+  getLastRoutingError,
   getRoadRoute,
   headingAlongPath,
   haversineMeters,
@@ -150,6 +152,10 @@ const INTERNAL_ZOOM_GUARD_MS = 900;
 const NEXT_MANEUVER_METERS = 120;
 // Mostrar "Estás llegando" cuando quede menos que esto para el destino.
 const NEAR_DESTINATION_METERS = 150;
+// Enfriamiento entre reintentos de ruta durante la SIMULACIÓN (si la primera
+// petición a Directions falla). Evita repetir la llamada en cada frame sin
+// dejar la simulación pegada para siempre.
+const SIM_ROUTE_RETRY_MS = 5_000;
 
 // ── OFFER_ROUTE_PREVIEW ─────────────────────────────────────────────
 // Preview TEMPORAL del recorrido completo del servicio (pickup → destino)
@@ -349,6 +355,37 @@ function getRestaurantAction(order: DriverOrder): { label: string; action: strin
     default:
       return { label: "VER PEDIDO", action: "view", icon: <Package className="h-4 w-4" /> };
   }
+}
+
+/**
+ * Plan de acciones REALES que ejecuta el SIMULADOR al llegar a un punto,
+ * derivado del estado REAL del pedido (no de la etapa simulada).
+ *
+ * Motivo: la simulación siempre arranca en "camino a recolección", pero el
+ * pedido puede estar más adelante (p. ej. un mandado ya recogido, en
+ * "en_route"). Si el plan repitiera "pickup_arrival" el servidor lo
+ * rechazaría con "Acción no válida en estado "en_route". Aquí solo se piden
+ * las transiciones que faltan, igual que haría el repartidor real.
+ */
+function simActionPlanFor(order: DriverOrder, stage: "at_pickup" | "at_delivery"): string[] {
+  const isMandado = order.serviceKind === "mandado";
+  const mandadoState = order.mandadoState;
+
+  if (stage === "at_pickup") {
+    // Restaurante: la recolección es navegación pura, sin acción de servidor.
+    if (!isMandado) return [];
+    if (mandadoState === "assigned") return ["pickup_arrival", "picked_up"];
+    if (mandadoState === "pickup_arrival") return ["picked_up"];
+    return []; // Ya recogido (en_route o posterior): nada que hacer.
+  }
+
+  if (isMandado) {
+    if (mandadoState === "en_route") return ["destination_arrival", "delivered"];
+    if (mandadoState === "destination_arrival") return ["delivered"];
+    return [];
+  }
+  if (order.dispatchStatus === "at_door") return ["delivered"];
+  return ["destination_arrival", "delivered"];
 }
 
 /**
@@ -965,18 +1002,25 @@ export default function DrivePage() {
   const [lastDelivered, setLastDelivered] = useState<{ order: DriverOrder; at: number } | null>(
     null
   );
+  // Mientras el repartidor evalúa al cliente, el panel no se autocierra: sería
+  // absurdo que el formulario desapareciera a mitad de la captura.
+  const [ratingEngaged, setRatingEngaged] = useState(false);
 
   // La confirmación de finalización se descarga sola: vuelve el panel de
   // espera (o la siguiente oferta) sin acción del repartidor.
   useEffect(() => {
-    if (!lastDelivered) return;
+    if (!lastDelivered || ratingEngaged) return;
     const t = setTimeout(() => setLastDelivered(null), 60_000);
     return () => clearTimeout(t);
-  }, [lastDelivered]);
+  }, [lastDelivered, ratingEngaged]);
   // Una oferta nueva manda sobre la confirmación de finalización.
   useEffect(() => {
     if (state?.offer) setLastDelivered(null);
   }, [state?.offer]);
+  // Al cambiar de pedido completado, reiniciamos el estado de evaluación.
+  useEffect(() => {
+    if (!lastDelivered) setRatingEngaged(false);
+  }, [lastDelivered]);
 
   // ── Sound alert for new offers ──────────────────────────────
   const { notifyOfferChange, stopAlertImmediate, resetAction } = useOfferAlertSound();
@@ -1100,6 +1144,12 @@ export default function DrivePage() {
   // dibuja ninguna línea (nunca una línea recta entre los dos puntos).
   const [roadRoute, setRoadRoute] = useState<RoadRoute | null>(null);
   const prevNavKeyRef = useRef<string | null>(null);
+  /** Último destino para el que el SIMULADOR ya pidió la ruta (ver más abajo). */
+  const simRouteKeyRef = useRef<string | null>(null);
+  /** Antes de este instante no se reintenta la ruta de la simulación. */
+  const simRouteRetryAtRef = useRef(0);
+  /** Motivo del último fallo de ruta durante la simulación (solo diagnóstico). */
+  const [simRouteDiag, setSimRouteDiag] = useState<string | null>(null);
 
   // ── Simulador de viaje (SOLO dev/staging) ───────────────────────
   // Todo en estado local: entrega una posición simulada y una etapa override
@@ -1150,8 +1200,10 @@ export default function DrivePage() {
     return sim.simHeading;
   }, [sim.active, sim.simHeading]);
 
-  // Solo pedir ruta cuando hay una ubicación del repartidor (GPS real o
-  // simulada); si no hay ninguna, no se dibuja ruta desde el centro del mapa.
+  // Ubicación del repartidor disponible en el mapa (GPS real o simulada).
+  // OJO: durante la simulación esto pasa a true recién cuando la ruta ya
+  // llegó y el marcador avanzó, por lo que NO sirve como condición para
+  // pedir la ruta simulada (ver el efecto de ruta más abajo).
   const driverHasLocation = sim.active ? Boolean(sim.simLocation) : realLocation !== null;
 
   // Destination según la etapa que la simulación está mostrando (permite
@@ -1180,13 +1232,47 @@ export default function DrivePage() {
       // ruta anterior para no dibujarla durante el tramo equivocado.
       setRoadRoute(null);
       prevNavKeyRef.current = navKey;
+      simRouteKeyRef.current = null;
     }
-    if (!navTarget || !mapsLoaded || !driverHasLocation) {
+    if (!navTarget || !mapsLoaded) {
       return;
     }
-    // Mientras el simulador avanza sobre una ruta que YA corresponde al
-    // destino actual, no recalcular en cada frame de la simulación.
-    if (sim.active && routeTargets(roadRoute, navTarget)) return;
+
+    // ── SIMULACIÓN ──
+    // Dos diferencias deliberadas frente al GPS real:
+    //  1. El origen es el punto de partida del viaje, NO la ubicación
+    //     efectiva: la posición simulada nace justamente al avanzar por la
+    //     ruta, así que exigirla aquí era un bloqueo mutuo (sin ruta no hay
+    //     posición simulada; sin posición simulada no se pedía la ruta). El
+    //     síntoma era "Esperando ruta de Google…" para siempre.
+    //  2. Se pide UNA vez por destino y SIN cancelar: `currentLocation` cambia
+    //     en cada frame y el cleanup cancelaba la petición en vuelo antes de
+    //     que Google respondiera.
+    if (sim.active) {
+      const simOrigin = sim.simLocation ?? realLocation;
+      if (!simOrigin) return;
+      if (routeTargets(roadRoute, navTarget)) return;
+      if (simRouteKeyRef.current === navKey && Date.now() < simRouteRetryAtRef.current) {
+        return;
+      }
+      simRouteKeyRef.current = navKey;
+      simRouteRetryAtRef.current = Date.now() + SIM_ROUTE_RETRY_MS;
+      getRoadRoute(simOrigin, navTarget).then((route) => {
+        // Si falla se reintenta tras el enfriamiento (getRoadRoute ya evita
+        // castigar la API mientras el fallo esté cacheado). El motivo queda
+        // visible en el panel dev: "REQUEST_DENIED" ⇒ falta habilitar la
+        // Directions API, "maps_api_unavailable" ⇒ el loader no está listo.
+        if (route) {
+          setSimRouteDiag(null);
+          setRoadRoute(route);
+        } else {
+          setSimRouteDiag(getLastRoutingError() ?? "sin_ruta");
+        }
+      });
+      return;
+    }
+
+    if (!driverHasLocation) return;
     let cancelled = false;
     getRoadRoute(currentLocation, navTarget).then((route) => {
       if (!cancelled) setRoadRoute(route);
@@ -1194,7 +1280,25 @@ export default function DrivePage() {
     return () => {
       cancelled = true;
     };
-  }, [currentLocation, navTarget, mapsLoaded, driverHasLocation, sim.active, roadRoute]);
+  }, [
+    currentLocation,
+    realLocation,
+    navTarget,
+    mapsLoaded,
+    driverHasLocation,
+    sim.active,
+    sim.simLocation,
+    roadRoute,
+  ]);
+
+  // Al detener el simulador se permite volver a pedir la ruta en el próximo
+  // intento (la marca por destino se limpia).
+  useEffect(() => {
+    if (!sim.active) {
+      simRouteKeyRef.current = null;
+      setSimRouteDiag(null);
+    }
+  }, [sim.active]);
 
   // Etapa de navegación efectiva (real o simulada).
   // Llegada AUTOMÁTICA por geocerca GPS: dentro del radio de llegada la UI
@@ -2689,6 +2793,10 @@ export default function DrivePage() {
   //   restaurante at_pickup   → (sin acción: la recolección es navegación)
   //               at_delivery → destination_arrival + delivered
   //
+  // El plan NO se fija por la etapa simulada: se deriva del estado REAL del
+  // pedido (ver simActionPlanFor) para no repetir pasos ya hechos (un mandado
+  // ya recogido no vuelve a pedir pickup_arrival).
+  //
   // Secuencial (cada acción espera a la anterior porque el servidor valida el
   // estado intermedio) y una sola vez por pedido+etapa. Si el servidor
   // rechaza (p. ej. la entrega requiere NIP), se muestra el error TAL CUAL y
@@ -2698,12 +2806,7 @@ export default function DrivePage() {
     if (!sim.active || !simCommitOrders || !activeOrder) return;
     const stage = sim.stage;
     if (stage !== "at_pickup" && stage !== "at_delivery") return;
-    const plan =
-      stage === "at_pickup"
-        ? activeOrder.serviceKind === "mandado"
-          ? ["pickup_arrival", "picked_up"]
-          : []
-        : ["destination_arrival", "delivered"];
+    const plan = simActionPlanFor(activeOrder, stage);
     if (plan.length === 0) return;
 
     const orderNumber = activeOrder.orderNumber;
@@ -3302,12 +3405,16 @@ export default function DrivePage() {
               stageLabel={sim.stageLabel}
               speed={sim.speed}
               waitingForRoute={sim.waitingForRoute}
+              routeDiagnostic={simRouteDiag}
               onStart={sim.start}
               onPause={sim.pause}
               onResume={sim.resume}
               onRestart={sim.restart}
               onStop={sim.stop}
               onSpeed={sim.setSpeed}
+              onSkipPickup={sim.skipToPickup}
+              onSkipDelivery={sim.skipToDelivery}
+              onJumpNear={() => sim.jumpNearDestination(1000)}
               commitOrders={simCommitOrders}
               onToggleCommit={() => setSimCommitOrders((value) => !value)}
             />
@@ -3387,6 +3494,18 @@ export default function DrivePage() {
                 onPrimaryAction={async () => true}
                 onPinSubmit={async () => false}
               />
+              {/* Evaluación del cliente (solo con entrega REAL confirmada por
+                  el servidor; la vista del simulador no evalúa). */}
+              {lastDelivered && (
+                <div className="mt-3">
+                  <RatingSection
+                    orderNumber={lastDelivered.order.orderNumber}
+                    role="driver"
+                    endpoint="/api/driver/rating"
+                    onEngaged={() => setRatingEngaged(true)}
+                  />
+                </div>
+              )}
               {/* Salida explícita: sin esto la tarjeta solo se iba sola a los
                   60 s o al llegar una oferta nueva. */}
               <button

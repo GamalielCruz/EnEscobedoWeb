@@ -3,6 +3,7 @@
 //   node --env-file=.env.local scripts/staging-extend-nip.mjs list [folioCorto]
 //   node --env-file=.env.local scripts/staging-extend-nip.mjs extend <_id> [horas]
 //   node --env-file=.env.local scripts/staging-extend-nip.mjs disable-pin <_id>
+//   node --env-file=.env.local scripts/staging-extend-nip.mjs nip-delivered <_id>
 // `list` busca por FOLIO CORTO (el # de 6 dígitos que muestra Drive), que no es
 // el orderNumber. Guarda dura: SOLO opera sobre el dataset "test" (staging).
 
@@ -96,28 +97,66 @@ if (cmd === "list") {
   // NINGUNA entrega puede completarse (markDelivered exige el código y su TTL
   // de 24 h suele estar vencido). Para probar el viaje completo y ver la
   // ganancia en el Wallet, se apaga la Entrega segura de ese pedido.
+  // OJO: en MANDADOS la bandera que decide (`orderRequiresDeliveryPin`) es
+  // `mandadoEntregaSegura`; apagar solo el método NO los desbloquea.
   if (!arg) {
     console.error("Falta el _id del pedido.");
     process.exit(1);
   }
   const before = await query(
-    `*[_id == ${JSON.stringify(arg)}][0]{orderNumber, deliveryVerificationMethod, deliveryVerificationStatus, dispatchStatus}`
+    `*[_id == ${JSON.stringify(arg)}][0]{orderNumber, serviceKind, mandadoEntregaSegura, deliveryVerificationMethod, deliveryVerificationStatus, dispatchStatus}`
   );
   if (!before) {
     console.error("El pedido no existe.");
     process.exit(1);
   }
+  const isMandado = String(before.serviceKind ?? "") === "mandado";
   await patch(arg, {
     deliveryVerificationMethod: "not_required",
     deliveryVerificationStatus: "not_required",
+    ...(isMandado ? { mandadoEntregaSegura: false } : {}),
   });
   console.log(
-    `#${shortOrderCode(before.orderNumber)} (${arg})\n` +
-      `   antes: metodo=${before.deliveryVerificationMethod} estado=${before.deliveryVerificationStatus}\n` +
-      `   ahora: metodo=not_required estado=not_required (dispatch=${before.dispatchStatus})\n` +
+    `#${shortOrderCode(before.orderNumber)} (${arg}) tipo=${before.serviceKind ?? "restaurant"}\n` +
+      `   antes: metodo=${before.deliveryVerificationMethod} estado=${before.deliveryVerificationStatus} entregaSegura=${before.mandadoEntregaSegura ?? "—"}\n` +
+      `   ahora: metodo=not_required estado=not_required${isMandado ? " mandadoEntregaSegura=false" : ""} (dispatch=${before.dispatchStatus})\n` +
       `   La entrega ya no exige código: el simulador puede completar el viaje.`
   );
+} else if (cmd === "nip-delivered") {
+  // STAGING: simula el webhook de `statuses` de Meta confirmando que el mensaje
+  // con el NIP SÍ llegó. Fuera de producción WhatsApp está apagado a propósito
+  // (`assertProductionIntegration`), así que ese evento nunca ocurre y el gate
+  // de Entrega segura de los mandados queda cerrado para siempre: ninguna
+  // entrega con NIP puede probarse. Este comando abre ese gate SOLO en el
+  // dataset de pruebas; el código real NIP no se toca (sigue siendo el mismo
+  // que se envió al remitente).
+  if (!arg) {
+    console.error("Falta el _id del pedido.");
+    process.exit(1);
+  }
+  const before = await query(
+    `*[_id == ${JSON.stringify(arg)}][0]{orderNumber, serviceKind, mandadoEntregaSegura, nipDeliveryStatus, deliveryPinExpiresAt, deliveryVerificationStatus, dispatchStatus}`
+  );
+  if (!before) {
+    console.error("El pedido no existe.");
+    process.exit(1);
+  }
+  const expiry = before.deliveryPinExpiresAt ? new Date(before.deliveryPinExpiresAt) : null;
+  if (expiry && expiry.getTime() <= Date.now()) {
+    console.error(
+      `AVISO: el NIP ya expiró (${before.deliveryPinExpiresAt}). Corre primero: extend ${arg} 24`
+    );
+  }
+  await patch(arg, { nipDeliveryStatus: "delivered", nipDeliveredAt: new Date().toISOString() });
+  console.log(
+    `#${shortOrderCode(before.orderNumber)} (${arg})\n` +
+      `   antes: nipDeliveryStatus=${before.nipDeliveryStatus ?? "(sin campo)"} verificado=${before.deliveryVerificationStatus}\n` +
+      `   ahora: nipDeliveryStatus=delivered (simula la confirmación de Meta)\n` +
+      `   El gate de NIP queda ABIERTO: el repartidor ya puede validar el código.`
+  );
 } else {
-  console.error("Uso: list [folioCorto] | extend <_id> [horas] | disable-pin <_id>");
+  console.error(
+    "Uso: list [folioCorto] | extend <_id> [horas] | disable-pin <_id> | nip-delivered <_id>"
+  );
   process.exit(1);
 }

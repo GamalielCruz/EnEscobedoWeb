@@ -16,6 +16,11 @@ export const dynamic = "force-dynamic";
  * Fail-closed: cualquier problema de datos simplemente no suma — la vista
  * muestra cero/lista vacía, nunca un saldo inventado.
  *
+ * EFECTIVO vs TARJETA: `cashCollectedBy` dice quién recibió el efectivo. Si lo
+ * cobró el repartidor, ese fee ya está en su mano (no se le debe) y la billetera
+ * solo acumula lo que ElMenu le pagará después (pagos en línea/tarjeta o
+ * servicios pendientes de liquidar).
+ *
  * "Día" y "semana" se calculan en HORA DE MÉXICO (mismo criterio que
  * /admin/finanzas), nunca con el reloj del teléfono.
  */
@@ -35,7 +40,9 @@ const WALLET_QUERY = `*[
   driverPayout,
   settlementStatus,
   orderStatus,
-  status
+  status,
+  paymentMethod,
+  cashCollectedBy
 }`;
 
 type WalletOrderRow = {
@@ -49,6 +56,8 @@ type WalletOrderRow = {
   settlementStatus?: string | null;
   orderStatus?: string | null;
   status?: string | null;
+  paymentMethod?: string | null;
+  cashCollectedBy?: string | null;
 };
 
 export async function GET() {

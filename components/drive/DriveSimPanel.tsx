@@ -36,12 +36,16 @@ export function DriveSimPanel({
   stageLabel,
   speed,
   waitingForRoute,
+  routeDiagnostic,
   onStart,
   onPause,
   onResume,
   onRestart,
   onStop,
   onSpeed,
+  onSkipPickup,
+  onSkipDelivery,
+  onJumpNear,
   commitOrders,
   onToggleCommit,
 }: {
@@ -53,12 +57,20 @@ export function DriveSimPanel({
   stageLabel: string;
   speed: number;
   waitingForRoute: boolean;
+  /** Motivo del último fallo al pedir la ruta (solo diagnóstico dev). */
+  routeDiagnostic?: string | null;
   onStart: () => void;
   onPause: () => void;
   onResume: () => void;
   onRestart: () => void;
   onStop: () => void;
   onSpeed: (speed: (typeof SIM_SPEEDS)[number]) => void;
+  /** Salta a la llegada a recolección (pruebas rápidas). */
+  onSkipPickup: () => void;
+  /** Salta a la llegada al destino (pruebas rápidas). */
+  onSkipDelivery: () => void;
+  /** Deja el tramo actual a 1 km del punto para probar la llegada. */
+  onJumpNear: () => void;
   /** true ⇔ al llegar a cada punto se ejecutan las acciones REALES del pedido. */
   commitOrders: boolean;
   onToggleCommit: () => void;
@@ -168,6 +180,41 @@ export function DriveSimPanel({
         </div>
       </div>
 
+      {/* Saltos rápidos: colocan la simulación en un punto del viaje sin
+          recorrerlo. Sirven para probar la llegada, la entrega y el cierre
+          sin esperar el trayecto completo. */}
+      <div className="mt-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+          Saltos rápidos
+        </span>
+        <div className="mt-1 grid grid-cols-2 gap-1">
+          <button
+            onClick={onSkipPickup}
+            disabled={!active && !canStart}
+            className="rounded-lg bg-gray-100 px-2 py-1.5 text-[10px] font-bold text-gray-600 transition active:scale-95 disabled:opacity-30"
+            title="Saltar a la llegada a recolección"
+          >
+            Ya recogió
+          </button>
+          <button
+            onClick={onSkipDelivery}
+            disabled={!active && !canStart}
+            className="rounded-lg bg-gray-100 px-2 py-1.5 text-[10px] font-bold text-gray-600 transition active:scale-95 disabled:opacity-30"
+            title="Saltar a la llegada al destino"
+          >
+            Con el cliente
+          </button>
+          <button
+            onClick={onJumpNear}
+            disabled={!active || waitingForRoute}
+            className="col-span-2 rounded-lg bg-gray-100 px-2 py-1.5 text-[10px] font-bold text-gray-600 transition active:scale-95 disabled:opacity-30"
+            title="Dejar 1 km para llegar al punto actual"
+          >
+            A 1 km del punto
+          </button>
+        </div>
+      </div>
+
       {/* Completar el pedido en el servidor: el simulador ejecuta las mismas
           acciones reales (recoger/entregar) para que Dispatch, settlement y
           Wallet vean un servicio real. Apagado = solo vista. */}
@@ -206,6 +253,7 @@ export function DriveSimPanel({
         <p className="mt-1 flex items-center gap-1 text-[10px] font-medium text-amber-600">
           <Loader2 className="h-3 w-3 animate-spin" />
           Esperando ruta de Google…
+          {routeDiagnostic ? ` (${routeDiagnostic})` : ""}
         </p>
       )}
       {!active && !canStart && (

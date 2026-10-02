@@ -303,6 +303,14 @@ export function resolveNipStatusFromClaimStatus(
 /**
  * Transición forward-only de `nipDeliveryStatus`. Idempotente; `delivered`,
  * `failed` y `expired` son absorbentes (no se degradan con eventos tardíos).
+ *
+ * OJO con el orden de `forward`: `failed` va AL FINAL a propósito. Antes no
+ * estaba en la lista y `indexOf("failed") === -1` hacía que la transición
+ * `pending → failed` (envío que nunca salió, p. ej. proveedor caído/plantilla
+ * rechazada) se descartara en silencio: la orden se quedaba en `pending` para
+ * siempre, el remitente nunca veía el código (la vista solo lo revela en
+ * `failed`) y el gate quedaba cerrado con el estado MENTIENDO sobre lo que
+ * pasó. `failed` sigue siendo absorbente y `delivered` no se degrada.
  */
 export function resolveNextNipStatus(
   current: NipDeliveryStatus | null | undefined,
@@ -312,7 +320,7 @@ export function resolveNextNipStatus(
   const cur = current ?? "pending";
   if (cur === incoming) return incoming;
   if (cur === "delivered" || cur === "failed" || cur === "expired") return null;
-  const forward: NipDeliveryStatus[] = ["pending", "sent", "delivered"];
+  const forward: NipDeliveryStatus[] = ["pending", "sent", "delivered", "failed"];
   const curIdx = forward.indexOf(cur);
   const incIdx = forward.indexOf(incoming);
   if (curIdx === -1) return incoming;

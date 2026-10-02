@@ -27,6 +27,14 @@ import {
   dispatchWaitingOrdersForDriver,
 } from "@/lib/delivery-dispatch";
 import { decideOfferAcceptance, isTerminalOfferStatus } from "@/lib/dispatch/offer-lifecycle";
+import {
+  extractRevisionInfo,
+  isRevisionConflict,
+} from "@/lib/dispatch/dispatch-validation";
+import {
+  commitWithRevisionRetry,
+  REVISION_RETRY_ATTEMPTS,
+} from "@/lib/dispatch/revision-retry";
 import { nextStateAfterDelivery } from "@/lib/dispatch/driver-availability";
 import { resolveSettlementStatusOnDelivery } from "@/lib/order-state";
 import { syncBaserowOrderById } from "@/lib/baserow";
@@ -202,14 +210,6 @@ const ACTIVE_SHIPPED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._r
 
 // ── Helpers ────────────────────────────────────────────────────────
 
-function isRevisionConflict(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "statusCode" in error &&
-    (error as { statusCode?: number }).statusCode === 409
-  );
-}
 
 function toFinite(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -396,40 +396,78 @@ async function completeDeliveredOrder(
   now: string,
   opts: { verifiedByDriver?: boolean } = {}
 ): Promise<{ nextState: string }> {
-  const settlementStatus = resolveSettlementStatusOnDelivery({
-    paymentProvider: String(targetOrder.paymentProvider ?? ""),
-    paymentMethod: String(targetOrder.paymentMethod ?? ""),
-    paymentStatus: String(targetOrder.paymentStatus ?? ""),
-    cashCollectedBy: String(targetOrder.cashCollectedBy ?? ""),
-    settlementStatus: String(targetOrder.settlementStatus ?? ""),
-    orderStatus: "delivered",
+  // COMMIT CON REINTENTO DE REVISIÓN: entre la lectura del pedido (donde se
+  // validó el NIP) y este commit el documento puede cambiar solo — la geocerca
+  // de llegada marca `destination_arrival` en segundo plano, otra acción del
+  // repartidor, el simulador, un reenvío del webhook… Sanity responde 409
+  // ("Document ... expectedRevisionID ...") y antes esa excepción subía sin
+  // control: la API devolvía 500 ("No se pudo confirmar la entrega") con el
+  // pedido intacto, aunque no faltara nada. El conflicto es NORMAL: se relee la
+  // revisión vigente y se repite el MISMO patch (idempotente).
+  const commitResult = await commitWithRevisionRetry({
+    initial: targetOrder,
+    attempts: REVISION_RETRY_ATTEMPTS,
+    refresh: async () => {
+      const fresh = await fetchOrderByNumber(String(targetOrder.orderNumber));
+      if (!fresh || fresh.repartidorAsignadoRef !== driverId) {
+        throw new Error("El pedido ya no está asignado a ti; no se pudo cerrar la entrega.");
+      }
+      return fresh as unknown as Record<string, unknown>;
+    },
+    commit: async (orderFields) => {
+      const settlementStatus = resolveSettlementStatusOnDelivery({
+        paymentProvider: String(orderFields.paymentProvider ?? ""),
+        paymentMethod: String(orderFields.paymentMethod ?? ""),
+        paymentStatus: String(orderFields.paymentStatus ?? ""),
+        cashCollectedBy: String(orderFields.cashCollectedBy ?? ""),
+        settlementStatus: String(orderFields.settlementStatus ?? ""),
+        orderStatus: "delivered",
+      });
+
+      await backendClient
+        .patch(String(orderFields._id))
+        .ifRevisionId(String(orderFields._rev))
+        .set({
+          status: "delivered",
+          orderStatus: "delivered",
+          dispatchStatus: "completed",
+          ...(String(orderFields.mandadoContactStatus ?? "") === "active"
+            ? { mandadoContactStatus: "closed" }
+            : {}),
+          deliveredAt: now,
+          settlementStatus,
+          ...(opts.verifiedByDriver
+            ? {
+                deliveryPinVerifiedAt: now,
+                deliveryPinVerifiedBy: driverId,
+                deliveryVerificationStatus: "verified",
+              }
+            : {}),
+          ...(orderFields.fulfillmentTiming === "scheduled"
+            ? { scheduleStatus: "completed" }
+            : {}),
+          updatedAt: now,
+        })
+        .commit();
+    },
+    onConflict: (error, attempt) => {
+      console.warn("[driver-actions] completeDeliveredOrder: conflicto de revisión, reintentando", {
+        orderId: String(targetOrder._id),
+        attempt,
+        ...extractRevisionInfo(error),
+      });
+    },
   });
 
-  await backendClient
-    .patch(String(targetOrder._id))
-    .ifRevisionId(String(targetOrder._rev))
-    .set({
-      status: "delivered",
-      orderStatus: "delivered",
-      dispatchStatus: "completed",
-      ...(String(targetOrder.mandadoContactStatus ?? "") === "active"
-        ? { mandadoContactStatus: "closed" }
-        : {}),
-      deliveredAt: now,
-      settlementStatus,
-      ...(opts.verifiedByDriver
-        ? {
-            deliveryPinVerifiedAt: now,
-            deliveryPinVerifiedBy: driverId,
-            deliveryVerificationStatus: "verified",
-          }
-        : {}),
-      ...(targetOrder.fulfillmentTiming === "scheduled"
-        ? { scheduleStatus: "completed" }
-        : {}),
-      updatedAt: now,
-    })
-    .commit();
+  if (!commitResult.ok) {
+    // Se agotaron los intentos: error explícito y atribuible, nunca un 500
+    // genérico (el llamador lo traduce a un mensaje humano).
+    console.error("[driver-actions] completeDeliveredOrder: revisión en conflicto tras los reintentos", {
+      orderId: String(targetOrder._id),
+      ...extractRevisionInfo(commitResult.lastConflict),
+    });
+    throw new Error("El pedido cambió mientras se confirmaba la entrega.");
+  }
 
   after(() => syncBaserowOrderById(String(targetOrder._id)));
 
@@ -1252,12 +1290,23 @@ export async function markDelivered(
   const nowDate = new Date();
   const now = nowDate.toISOString();
 
-  await completeDeliveredOrder(
-    order as unknown as Record<string, unknown>,
-    driverId,
-    nowDate,
-    now
-  );
+  // Cualquier fallo al CERRAR (p. ej. conflicto de revisión agotado) se
+  // devuelve como error humano: la ruta responde 409 con el motivo, nunca un
+  // 500 opaco con el pedido intacto.
+  try {
+    await completeDeliveredOrder(
+      order as unknown as Record<string, unknown>,
+      driverId,
+      nowDate,
+      now
+    );
+  } catch (error) {
+    console.error("[driver-actions] markDelivered error:", error);
+    return {
+      ok: false,
+      error: "El pedido cambió justo al confirmar la entrega. Reintenta en un momento.",
+    };
+  }
 
   return { ok: true, newState: "delivered", dispatchStatus: "completed" };
 }
@@ -1356,13 +1405,21 @@ export async function markDeliveredWithPin(
     actor: driverId,
   }).catch(() => null);
 
-  await completeDeliveredOrder(
-    order as unknown as Record<string, unknown>,
-    driverId,
-    nowDate,
-    now,
-    { verifiedByDriver: true }
-  );
+  try {
+    await completeDeliveredOrder(
+      order as unknown as Record<string, unknown>,
+      driverId,
+      nowDate,
+      now,
+      { verifiedByDriver: true }
+    );
+  } catch (error) {
+    console.error("[driver-actions] markDeliveredWithPin error:", error);
+    return {
+      ok: false,
+      error: "El pedido cambió justo al confirmar la entrega. Reintenta en un momento.",
+    };
+  }
 
   return { ok: true, newState: "delivered", dispatchStatus: "completed" };
 }

@@ -177,7 +177,7 @@ export function DriveWallet() {
                   </span>
                   {d.settled && (
                     <span className="border border-green-200 bg-green-50 px-1.5 py-0.5 text-[9px] font-black uppercase tracking-wide text-green-700">
-                      Pagado
+                      {d.paidInCash ? "Efectivo" : "Pagado"}
                     </span>
                   )}
                 </span>

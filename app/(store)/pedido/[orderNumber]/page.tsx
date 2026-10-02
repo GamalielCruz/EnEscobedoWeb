@@ -1,7 +1,7 @@
 import { auth } from "@clerk/nextjs/server";
 import { redirect } from "next/navigation";
 import OrderTrackingScreen from "@/components/OrderTrackingScreen";
-import { client } from "@/sanity/lib/client";
+import { backendClient } from "@/sanity/lib/backendClient";
 
 export const dynamic = "force-dynamic";
 
@@ -27,8 +27,13 @@ export default async function PedidoTrackingPage({
   // que el userId resuelto por Clerk SIEMPRE debe enviarse como parámetro.
   // Omitirlo provoca el error de Sanity "param $userId referenced, but not
   // provided". El redirect previo garantiza que aquí userId es una cadena.
-  const order = await client.fetch(
-    `*[_type == "order" && (orderNumber == $orderNumber || _id == $orderNumber) && clerkUserId == $userId][0]{ _id }`,
+  //
+  // Lectura SIN CDN: un pedido recién creado con TARJETA nace en
+  // /api/checkout/confirm justo antes de este render; el CDN puede servirlo
+  // con retraso y provocar un redirect inmediato a /orders (la espera nunca se
+  // veía). Se excluyen drafts para no servir una versión no publicada.
+  const order = await backendClient.fetch(
+    `*[_type == "order" && !(_id in path('drafts.**')) && (orderNumber == $orderNumber || _id == $orderNumber) && clerkUserId == $userId][0]{ _id }`,
     { orderNumber, userId }
   );
 
