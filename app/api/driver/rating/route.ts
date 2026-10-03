@@ -9,7 +9,7 @@ import {
 export const dynamic = "force-dynamic";
 
 // ────────────────────────────────────────────────────────────────────
-// Evaluación del REPARTIDOR hacia el cliente (mismo sistema de 5 pulgares).
+// Evaluación del REPARTIDOR hacia el cliente (mismo sistema de 3 estrellas).
 //
 //   GET  /api/driver/rating?orderNumber=…  → ¿puede evaluar? ¿ya evaluó?
 //   POST /api/driver/rating                → registra la evaluación

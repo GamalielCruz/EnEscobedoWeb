@@ -9,7 +9,7 @@ import {
 export const dynamic = "force-dynamic";
 
 // ────────────────────────────────────────────────────────────────────
-// Evaluación del CLIENTE hacia el repartidor (sistema de 5 pulgares).
+// Evaluación del CLIENTE hacia el repartidor (sistema de 3 estrellas).
 //
 //   GET  /api/orders/[orderId]/rating  → ¿puede evaluar? ¿ya evaluó?
 //   POST /api/orders/[orderId]/rating  → registra la evaluación

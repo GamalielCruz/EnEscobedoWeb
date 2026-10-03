@@ -40,9 +40,10 @@ export const orderRatingType = defineType({
     defineField({ name: "evaluateeId", title: "ID del evaluado", type: "string" }),
     defineField({
       name: "rating",
-      title: "Calificación (pulgares)",
+      title: "Calificación (estrellas)",
       type: "number",
-      validation: (Rule) => Rule.required().min(1).max(5),
+      description: "1 = mala experiencia · 2 = hubo algún inconveniente · 3 = todo salió bien.",
+      validation: (Rule) => Rule.required().min(1).max(3),
     }),
     defineField({
       name: "reasons",
@@ -96,7 +97,7 @@ export const orderRatingType = defineType({
     prepare({ role, rating, order, incident }) {
       const who = role === "driver" ? "Repartidor" : "Cliente";
       return {
-        title: `${who} evaluó ${rating ?? "?"}/5`,
+        title: `${who} evaluó ${rating ?? "?"}/3`,
         subtitle: `${incident ? "⚠ Incidente grave · " : ""}Pedido #${order ?? "?"}`,
       };
     },

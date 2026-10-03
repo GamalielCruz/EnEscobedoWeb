@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import type { RatingRole } from "@/lib/order-ratings";
-import { ThumbRating, type ThumbRatingPayload } from "@/components/ratings/ThumbRating";
+import { StarRating, type StarRatingPayload } from "@/components/ratings/StarRating";
 
 /**
  * Bloque de evaluación auto-contenido: consulta si el pedido es evaluable,
@@ -28,7 +28,6 @@ export function RatingSection({
 }) {
   const [phase, setPhase] = useState<"loading" | "ready" | "hidden" | "error">("loading");
   const [alreadyRated, setAlreadyRated] = useState(false);
-  const [evaluateeName, setEvaluateeName] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +51,6 @@ export function RatingSection({
         return;
       }
       setAlreadyRated(Boolean(data.alreadyRated));
-      setEvaluateeName(typeof data.evaluateeName === "string" ? data.evaluateeName : null);
       setPhase("ready");
     } catch {
       // Fallo de red puntual: ofrecemos reintentar sin romper la pantalla.
@@ -65,7 +63,7 @@ export function RatingSection({
   }, [load]);
 
   const handleSubmit = useCallback(
-    async (payload: ThumbRatingPayload): Promise<boolean> => {
+    async (payload: StarRatingPayload): Promise<boolean> => {
       setSubmitting(true);
       setError(null);
       try {
@@ -131,9 +129,8 @@ export function RatingSection({
   }
 
   return (
-    <ThumbRating
+    <StarRating
       role={role}
-      evaluateeName={evaluateeName}
       submitting={submitting}
       serverError={error}
       submitted={submitted}

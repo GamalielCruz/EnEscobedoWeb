@@ -1,79 +1,93 @@
 // ────────────────────────────────────────────────────────────────────
-// Evaluación bilateral cliente ↔ repartidor (sistema de 5 pulgares).
+// Evaluación bilateral cliente ↔ repartidor (sistema de 3 ESTRELLAS).
 //
 // Este módulo es PURO (sin I/O, sin imports) para poder probarse con
 // `node --experimental-strip-types --test`. La persistencia (Sanity) y las
 // rutas API consumen estas decisiones; la UI solo pinta lo que aquí se decide.
 //
 // Principios:
-//   - Sustituye las estrellas por 5 pulgares (1 = muy mala … 5 = excelente).
+//   - SOLO 3 niveles: 3 = todo salió bien, 2 = hubo algún inconveniente,
+//     1 = mala experiencia. El 3 va PRESELECCIONADO: la mayoría de las
+//     evaluaciones se completan con un solo toque en "Listo".
 //   - El menú de motivos es CONTEXTUAL por calificación y por ROL: cada nivel
 //     ofrece su propio catálogo y el cliente nunca ve motivos del repartidor
-//     (ni al revés).
-//   - Al cambiar de nivel se descartan los motivos incompatibles; nunca se
-//     guarda un motivo que no pertenezca al nivel final.
-//   - Un incidente grave NO es una acusación: activa un reporte privado para
-//     revisión humana, no una sanción automática.
+//     (ni al revés). El 3★ no muestra ningún menú.
+//   - Al cambiar de nivel se descartan los motivos incompatibles (volver a 3★
+//     limpia todo); nunca se guarda un motivo que no pertenezca al nivel final.
+//   - Un incidente grave NO es una acusación ni una sanción: habilita una
+//     opción secundaria (ayuda de ElMenu / reporte privado a administración)
+//     y abre un reporte para revisión HUMANA.
 //   - La evaluación del cliente y la del repartidor son INDEPENDIENTES: viven
 //     en documentos separados con id determinista por (orden, rol).
 //
 // IMPORTANTE (integración): este módulo NO toca `repartidor.calificacion`,
 // porque ese campo alimenta el ranking del algoritmo de despacho. Las nuevas
-// evaluaciones se guardan aparte.
+// evaluaciones se guardan aparte y NO generan sanciones automáticas.
 // ────────────────────────────────────────────────────────────────────
 
 export type RatingRole = "customer" | "driver";
-export type RatingLevel = 1 | 2 | 3 | 4 | 5;
+export type RatingLevel = 1 | 2 | 3;
 
 export type RatingReason = {
   /** Código estable (se persiste; no cambiar sin migración). */
   code: string;
   /** Texto visible para el usuario. */
   label: string;
-  /** true = incidente grave → genera reporte privado para administración. */
+  /** true = incidente grave → habilita reporte privado para administración. */
   serious?: boolean;
 };
 
-export const RATING_LEVELS: RatingLevel[] = [1, 2, 3, 4, 5];
+export const RATING_LEVELS: RatingLevel[] = [1, 2, 3];
+
+/** Calificación PRESELECCIONADA: todo salió bien. */
+export const DEFAULT_RATING: RatingLevel = 3;
+
 export const RATING_COMMENT_MAX = 1000;
 export const RATING_INCIDENT_MAX = 2000;
 
+/** Pregunta inicial del componente, por rol. */
+export const RATING_PROMPT: Record<RatingRole, string> = {
+  customer: "¿Cómo fue tu experiencia?",
+  driver: "¿Cómo fue tu experiencia con el cliente?",
+};
+
+/** Significado de cada estrella (ARIA + refuerzo visual). */
+export const RATING_LEVEL_LABEL: Record<RatingLevel, string> = {
+  3: "Todo salió bien",
+  2: "Hubo algún inconveniente",
+  1: "Mala experiencia",
+};
+
 /**
- * Intro contextual por rol y nivel. El nivel 5 no muestra menú de problemas
- * (solo mensaje positivo y comentario opcional).
+ * Copy contextual por rol y nivel.
+ *   - 3★ → mensaje positivo, SIN menú de motivos.
+ *   - 2★ → "¿Qué podríamos mejorar?" + motivos leves.
+ *   - 1★ → "¿Qué ocurrió?" + motivos de incidencia.
  */
 export const RATING_INTRO: Record<RatingRole, Record<RatingLevel, string>> = {
   customer: {
-    5: "¡Excelente! Nos alegra que todo haya salido bien.",
-    4: "¡Gracias por tu opinión! ¿Qué pequeño detalle podríamos mejorar?",
-    3: "¿Qué podríamos mejorar para ofrecerte una mejor experiencia?",
-    2: "Lamentamos que tu experiencia no haya sido la esperada. ¿Qué ocurrió?",
-    1: "Lamentamos mucho lo ocurrido. Cuéntanos qué pasó para que podamos revisar tu experiencia.",
+    3: "¡Gracias! Nos alegra que todo haya salido bien.",
+    2: "¿Qué podríamos mejorar?",
+    1: "Lamentamos que tu experiencia no haya sido buena. ¿Qué ocurrió?",
   },
   driver: {
-    5: "¡Excelente entrega! Gracias por hacer que todo fuera sencillo.",
-    4: "¿Hubo algún pequeño detalle durante la entrega?",
-    3: "¿Qué dificultad encontraste durante esta entrega?",
-    2: "Cuéntanos qué complicó esta entrega.",
-    1: "Lamentamos que hayas tenido una mala experiencia. ¿Qué sucedió?",
+    3: "¡Excelente! Gracias por completar tu entrega.",
+    2: "¿Hubo algún inconveniente durante la entrega?",
+    1: "Cuéntanos qué ocurrió durante esta entrega.",
   },
 };
 
-/** Etiqueta accesible del pulgar seleccionado (ARIA + refuerzo visual). */
-export const RATING_LEVEL_LABEL: Record<RatingRole, Record<RatingLevel, string>> = {
+/** Confirmación breve tras guardar (por rol y nivel). */
+export const RATING_THANKS_COPY: Record<RatingRole, Record<RatingLevel, string>> = {
   customer: {
-    5: "Excelente experiencia",
-    4: "Buena experiencia, con algún detalle menor",
-    3: "Experiencia regular",
-    2: "Mala experiencia",
-    1: "Experiencia muy mala",
+    3: "¡Gracias! Nos alegra que todo haya salido bien.",
+    2: "Gracias por contarnos qué podemos mejorar.",
+    1: "Gracias por contarnos lo sucedido. Lo revisaremos.",
   },
   driver: {
-    5: "Excelente entrega",
-    4: "Buena entrega, con algún detalle",
-    3: "Entrega regular",
-    2: "Entrega con problemas",
-    1: "Entrega muy difícil",
+    3: "¡Excelente! Gracias por completar tu entrega.",
+    2: "Gracias por contarnos qué complicó la entrega.",
+    1: "Gracias por contarnos lo sucedido. Lo revisaremos.",
   },
 };
 
@@ -83,117 +97,86 @@ export const RATING_COMMENT_PLACEHOLDER: Record<RatingRole, string> = {
 };
 
 export const RATING_INCIDENT_PLACEHOLDER =
-  "Describe lo sucedido con tus palabras. Lo revisará una persona del equipo de ElMenu. (opcional)";
+  "Describe lo sucedido con tus palabras. Lo revisará una persona del equipo. (opcional)";
 
-export const RATING_REPORT_CONTACT_LABEL =
-  "Quiero que el equipo de ElMenu se comunique conmigo para revisar este caso.";
+/** Opción secundaria que se habilita ante un incidente grave, por rol. */
+export const RATING_REPORT_OPTION_LABEL: Record<RatingRole, string> = {
+  customer: "Solicitar ayuda de ElMenu",
+  driver: "Reportar a administración (privado)",
+};
 
-export const RATING_THANKS_COPY: Record<RatingRole, string> = {
-  customer: "¡Gracias! Tu opinión nos ayuda a mejorar.",
-  driver: "¡Gracias! Registramos tu evaluación.",
+/** Aclaración: un reporte abre revisión humana, nunca una sanción automática. */
+export const RATING_REPORT_NOTE: Record<RatingRole, string> = {
+  customer: "Una persona del equipo de ElMenu revisará tu caso. No es una sanción automática.",
+  driver: "El reporte es privado y lo revisará administración. No genera sanciones automáticas.",
 };
 
 /**
- * Catálogo de motivos por rol y nivel. El nivel 5 no tiene motivos: no hay
- * nada que corregir. Los niveles 1-2 concentran los incidentes graves.
+ * Catálogo de motivos por rol y nivel.
+ *   - 3★ no tiene motivos: no hay nada que corregir.
+ *   - 2★ recoge inconvenientes.
+ *   - 1★ recoge incidencias; las marcadas `serious` habilitan el reporte.
  */
 const REASON_CATALOG: Record<RatingRole, Partial<Record<RatingLevel, RatingReason[]>>> = {
   customer: {
-    4: [
-      { code: "late_minor", label: "La entrega tardó un poco más de lo esperado." },
-      { code: "communication_minor", label: "Faltó un poco de comunicación." },
-      { code: "friendliness_minor", label: "El repartidor pudo ser más amable." },
-      { code: "handling_minor", label: "El pedido pudo manejarse con más cuidado." },
-      { code: "instructions_minor", label: "Hubo un detalle con las instrucciones de entrega." },
-      { code: "other", label: "Otro motivo." },
-    ],
-    3: [
-      { code: "late", label: "La entrega tardó demasiado." },
-      { code: "communication", label: "El repartidor no mantuvo una buena comunicación." },
-      { code: "treatment", label: "El trato pudo ser mejor." },
-      { code: "instructions_ignored", label: "No se siguieron mis instrucciones." },
-      { code: "condition", label: "El pedido llegó en condiciones inadecuadas." },
-      { code: "delivery_difficulty", label: "Hubo dificultades durante la entrega." },
-      { code: "other", label: "Otro motivo." },
-    ],
     2: [
-      { code: "unkind", label: "El repartidor fue poco amable o irrespetuoso." },
-      { code: "no_information", label: "No recibí información sobre mi pedido." },
-      { code: "instructions_not_respected", label: "No se respetaron mis instrucciones." },
-      { code: "damaged", label: "El pedido llegó dañado o en malas condiciones." },
-      { code: "delivery_problem", label: "Hubo un problema importante con la entrega." },
-      {
-        code: "inappropriate_conduct",
-        label: "El repartidor tuvo una conducta inapropiada.",
-        serious: true,
-      },
+      { code: "late", label: "La entrega tardó más de lo esperado." },
+      { code: "poor_communication", label: "Hubo poca comunicación." },
+      { code: "better_treatment", label: "El trato pudo ser mejor." },
+      { code: "instructions_not_followed", label: "No se siguieron mis instrucciones." },
+      { code: "bad_condition", label: "El pedido llegó en malas condiciones." },
       { code: "other", label: "Otro motivo." },
     ],
     1: [
       { code: "not_delivered", label: "Mi pedido no fue entregado.", serious: true },
       {
-        code: "marked_delivered_falsely",
-        label: "El repartidor marcó la entrega como completada sin entregarme el pedido.",
-        serious: true,
+        code: "serious_delivery_problem",
+        label: "Hubo un problema importante con la entrega.",
       },
-      { code: "disrespectful_conduct", label: "El repartidor tuvo una conducta irrespetuosa.", serious: true },
-      { code: "mishandled", label: "El pedido fue manipulado incorrectamente.", serious: true },
       {
-        code: "instructions_not_followed",
-        label: "El repartidor no respetó las instrucciones de entrega.",
+        code: "disrespectful_driver",
+        label: "El repartidor tuvo una actitud irrespetuosa.",
         serious: true,
       },
-      { code: "safety_issue", label: "Tuve un problema de seguridad durante la entrega.", serious: true },
+      {
+        code: "damaged_or_tampered",
+        label: "El pedido llegó dañado o manipulado incorrectamente.",
+        serious: true,
+      },
+      { code: "instructions_not_respected", label: "No se respetaron mis instrucciones." },
+      {
+        code: "safety_problem",
+        label: "Tuve un problema de seguridad.",
+        serious: true,
+      },
       { code: "other", label: "Otro motivo." },
     ],
   },
   driver: {
-    4: [
-      { code: "address_clarification", label: "La dirección necesitó una pequeña aclaración." },
-      { code: "slow_response_minor", label: "El cliente tardó un poco en responder." },
-      { code: "unclear_instructions_minor", label: "Las instrucciones pudieron ser más claras." },
-      { code: "finding_address_minor", label: "Hubo una pequeña dificultad para encontrar el domicilio." },
-      { code: "other", label: "Otro motivo." },
-    ],
-    3: [
-      { code: "slow_response", label: "El cliente tardó en responder." },
-      { code: "wrong_address", label: "La dirección era incorrecta o incompleta." },
-      { code: "unclear_instructions", label: "Las instrucciones de entrega no eran claras." },
-      { code: "hard_to_locate", label: "Hubo dificultades para localizar al cliente." },
-      { code: "customer_unavailable", label: "El cliente no estuvo disponible al llegar." },
-      { code: "communication", label: "Hubo dificultades de comunicación." },
-      { code: "other", label: "Otro motivo." },
-    ],
     2: [
-      { code: "no_response", label: "El cliente no respondió a mis mensajes o llamadas." },
-      { code: "wrong_address_provided", label: "El cliente proporcionó una dirección incorrecta." },
-      { code: "unkind", label: "El cliente tuvo un trato poco amable." },
-      { code: "unavailable_to_receive", label: "El cliente no estuvo disponible para recibir el pedido." },
-      { code: "contradictory_instructions", label: "Hubo instrucciones contradictorias." },
-      {
-        code: "uncomfortable_situation",
-        label: "Se presentó una situación incómoda durante la entrega.",
-        serious: true,
-      },
+      { code: "slow_response", label: "El cliente tardó en responder." },
+      { code: "address_clarification", label: "La dirección necesitó aclaraciones." },
+      { code: "unclear_instructions", label: "Las instrucciones no fueron claras." },
+      { code: "customer_unavailable", label: "El cliente no estuvo disponible al llegar." },
+      { code: "communication_difficulties", label: "Hubo dificultades de comunicación." },
       { code: "other", label: "Otro motivo." },
     ],
     1: [
-      { code: "disrespectful_conduct", label: "El cliente tuvo una conducta irrespetuosa.", serious: true },
-      { code: "threats", label: "El cliente realizó amenazas o agresiones.", serious: true },
-      { code: "false_information", label: "El cliente proporcionó información falsa sobre la entrega.", serious: true },
+      { code: "no_response", label: "El cliente no respondió a mis llamadas o mensajes." },
+      { code: "wrong_address", label: "La dirección era incorrecta." },
       {
-        code: "out_of_scope_request",
-        label: "El cliente solicitó acciones fuera de las condiciones del servicio.",
+        code: "disrespectful_customer",
+        label: "El cliente tuvo una conducta irrespetuosa.",
         serious: true,
       },
+      {
+        code: "customer_not_available",
+        label: "El cliente no estuvo disponible para recibir el pedido.",
+      },
+      { code: "uncomfortable_situation", label: "Hubo una situación incómoda o conflictiva." },
       {
         code: "safety_compromised",
-        label: "Existió una situación que comprometió mi seguridad.",
-        serious: true,
-      },
-      {
-        code: "could_not_complete",
-        label: "No fue posible completar la entrega por causas atribuibles al cliente.",
+        label: "Se presentó una situación que comprometió mi seguridad.",
         serious: true,
       },
       { code: "other", label: "Otro motivo." },
@@ -201,19 +184,20 @@ const REASON_CATALOG: Record<RatingRole, Partial<Record<RatingLevel, RatingReaso
   },
 };
 
-/** Motivos válidos para un rol y una calificación. Nivel 5 → sin motivos. */
+/** Motivos válidos para un rol y una calificación. 3★ → sin motivos. */
 export function reasonsFor(role: RatingRole, level: RatingLevel): RatingReason[] {
   return REASON_CATALOG[role]?.[level] ?? [];
 }
 
-/** ¿El pulgar seleccionado abre un menú de motivos? (todos menos el 5). */
+/** ¿La calificación seleccionada abre un menú de motivos? (solo 2★ y 1★) */
 export function ratingHasReasons(level: RatingLevel): boolean {
-  return level !== 5;
+  return level !== DEFAULT_RATING;
 }
 
 /**
  * Descarta motivos que no pertenezcan al rol/nivel actuales y deduplica.
- * Se usa al cambiar de nivel: evita guardar motivos incompatibles.
+ * Se usa al cambiar de nivel: evita guardar motivos incompatibles y limpia
+ * todo al volver a 3★.
  */
 export function sanitizeReasons(
   role: RatingRole,
@@ -251,9 +235,12 @@ export function isSeriousIncident(
   return sanitizeReasons(role, level, codes).some((code) => serious.has(code));
 }
 
-/** Texto del botón final según exista o no un incidente grave. */
-export function ratingSubmitLabel(hasSeriousIncident: boolean): string {
-  return hasSeriousIncident ? "Enviar evaluación y reporte" : "Enviar evaluación";
+/**
+ * Texto del botón final: "Listo" para la evaluación positiva (3★) y
+ * "Enviar evaluación" para las de 1★/2★.
+ */
+export function ratingSubmitLabel(level: RatingLevel | null | undefined): string {
+  return level === DEFAULT_RATING ? "Listo" : "Enviar evaluación";
 }
 
 /** Id determinista por (orden, rol): impide evaluaciones duplicadas. */
@@ -332,8 +319,8 @@ export function validateRatingSubmission(input: RatingSubmissionInput): RatingSu
   const errors: string[] = [];
 
   const numeric = typeof input.rating === "number" ? input.rating : Number(input.rating);
-  if (!Number.isInteger(numeric) || numeric < 1 || numeric > 5) {
-    errors.push("La calificación debe ser un número entero entre 1 y 5.");
+  if (!Number.isInteger(numeric) || numeric < 1 || numeric > 3) {
+    errors.push("La calificación debe ser un número entero entre 1 y 3.");
   }
   if (errors.length > 0) return { ok: false, errors };
 
