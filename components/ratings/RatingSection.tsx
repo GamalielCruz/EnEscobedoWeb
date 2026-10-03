@@ -11,7 +11,7 @@ import { StarRating, type StarRatingPayload } from "@/components/ratings/StarRat
  * evaluarse (no entregado, sin permiso o ya evaluado no bloquea: se muestra
  * el cierre "gracias").
  *
- *   - getUrl  → estado (rateable / alreadyRated / evaluateeName)
+ *   - GET  → estado (rateable / alreadyRated)
  *   - POST con el mismo endpoint, body { orderNumber, ...payload }
  */
 export function RatingSection({
