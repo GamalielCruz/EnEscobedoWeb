@@ -17,9 +17,12 @@ import {
   buildRatingDocumentId,
   counterpartRole,
   isOrderRateable,
+  isRatingWindowOpen,
+  summarizeRatings,
   validateRatingSubmission,
   type RatingRole,
   type RatingSubmissionValue,
+  type RatingSummary,
 } from "@/lib/order-ratings";
 
 const ORDER_CONTEXT_QUERY = `*[
@@ -89,6 +92,11 @@ function notRateableMessage(order: OrderContext, role: RatingRole): string | nul
       return "Este pedido fue cancelado y no puede evaluarse.";
     }
     return "Podrás evaluar cuando el pedido se confirme como entregado.";
+  }
+  // Ventana de 72 h: el periodo de evaluación no queda abierto para siempre.
+  // Solo aplica si conocemos la fecha real de entrega.
+  if (order.deliveredAt && !isRatingWindowOpen(order.deliveredAt)) {
+    return "El periodo para evaluar este pedido ya terminó.";
   }
   if (role === "customer" && !order.driverId) {
     return "Este pedido no tuvo un repartidor asignado.";
@@ -210,4 +218,124 @@ export async function submitOrderRating(input: RatingSubmitInput): Promise<Ratin
   });
 
   return { ok: true, created: true, alreadyRated: false, value };
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Tarjeta de calificación pendiente (cliente) y promedios recibidos.
+// Solo LECTURA: nunca escribe en la orden ni en el repartidor.
+// ────────────────────────────────────────────────────────────────────
+
+const PENDING_CUSTOMER_QUERY = `*[
+  _type == "order" &&
+  !(_id in path('drafts.**')) &&
+  clerkUserId == $userId &&
+  defined(deliveredAt) &&
+  defined(repartidorAsignado._ref) &&
+  !(coalesce(orderStatus, status, "") in ["cancelled", "failed", "expired"])
+] | order(deliveredAt desc)[0...20]{
+  _id,
+  orderNumber,
+  deliveredAt,
+  "driverName": repartidorAsignado->nombre
+}`;
+
+type PendingOrderRow = {
+  _id: string;
+  orderNumber?: string | null;
+  deliveredAt?: string | null;
+  driverName?: string | null;
+};
+
+export type PendingCustomerRating = {
+  orderNumber: string;
+  deliveredAt: string;
+  driverName: string | null;
+};
+
+/**
+ * El pedido más reciente del cliente que sigue dentro de la ventana de 72 h y
+ * aún no fue evaluado. Si no hay ninguno, devuelve null (la tarjeta no se pinta).
+ */
+export async function getPendingCustomerRating(
+  userId: string,
+  nowMs: number = Date.now()
+): Promise<PendingCustomerRating | null> {
+  if (!userId) return null;
+
+  const rows =
+    (await backendClient.fetch<PendingOrderRow[] | null>(PENDING_CUSTOMER_QUERY, { userId })) ?? [];
+  if (rows.length === 0) return null;
+
+  const candidates = rows.filter(
+    (row) => row.deliveredAt && isRatingWindowOpen(row.deliveredAt, nowMs)
+  );
+  if (candidates.length === 0) return null;
+
+  // Una evaluación por (orden, rol): basta con saber cuáles ya existen.
+  const ratingIds = candidates.map((row) => buildRatingDocumentId(row._id, "customer"));
+  const existing =
+    (await backendClient.fetch<string[] | null>(
+      `*[_id in $ids && _type == "orderRating"]._id`,
+      { ids: ratingIds }
+    )) ?? [];
+  const rated = new Set(existing);
+
+  for (const row of candidates) {
+    if (rated.has(buildRatingDocumentId(row._id, "customer"))) continue;
+    return {
+      orderNumber: row.orderNumber ?? row._id,
+      deliveredAt: row.deliveredAt as string,
+      driverName: row.driverName ?? null,
+    };
+  }
+
+  return null;
+}
+
+const RECEIVED_RATINGS_QUERY = `*[
+  _type == "orderRating" &&
+  !(_id in path('drafts.**')) &&
+  evaluateeRole == $role &&
+  evaluateeId == $userId
+] | order(createdAt desc)[0...200]{
+  rating,
+  createdAt,
+  orderNumber,
+  evaluatorRole
+}`;
+
+export type ReceivedRatingRow = {
+  rating?: number | null;
+  createdAt?: string | null;
+  orderNumber?: string | null;
+  evaluatorRole?: RatingRole | null;
+};
+
+export type RatingSummaryResult =
+  | { ok: true; summary: RatingSummary; recent: ReceivedRatingRow[] }
+  | RatingFailure;
+
+/**
+ * Promedio de las evaluaciones RECIBIDAS por una persona (repartidor o
+ * cliente), calculado solo con las evaluaciones nuevas de 3★. No modifica
+ * `repartidor.calificacion` (ese campo alimenta el despacho).
+ */
+export async function getRatingSummary(input: {
+  evaluateeId: string;
+  evaluateeRole: RatingRole;
+}): Promise<RatingSummaryResult> {
+  if (!input.evaluateeId) {
+    return { ok: false, code: "not_found", error: "Perfil no encontrado." };
+  }
+  const rows =
+    (await backendClient.fetch<ReceivedRatingRow[] | null>(RECEIVED_RATINGS_QUERY, {
+      userId: input.evaluateeId,
+      role: input.evaluateeRole,
+    })) ?? [];
+
+  return {
+    ok: true,
+    summary: summarizeRatings(rows),
+    recent: rows.slice(0, 20),
+  };
 }

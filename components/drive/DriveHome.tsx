@@ -7,6 +7,7 @@ import {
   Bell,
   Loader2,
   Map,
+  UserRound,
   Wallet,
   X,
   type LucideIcon,
@@ -16,6 +17,7 @@ import {
   DRIVE_MOTION_EASE,
 } from "@/components/drive/motion";
 import { DriveWallet } from "@/components/drive/DriveWallet";
+import { DriveProfile } from "@/components/drive/DriveProfile";
 
 /**
  * HOME DEL REPARTIDOR — pantalla de inicio (SOLO UI/UX, sin lógica).
@@ -27,6 +29,8 @@ import { DriveWallet } from "@/components/drive/DriveWallet";
  * Contenido:
  * - Encabezado con saludo y el estado de sesión actual.
  * - Acceso de regreso al mapa (y a conectarse, si está fuera de servicio).
+ * - Sección "Mi perfil": promedio real de calificaciones recibidas
+ *   (DriveProfile).
  * - Sección "Wallet": ganancias y saldo reales (DriveWallet).
  * - Sección "Notificaciones": PLACEHOLDER (subpantalla "Próximamente") hasta
  *   que exista su diseño arquitectónico.
@@ -36,7 +40,7 @@ import { DriveWallet } from "@/components/drive/DriveWallet";
  * inicial (nunca se recuerda la última sección).
  */
 
-type HomeSection = "notifications" | "wallet";
+type HomeSection = "notifications" | "wallet" | "profile";
 
 const SECTIONS: {
   id: HomeSection;
@@ -45,6 +49,13 @@ const SECTIONS: {
   placeholder: string;
   icon: LucideIcon;
 }[] = [
+  {
+    id: "profile",
+    title: "Mi perfil",
+    description: "Tu promedio y evaluaciones",
+    placeholder: "Aquí verás tu promedio de calificaciones.",
+    icon: UserRound,
+  },
   {
     id: "notifications",
     title: "Notificaciones",
@@ -243,10 +254,12 @@ export function DriveHome({
                   </h2>
                 </div>
 
-                {/* Contenido: Wallet ya tiene función real; el resto sigue
-                    como placeholder hasta tener su diseño. */}
+                {/* Contenido: Wallet y Mi perfil ya tienen función real; el
+                    resto sigue como placeholder hasta tener su diseño. */}
                 {activeSection.id === "wallet" ? (
                   <DriveWallet />
+                ) : activeSection.id === "profile" ? (
+                  <DriveProfile />
                 ) : (
                   <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-8 pb-16 text-center">
                     <span className="flex h-16 w-16 items-center justify-center bg-gray-100 text-gray-400">

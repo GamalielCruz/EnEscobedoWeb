@@ -45,6 +45,61 @@ export const DEFAULT_RATING: RatingLevel = 3;
 export const RATING_COMMENT_MAX = 1000;
 export const RATING_INCIDENT_MAX = 2000;
 
+/**
+ * Ventana para evaluar: pasada esta cantidad de horas desde la entrega, la
+ * evaluación ya no se muestra ni se acepta. Mantiene la tarjeta relevante y
+ * evita recordatorios sobre pedidos muy antiguos.
+ */
+export const RATING_WINDOW_HOURS = 72;
+
+const HOUR_MS = 60 * 60 * 1000;
+
+/**
+ * ¿Sigue abierta la ventana de evaluación para una entrega? Fail-closed: sin
+ * fecha válida no hay ventana (no se muestra la tarjeta).
+ */
+export function isRatingWindowOpen(
+  deliveredAt: string | null | undefined,
+  nowMs: number = Date.now()
+): boolean {
+  if (!deliveredAt) return false;
+  const deliveredMs = new Date(deliveredAt).getTime();
+  if (!Number.isFinite(deliveredMs)) return false;
+  // Tolerante a relojes adelantados: una entrega "en el futuro" cuenta como
+  // recién hecha en lugar de descartarse.
+  return nowMs - deliveredMs <= RATING_WINDOW_HOURS * HOUR_MS;
+}
+
+export type RatingSummary = {
+  /** Promedio 1-3 con un decimal (o null si no hay evaluaciones). */
+  average: number | null;
+  count: number;
+  distribution: Record<RatingLevel, number>;
+};
+
+/**
+ * Resume una lista de evaluaciones (solo lectura, puro). Ignora cualquier
+ * valor que no sea una calificación válida para no inventar promedios.
+ */
+export function summarizeRatings(ratings: readonly unknown[]): RatingSummary {
+  const distribution: Record<RatingLevel, number> = { 1: 0, 2: 0, 3: 0 };
+  let count = 0;
+  let sum = 0;
+
+  for (const entry of ratings) {
+    const raw = typeof entry === "object" && entry !== null ? (entry as { rating?: unknown }).rating : entry;
+    const numeric = typeof raw === "number" ? raw : Number(raw);
+    if (!Number.isInteger(numeric) || numeric < 1 || numeric > 3) continue;
+    const level = numeric as RatingLevel;
+    distribution[level] += 1;
+    count += 1;
+    sum += level;
+  }
+
+  if (count === 0) return { average: null, count, distribution };
+  return { average: Math.round((sum / count) * 10) / 10, count, distribution };
+}
+
 /** Pregunta inicial del componente, por rol. */
 export const RATING_PROMPT: Record<RatingRole, string> = {
   customer: "¿Cómo fue tu experiencia?",

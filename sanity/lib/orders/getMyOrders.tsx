@@ -11,7 +11,6 @@ export async function getMyOrders(userId: string) {
     *[_type == "order" && clerkUserId == $userId] | order(orderDate desc) {
       ...,
       "isClickCollect": orderType == "pickup",
-      "hasDriver": defined(repartidorAsignado._ref),
       "storeInfo": select(
         orderType == "pickup" => {
           "storeName": pickupStore->name,

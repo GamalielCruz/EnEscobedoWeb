@@ -6,6 +6,7 @@ import { getAllStoreCategories } from "@/sanity/lib/products/getAllStoreCategori
 import { redirect } from "next/navigation";
 import StoresView from "@/components/StoresView";
 import BuenFinBanner from "@/components/BuenFinBanner";
+import { PendingRatingPrompt } from "@/components/ratings/PendingRatingPrompt";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 60;
@@ -201,6 +202,12 @@ export default async function Home(props: NextPageProps) {
       )}
 
       <div className="flex min-h-screen w-full flex-col bg-white pb-4">
+        {/* Tarjeta de calificación: pedido entregado hace < 72 h sin evaluar. */}
+        {currentPage === 1 && !isMandado && (
+          <div className="mx-auto w-full max-w-3xl px-4 pt-4">
+            <PendingRatingPrompt />
+          </div>
+        )}
         <div className="w-full">
           <StoresView
             stores={convertedStores}

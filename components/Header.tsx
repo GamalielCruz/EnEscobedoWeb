@@ -8,7 +8,7 @@ import {
 } from "@clerk/nextjs";
 import Link from "next/link";
 import Form from "next/form";
-import { SearchIcon, LayoutDashboard } from "lucide-react";
+import { SearchIcon, LayoutDashboard, UserRound } from "lucide-react";
 import { PackageIcon, TrolleyIcon } from "@sanity/icons";
 import useBasketStore from "@/store/store";
 import Image from "next/image";
@@ -216,7 +216,15 @@ export function Header() {
             <ClerkLoaded>
               {user ? (
                 <div className="flex min-w-9 items-center justify-center">
-                  <UserButton />
+                  <UserButton>
+                    <UserButton.MenuItems>
+                      <UserButton.Link
+                        label="Mi perfil"
+                        labelIcon={<UserRound className="h-4 w-4" />}
+                        href="/mi-perfil"
+                      />
+                    </UserButton.MenuItems>
+                  </UserButton>
                 </div>
               ) : (
                 <SignInButton mode="modal">
@@ -236,12 +244,18 @@ export function Header() {
             {isHydrated && (
             <ClerkLoaded>
               {user && (
-                <div className="flex items-center space-x-2">
+                <Link
+                  href="/mi-perfil"
+                  aria-label="Mi perfil"
+                  className="flex items-center space-x-2"
+                >
                   <div className="hidden sm:block text-xs">
-                    <p className="text-gray-900">Buen dia,</p>
-                    <p className="font-bold text-gray-900">{user.firstName}!</p>
+                    <p className="text-gray-900">Buen día,</p>
+                    <p className="font-bold text-gray-900 underline-offset-2 hover:underline">
+                      {user.firstName}!
+                    </p>
                   </div>
-                </div>
+                </Link>
               )}
             </ClerkLoaded>
             )}
