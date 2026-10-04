@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { DeliveryPinCard } from "@/components/DeliveryPinCard";
 import { NipStatusCard } from "@/components/NipStatusCard";
+import { OrderHistoryRating } from "@/components/ratings/OrderHistoryRating";
 import { orderRequiresDeliveryPin, revealDeliveryPin } from "@/lib/delivery-pin";
 import { buildNipSenderView } from "@/lib/nip-sender-view";
 
@@ -47,6 +48,7 @@ interface ExtendedOrder {
     allergies?: string[];
   }>;
   isClickCollect?: boolean;
+  hasDriver?: boolean;
   pickupCode?: string;
   storeInfo?: {
     storeName?: string;
@@ -315,6 +317,9 @@ const ActiveOrderCard = ({ order }: { order: ExtendedOrder }) => {
 const PastOrderCard = ({ order }: { order: ExtendedOrder }) => {
   const isCancelled = order.status === "cancelled" || order.status === "failed" || order.status === "expired";
   const createdAt = order.orderDate ?? order.createdAt;
+  // Solo pedidos entregados con repartidor asignado pueden evaluarse.
+  const isDelivered = order.status === "delivered" || order.status === "completed" || order.status === "picked_up";
+  const canRate = isDelivered && Boolean(order.hasDriver);
 
   return (
     <div className="flex flex-col justify-between gap-4 rounded-lg border bg-white p-4 transition-shadow hover:shadow-sm sm:flex-row sm:items-center">
@@ -338,9 +343,14 @@ const PastOrderCard = ({ order }: { order: ExtendedOrder }) => {
           </Badge>
         </div>
       </div>
-      <div className="text-right">
-        <p className="text-lg font-bold text-gray-900">{formatCurrency(order.totalPrice ?? 0, order.currency)}</p>
-        <span className="text-xs uppercase tracking-wide text-gray-400">Total</span>
+      <div className="flex flex-col items-start gap-2 sm:items-end">
+        <div className="text-right">
+          <p className="text-lg font-bold text-gray-900">{formatCurrency(order.totalPrice ?? 0, order.currency)}</p>
+          <span className="text-xs uppercase tracking-wide text-gray-400">Total</span>
+        </div>
+        {canRate && order.orderNumber && (
+          <OrderHistoryRating orderNumber={order.orderNumber} />
+        )}
       </div>
     </div>
   );
