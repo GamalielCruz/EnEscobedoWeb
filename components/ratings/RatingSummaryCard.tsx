@@ -1,4 +1,3 @@
-import Image from "next/image";
 import { Star } from "lucide-react";
 import type { RatingSummary } from "@/lib/order-ratings";
 
@@ -47,13 +46,11 @@ function Stars({ value, size = 16 }: { value: number; size?: number }) {
 export function RatingSummaryCard({
   name,
   subtitle,
-  imageUrl,
   summary,
   recent,
 }: {
   name: string;
   subtitle?: string | null;
-  imageUrl?: string | null;
   summary: RatingSummary;
   recent: ReceivedRating[];
 }) {
@@ -63,18 +60,14 @@ export function RatingSummaryCard({
     <div className="space-y-3">
       {/* Cabecera: identidad + promedio */}
       <div className="flex items-center gap-4 border-2 border-gray-200 p-4">
-        {imageUrl ? (
-          <span className="relative h-14 w-14 shrink-0 overflow-hidden rounded-full bg-gray-100">
-            <Image src={imageUrl} alt={name} fill className="object-cover" />
-          </span>
-        ) : (
-          <span
-            className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full text-lg font-black text-white"
-            style={{ backgroundColor: NAVY }}
-          >
-            {name.slice(0, 1).toUpperCase()}
-          </span>
-        )}
+        {/* Inicial en lugar de avatar: no depende de hosts externos. */}
+        <span
+          className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full text-lg font-black text-white"
+          style={{ backgroundColor: NAVY }}
+          aria-hidden
+        >
+          {name.slice(0, 1).toUpperCase()}
+        </span>
         <div className="min-w-0 flex-1">
           <p className="truncate text-base font-black" style={{ color: NAVY }}>
             {name}

@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/customer/profile — perfil del cliente.
  *
- * Identidad: Clerk (nombre y avatar) — el cliente no vive en Sanity.
+ * Identidad: Clerk (nombre) — el cliente no vive en Sanity.
  * Reputación: promedio de las evaluaciones RECIBIDAS por el cliente
  * (evaluaciones nuevas de 3★ que los repartidores le dejaron).
  *
@@ -25,7 +25,6 @@ export async function GET() {
 
     const fullName = [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim();
     const name = fullName || user?.username || "Cliente";
-    const imageUrl = user?.imageUrl ?? null;
 
     const result = await getRatingSummary({
       evaluateeId: userId,
@@ -38,7 +37,6 @@ export async function GET() {
         ok: true,
         profile: {
           name,
-          imageUrl,
           summary: result.summary,
           recent: result.recent,
         },

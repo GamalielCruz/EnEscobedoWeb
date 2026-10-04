@@ -8,14 +8,13 @@ import type { RatingSummary } from "@/lib/order-ratings";
 /**
  * MI PERFIL DEL CLIENTE.
  *
- * Identidad: Clerk (nombre + avatar) — el cliente no vive en Sanity.
+ * Identidad: Clerk (nombre) — el cliente no vive en Sanity.
  * Reputación: promedio de las evaluaciones RECIBIDAS de los repartidores
  * (sistema de 3★). Reutiliza lo que ya existe: no requiere campos nuevos.
  */
 
 type Profile = {
   name: string;
-  imageUrl: string | null;
   summary: RatingSummary;
   recent: ReceivedRating[];
 };
@@ -91,7 +90,6 @@ export function CustomerProfile() {
       <RatingSummaryCard
         name={profile.name}
         subtitle="Cliente de ElMenu"
-        imageUrl={profile.imageUrl}
         summary={profile.summary}
         recent={profile.recent}
       />
