@@ -7,6 +7,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowLeft,
   Bike,
+  Check,
   CheckCircle,
   ChevronDown,
   ChevronRight,
@@ -18,6 +19,7 @@ import {
   Package,
   Pencil,
   Phone,
+  Plus,
   Route,
   Search,
   ShieldCheck,
@@ -168,6 +170,14 @@ export default function MandadoMapFlow() {
   // Flujo explícito (regla 3): el remitente recibe el código aunque no haya datos
   // del destinatario.
   const [nipToSender, setNipToSender] = useState(false);
+
+  // Progressive disclosure de los detalles opcionales: cada bloque se expande
+  // solo cuando el usuario lo pide. Los datos escritos NO se borran al colapsar
+  // (se conservan durante la sesión).
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
+  const [protectionOpen, setProtectionOpen] = useState(false);
+  const [notifyOpen, setNotifyOpen] = useState(false);
+  const [notifyActive, setNotifyActive] = useState(false);
 
   // Cotización
   const [quote, setQuote] = useState<QuoteState>({ status: "idle" });
@@ -907,7 +917,7 @@ export default function MandadoMapFlow() {
                   </button>
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-bold text-[#eb1901]">
-                      {pickingFor === "origin" ? "Paso 1 de 2" : "Paso 2 de 2"}
+                      {pickingFor === "origin" ? "Punto de inicio" : "Punto de entrega"}
                     </p>
                     <p className="truncate text-sm font-semibold leading-tight text-[#09193B]">
                       {pickingFor === "origin" ? originTitle : "¿A dónde lo entregamos?"}
@@ -1187,12 +1197,14 @@ export default function MandadoMapFlow() {
                       {progress !== "confirm" ? (
                         <p className="text-center text-[11px] font-bold uppercase tracking-wide text-slate-500">
                           {progress === "step1"
-                            ? `Paso 1 de 2 · ${isPickup ? "Elige dónde recogemos" : "Elige dónde compramos"}`
-                            : "Paso 2 de 2 · ¿A dónde lo entregamos?"}
+                            ? isPickup
+                              ? "Elige dónde recogemos"
+                              : "Elige dónde compramos"
+                            : "¿A dónde lo entregamos?"}
                         </p>
                       ) : (
                         <p className="text-center text-[11px] font-bold uppercase tracking-wide text-slate-500">
-                          Paso {confirmStep} de 2 · {confirmStepLabel}
+                          {confirmStepLabel}
                         </p>
                       )}
 
@@ -1282,7 +1294,7 @@ export default function MandadoMapFlow() {
                             <Package className="h-4 w-4 text-[#09193B]" />
                           </div>
                           <h3 className="text-sm font-bold text-[#09193B]">
-                            {isPickup ? "¿Qué enviarás?" : "¿Qué compraremos?"}
+                            {isPickup ? "¿Qué vas a enviar?" : "¿Qué quieres que compremos?"}
                           </h3>
                         </div>
                         <textarea
@@ -1293,55 +1305,179 @@ export default function MandadoMapFlow() {
                           rows={3}
                           className="w-full resize-none rounded-xl border border-slate-200 p-4 text-base leading-6 text-[#09193B] placeholder:text-slate-400 focus:border-[#eb1901] focus:outline-none focus:ring-2 focus:ring-[#eb1901]/20"
                         />
+                        <p className="mt-2 text-xs leading-5 text-slate-500">
+                          {isPickup
+                            ? "Cuéntale al repartidor qué llevará y cómo debe manejarlo."
+                            : "Escribe productos, cantidades y cualquier indicación útil. Te confirmamos el total antes de comprar."}
+                        </p>
                       </Card>
                       )}
 
-                      {/* 4. Seguridad (NIP) — solo al confirmar.
-                          El código se envía al canal configurado: al destinatario
-                          (si tiene WhatsApp) o al remitente (si el destinatario no
-                          tiene WhatsApp o el usuario elige recibirlo). */}
+                      {/* Detalles OPCIONALES — progressive disclosure: las tres
+                          funciones se ofrecen como acciones compactas y sus
+                          formularios aparecen SOLO cuando el usuario los pide.
+                          No se usan switches para estas acciones. */}
                       {progress === "confirm" && confirmStep === 1 && (
                       <Card>
-                        <div className="flex items-start gap-3">
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#09193B]">
-                            <ShieldCheck className="h-5 w-5 text-white" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <h3 className="text-sm font-bold text-[#09193B]">Entrega segura</h3>
-                            <p className="mt-0.5 text-xs leading-5 text-slate-500">
-                              Solicita un NIP para confirmar que el artículo fue entregado a la persona correcta.
-                            </p>
-                          </div>
-                          <ModernSwitch checked={pinEnabled} onChange={setPinEnabled} label="Entrega segura" />
+                        <h3 className="text-sm font-bold text-[#09193B]">
+                          ¿Quieres agregar algún detalle?
+                        </h3>
+                        <p className="mt-0.5 text-xs leading-5 text-slate-500">
+                          Opcional. Si no necesitas nada de esto, puedes continuar.
+                        </p>
+                        <div className="mt-3 space-y-2">
+                          <OptionalOption
+                            icon={Navigation}
+                            label="Instrucciones de entrega"
+                            hint="¿Qué debe saber el repartidor?"
+                            active={instructionsOpen}
+                            onClick={() => setInstructionsOpen((open) => !open)}
+                          />
+                          <OptionalOption
+                            icon={ShieldCheck}
+                            label="Proteger la entrega"
+                            hint="Confirma que llegue a la persona correcta."
+                            active={pinEnabled}
+                            onClick={() => {
+                              if (pinEnabled) {
+                                setPinEnabled(false);
+                                setProtectionOpen(false);
+                              } else {
+                                setProtectionOpen((open) => !open);
+                              }
+                            }}
+                          />
+                          <OptionalOption
+                            icon={Phone}
+                            label="Avisar al destinatario"
+                            hint="Le avisamos por WhatsApp cuando va en camino."
+                            active={notifyActive}
+                            onClick={() => {
+                              if (notifyActive) {
+                                setNotifyActive(false);
+                                setNotifyOpen(false);
+                              } else {
+                                setNotifyOpen((open) => !open);
+                              }
+                            }}
+                          />
                         </div>
-
-                        <AnimatePresence initial={false}>
-                          {pinEnabled && (
-                            <motion.div
-                              initial={{ height: 0, opacity: 0 }}
-                              animate={{ height: "auto", opacity: 1 }}
-                              exit={{ height: 0, opacity: 0 }}
-                              transition={{ duration: 0.28, ease: "easeOut" }}
-                              className="overflow-hidden"
-                            >
-                              <div className="mt-4 rounded-xl bg-[#09193B]/[0.05] px-3.5 py-3">
-                                <p className="text-xs leading-5 text-slate-600">
-                                  {nipToSender || !recipientWhatsAppDeclared
-                                    ? "El código de entrega se enviará a TU WhatsApp y tú deberás proporcionárselo al repartidor."
-                                    : "Enviaremos el código de entrega al WhatsApp del destinatario; esa persona deberá mostrarlo al repartidor para recibir el paquete."}
-                                </p>
-                              </div>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
                       </Card>
                       )}
 
-                      {/* 4b. Indicaciones para el repartidor (opcional) — solo al
-                          confirmar. Se guardan en la orden como
-                          mandadoOriginReference/mandadoDestinationReference y el
-                          webhook las envía al repartidor tras el ACEPTO. */}
-                      {progress === "confirm" && confirmStep === 1 && (
+                      {/* AVANZADO · Proteger la entrega: el NIP aparece solo
+                          después de activar la función (no antes). */}
+                      <AnimatePresence initial={false}>
+                        {(protectionOpen || pinEnabled) && (
+                          <motion.div
+                            key="protection"
+                            initial={{ opacity: 0, y: -6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -6 }}
+                            transition={{ duration: 0.2, ease: "easeOut" }}
+                          >
+                            <Card>
+                              <div className="flex items-start gap-3">
+                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#09193B]">
+                                  <ShieldCheck className="h-5 w-5 text-white" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <h3 className="text-sm font-bold text-[#09193B]">
+                                    {pinEnabled ? "Entrega protegida" : "Proteger la entrega"}
+                                  </h3>
+                                  <p className="mt-0.5 text-xs leading-5 text-slate-500">
+                                    {pinEnabled
+                                      ? "El destinatario deberá proporcionar un NIP para confirmar la entrega."
+                                      : "Confirma que el mandado llegue a la persona correcta."}
+                                  </p>
+                                </div>
+                              </div>
+
+                              {!pinEnabled ? (
+                                <button
+                                  type="button"
+                                  onClick={() => setPinEnabled(true)}
+                                  className="mt-4 h-11 w-full rounded-full bg-[#09193B] text-sm font-bold text-white transition hover:bg-[#0d2150]"
+                                >
+                                  Activar
+                                </button>
+                              ) : (
+                                <div className="mt-4 space-y-3">
+                                  <div className="rounded-xl bg-[#09193B]/[0.05] px-3.5 py-3">
+                                    <p className="text-xs leading-5 text-slate-600">
+                                      {nipToSender || !recipientWhatsAppDeclared
+                                        ? "El código de entrega se enviará a TU WhatsApp y tú deberás proporcionárselo al repartidor."
+                                        : "Enviaremos el código de entrega al WhatsApp del destinatario; esa persona deberá mostrarlo al repartidor para recibir el paquete."}
+                                    </p>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setPinEnabled(false);
+                                      setProtectionOpen(false);
+                                    }}
+                                    className="w-full text-center text-xs font-bold text-slate-500 underline underline-offset-2"
+                                  >
+                                    Desactivar la protección
+                                  </button>
+                                </div>
+                              )}
+                            </Card>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+
+                      {/* AVANZADO · Avisar al destinatario: activar revela solo
+                          los datos necesarios. */}
+                      <AnimatePresence initial={false}>
+                        {notifyOpen && !notifyActive && (
+                          <motion.div
+                            key="notify"
+                            initial={{ opacity: 0, y: -6 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            exit={{ opacity: 0, y: -6 }}
+                            transition={{ duration: 0.2, ease: "easeOut" }}
+                          >
+                            <Card>
+                              <div className="flex items-start gap-3">
+                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
+                                  <Phone className="h-5 w-5 text-[#09193B]" />
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <h3 className="text-sm font-bold text-[#09193B]">
+                                    Avisar al destinatario
+                                  </h3>
+                                  <p className="mt-0.5 text-xs leading-5 text-slate-500">
+                                    ¿Quieres avisarle cuando el repartidor llegue?
+                                  </p>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setNotifyActive(true)}
+                                className="mt-4 h-11 w-full rounded-full bg-[#09193B] text-sm font-bold text-white transition hover:bg-[#0d2150]"
+                              >
+                                Activar
+                              </button>
+                            </Card>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+
+                      {/* AVANZADO · Indicaciones para el repartidor: el campo
+                          permanece oculto hasta que el usuario lo solicita. Se
+                          guardan en la orden como mandadoOriginReference/
+                          mandadoDestinationReference y el webhook las envía tras
+                          el ACEPTO. */}
+                      <AnimatePresence initial={false}>
+                        {progress === "confirm" && confirmStep === 1 && instructionsOpen && (
+                        <motion.div
+                          key="instructions"
+                          initial={{ opacity: 0, y: -6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -6 }}
+                          transition={{ duration: 0.2, ease: "easeOut" }}
+                        >
                       <Card>
                         <div className="mb-3 flex items-center gap-2.5">
                           <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
@@ -1388,13 +1524,23 @@ export default function MandadoMapFlow() {
                           </div>
                         </div>
                       </Card>
-                      )}
+                        </motion.div>
+                        )}
+                      </AnimatePresence>
 
-                      {/* 5. ¿Quién recibe el envío? — solo al confirmar.
-                          Con Entrega segura activa (PASO 3), el destinatario define el
-                          canal del NIP: nombre + teléfono + declaración de WhatsApp.
-                          Si el destinatario no tiene WhatsApp, el código va al remitente. */}
-                      {progress === "confirm" && confirmStep === 1 && (
+                      {/* AVANZADO · Destinatario: aparece al activar "Avisar al
+                          destinatario" o "Proteger la entrega". Con Entrega
+                          protegida, el destinatario define el canal del NIP:
+                          nombre + teléfono + declaración de WhatsApp. */}
+                      <AnimatePresence initial={false}>
+                        {progress === "confirm" && confirmStep === 1 && (pinEnabled || notifyActive) && (
+                        <motion.div
+                          key="recipient"
+                          initial={{ opacity: 0, y: -6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, y: -6 }}
+                          transition={{ duration: 0.2, ease: "easeOut" }}
+                        >
                       <Card>
                         <div className="mb-3 flex items-start gap-3">
                           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
@@ -1405,7 +1551,7 @@ export default function MandadoMapFlow() {
                               {pinEnabled ? (
                                 "¿Quién recibirá el envío?"
                               ) : (
-                                <>Notificar al destinatario{" "}<span className="font-medium text-slate-400">(opcional)</span></>
+                                "Avisar al destinatario"
                               )}
                             </h3>
                             <p className="mt-0.5 text-xs leading-5 text-slate-500">
@@ -1508,7 +1654,9 @@ export default function MandadoMapFlow() {
                           </div>
                         )}
                       </Card>
-                      )}
+                        </motion.div>
+                        )}
+                      </AnimatePresence>
 
                       {progress === "confirm" && confirmStep === 2 && origin && destination && (
                         <Card>
@@ -1660,6 +1808,58 @@ function Card({ children }: { children: React.ReactNode }) {
     <section className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[0_1px_3px_rgba(9,25,59,0.08)]">
       {children}
     </section>
+  );
+}
+
+/**
+ * Acción OPCIONAL compacta para el bloque de detalles. Se ve como una acción
+ * (no como un campo obligatorio): el usuario entiende que puede ignorarla y
+ * continuar. Al tocarla se expande el formulario correspondiente.
+ */
+function OptionalOption({
+  icon: Icon,
+  label,
+  hint,
+  active,
+  onClick,
+}: {
+  icon: typeof Navigation;
+  label: string;
+  hint: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition ${
+        active
+          ? "border-[#eb1901]/40 bg-rose-50/60"
+          : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
+      }`}
+    >
+      <span
+        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
+          active ? "bg-[#eb1901]/10" : "bg-[#09193B]/[0.06]"
+        }`}
+      >
+        <Icon className={`h-4 w-4 ${active ? "text-[#eb1901]" : "text-[#09193B]"}`} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-bold text-[#09193B]">{label}</span>
+        <span className="mt-0.5 block text-xs text-slate-500">{hint}</span>
+      </span>
+      <span
+        aria-hidden
+        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${
+          active ? "bg-[#eb1901]" : "bg-slate-300"
+        }`}
+      >
+        {active ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+      </span>
+    </button>
   );
 }
 
