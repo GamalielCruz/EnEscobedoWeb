@@ -3719,6 +3719,18 @@ export default function DrivePage() {
         coverHeight={tripSheetCollapsedHeight}
       />
 
+      {/* ── HOJA DE CANCELACIÓN (segundo nivel del menú ⋮) ───────────────
+          Capa independiente, igual que "Tu ruta": el panel de pedido queda
+          cubierto mientras está abierta. Registra el motivo elegido en la
+          orden (order.cancellation) y refresca el estado al confirmar. */}
+      <DriveCancelOrderSheet
+        open={cancelSheetOpen}
+        onClose={() => setCancelSheetOpen(false)}
+        orderNumber={orders[0]?.orderNumber ?? null}
+        onConfirm={handleCancelOrder}
+        coverHeight={tripSheetCollapsedHeight}
+      />
+
       {/* Toast temporal con Deshacer (resultado de la elección). */}
       <AnimatePresence>
         {routeToast && (
