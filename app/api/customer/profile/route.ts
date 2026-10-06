@@ -8,8 +8,9 @@ export const dynamic = "force-dynamic";
  * GET /api/customer/profile — perfil del cliente.
  *
  * Identidad: Clerk (nombre) — el cliente no vive en Sanity.
- * Reputación: promedio de las evaluaciones RECIBIDAS por el cliente
- * (evaluaciones nuevas de 3★ que los repartidores le dejaron).
+ * Reputación: promedio ANÓNIMO de las evaluaciones RECIBIDAS por el cliente
+ * sobre una ventana móvil de las últimas 50. No expone evaluaciones
+ * individuales, distribución ni quién calificó.
  *
  * Solo lectura: no modifica datos de Clerk ni documentos de la orden.
  */
@@ -38,7 +39,6 @@ export async function GET() {
         profile: {
           name,
           summary: result.summary,
-          recent: result.recent,
         },
       },
       { headers: { "Cache-Control": "no-store" } }

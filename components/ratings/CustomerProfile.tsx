@@ -2,21 +2,21 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, RefreshCw, UserRound } from "lucide-react";
-import { RatingSummaryCard, type ReceivedRating } from "@/components/ratings/RatingSummaryCard";
-import type { RatingSummary } from "@/lib/order-ratings";
+import { RatingSummaryCard } from "@/components/ratings/RatingSummaryCard";
+import type { ReputationSummary } from "@/lib/order-ratings";
 
 /**
  * MI PERFIL DEL CLIENTE.
  *
  * Identidad: Clerk (nombre) — el cliente no vive en Sanity.
- * Reputación: promedio de las evaluaciones RECIBIDAS de los repartidores
- * (sistema de 3★). Reutiliza lo que ya existe: no requiere campos nuevos.
+ * Reputación: promedio ANÓNIMO de las evaluaciones RECIBIDAS de los
+ * repartidores sobre una ventana móvil de las últimas 50. Reutiliza lo que ya
+ * existe: no requiere campos nuevos.
  */
 
 type Profile = {
   name: string;
-  summary: RatingSummary;
-  recent: ReceivedRating[];
+  summary: ReputationSummary;
 };
 
 export function CustomerProfile() {
@@ -91,11 +91,10 @@ export function CustomerProfile() {
         name={profile.name}
         subtitle="Cliente de ElMenu"
         summary={profile.summary}
-        recent={profile.recent}
       />
       <p className="mt-4 text-[11px] leading-relaxed text-gray-400">
-        Tu promedio se calcula solo con las evaluaciones que los repartidores dejan al completar un
-        pedido.
+        Tu promedio se calcula solo con las últimas evaluaciones que los repartidores dejan al
+        completar un pedido. Las evaluaciones son anónimas.
       </p>
     </div>
   );

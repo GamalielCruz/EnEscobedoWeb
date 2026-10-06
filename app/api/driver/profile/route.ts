@@ -5,11 +5,13 @@ import { getRatingSummary } from "@/lib/order-ratings-store";
 export const dynamic = "force-dynamic";
 
 /**
- * GET /api/driver/profile — promedio de calificaciones RECIBIDAS por el
- * repartidor (evaluaciones nuevas de 3★).
+ * GET /api/driver/profile — promedio ANÓNIMO de calificaciones RECIBIDAS por el
+ * repartidor sobre una ventana móvil de las últimas 50.
  *
- * Solo lectura. NO toca `repartidor.calificacion` (ese campo alimenta el
- * ranking del despacho): el promedio del perfil se calcula aparte.
+ * Solo lectura. Expone únicamente el promedio y cuántas evaluaciones entran en
+ * la ventana: nunca evaluación individual, distribución ni evaluador. NO toca
+ * `repartidor.calificacion` (ese campo alimenta el ranking del despacho): el
+ * promedio del perfil se calcula aparte.
  */
 export async function GET() {
   const auth = await requireDriver();
@@ -28,7 +30,6 @@ export async function GET() {
         profile: {
           name: auth.repartidor.nombre ?? "Repartidor",
           summary: result.summary,
-          recent: result.recent,
         },
       },
       { headers: { "Cache-Control": "no-store" } }

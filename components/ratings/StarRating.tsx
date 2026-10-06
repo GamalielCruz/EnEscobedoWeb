@@ -157,10 +157,12 @@ export function StarRating({
         })}
       </div>
 
-      {/* 3★: mensaje positivo, sin ningún formulario adicional. */}
+      {/* 3★ (estado inicial, PRESELECCIONADO): todo salió bien, sin ningún
+          formulario adicional. La evaluación NO se registra sola: se confirma
+          con el botón "Listo". */}
       {!showReasons && (
         <p className="mt-4 text-center text-sm font-semibold leading-snug" style={{ color: NAVY }}>
-          {RATING_INTRO[role][DEFAULT_RATING]}
+          {RATING_LEVEL_LABEL[DEFAULT_RATING]}
         </p>
       )}
 

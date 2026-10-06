@@ -2,23 +2,23 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, RefreshCw, UserRound } from "lucide-react";
-import { RatingSummaryCard, type ReceivedRating } from "@/components/ratings/RatingSummaryCard";
-import type { RatingSummary } from "@/lib/order-ratings";
+import { RatingSummaryCard } from "@/components/ratings/RatingSummaryCard";
+import type { ReputationSummary } from "@/lib/order-ratings";
 
 /**
- * MI PERFIL DEL REPARTIDOR — reputación real (solo lectura).
+ * MI PERFIL DEL REPARTIDOR — reputación anónima (solo lectura).
  *
- * Consume GET /api/driver/profile: promedio de las evaluaciones RECIBIDAS
- * (sistema de 3★). No confunde este promedio con `repartidor.calificacion`,
- * que alimenta el ranking del despacho y no se toca aquí.
+ * Consume GET /api/driver/profile: promedio de las evaluaciones RECIBIDAS sobre
+ * una ventana móvil de las últimas 50. No confunde este promedio con
+ * `repartidor.calificacion`, que alimenta el ranking del despacho y no se toca
+ * aquí.
  *
  * Fail-closed: si algo falla, no se muestran cifras inventadas.
  */
 
 type Profile = {
   name: string;
-  summary: RatingSummary;
-  recent: ReceivedRating[];
+  summary: ReputationSummary;
 };
 
 export function DriveProfile() {
@@ -93,11 +93,10 @@ export function DriveProfile() {
         name={profile.name}
         subtitle="Repartidor de ElMenu"
         summary={profile.summary}
-        recent={profile.recent}
       />
       <p className="mt-4 text-[11px] leading-relaxed text-gray-400">
-        Tu promedio se calcula solo con las evaluaciones de 3 estrellas que los clientes dejan al
-        completar un pedido.
+        Tu promedio se calcula solo con las últimas 50 entregas evaluadas. Las evaluaciones son
+        anónimas: nadie puede saber quién te calificó ni de qué pedido viene.
       </p>
     </div>
   );

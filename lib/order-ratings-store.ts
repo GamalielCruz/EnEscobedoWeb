@@ -18,11 +18,12 @@ import {
   counterpartRole,
   isOrderRateable,
   isRatingWindowOpen,
-  summarizeRatings,
+  summarizeReputation,
   validateRatingSubmission,
+  RATING_WINDOW_SIZE,
+  type ReputationSummary,
   type RatingRole,
   type RatingSubmissionValue,
-  type RatingSummary,
 } from "@/lib/order-ratings";
 
 const ORDER_CONTEXT_QUERY = `*[
@@ -292,33 +293,36 @@ export async function getPendingCustomerRating(
   return null;
 }
 
+/**
+ * Reputación ANÓNIMA: solo se leen las calificaciones de las últimas 50
+ * evaluaciones (ventana móvil). NO se devuelven datos que permitan identificar
+ * al evaluador ni el pedido de origen: la lista individual queda solo del lado
+ * interno (moderación y análisis).
+ */
 const RECEIVED_RATINGS_QUERY = `*[
   _type == "orderRating" &&
   !(_id in path('drafts.**')) &&
   evaluateeRole == $role &&
   evaluateeId == $userId
-] | order(createdAt desc)[0...200]{
-  rating,
-  createdAt,
-  orderNumber,
-  evaluatorRole
+] | order(createdAt desc)[0...${RATING_WINDOW_SIZE}]{
+  rating
 }`;
 
 export type ReceivedRatingRow = {
   rating?: number | null;
-  createdAt?: string | null;
-  orderNumber?: string | null;
-  evaluatorRole?: RatingRole | null;
 };
 
 export type RatingSummaryResult =
-  | { ok: true; summary: RatingSummary; recent: ReceivedRatingRow[] }
+  | { ok: true; summary: ReputationSummary }
   | RatingFailure;
 
 /**
- * Promedio de las evaluaciones RECIBIDAS por una persona (repartidor o
- * cliente), calculado solo con las evaluaciones nuevas de 3★. No modifica
+ * Promedio de reputación RECIBIDA por una persona (repartidor o cliente),
+ * calculado sobre una VENTANA MÓVIL de las últimas 50 evaluaciones. No modifica
  * `repartidor.calificacion` (ese campo alimenta el despacho).
+ *
+ * Solo expone el promedio y cuántas evaluaciones entraron en la ventana: nunca
+ * la distribución, las evaluaciones individuales ni quién calificó.
  */
 export async function getRatingSummary(input: {
   evaluateeId: string;
@@ -335,7 +339,6 @@ export async function getRatingSummary(input: {
 
   return {
     ok: true,
-    summary: summarizeRatings(rows),
-    recent: rows.slice(0, 20),
+    summary: summarizeReputation(rows)
   };
 }

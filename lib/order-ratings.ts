@@ -52,6 +52,16 @@ export const RATING_INCIDENT_MAX = 2000;
  */
 export const RATING_WINDOW_HOURS = 72;
 
+/**
+ * Ventana MÓVIL de reputación: el promedio visible se calcula solo con las
+ * últimas 50 evaluaciones disponibles. Cuando entra una nueva y ya había 50, la
+ * más antigua sale del cálculo. Nunca es un promedio histórico permanente.
+ */
+export const RATING_WINDOW_SIZE = 50;
+
+export const RATING_ANONYMITY_NOTE =
+  "Tu evaluación es anónima: la otra persona no sabe quién la calificó ni de qué pedido viene.";
+
 const HOUR_MS = 60 * 60 * 1000;
 
 /**
@@ -78,6 +88,20 @@ export type RatingSummary = {
 };
 
 /**
+ * Reputación ANÓNIMA de cara al usuario evaluado: solo el promedio de una
+ * ventana móvil. No expone la distribución, ni evaluaciones individuales, ni
+ * quién calificó, ni el pedido de origen.
+ */
+export type ReputationSummary = {
+  /** Promedio 1-3 con un decimal (o null si no hay evaluaciones). */
+  average: number | null;
+  /** Evaluaciones consideradas en la ventana (nunca más que `windowSize`). */
+  count: number;
+  /** Tamaño máximo de la ventana (50). */
+  windowSize: number;
+};
+
+/**
  * Resume una lista de evaluaciones (solo lectura, puro). Ignora cualquier
  * valor que no sea una calificación válida para no inventar promedios.
  */
@@ -98,6 +122,54 @@ export function summarizeRatings(ratings: readonly unknown[]): RatingSummary {
 
   if (count === 0) return { average: null, count, distribution };
   return { average: Math.round((sum / count) * 10) / 10, count, distribution };
+}
+
+/**
+ * Promedio sobre una VENTANA MÓVIL de las últimas `windowSize` evaluaciones.
+ *
+ * La lista debe llegar ordenada de la más reciente a la más antigua: se
+ * consideran solo las primeras `windowSize` (las más nuevas) y las más antiguas
+ * quedan fuera del cálculo. Los valores inválidos se descartan sin ocupar lugar
+ * en la ventana y, si no hay evaluaciones válidas, el promedio es null (nunca
+ * se inventan evaluaciones faltantes).
+ */
+export function summarizeReputation(
+  ratings: readonly unknown[],
+  windowSize: number = RATING_WINDOW_SIZE
+): ReputationSummary {
+  const size = Number.isFinite(windowSize) ? Math.max(1, Math.floor(windowSize)) : RATING_WINDOW_SIZE;
+
+  const valid: RatingLevel[] = [];
+  for (const entry of ratings) {
+    const raw = typeof entry === "object" && entry !== null ? (entry as { rating?: unknown }).rating : entry;
+    const numeric = typeof raw === "number" ? raw : Number(raw);
+    if (!Number.isInteger(numeric) || numeric < 1 || numeric > 3) continue;
+    valid.push(numeric as RatingLevel);
+  }
+
+  const window = valid.slice(0, size);
+  if (window.length === 0) return { average: null, count: 0, windowSize: size };
+
+  const sum = window.reduce((total, level) => total + level, 0);
+  return {
+    average: Math.round((sum / window.length) * 10) / 10,
+    count: window.length,
+    windowSize: size,
+  };
+}
+
+/**
+ * Texto humano de la ventana de reputación. Si hay menos de la ventana completa,
+ * se indica el número REAL de entregas evaluadas; nunca se redondea a 50.
+ */
+export function reputationWindowLabel(
+  count: number,
+  windowSize: number = RATING_WINDOW_SIZE
+): string {
+  const size = Number.isFinite(windowSize) ? Math.max(1, Math.floor(windowSize)) : RATING_WINDOW_SIZE;
+  const safeCount = Number.isFinite(count) ? Math.max(0, Math.min(Math.floor(count), size)) : 0;
+  if (safeCount === 0) return "Aún no tienes evaluaciones";
+  return `Basado en tus últimas ${safeCount} ${safeCount === 1 ? "entrega" : "entregas"}`;
 }
 
 /** Pregunta inicial del componente, por rol. */
@@ -123,12 +195,12 @@ export const RATING_INTRO: Record<RatingRole, Record<RatingLevel, string>> = {
   customer: {
     3: "¡Gracias! Nos alegra que todo haya salido bien.",
     2: "¿Qué podríamos mejorar?",
-    1: "Lamentamos que tu experiencia no haya sido buena. ¿Qué ocurrió?",
+    1: "Lamentamos que tu experiencia no haya sido la esperada. ¿Qué ocurrió?",
   },
   driver: {
     3: "¡Excelente! Gracias por completar tu entrega.",
     2: "¿Hubo algún inconveniente durante la entrega?",
-    1: "Cuéntanos qué ocurrió durante esta entrega.",
+    1: "Lamentamos que esta entrega no haya salido como esperabas. ¿Qué ocurrió?",
   },
 };
 
