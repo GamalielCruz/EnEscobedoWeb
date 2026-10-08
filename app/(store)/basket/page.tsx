@@ -26,8 +26,6 @@ import {
 import { FulfillmentTimingPicker } from "@/components/FulfillmentTimingPicker";
 import type { FulfillmentSelection } from "@/lib/fulfillment-schedule";
 import { calculateOrderTotal, PLATFORM_SERVICE_FEE_MXN } from "@/lib/platform-service-fee";
-import MandadoCheckout from "@/components/MandadoCheckout";
-import type { MandadoDraft } from "@/lib/mandado";
 import { SegmentedTabs } from "@/components/SegmentedTabs";
 import { AddressSelector } from "@/components/AddressSelector";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -124,8 +122,6 @@ function BasketPage() {
   const isHydrated = useHydration();
 
   const [isClient, setIsClient] = useState(false);
-  const [isMandadoCheckout, setIsMandadoCheckout] = useState(false);
-  const [mandadoDraft, setMandadoDraft] = useState<MandadoDraft | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [method, setMethod] = useState<"card" | "cash" | null>(null);
   const [hasStoreSaved, setHasStoreSaved] = useState(false);
@@ -258,14 +254,13 @@ function BasketPage() {
   }, [clientSecret]);
 
   useEffect(() => {
+    // Mandados vive en su propia "app" (ruta /mandado/basket con su layout y
+    // header propios). Los enlaces antiguos /basket?service=mandado se
+    // redirigen para no romperse.
     const mandadoRequested = new URLSearchParams(window.location.search).get("service") === "mandado";
-    setIsMandadoCheckout(mandadoRequested);
     if (mandadoRequested) {
-      try {
-        setMandadoDraft(JSON.parse(sessionStorage.getItem("mandadoCheckoutDraft") || "null"));
-      } catch {
-        sessionStorage.removeItem("mandadoCheckoutDraft");
-      }
+      router.replace("/mandado/basket");
+      return;
     }
     setIsClient(true);
     const storedAddressValue = user?.id
@@ -586,8 +581,6 @@ function BasketPage() {
   if (!isClient) {
     return <Loader />;
   }
-
-  if (isMandadoCheckout) return <MandadoCheckout draft={mandadoDraft} />;
 
   if (groupedItems.length === 0) {
     return (
@@ -1136,7 +1129,7 @@ function BasketPage() {
 
         <div className="flex flex-col lg:flex-row gap-6">
           {/* Lista de productos */}
-          <div className="flex-1 space-y-3">
+          <div className="min-w-0 flex-1 space-y-3">
             {groupedItems?.map((item, index) => (
               <div
                 key={`${item.product._id}-${index}`}
@@ -1212,8 +1205,9 @@ function BasketPage() {
             ))}
           </div>
 
-          {/* Sidebar de resumen */}
-          <div className="w-full lg:w-[420px] xl:w-[480px] lg:sticky lg:top-24 h-fit">
+          {/* Sidebar de resumen. min-w-0 evita que el contenido ancho (direcciones
+              largas, montos) estire la columna y se desborde sobre la lista. */}
+          <div className="min-w-0 w-full lg:w-[420px] xl:w-[480px] lg:sticky lg:top-24 h-fit">
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 md:p-6">
               <h3 className="text-xl font-bold text-gray-900 mb-4">Resumen de Compra</h3>              
 
@@ -1731,7 +1725,7 @@ function BasketPage() {
                                     {/* Entrega en: dirección destacada con cambio rápido */}
                                     <div className="mt-2 rounded-lg border border-rose-100 bg-rose-50/50 p-3">
                                       <div className="flex items-center justify-between gap-3">
-                                        <div className="min-w-0">
+                                        <div className="min-w-0 flex-1">
                                           <p className="text-[11px] font-bold uppercase tracking-wide text-rose-700 font-semibold">
                                             Entrega en
                                           </p>
@@ -1755,8 +1749,8 @@ function BasketPage() {
                                         )}
                                       </div>
                                     </div>
-                                    <p className="text-sm mt-2">
-                                      {customerAddress.street}, {customerAddress.city}
+                                    <p className="mt-2 break-words text-sm text-gray-600">
+                                      {[customerAddress.street, customerAddress.city].filter(Boolean).join(", ")}
                                     </p>
                                     <p className="text-sm text-gray-600 mt-1">
                                       Tiempo estimado: {selectedStoreTiming?.label}

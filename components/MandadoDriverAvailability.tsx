@@ -102,9 +102,9 @@ export default function MandadoDriverAvailability() {
   // ── Searching ──
   if (status === "searching") {
     return (
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="border-2 border-gray-200 bg-white p-5">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gray-100">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center bg-gray-100">
             <Bike className="h-5 w-5 text-gray-400" />
           </div>
           <div>
@@ -126,10 +126,10 @@ export default function MandadoDriverAvailability() {
   // ── Error ──
   if (status === "error") {
     return (
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm animate-in fade-in duration-300">
+      <div className="border-2 border-gray-200 bg-white p-5 animate-in fade-in duration-300">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100">
+            <div className="flex h-8 w-8 items-center justify-center bg-gray-100">
               <Bike className="h-4 w-4 text-gray-400" />
             </div>
             <div>
@@ -143,7 +143,7 @@ export default function MandadoDriverAvailability() {
           </div>
           <button
             onClick={() => fetchAvailability()}
-            className="flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-600 transition-colors hover:bg-gray-50"
+            className="flex items-center gap-1.5 border-2 border-gray-200 bg-white px-3 py-1.5 text-xs font-black text-gray-600 transition-colors active:bg-gray-50"
           >
             <RefreshCw className="h-3.5 w-3.5" />
             Reintentar
@@ -156,9 +156,9 @@ export default function MandadoDriverAvailability() {
   // ── Sin repartidores conectados ──
   if (status === "offline") {
     return (
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm animate-in fade-in duration-300">
+      <div className="border-2 border-gray-200 bg-white p-5 animate-in fade-in duration-300">
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100">
+          <div className="flex h-8 w-8 items-center justify-center bg-gray-100">
             <Bike className="h-4 w-4 text-gray-400" />
           </div>
           <div className="flex-1">
@@ -186,9 +186,9 @@ export default function MandadoDriverAvailability() {
     const busyCount = data?.busyCount ?? 0;
 
     return (
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm animate-in fade-in duration-300">
+      <div className="border-2 border-gray-200 bg-white p-5 animate-in fade-in duration-300">
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100">
+          <div className="flex h-8 w-8 items-center justify-center bg-gray-100">
             <Bike className="h-4 w-4 text-[#eb1902]" />
           </div>
           <div className="flex-1">
@@ -221,9 +221,9 @@ export default function MandadoDriverAvailability() {
     const busyCount = data?.busyCount ?? 0;
 
     return (
-      <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm animate-in fade-in duration-300">
+      <div className="border-2 border-gray-200 bg-white p-5 animate-in fade-in duration-300">
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gray-100">
+          <div className="flex h-8 w-8 items-center justify-center bg-gray-100">
             <Bike className="h-4 w-4 text-amber-500" />
           </div>
           <div className="flex-1">

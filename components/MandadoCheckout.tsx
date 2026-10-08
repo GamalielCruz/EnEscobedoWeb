@@ -76,13 +76,13 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
 
   if (!draft) {
     return (
-      <div className="min-h-screen bg-gray-50 pt-20 pb-8">
-        <div className="container mx-auto px-4 max-w-7xl">
-          <div className="mx-auto max-w-lg rounded-xl border border-gray-200 bg-white p-8 text-center shadow-sm">
+      <div className="min-h-screen bg-gray-50 pb-8">
+        <div className="container mx-auto px-4 max-w-7xl pt-6">
+          <div className="mx-auto max-w-lg border-2 border-gray-200 bg-white p-8 text-center">
             <PackageCheck className="mx-auto h-12 w-12 text-gray-300" />
             <h1 className="mt-4 text-xl font-bold text-gray-900">No encontramos tu mandado</h1>
             <p className="mt-2 text-sm text-gray-500">Vuelve a elegir los puntos de inicio y entrega.</p>
-            <button onClick={() => router.push("/?service=mandado")} className="mt-6 rounded-xl bg-[#eb1902] px-5 py-3 font-semibold text-white hover:bg-[#c11300]">
+            <button onClick={() => router.push("/?service=mandado")} className="mt-6 bg-[#eb1902] px-5 py-3 font-black uppercase tracking-wide text-white hover:bg-[#c11300]">
               Crear un mandado
             </button>
           </div>
@@ -159,15 +159,15 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 pt-20 pb-8">
-      <div className="container mx-auto px-4 max-w-7xl">
+    <div className="min-h-screen bg-gray-50 pb-8">
+      <div className="container mx-auto px-4 max-w-7xl pt-6">
         <div className="mb-6">
-          <h1 className="text-2xl md:text-3xl font-bold text-gray-900">Tu Carrito</h1>
-          <p className="text-gray-600 mt-1">1 servicio</p>
+          <h1 className="text-2xl font-black text-[#09193B] md:text-3xl">Tu mandado</h1>
+          <p className="mt-1 text-gray-600">1 servicio de mandado</p>
         </div>
 
         {/* ── Sección full-width: Tu mandado está listo ── */}
-        <div className="mb-4 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 border-2 border-gray-200 bg-white p-5">
           <div className="flex items-center justify-between">
             <button type="button" onClick={leaveCheckout} className="flex items-center gap-2 text-sm font-semibold text-gray-600 transition-colors hover:text-[#eb1902]">
               <ArrowLeft className="h-4 w-4" /> Editar mandado
@@ -202,7 +202,7 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
             <p className="mt-3 text-xs text-gray-500">Persona que recibe: <span className="font-medium text-gray-700">{draft.destinationPerson}</span></p>
           )}
 
-          <div className="mt-4 flex items-center justify-between rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
+          <div className="mt-4 flex items-center justify-between border-2 border-gray-200 bg-gray-50 px-4 py-3">
             <div className="flex items-center gap-3">
               <Image src="/repartidor.png" alt="Servicio de mandado" width={40} height={40} className="object-contain" />
               <div>
@@ -217,7 +217,7 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
             <p className="mt-3 text-xs text-amber-700">Los productos se pagan por separado; aquí solo cubres el servicio de envío.</p>
           )}
           {draft.pinEnabled && (
-            <p className="mt-3 flex items-start gap-2 rounded-lg bg-[#09193B]/5 p-3 text-xs leading-5 text-gray-700">
+            <p className="mt-3 flex items-start gap-2 border-2 border-[#09193B]/10 bg-[#09193B]/5 p-3 text-xs leading-5 text-gray-700">
               <span className="mt-0.5 shrink-0">🔒</span>
               <span>
                 <strong>Entrega segura:</strong>{" "}
@@ -236,7 +236,7 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
 
         {/* ── Resumen de compra ── */}
         <div className="mx-auto w-full max-w-lg lg:sticky lg:top-24 h-fit">
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 md:p-6">
+          <div className="bg-white border-2 border-gray-200 p-4 sm:p-5 md:p-6">
               <h3 className="text-xl font-bold text-gray-900 mb-4">Resumen de Compra</h3>
 
               {isSignedIn ? (
@@ -245,20 +245,20 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                     <>
                       <div>
                         <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                          <span className="w-6 h-6 bg-[#eb1901] text-white rounded-full flex items-center justify-center text-sm">1</span>
+                          <span className="flex h-6 w-6 items-center justify-center bg-[#eb1902] text-sm font-black text-white">1</span>
                           Datos de contacto
                         </h4>
-                        <label className="block rounded-xl border border-gray-200 bg-white p-4">
+                        <label className="block border-2 border-gray-200 bg-white p-4">
                           <span className="block text-sm font-semibold text-gray-900">Teléfono móvil</span>
                           <span className="mt-1 block text-xs text-gray-500">Recibirás aquí las actualizaciones de tu pedido.</span>
-                          <div className="mt-3 flex items-center gap-2 rounded-lg border-2 border-gray-200 bg-gray-50 px-3 py-2.5 focus-within:border-[#eb1902] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#eb1902]/20 transition-all">
+                          <div className="mt-3 flex items-center gap-2 border-2 border-gray-200 bg-gray-50 px-3 py-2.5 transition-all focus-within:border-[#09193B] focus-within:bg-white">
                             <span className="text-sm font-semibold text-gray-600 whitespace-nowrap">+52</span>
                             <div className="w-px h-4 bg-gray-300" />
                             <input value={phone} onChange={(event) => setPhone(event.target.value.replace(/\D/g, "").slice(0, 10))} inputMode="numeric" autoComplete="tel-national" maxLength={10} placeholder="4421234567" className="min-w-0 flex-1 bg-transparent text-sm font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none" />
                           </div>
                         </label>
 
-                        <div className="mt-3 rounded-xl border border-gray-200 bg-white p-4">
+                        <div className="mt-3 border-2 border-gray-200 bg-white p-4">
                           <span className="block text-sm font-semibold text-gray-900">
                             {pinEnabled ? "¿Quién recibirá el envío?" : "Notificar al destinatario (opcional)"}
                           </span>
@@ -271,9 +271,9 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                             value={recipientName}
                             onChange={(event) => setRecipientName(event.target.value.slice(0, 60))}
                             placeholder="Nombre del destinatario"
-                            className="mt-3 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none focus:border-[#eb1902] focus:ring-2 focus:ring-[#eb1902]/20"
+                            className="mt-3 w-full border-2 border-gray-200 px-3 py-2 text-sm font-medium text-gray-900 outline-none focus:border-[#09193B]"
                           />
-                          <div className="mt-2 flex items-center gap-2 rounded-lg border-2 border-gray-200 bg-gray-50 px-3 py-2.5 focus-within:border-[#eb1902] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#eb1902]/20 transition-all">
+                          <div className="mt-2 flex items-center gap-2 border-2 border-gray-200 bg-gray-50 px-3 py-2.5 transition-all focus-within:border-[#09193B] focus-within:bg-white">
                             <span className="text-sm font-semibold text-gray-600 whitespace-nowrap">+52</span>
                             <div className="w-px h-4 bg-gray-300" />
                             <input value={recipientPhone} onChange={(event) => setRecipientPhone(event.target.value.replace(/\D/g, "").slice(0, 10))} inputMode="numeric" autoComplete="tel-national" maxLength={10} placeholder="4421234567" className="min-w-0 flex-1 bg-transparent text-sm font-medium text-gray-900 placeholder:text-gray-400 focus:outline-none" />
@@ -284,7 +284,7 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                           {pinEnabled && (
                             <div className="mt-3 space-y-2">
                               {!nipToSender && (
-                                <label className="flex items-start gap-2 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                                <label className="flex items-start gap-2 border-2 border-gray-200 bg-gray-50 p-3">
                                   <input type="checkbox" checked={recipientWhatsAppDeclared} onChange={(event) => setRecipientWhatsAppDeclared(event.target.checked)} className="mt-0.5 h-4 w-4 accent-[#eb1902]" />
                                   <span className="text-xs leading-5 text-gray-600">
                                     <strong className="text-gray-900">¿El destinatario tiene WhatsApp?</strong>
@@ -298,16 +298,15 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
 
                               {/* AJUSTE 1: confirmación explícita del fallback al remitente */}
                               {!nipToSender && recipientIdentified && !recipientWhatsAppDeclared && (
-                                <label className="flex items-start gap-2 rounded-lg border border-gray-200 p-3">
+                                <label className="flex items-start gap-2 border-2 border-gray-200 p-3">
                                   <input type="checkbox" checked={senderFallbackAccepted} onChange={(event) => setSenderFallbackAccepted(event.target.checked)} className="mt-0.5 h-4 w-4 accent-[#eb1902]" />
                                   <span className="text-xs leading-5 text-gray-600">
-                                    <strong className="text-gray-900">Sí, yo proporcionaré el código al destinatario.</strong>{" "}
-                                    Recibirás el código de entrega y serás responsable de proporcionárselo al destinatario antes de la entrega.
+                                    <strong className="text-gray-900">Yo daré el código al destinatario.</strong>
                                   </span>
                                 </label>
                               )}
 
-                              <label className="flex items-start gap-2 rounded-lg border border-gray-200 p-3">
+                              <label className="flex items-start gap-2 border-2 border-gray-200 p-3">
                                 <input type="checkbox" checked={nipToSender} onChange={(event) => setNipToSender(event.target.checked)} className="mt-0.5 h-4 w-4 accent-[#eb1902]" />
                                 <span className="text-xs leading-5 text-gray-600">
                                   <strong className="text-gray-900">Recibir el código yo (remitente)</strong>
@@ -319,16 +318,11 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                               </label>
 
                               {nipChannel === null && !nipToSender && (
-                                recipientIdentified && !recipientWhatsAppDeclared ? (
-                                  <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
-                                    Para usar la entrega con NIP, confirma que recibirás el código de entrega y se lo proporcionarás al destinatario antes de la entrega.
-                                  </p>
-                                ) : (
-                                  <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
-                                    Para usar la entrega con NIP necesitamos un WhatsApp donde podamos enviar el código:
-                                    el del destinatario o el tuyo. Completa el nombre y teléfono del destinatario, o elige recibir el código tú.
-                                  </p>
-                                )
+                                <p className="border-2 border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+                                  {recipientIdentified
+                                    ? "Confirma que tú darás el código, o activa «Recibir el código yo»."
+                                    : "Completa el destinatario o activa «Recibir el código yo»."}
+                                </p>
                               )}
                             </div>
                           )}
@@ -337,7 +331,7 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
 
                       <div className="space-y-3">
                         <h4 className="font-semibold text-gray-900 flex items-center gap-2">
-                          <span className="w-6 h-6 bg-[#eb1902] text-white rounded-full flex items-center justify-center text-sm">2</span>
+                          <span className="flex h-6 w-6 items-center justify-center bg-[#eb1902] text-sm font-black text-white">2</span>
                           Método de pago
                         </h4>
                         <SegmentedTabs
@@ -355,7 +349,7 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                         </p>
                       </div>
 
-                      <div className="mb-4 p-4 border border-rose-200 rounded-lg">
+                      <div className="mb-4 border-2 border-[#eb1902]/20 p-4">
                         <div className="flex items-start gap-2">
                           <CheckCircle className="w-5 h-5 text-[#70E000] flex-shrink-0 mt-0.5" />
                           <div className="flex-1">
@@ -370,9 +364,9 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                         </div>
                       </div>
 
-                      {error && <div className="flex items-start gap-2 text-sm text-[#eb1902] font-medium bg-rose-50 border border-rose-200 rounded-xl p-3">{error}</div>}
+                      {error && <div className="flex items-start gap-2 border-2 border-[#eb1902]/30 bg-[#eb1902]/5 p-3 text-sm font-medium text-[#eb1902]">{error}</div>}
 
-                      <button onClick={submit} disabled={!ready || loading} className="w-full bg-[#eb1902] text-white px-4 py-3.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm">
+                      <button onClick={submit} disabled={!ready || loading} className="flex w-full items-center justify-center gap-2.5 bg-[#eb1902] px-4 py-4 font-black uppercase tracking-wide text-white transition-colors hover:bg-[#c11300] active:scale-[0.99] disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500">
                         {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : method === "cash" ? <Banknote className="w-5 h-5" /> : <CreditCard className="w-5 h-5" />}
                         {loading ? "Procesando..." : method === "card" ? "Pagar con tarjeta" : method === "cash" ? "Pagar al recibir (Efectivo)" : "Elige un método de pago"}
                       </button>
@@ -386,16 +380,16 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
                     </>
                   ) : (
                     <div className="space-y-3">
-                      <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-sm text-rose-800">
+                      <div className="border-2 border-[#eb1902]/30 bg-[#eb1902]/5 p-3 text-sm text-rose-800">
                         <span className="font-semibold block mb-1">Pago seguro con tarjeta:</span>
                         Completa los detalles de tu tarjeta para finalizar tu pedido.
                       </div>
-                      <div ref={stripeContainerRef} id="stripe-checkout-container" className="mt-4 bg-white rounded-xl w-full min-h-[400px] -mx-1 sm:mx-0" />
+                      <div ref={stripeContainerRef} id="stripe-checkout-container" className="mt-4 bg-white w-full min-h-[400px] -mx-1 sm:mx-0" />
                       <button onClick={() => setClientSecret(null)} className="w-full text-center text-sm font-semibold text-[#eb1902] hover:text-rose-800 underline pt-2">Cancelar y volver a métodos de pago</button>
                     </div>
                   )}
 
-                  <div className="bg-gray-50 rounded-lg p-3">
+                  <div className="border-2 border-gray-100 bg-gray-50 p-3">
                     <div className="flex items-center justify-center py-2">
                       <Image src="/Powered by Stripe - blurple.svg" alt="Powered by Stripe" width={120} height={40} className="h-auto" />
                     </div>
@@ -404,9 +398,9 @@ export default function MandadoCheckout({ draft }: { draft: MandadoDraft | null 
               ) : isHydrated ? (
                 <button
                   onClick={() => clerk.openSignIn({
-                    forceRedirectUrl: typeof window !== 'undefined' ? window.location.href : '/basket?service=mandado',
+                    forceRedirectUrl: typeof window !== 'undefined' ? window.location.href : '/mandado/basket',
                   })}
-                  className="mt-6 w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                  className="mt-6 w-full bg-[#09193B] px-4 py-3.5 font-black uppercase tracking-wide text-white transition-colors hover:bg-[#0d2347] active:scale-[0.99]"
                 >
                   Inicia sesión para continuar
                 </button>

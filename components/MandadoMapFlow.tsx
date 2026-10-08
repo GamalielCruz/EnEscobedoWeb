@@ -40,6 +40,11 @@ import { useUser } from "@clerk/nextjs";
 import { AddressSelector } from "./AddressSelector";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./ui/dialog";
 import { customerAddressToMandadoPoint } from "@/lib/address-utils";
+import {
+  DRIVE_ELEVATION,
+  DRIVE_MOTION_DURATION,
+  DRIVE_MOTION_EASE,
+} from "@/components/drive/motion";
 
 type Mode = MandadoMode;
 type View = "main" | "picking";
@@ -111,8 +116,8 @@ const mapOptions = {
 };
 
 const inputCls =
-  "w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3 text-sm font-medium text-[#09193B] placeholder:text-slate-400 transition focus:border-[#eb1901] focus:outline-none focus:ring-2 focus:ring-[#eb1901]/20";
-const labelCls = "mb-1.5 block text-xs font-bold text-[#09193B]";
+  "w-full border-2 border-gray-200 bg-white px-3.5 py-3 text-sm font-medium text-[#09193B] placeholder:text-gray-400 transition focus:border-[#09193B] focus:outline-none";
+const labelCls = "mb-1.5 block text-xs font-bold uppercase tracking-wide text-gray-500";
 
 export default function MandadoMapFlow() {
   const router = useRouter();
@@ -168,15 +173,14 @@ export default function MandadoMapFlow() {
   // el destinatario no tiene WhatsApp (AJUSTE 1). Se persiste en la orden.
   const [senderFallbackAccepted, setSenderFallbackAccepted] = useState(false);
   // Flujo explícito (regla 3): el remitente recibe el código aunque no haya datos
-  // del destinatario.
-  const [nipToSender, setNipToSender] = useState(false);
+  // del destinatario. ACTIVADO POR DEFECTO: es la ruta más simple y no exige
+  // datos extra (el código llega al WhatsApp del que envía).
+  const [nipToSender, setNipToSender] = useState(true);
 
   // Progressive disclosure de los detalles opcionales: cada bloque se expande
   // solo cuando el usuario lo pide. Los datos escritos NO se borran al colapsar
   // (se conservan durante la sesión).
   const [instructionsOpen, setInstructionsOpen] = useState(false);
-  const [protectionOpen, setProtectionOpen] = useState(false);
-  const [notifyOpen, setNotifyOpen] = useState(false);
   const [notifyActive, setNotifyActive] = useState(false);
 
   // Cotización
@@ -587,6 +591,101 @@ export default function MandadoMapFlow() {
     Boolean(origin && destination && details.trim() && quote.status === "ready") &&
     (nipChannel !== null || !pinEnabled);
 
+  // Campos compartidos del destinatario: se pintan UNA sola vez, dentro del
+  // bloque opcional que los necesita (Proteger la entrega o Avisar).
+  const recipientFieldsNode = (
+    <div className="grid gap-3 sm:grid-cols-2">
+      <div>
+        <label className={labelCls} htmlFor="recipient-name">Nombre</label>
+        <input
+          id="recipient-name"
+          value={recipientName}
+          onChange={(e) => setRecipientName(e.target.value.slice(0, 60))}
+          placeholder="Ej. María Fernández"
+          className={inputCls}
+        />
+      </div>
+      <div>
+        <label className={labelCls} htmlFor="recipient-phone">Número telefónico</label>
+        <div className="flex items-center gap-2 border-2 border-gray-200 bg-white px-3 py-3 transition focus-within:border-[#09193B]">
+          <span className="whitespace-nowrap text-sm font-semibold text-gray-600">+52</span>
+          <div className="h-4 w-px bg-gray-300" />
+          <input
+            id="recipient-phone"
+            value={recipientPhone}
+            onChange={(e) => setRecipientPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
+            inputMode="numeric"
+            maxLength={10}
+            placeholder="4421234567"
+            className="min-w-0 flex-1 bg-transparent text-sm font-medium text-[#09193B] placeholder:text-gray-400 focus:outline-none"
+          />
+        </div>
+        {recipientPhoneDigits.length > 0 && recipientPhoneDigits.length < 10 && (
+          <p className="mt-1.5 text-xs font-medium text-[#eb1901]">Ingresa los 10 dígitos del teléfono.</p>
+        )}
+      </div>
+    </div>
+  );
+
+  // Controles del canal del NIP: viven dentro del bloque "Proteger la entrega".
+  // ORDEN SIMPLE: primero la opción por defecto ("Recibir el código yo"), y
+  // solo si se desactiva aparece la decisión del WhatsApp del destinatario.
+  const nipControlsNode = (
+    <div className="space-y-3">
+      {/* Opción por DEFECTO: el remitente recibe el código. */}
+      <div className="flex items-center justify-between gap-3 border-2 border-gray-200 px-3.5 py-3">
+        <div>
+          <p className="text-xs font-black text-[#09193B]">Recibir el código yo (remitente)</p>
+          <p className="mt-0.5 text-[11px] leading-4 text-gray-500">
+            {nipToSender
+              ? "El código llega a tu WhatsApp y tú se lo das al repartidor."
+              : "El código se enviará al destinatario."}
+          </p>
+        </div>
+        <ModernSwitch checked={nipToSender} onChange={setNipToSender} label="Recibir el código yo" />
+      </div>
+
+      {/* Solo al desactivar "Recibir el código yo" se decide el WhatsApp del destinatario. */}
+      {!nipToSender && (
+        <div className="flex items-center justify-between gap-3 border border-gray-200 bg-gray-50 px-3.5 py-3">
+          <div>
+            <p className="text-xs font-black text-gray-500">¿El destinatario tiene WhatsApp?</p>
+            <p className="mt-0.5 text-[11px] leading-4 text-gray-500">
+              {recipientWhatsAppDeclared
+                ? "El código se enviará a su WhatsApp."
+                : "Sin WhatsApp. Te lo enviaremos a ti."}
+            </p>
+          </div>
+          <ModernSwitch checked={recipientWhatsAppDeclared} onChange={setRecipientWhatsAppDeclared} label="El destinatario tiene WhatsApp" />
+        </div>
+      )}
+
+      {/* Fallback al remitente: una sola confirmación, sin explicaciones largas. */}
+      {!nipToSender && recipientIdentified && !recipientWhatsAppDeclared && (
+        <label className="flex items-start gap-3 border-2 border-gray-200 px-3.5 py-3">
+          <input
+            type="checkbox"
+            checked={senderFallbackAccepted}
+            onChange={(e) => setSenderFallbackAccepted(e.target.checked)}
+            className="mt-0.5 h-4 w-4 accent-[#eb1902]"
+          />
+          <span className="text-[11px] leading-4 text-gray-600">
+            <strong className="text-[#09193B]">Yo daré el código al destinatario.</strong>
+          </span>
+        </label>
+      )}
+
+      {/* Aviso corto SOLO si falta algo para poder entregar el código. */}
+      {nipChannel === null && (
+        <p className="bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
+          {recipientIdentified
+            ? "Confirma que tú darás el código, o activa «Recibir el código yo»."
+            : "Completa el destinatario o activa «Recibir el código yo»."}
+        </p>
+      )}
+    </div>
+  );
+
   const goToCheckout = useCallback(() => {
     if (!canConfirm || quote.status !== "ready" || !origin || !destination) return;
     const draft = {
@@ -615,7 +714,7 @@ export default function MandadoMapFlow() {
     } catch {
       return;
     }
-    router.push("/basket?service=mandado");
+    router.push("/mandado/basket");
   }, [
     canConfirm, quote, mode, origin, destination, details, originReference, destinationReference,
     pinEnabled, recipientName, recipientPhoneDigits, recipientWhatsAppDeclared,
@@ -667,13 +766,13 @@ export default function MandadoMapFlow() {
   if (loadError || !apiKey) {
     return (
       <div className="flex h-screen items-center justify-center bg-gray-50">
-        <p className="rounded-xl bg-red-50 p-4 text-sm text-red-700">No pudimos cargar el mapa. Intenta de nuevo en unos minutos.</p>
+        <p className="border-2 border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700">No pudimos cargar el mapa. Intenta de nuevo en unos minutos.</p>
       </div>
     );
   }
 
   return (
-    <div className="fixed inset-0 overflow-hidden bg-slate-100">
+    <div className="fixed inset-0 overflow-hidden bg-gray-100">
       {/* ── Mapa de fondo (siempre fijo) ── */}
       <div className="absolute inset-0 z-0">
         {isLoaded ? (
@@ -803,7 +902,7 @@ export default function MandadoMapFlow() {
             )}
           </GoogleMap>
         ) : (
-          <div className="flex h-full items-center justify-center gap-2 text-sm text-slate-500">
+          <div className="flex h-full items-center justify-center gap-2 text-sm text-gray-500">
             <Loader2 className="animate-spin" /> Cargando mapa…
           </div>
         )}
@@ -811,7 +910,7 @@ export default function MandadoMapFlow() {
         {/* Guía flotante mientras se elige un punto */}
         {view === "picking" && !draftAddress && (
           <div className="pointer-events-none absolute bottom-64 left-1/2 z-10 -translate-x-1/2">
-            <div className="flex items-center gap-2 whitespace-nowrap rounded-full bg-white/95 px-4 py-2 text-sm text-slate-600 shadow-lg backdrop-blur-sm">
+            <div className="flex items-center gap-2 whitespace-nowrap border-2 border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-600 shadow-[0_8px_28px_rgba(0,0,0,0.18)]">
               <MapPin className="h-4 w-4 text-[#eb1901]" /> Toca el mapa o arrastra el pin
             </div>
           </div>
@@ -819,7 +918,7 @@ export default function MandadoMapFlow() {
 
         {pinHint && view === "picking" && pickingFor === "destination" && (
           <div className="pointer-events-none absolute left-1/2 top-[42%] z-30 -translate-x-1/2 -translate-y-1/2">
-            <div className="animate-pulse rounded-full bg-[#09193B]/90 px-4 py-2 text-sm font-medium text-white shadow-xl">
+            <div className="animate-pulse bg-[#09193B] px-4 py-2 text-sm font-bold text-white shadow-[0_8px_28px_rgba(0,0,0,0.35)]">
               Este es el punto de recogida. Toca el mapa para elegir la entrega
             </div>
           </div>
@@ -827,7 +926,7 @@ export default function MandadoMapFlow() {
 
         {view === "main" && progress === "confirm" && confirmStep === 2 && routeOpen && (
           <div className="pointer-events-none absolute left-1/2 top-4 z-30 -translate-x-1/2">
-            <div className="flex items-center gap-2 whitespace-nowrap rounded-full bg-[#09193B]/90 px-4 py-2 text-sm font-medium text-white shadow-xl">
+            <div className="flex items-center gap-2 whitespace-nowrap bg-[#09193B] px-4 py-2 text-sm font-bold text-white shadow-[0_8px_28px_rgba(0,0,0,0.35)]">
               {isPickup ? <Bike className="h-4 w-4" /> : <ShoppingBasket className="h-4 w-4" />}
               <span className="flex items-center gap-1.5">
                 {isPickup ? "Enviando tu mandado" : "Comprando por ti"}
@@ -845,7 +944,7 @@ export default function MandadoMapFlow() {
       {view === "main" && progress === "confirm" && !routeOpen && (
         <button
           onClick={() => router.push("/")}
-          className="absolute left-4 top-4 z-40 flex h-9 w-9 items-center justify-center rounded-full bg-white/85 text-[#09193B] shadow-lg backdrop-blur-xl transition hover:bg-white"
+          className="absolute left-4 top-4 z-40 flex h-11 w-11 items-center justify-center border-2 border-gray-200 bg-white text-[#09193B] shadow-[0_8px_28px_rgba(0,0,0,0.18)] transition active:bg-gray-50"
           aria-label="Salir de mandados"
         >
           <ArrowLeft className="h-4 w-4" />
@@ -856,7 +955,7 @@ export default function MandadoMapFlow() {
       {view === "main" && progress === "confirm" && confirmStep === 2 && routeOpen && (
         <button
           onClick={() => setRouteOpen(false)}
-          className="absolute left-4 top-4 z-50 flex h-9 w-9 items-center justify-center rounded-full bg-white/85 text-[#09193B] shadow-lg backdrop-blur-xl transition hover:bg-white"
+          className="absolute left-4 top-4 z-50 flex h-11 w-11 items-center justify-center border-2 border-gray-200 bg-white text-[#09193B] shadow-[0_8px_28px_rgba(0,0,0,0.18)] transition active:bg-gray-50"
           aria-label="Volver a las direcciones"
         >
           <X className="h-4 w-4" />
@@ -906,11 +1005,11 @@ export default function MandadoMapFlow() {
               transition={{ duration: 0.25 }}
               className="absolute left-4 right-4 top-4 z-40 sm:left-8 sm:right-8"
             >
-              <div className="overflow-visible rounded-2xl bg-white/85 shadow-xl backdrop-blur-xl">
+              <div className="overflow-visible border-2 border-gray-200 bg-white shadow-[0_8px_28px_rgba(0,0,0,0.18)]">
                 <div className="flex items-center gap-3 px-3 pb-1 pt-2">
                   <button
                     onClick={cancelPicking}
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[#09193B] transition hover:bg-slate-200"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center text-[#09193B] transition active:bg-gray-100"
                     aria-label="Volver"
                   >
                     <ArrowLeft className="h-4 w-4" />
@@ -926,22 +1025,22 @@ export default function MandadoMapFlow() {
                 </div>
 
                 {pickingFor === "destination" && origin && (
-                  <div className="mx-3 mb-2 flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-[#09193B]">
+                  <div className="mx-3 mb-2 flex items-center gap-2 border border-gray-200 bg-gray-50 px-3 py-2">
+                    <div className="flex h-6 w-6 shrink-0 items-center justify-center bg-[#09193B]">
                       <CheckCircle className="h-3.5 w-3.5 text-white" />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="text-xs font-bold text-[#09193B]">
+                      <p className="text-xs font-bold uppercase tracking-wide text-[#09193B]">
                         {mode === "purchase" ? "Tienda confirmada" : "Origen confirmado"}
                       </p>
-                      <p className="truncate text-xs text-slate-500">{origin.label}</p>
+                      <p className="truncate text-xs text-gray-500">{origin.label}</p>
                     </div>
                   </div>
                 )}
 
                 <div className="relative px-3 pb-3">
                   <form onSubmit={searchAddress} className="relative">
-                    <MapPin className="absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                    <MapPin className="absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-gray-400" />
                     <Input
                       value={searchInput}
                       onChange={(e) => {
@@ -950,26 +1049,26 @@ export default function MandadoMapFlow() {
                       }}
                       placeholder="Buscar dirección..."
                       autoComplete="off"
-                      className="h-10 rounded-xl pl-9 pr-12 text-sm"
+                      className="h-10 pl-9 pr-12 text-sm"
                     />
                     <Button
                       type="submit"
                       size="icon"
                       disabled={searching || !searchInput.trim()}
-                      className="absolute right-1 top-1 h-8 w-8 rounded-lg bg-[#09193B] hover:bg-[#162d5c]"
+                      className="absolute right-1 top-1 h-8 w-8 bg-[#09193B] hover:bg-[#162d5c]"
                     >
                       {searching ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Search className="h-3.5 w-3.5" />}
                     </Button>
                   </form>
 
                   {predictions.length > 0 && (
-                    <div className="absolute left-3 right-3 top-full z-50 mt-1 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl">
+                    <div className="absolute left-3 right-3 top-full z-50 mt-1 overflow-hidden border-2 border-gray-200 bg-white shadow-[0_8px_28px_rgba(0,0,0,0.18)]">
                       {predictions.slice(0, 5).map((prediction) => (
                         <button
                           key={`${prediction.lat}-${prediction.lng}`}
                           type="button"
                           onClick={() => choosePrediction(prediction)}
-                          className="flex w-full items-start gap-3 border-b border-slate-100 px-4 py-3 text-left text-sm last:border-0 hover:bg-rose-50"
+                          className="flex w-full items-start gap-3 border-b border-gray-100 px-4 py-3 text-left text-sm last:border-0 hover:bg-rose-50"
                         >
                           <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-[#eb1901]" />
                           <span className="flex-1">{prediction.label}</span>
@@ -983,7 +1082,7 @@ export default function MandadoMapFlow() {
                     variant="outline"
                     onClick={useMyLocation}
                     disabled={locating}
-                    className="mt-2 h-9 w-full rounded-xl border-[#eb1901]/40 text-sm text-[#eb1901] hover:bg-rose-50"
+                    className="mt-2 h-9 w-full border-2 border-gray-200 text-sm font-bold text-[#09193B] hover:bg-gray-50"
                   >
                     {locating ? (
                       <><Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> Detectando ubicación...</>
@@ -1003,30 +1102,30 @@ export default function MandadoMapFlow() {
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
-              transition={{ type: "spring", damping: 30, stiffness: 280 }}
+              transition={{ duration: DRIVE_MOTION_DURATION.standard, ease: DRIVE_MOTION_EASE.enter }}
               className="absolute bottom-0 left-0 right-0 z-40"
             >
-              <div className="flex flex-col rounded-t-3xl border-t border-slate-200 bg-[#F7F8FA]/85 shadow-2xl backdrop-blur-2xl">
+              <div className={`${DRIVE_ELEVATION.sheet} flex flex-col border-t border-black/[0.06] bg-white`}>
                 <div className="flex justify-center pb-2 pt-4">
-                  <div className="h-1.5 w-10 rounded-full bg-slate-300" />
+                  <span className="h-1 w-10 bg-gray-300" aria-hidden />
                 </div>
 
                 <div className="px-6 pb-6">
                   {draftAddress ? (
                     <div className="mb-4 text-center">
-                      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                      <p className="text-xs font-bold uppercase tracking-wide text-gray-500">
                         {pickingFor === "origin" ? "Punto de recolección" : "Punto de entrega"}
                       </p>
                       <p className="mt-1 line-clamp-2 text-sm font-semibold text-[#09193B]">{draftAddress.label}</p>
                     </div>
                   ) : (
-                    <p className="mb-4 text-center text-sm text-slate-500">
+                    <p className="mb-4 text-center text-sm text-gray-500">
                       Toca el mapa, busca una dirección o arrastra el pin
                     </p>
                   )}
 
                   {isGeocoding && (
-                    <p className="mb-3 flex items-center justify-center gap-1.5 text-center text-xs text-slate-400">
+                    <p className="mb-3 flex items-center justify-center gap-1.5 text-center text-xs text-gray-400">
                       <Loader2 className="h-3.5 w-3.5 animate-spin" /> Obteniendo dirección…
                     </p>
                   )}
@@ -1035,23 +1134,23 @@ export default function MandadoMapFlow() {
                     <button
                       type="button"
                       onClick={() => setSaveDraftPoint((value) => !value)}
-                      className={`mb-2 flex w-full items-center gap-2.5 rounded-xl border px-3.5 py-2.5 text-left text-xs transition ${
+                      className={`mb-2 flex w-full items-center gap-2.5 border-2 px-3.5 py-2.5 text-left text-xs transition ${
                         saveDraftPoint
-                          ? "border-[#eb1901] bg-rose-50 text-[#09193B]"
-                          : "border-slate-200 bg-white text-slate-600"
+                          ? "border-[#eb1902] bg-[#eb1902]/[0.05] text-[#09193B]"
+                          : "border-gray-200 bg-white text-gray-600"
                       }`}
                     >
                       <span
-                        className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-md border ${
-                          saveDraftPoint ? "border-[#eb1901] bg-[#eb1901]" : "border-slate-300 bg-white"
+                        className={`flex h-4.5 w-4.5 shrink-0 items-center justify-center border ${
+                          saveDraftPoint ? "border-[#eb1902] bg-[#eb1902]" : "border-gray-300 bg-white"
                         }`}
                       >
                         {saveDraftPoint && <CheckCircle className="h-3 w-3 text-white" />}
                       </span>
                       <span className="flex-1">
                         <strong>Guardar esta dirección</strong>{" "}
-                        <span className="text-slate-400">(opcional)</span>
-                        <span className="mt-0.5 block text-[11px] leading-4 text-slate-500">
+                        <span className="text-gray-400">(opcional)</span>
+                        <span className="mt-0.5 block text-[11px] leading-4 text-gray-500">
                           La guardamos en tu libreta para usarla después. Si no, solo se usará para este mandado.
                         </span>
                       </span>
@@ -1061,10 +1160,10 @@ export default function MandadoMapFlow() {
                   <Button
                     onClick={confirmPick}
                     disabled={!draftAddress}
-                    className={`h-12 w-full rounded-full text-base font-semibold transition-all duration-300 ${
+                    className={`w-full py-3.5 text-base font-black uppercase tracking-wide transition-all active:scale-[0.99] ${
                       draftAddress
-                        ? "bg-[#eb1901] text-white shadow-lg hover:bg-[#c91602]"
-                        : "cursor-not-allowed bg-gray-300 text-gray-500"
+                        ? "bg-[#eb1902] text-white hover:bg-[#c11300]"
+                        : "cursor-not-allowed bg-gray-200 text-gray-500"
                     }`}
                   >
                     {draftAddress ? (
@@ -1102,10 +1201,10 @@ export default function MandadoMapFlow() {
             >
               <div className="mx-auto w-full max-w-md">
                 {modeCompact ? (
-                  <div className="flex items-center gap-2 rounded-2xl bg-white/80 p-2 shadow-lg backdrop-blur-xl">
+                  <div className="flex items-center gap-2 border-2 border-gray-200 bg-white p-2 shadow-[0_8px_28px_rgba(0,0,0,0.18)]">
                     <button
                       onClick={() => router.push("/")}
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[#09193B] transition hover:bg-slate-200"
+                      className="flex h-9 w-9 shrink-0 items-center justify-center text-[#09193B] transition active:bg-gray-100"
                       aria-label="Salir de mandados"
                     >
                       <ArrowLeft className="h-4 w-4" />
@@ -1115,11 +1214,11 @@ export default function MandadoMapFlow() {
                     </div>
                   </div>
                 ) : (
-                  <div className="rounded-2xl bg-white/85 shadow-xl backdrop-blur-xl">
+                  <div className="border-2 border-gray-200 bg-white shadow-[0_8px_28px_rgba(0,0,0,0.18)]">
                     <div className="flex items-center gap-3 px-3 pt-3">
                       <button
                         onClick={() => router.push("/")}
-                        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-100 text-[#09193B] transition hover:bg-slate-200"
+                        className="flex h-9 w-9 shrink-0 items-center justify-center text-[#09193B] transition active:bg-gray-100"
                         aria-label="Salir de mandados"
                       >
                         <ArrowLeft className="h-4 w-4" />
@@ -1135,7 +1234,7 @@ export default function MandadoMapFlow() {
 
                     <div className="px-3 pb-3 pt-2.5">
                       <SegmentedTabs value={mode} onChange={selectMode} options={MODE_OPTIONS} layoutId="mode-pill" />
-                      <p className="mt-2 text-center text-xs leading-4 text-slate-500">
+                      <p className="mt-2 text-center text-xs leading-4 text-gray-500">
                         {isPickup
                           ? "Pasamos por un artículo y lo entregamos donde indiques."
                           : "Compramos por ti y te lo llevamos. El costo de los productos se paga por separado."}
@@ -1153,10 +1252,10 @@ export default function MandadoMapFlow() {
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}
-              transition={{ type: "spring", damping: 30, stiffness: 280 }}
+              transition={{ duration: DRIVE_MOTION_DURATION.standard, ease: DRIVE_MOTION_EASE.enter }}
               className="absolute inset-x-0 bottom-0 z-40 mx-auto w-full max-w-md"
             >
-              <div className="flex flex-col overflow-hidden rounded-t-3xl border-t border-slate-200 bg-[#F7F8FA]/80 shadow-2xl backdrop-blur-2xl">
+              <div className={`${DRIVE_ELEVATION.sheet} flex flex-col overflow-hidden border-t border-black/[0.06] bg-white`}>
                 {/* Altura inteligente según el progreso del flujo (sin flechas).
                     Se usa svh (viewport mínimo estable) en lugar de dvh: en móvil,
                     cuando la barra del navegador se oculta, dvh cambia y la
@@ -1166,7 +1265,7 @@ export default function MandadoMapFlow() {
                 <div className={`transition-[height] duration-500 ease-in-out ${progress === "confirm" ? "h-[68svh]" : progress === "step2" ? "h-[44svh]" : "h-[38svh]"}`}>
                   <div className="flex h-full flex-col">
                     <div className="flex justify-center pb-1 pt-3">
-                      <div className="h-1.5 w-10 rounded-full bg-slate-300" />
+                      <span className="h-1 w-10 bg-gray-300" aria-hidden />
                     </div>
 
                     {/* Acceso a la vista de ruta a pantalla completa */}
@@ -1174,10 +1273,10 @@ export default function MandadoMapFlow() {
                       <div className="shrink-0 px-4 pb-2">
                         <button
                           onClick={() => setRouteOpen(true)}
-                          className="flex w-full items-center justify-center gap-2 rounded-full border border-slate-200 bg-white py-2 text-sm font-bold text-[#09193B] shadow-sm transition hover:border-[#eb1901]/40 hover:bg-rose-50"
+                          className="flex w-full items-center justify-center gap-2 border-2 border-gray-200 bg-white py-2.5 text-sm font-black text-[#09193B] transition active:bg-gray-50"
                         >
                           <Route className="h-4 w-4 text-[#eb1901]" /> Ver ruta en el mapa
-                          <ChevronDown className="h-4 w-4 text-slate-400" />
+                          <ChevronDown className="h-4 w-4 text-gray-400" />
                         </button>
                       </div>
                     )}
@@ -1195,7 +1294,7 @@ export default function MandadoMapFlow() {
                         className="space-y-3"
                       >
                       {progress !== "confirm" ? (
-                        <p className="text-center text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                        <p className="text-center text-[11px] font-bold uppercase tracking-wide text-gray-500">
                           {progress === "step1"
                             ? isPickup
                               ? "Elige dónde recogemos"
@@ -1203,7 +1302,7 @@ export default function MandadoMapFlow() {
                             : "¿A dónde lo entregamos?"}
                         </p>
                       ) : (
-                        <p className="text-center text-[11px] font-bold uppercase tracking-wide text-slate-500">
+                        <p className="text-center text-[11px] font-bold uppercase tracking-wide text-gray-500">
                           {confirmStepLabel}
                         </p>
                       )}
@@ -1222,21 +1321,21 @@ export default function MandadoMapFlow() {
                       {progress === "step1" && (
                       <Card>
                         <div className="mb-2 flex items-center gap-2.5">
-                          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
+                          <div className="flex h-8 w-8 items-center justify-center bg-gray-100">
                             <Store className="h-4 w-4 text-[#09193B]" />
                           </div>
                           <h3 className="text-sm font-bold text-[#09193B]">{originCardTitle}</h3>
                         </div>
                         <button
                           onClick={() => startPicking("origin")}
-                          className="flex w-full items-center gap-3 rounded-xl border-2 border-dashed border-slate-200 px-4 py-4 text-left transition hover:border-emerald-500/50 hover:bg-emerald-50/40"
+                          className="flex w-full items-center gap-3 border-2 border-dashed border-gray-200 px-4 py-4 text-left transition hover:border-emerald-500/50 hover:bg-emerald-50/40"
                         >
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#09193B]/[0.06]">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center bg-gray-100">
                             <Store className="h-5 w-5 text-[#09193B]" />
                           </div>
                           <div>
                             <p className="text-sm font-bold text-[#09193B]">{originPlaceholder}</p>
-                            <p className="mt-0.5 text-xs text-slate-500">Toca para elegirlo en el mapa</p>
+                            <p className="mt-0.5 text-xs text-gray-500">Toca para elegirlo en el mapa</p>
                           </div>
                         </button>
 
@@ -1244,7 +1343,7 @@ export default function MandadoMapFlow() {
                           <button
                             type="button"
                             onClick={() => setAddressDialogFor("origin")}
-                            className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-[#09193B] transition hover:border-[#eb1901]/40 hover:bg-rose-50"
+                            className="mt-2 flex w-full items-center justify-center gap-1.5 border-2 border-gray-200 bg-white px-4 py-2.5 text-sm font-black text-[#09193B] transition active:bg-gray-50"
                           >
                             <MapPin className="h-4 w-4 text-[#eb1901]" /> Usar una dirección guardada
                           </button>
@@ -1256,21 +1355,21 @@ export default function MandadoMapFlow() {
                       {progress === "step2" && (
                       <Card>
                         <div className="mb-2 flex items-center gap-2.5">
-                          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
+                          <div className="flex h-8 w-8 items-center justify-center bg-gray-100">
                             <House className="h-4 w-4 text-[#09193B]" />
                           </div>
                           <h3 className="text-sm font-bold text-[#09193B]">Entrega</h3>
                         </div>
                         <button
                           onClick={() => startPicking("destination")}
-                          className="flex w-full items-center gap-3 rounded-xl border-2 border-dashed border-slate-200 px-4 py-4 text-left transition hover:border-[#eb1901]/50 hover:bg-rose-50/40"
+                          className="flex w-full items-center gap-3 border-2 border-dashed border-gray-200 px-4 py-4 text-left transition hover:border-[#eb1902]/50 hover:bg-[#eb1902]/[0.04]"
                         >
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#09193B]/[0.06]">
+                          <div className="flex h-10 w-10 shrink-0 items-center justify-center bg-gray-100">
                             <House className="h-5 w-5 text-[#09193B]" />
                           </div>
                           <div>
                             <p className="text-sm font-bold text-[#09193B]">Elegir punto de entrega</p>
-                            <p className="mt-0.5 text-xs text-slate-500">Toca para elegirlo en el mapa</p>
+                            <p className="mt-0.5 text-xs text-gray-500">Toca para elegirlo en el mapa</p>
                           </div>
                         </button>
 
@@ -1278,7 +1377,7 @@ export default function MandadoMapFlow() {
                           <button
                             type="button"
                             onClick={() => setAddressDialogFor("destination")}
-                            className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-bold text-[#09193B] transition hover:border-[#eb1901]/40 hover:bg-rose-50"
+                            className="mt-2 flex w-full items-center justify-center gap-1.5 border-2 border-gray-200 bg-white px-4 py-2.5 text-sm font-black text-[#09193B] transition active:bg-gray-50"
                           >
                             <MapPin className="h-4 w-4 text-[#eb1901]" /> Usar una dirección guardada
                           </button>
@@ -1290,7 +1389,7 @@ export default function MandadoMapFlow() {
                       {progress === "confirm" && confirmStep === 1 && (
                       <Card>
                         <div className="mb-2 flex items-center gap-2.5">
-                          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
+                          <div className="flex h-8 w-8 items-center justify-center bg-gray-100">
                             <Package className="h-4 w-4 text-[#09193B]" />
                           </div>
                           <h3 className="text-sm font-bold text-[#09193B]">
@@ -1303,9 +1402,9 @@ export default function MandadoMapFlow() {
                           placeholder={detailsPlaceholder}
                           maxLength={800}
                           rows={3}
-                          className="w-full resize-none rounded-xl border border-slate-200 p-4 text-base leading-6 text-[#09193B] placeholder:text-slate-400 focus:border-[#eb1901] focus:outline-none focus:ring-2 focus:ring-[#eb1901]/20"
+                          className="w-full resize-none border-2 border-gray-200 p-4 text-base leading-6 text-[#09193B] placeholder:text-gray-400 focus:border-[#09193B] focus:outline-none"
                         />
-                        <p className="mt-2 text-xs leading-5 text-slate-500">
+                        <p className="mt-2 text-xs leading-5 text-gray-500">
                           {isPickup
                             ? "Cuéntale al repartidor qué llevará y cómo debe manejarlo."
                             : "Escribe productos, cantidades y cualquier indicación útil. Te confirmamos el total antes de comprar."}
@@ -1313,383 +1412,150 @@ export default function MandadoMapFlow() {
                       </Card>
                       )}
 
-                      {/* Detalles OPCIONALES — progressive disclosure: las tres
-                          funciones se ofrecen como acciones compactas y sus
-                          formularios aparecen SOLO cuando el usuario los pide.
-                          No se usan switches para estas acciones. */}
+                      {/* Detalles OPCIONALES — progressive disclosure: cada
+                          función se ofrece como acción compacta y su formulario
+                          se despliega EN LÍNEA, justo debajo de la opción. El `+`
+                          activa la función directamente (sin paso "Activar"). */}
                       {progress === "confirm" && confirmStep === 1 && (
                       <Card>
-                        <h3 className="text-sm font-bold text-[#09193B]">
+                        <h3 className="text-sm font-black text-[#09193B]">
                           ¿Quieres agregar algún detalle?
                         </h3>
-                        <p className="mt-0.5 text-xs leading-5 text-slate-500">
+                        <p className="mt-0.5 text-xs leading-5 text-gray-500">
                           Opcional. Si no necesitas nada de esto, puedes continuar.
                         </p>
                         <div className="mt-3 space-y-2">
+                          {/* Instrucciones: el `+` despliega los campos aquí mismo. */}
                           <OptionalOption
                             icon={Navigation}
                             label="Instrucciones de entrega"
                             hint="¿Qué debe saber el repartidor?"
                             active={instructionsOpen}
                             onClick={() => setInstructionsOpen((open) => !open)}
-                          />
+                          >
+                            <div className="space-y-3 border-t border-gray-100 px-3 pb-3 pt-3">
+                              <div>
+                                <label className={labelCls} htmlFor="origin-reference">
+                                  {isPickup ? "Recolección" : "Compra"}{" "}
+                                  <span className="font-medium text-gray-400">(opcional)</span>
+                                </label>
+                                <textarea
+                                  id="origin-reference"
+                                  value={originReference}
+                                  onChange={(e) => setOriginReference(e.target.value.slice(0, 120))}
+                                  maxLength={120}
+                                  rows={2}
+                                  placeholder={
+                                    isPickup
+                                      ? "Ej. Local rojo junto a la farmacia, entrada por la esquina."
+                                      : "Ej. Tienda con toldo rojo, entrada por la calle lateral."
+                                  }
+                                  className="w-full resize-none border-2 border-gray-200 p-3 text-sm leading-5 text-[#09193B] placeholder:text-gray-400 focus:border-[#09193B] focus:outline-none"
+                                />
+                              </div>
+                              <div>
+                                <label className={labelCls} htmlFor="destination-reference">
+                                  Entrega <span className="font-medium text-gray-400">(opcional)</span>
+                                </label>
+                                <textarea
+                                  id="destination-reference"
+                                  value={destinationReference}
+                                  onChange={(e) => setDestinationReference(e.target.value.slice(0, 120))}
+                                  maxLength={120}
+                                  rows={2}
+                                  placeholder="Ej. Casa con portón negro, frente al parque."
+                                  className="w-full resize-none border-2 border-gray-200 p-3 text-sm leading-5 text-[#09193B] placeholder:text-gray-400 focus:border-[#09193B] focus:outline-none"
+                                />
+                              </div>
+                            </div>
+                          </OptionalOption>
+
+                          {/* Proteger la entrega: el `+` activa la función y muestra
+                              el NIP y los datos del destinatario en el acto. */}
                           <OptionalOption
                             icon={ShieldCheck}
                             label="Proteger la entrega"
-                            hint="Confirma que llegue a la persona correcta."
+                            hint="Pide un código (NIP) al entregar."
                             active={pinEnabled}
-                            onClick={() => {
-                              if (pinEnabled) {
-                                setPinEnabled(false);
-                                setProtectionOpen(false);
-                              } else {
-                                setProtectionOpen((open) => !open);
-                              }
-                            }}
-                          />
+                            onClick={() => setPinEnabled((value) => !value)}
+                          >
+                            <div className="space-y-3 border-t border-gray-100 px-3 pb-3 pt-3">
+                              <div className="bg-gray-50 px-3.5 py-3">
+                                <p className="text-xs leading-5 text-gray-600">
+                                  {nipToSender || !recipientWhatsAppDeclared
+                                    ? "El código de entrega llegará a tu WhatsApp y tú se lo das al repartidor."
+                                    : "El código de entrega llegará al WhatsApp del destinatario para confirmar la entrega."}
+                                </p>
+                              </div>
+                              <div className="space-y-1.5">
+                                <p className="text-[11px] font-black uppercase tracking-wide text-gray-500">Datos del destinatario</p>
+                                {recipientFieldsNode}
+                              </div>
+                              {nipControlsNode}
+                              <button
+                                type="button"
+                                onClick={() => setPinEnabled(false)}
+                                className="w-full text-center text-xs font-bold text-gray-500 underline underline-offset-2"
+                              >
+                                Desactivar la protección
+                              </button>
+                            </div>
+                          </OptionalOption>
+
+                          {/* Avisar al destinatario: el `+` activa el aviso y muestra
+                              los datos que necesita. */}
                           <OptionalOption
                             icon={Phone}
                             label="Avisar al destinatario"
-                            hint="Le avisamos por WhatsApp cuando va en camino."
+                            hint="Solo un aviso por WhatsApp, sin código."
                             active={notifyActive}
-                            onClick={() => {
-                              if (notifyActive) {
-                                setNotifyActive(false);
-                                setNotifyOpen(false);
-                              } else {
-                                setNotifyOpen((open) => !open);
-                              }
-                            }}
-                          />
+                            onClick={() => setNotifyActive((value) => !value)}
+                          >
+                            <div className="space-y-3 border-t border-gray-100 px-3 pb-3 pt-3">
+                              <p className="text-xs leading-5 text-gray-500">
+                                {pinEnabled
+                                  ? "Solo avisaremos por WhatsApp cuando el repartidor vaya en camino. El código de la entrega protegida no cambia."
+                                  : "Le enviaremos un aviso por WhatsApp cuando el repartidor vaya en camino."}
+                              </p>
+                              {!pinEnabled && recipientFieldsNode}
+                            </div>
+                          </OptionalOption>
                         </div>
                       </Card>
                       )}
 
-                      {/* AVANZADO · Proteger la entrega: el NIP aparece solo
-                          después de activar la función (no antes). */}
-                      <AnimatePresence initial={false}>
-                        {(protectionOpen || pinEnabled) && (
-                          <motion.div
-                            key="protection"
-                            initial={{ opacity: 0, y: -6 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -6 }}
-                            transition={{ duration: 0.2, ease: "easeOut" }}
-                          >
-                            <Card>
-                              <div className="flex items-start gap-3">
-                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#09193B]">
-                                  <ShieldCheck className="h-5 w-5 text-white" />
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <h3 className="text-sm font-bold text-[#09193B]">
-                                    {pinEnabled ? "Entrega protegida" : "Proteger la entrega"}
-                                  </h3>
-                                  <p className="mt-0.5 text-xs leading-5 text-slate-500">
-                                    {pinEnabled
-                                      ? "El destinatario deberá proporcionar un NIP para confirmar la entrega."
-                                      : "Confirma que el mandado llegue a la persona correcta."}
-                                  </p>
-                                </div>
-                              </div>
-
-                              {!pinEnabled ? (
-                                <button
-                                  type="button"
-                                  onClick={() => setPinEnabled(true)}
-                                  className="mt-4 h-11 w-full rounded-full bg-[#09193B] text-sm font-bold text-white transition hover:bg-[#0d2150]"
-                                >
-                                  Activar
-                                </button>
-                              ) : (
-                                <div className="mt-4 space-y-3">
-                                  <div className="rounded-xl bg-[#09193B]/[0.05] px-3.5 py-3">
-                                    <p className="text-xs leading-5 text-slate-600">
-                                      {nipToSender || !recipientWhatsAppDeclared
-                                        ? "El código de entrega se enviará a TU WhatsApp y tú deberás proporcionárselo al repartidor."
-                                        : "Enviaremos el código de entrega al WhatsApp del destinatario; esa persona deberá mostrarlo al repartidor para recibir el paquete."}
-                                    </p>
-                                  </div>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setPinEnabled(false);
-                                      setProtectionOpen(false);
-                                    }}
-                                    className="w-full text-center text-xs font-bold text-slate-500 underline underline-offset-2"
-                                  >
-                                    Desactivar la protección
-                                  </button>
-                                </div>
-                              )}
-                            </Card>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-
-                      {/* AVANZADO · Avisar al destinatario: activar revela solo
-                          los datos necesarios. */}
-                      <AnimatePresence initial={false}>
-                        {notifyOpen && !notifyActive && (
-                          <motion.div
-                            key="notify"
-                            initial={{ opacity: 0, y: -6 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            exit={{ opacity: 0, y: -6 }}
-                            transition={{ duration: 0.2, ease: "easeOut" }}
-                          >
-                            <Card>
-                              <div className="flex items-start gap-3">
-                                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
-                                  <Phone className="h-5 w-5 text-[#09193B]" />
-                                </div>
-                                <div className="min-w-0 flex-1">
-                                  <h3 className="text-sm font-bold text-[#09193B]">
-                                    Avisar al destinatario
-                                  </h3>
-                                  <p className="mt-0.5 text-xs leading-5 text-slate-500">
-                                    ¿Quieres avisarle cuando el repartidor llegue?
-                                  </p>
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => setNotifyActive(true)}
-                                className="mt-4 h-11 w-full rounded-full bg-[#09193B] text-sm font-bold text-white transition hover:bg-[#0d2150]"
-                              >
-                                Activar
-                              </button>
-                            </Card>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-
-                      {/* AVANZADO · Indicaciones para el repartidor: el campo
-                          permanece oculto hasta que el usuario lo solicita. Se
-                          guardan en la orden como mandadoOriginReference/
-                          mandadoDestinationReference y el webhook las envía tras
-                          el ACEPTO. */}
-                      <AnimatePresence initial={false}>
-                        {progress === "confirm" && confirmStep === 1 && instructionsOpen && (
-                        <motion.div
-                          key="instructions"
-                          initial={{ opacity: 0, y: -6 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -6 }}
-                          transition={{ duration: 0.2, ease: "easeOut" }}
-                        >
-                      <Card>
-                        <div className="mb-3 flex items-center gap-2.5">
-                          <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
-                            <Navigation className="h-4 w-4 text-[#09193B]" />
-                          </div>
-                          <div>
-                            <h3 className="text-sm font-bold text-[#09193B]">Indicaciones para el repartidor</h3>
-                            <p className="text-xs text-slate-500">Opcional · solo si ayudan a encontrar el lugar.</p>
-                          </div>
-                        </div>
-                        <div className="space-y-3">
-                          <div>
-                            <label className={labelCls} htmlFor="origin-reference">
-                              {isPickup ? "Recolección" : "Compra"}{" "}
-                              <span className="font-medium text-slate-400">(opcional)</span>
-                            </label>
-                            <textarea
-                              id="origin-reference"
-                              value={originReference}
-                              onChange={(e) => setOriginReference(e.target.value.slice(0, 120))}
-                              maxLength={120}
-                              rows={2}
-                              placeholder={
-                                isPickup
-                                  ? "Ej. Local rojo junto a la farmacia, entrada por la esquina."
-                                  : "Ej. Tienda con toldo rojo, entrada por la calle lateral."
-                              }
-                              className="w-full resize-none rounded-xl border border-slate-200 p-3 text-sm leading-5 text-[#09193B] placeholder:text-slate-400 focus:border-[#eb1901] focus:outline-none focus:ring-2 focus:ring-[#eb1901]/20"
-                            />
-                          </div>
-                          <div>
-                            <label className={labelCls} htmlFor="destination-reference">
-                              Entrega <span className="font-medium text-slate-400">(opcional)</span>
-                            </label>
-                            <textarea
-                              id="destination-reference"
-                              value={destinationReference}
-                              onChange={(e) => setDestinationReference(e.target.value.slice(0, 120))}
-                              maxLength={120}
-                              rows={2}
-                              placeholder="Ej. Casa con portón negro, frente al parque."
-                              className="w-full resize-none rounded-xl border border-slate-200 p-3 text-sm leading-5 text-[#09193B] placeholder:text-slate-400 focus:border-[#eb1901] focus:outline-none focus:ring-2 focus:ring-[#eb1901]/20"
-                            />
-                          </div>
-                        </div>
-                      </Card>
-                        </motion.div>
-                        )}
-                      </AnimatePresence>
-
-                      {/* AVANZADO · Destinatario: aparece al activar "Avisar al
-                          destinatario" o "Proteger la entrega". Con Entrega
-                          protegida, el destinatario define el canal del NIP:
-                          nombre + teléfono + declaración de WhatsApp. */}
-                      <AnimatePresence initial={false}>
-                        {progress === "confirm" && confirmStep === 1 && (pinEnabled || notifyActive) && (
-                        <motion.div
-                          key="recipient"
-                          initial={{ opacity: 0, y: -6 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, y: -6 }}
-                          transition={{ duration: 0.2, ease: "easeOut" }}
-                        >
-                      <Card>
-                        <div className="mb-3 flex items-start gap-3">
-                          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
-                            <Phone className="h-5 w-5 text-[#09193B]" />
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <h3 className="text-sm font-bold text-[#09193B]">
-                              {pinEnabled ? (
-                                "¿Quién recibirá el envío?"
-                              ) : (
-                                "Avisar al destinatario"
-                              )}
-                            </h3>
-                            <p className="mt-0.5 text-xs leading-5 text-slate-500">
-                              {pinEnabled
-                                ? "Enviaremos el código de entrega a esta persona."
-                                : "El destinatario recibirá una notificación por WhatsApp cuando tu mandado vaya en camino."}
-                            </p>
-                          </div>
-                        </div>
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <div>
-                            <label className={labelCls} htmlFor="recipient-name">Nombre</label>
-                            <input
-                              id="recipient-name"
-                              value={recipientName}
-                              onChange={(e) => setRecipientName(e.target.value.slice(0, 60))}
-                              placeholder="Ej. María Fernández"
-                              className={inputCls}
-                            />
-                          </div>
-                          <div>
-                            <label className={labelCls} htmlFor="recipient-phone">Número telefónico</label>
-                            <div className="flex items-center gap-2 rounded-xl border-2 border-slate-200 bg-white px-3 py-3 transition focus-within:border-[#eb1901] focus-within:ring-2 focus-within:ring-[#eb1901]/20">
-                              <span className="whitespace-nowrap text-sm font-semibold text-slate-600">+52</span>
-                              <div className="h-4 w-px bg-slate-300" />
-                              <input
-                                id="recipient-phone"
-                                value={recipientPhone}
-                                onChange={(e) => setRecipientPhone(e.target.value.replace(/\D/g, "").slice(0, 10))}
-                                inputMode="numeric"
-                                maxLength={10}
-                                placeholder="4421234567"
-                                className="min-w-0 flex-1 bg-transparent text-sm font-medium text-[#09193B] placeholder:text-slate-400 focus:outline-none"
-                              />
-                            </div>
-                            {recipientPhoneDigits.length > 0 && recipientPhoneDigits.length < 10 && (
-                              <p className="mt-1.5 text-xs font-medium text-[#eb1901]">Ingresa los 10 dígitos del teléfono.</p>
-                            )}
-                          </div>
-                        </div>
-
-                        {pinEnabled && (
-                          <div className="mt-4 space-y-3">
-                            {/* Declaración de WhatsApp del destinatario (regla 1) */}
-                            {!nipToSender && (
-                              <div className="flex items-center justify-between gap-3 rounded-xl bg-[#09193B]/[0.04] px-3.5 py-3">
-                                <div>
-                                  <p className="text-xs font-bold text-[#09193B]">¿El destinatario tiene WhatsApp?</p>
-                                  <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
-                                    {recipientWhatsAppDeclared
-                                      ? "Enviaremos el código de entrega a su WhatsApp."
-                                      : "El destinatario no tiene WhatsApp. Podemos enviar el código a ti y tú deberás proporcionárselo."}
-                                  </p>
-                                </div>
-                                <ModernSwitch checked={recipientWhatsAppDeclared} onChange={setRecipientWhatsAppDeclared} label="El destinatario tiene WhatsApp" />
-                              </div>
-                            )}
-
-                            {/* AJUSTE 1: confirmación explícita del fallback al remitente */}
-                            {!nipToSender && recipientIdentified && !recipientWhatsAppDeclared && (
-                              <label className="flex items-start gap-3 rounded-xl border border-slate-200 px-3.5 py-3">
-                                <input
-                                  type="checkbox"
-                                  checked={senderFallbackAccepted}
-                                  onChange={(e) => setSenderFallbackAccepted(e.target.checked)}
-                                  className="mt-0.5 h-4 w-4 accent-[#eb1901]"
-                                />
-                                <span className="text-[11px] leading-4 text-slate-600">
-                                  <strong className="text-slate-900">Sí, yo proporcionaré el código al destinatario.</strong>{" "}
-                                  Recibirás el código de entrega y serás responsable de proporcionárselo al destinatario antes de la entrega.
-                                </span>
-                              </label>
-                            )}
-
-                            {/* Flujo explícito: el remitente recibe el código (regla 3) */}
-                            <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 px-3.5 py-3">
-                              <div>
-                                <p className="text-xs font-bold text-[#09193B]">Recibir el código yo (remitente)</p>
-                                <p className="mt-0.5 text-[11px] leading-4 text-slate-500">
-                                  {nipToSender
-                                    ? "El código llegará a tu WhatsApp y tú se lo darás al repartidor."
-                                    : "Elige esta opción si prefieres que el código no vaya al destinatario."}
-                                </p>
-                              </div>
-                              <ModernSwitch checked={nipToSender} onChange={setNipToSender} label="Recibir el código yo" />
-                            </div>
-
-                            {nipChannel === null && !nipToSender && (
-                              recipientIdentified && !recipientWhatsAppDeclared ? (
-                                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
-                                  Para usar la entrega con NIP, confirma que recibirás el código de entrega y se lo proporcionarás al destinatario antes de la entrega.
-                                </p>
-                              ) : (
-                                <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs leading-5 text-amber-800">
-                                  Para usar la entrega con NIP necesitamos un WhatsApp donde podamos enviar el código: el del destinatario o el tuyo.
-                                  Completa el nombre y teléfono del destinatario, o elige recibir el código tú.
-                                </p>
-                              )
-                            )}
-                          </div>
-                        )}
-                      </Card>
-                        </motion.div>
-                        )}
-                      </AnimatePresence>
-
                       {progress === "confirm" && confirmStep === 2 && origin && destination && (
                         <Card>
                           <div className="mb-3 flex items-center gap-2.5">
-                            <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#eb1901]/10">
-                              <CheckCircle className="h-4 w-4 text-[#eb1901]" />
+                            <div className="flex h-8 w-8 items-center justify-center bg-[#eb1902]/10">
+                              <CheckCircle className="h-4 w-4 text-[#eb1902]" />
                             </div>
                             <div>
                               <h3 className="text-sm font-bold text-[#09193B]">Tu mandado está listo</h3>
-                              <p className="text-xs text-slate-500">Revisa los datos antes de continuar.</p>
+                              <p className="text-xs text-gray-500">Revisa los datos antes de continuar.</p>
                             </div>
                           </div>
                           <div className="space-y-2">
                             <AddressSummaryRow label={originCardTitle} icon={Store} point={origin} onEdit={() => startPicking("origin")} />
                             {originReference.trim() && (
-                              <p className="flex items-start gap-1.5 px-1 text-xs text-slate-500">
+                              <p className="flex items-start gap-1.5 px-1 text-xs text-gray-500">
                                 <MessageCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#eb1901]" />
                                 {originReference.trim()}
                               </p>
                             )}
                             <AddressSummaryRow label="Entrega" icon={House} point={destination} onEdit={() => startPicking("destination")} />
                             {destinationReference.trim() && (
-                              <p className="flex items-start gap-1.5 px-1 text-xs text-slate-500">
+                              <p className="flex items-start gap-1.5 px-1 text-xs text-gray-500">
                                 <MessageCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#eb1901]" />
                                 {destinationReference.trim()}
                               </p>
                             )}
-                            <div className="rounded-xl bg-slate-50 px-3.5 py-3">
-                              <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{isPickup ? "Enviarás" : "Compra"}</p>
+                            <div className="bg-gray-50 px-3.5 py-3">
+                              <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">{isPickup ? "Enviarás" : "Compra"}</p>
                               <p className="mt-0.5 text-sm font-medium text-[#09193B]">{details}</p>
                             </div>
                             {pinEnabled && (
-                              <div className="rounded-xl bg-[#09193B]/[0.05] px-3.5 py-3 text-xs text-[#09193B]">
+                              <div className="bg-gray-50 px-3.5 py-3 text-xs text-[#09193B]">
                                 Entrega segura activada{nipChannel === "recipient" ? " · NIP para el destinatario" : " · NIP para ti"}
                               </div>
                             )}
@@ -1702,7 +1568,7 @@ export default function MandadoMapFlow() {
                     {/* Avisos de cotización (fuera de zona / error) */}
                     {progress === "confirm" && quote.status === "outside" && (
                       <div className="shrink-0 px-4 pb-2">
-                        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs leading-5 text-amber-800">
+                        <div className="border-2 border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs leading-5 text-amber-800">
                           Todavía no llegamos hasta{" "}
                           {quote.point === "origin" ? "el punto de recolección" : "el punto de entrega"}.{" "}
                           Toca <strong>Editar</strong> para cambiarlo.
@@ -1712,7 +1578,7 @@ export default function MandadoMapFlow() {
 
                     {progress === "confirm" && quote.status === "error" && (
                       <div className="shrink-0 px-4 pb-2">
-                        <div className="flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-800">
+                        <div className="flex items-center justify-between gap-3 border-2 border-red-200 bg-red-50 px-3.5 py-2.5 text-xs text-red-800">
                           <span>No pudimos calcular el costo del mandado.</span>
                           <button
                             type="button"
@@ -1727,7 +1593,7 @@ export default function MandadoMapFlow() {
 
                     {/* ── CTA fijo: siempre indica el siguiente paso ── */}
                     {progress === "confirm" && (
-                    <div className="shrink-0 border-t border-slate-200 bg-white/90 px-4 pt-3 backdrop-blur-xl" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)" }}>
+                    <div className="shrink-0 border-t border-gray-100 bg-white px-4 pt-3" style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)" }}>
                       {confirmStep > 1 && (
                         <button
                           type="button"
@@ -1740,10 +1606,10 @@ export default function MandadoMapFlow() {
                       <Button
                         onClick={continueConfirm}
                         disabled={!canContinueConfirmStep}
-                        className={`h-14 w-full rounded-full text-base font-bold shadow-lg transition-all duration-200 active:scale-[0.98] disabled:shadow-none ${
+                        className={`w-full py-4 text-base font-black uppercase tracking-wide transition-all active:scale-[0.99] ${
                           canContinueConfirmStep
-                            ? "bg-[#eb1901] text-white hover:bg-[#c91602]"
-                            : "bg-slate-300 text-slate-500"
+                            ? "bg-[#eb1902] text-white hover:bg-[#c11300]"
+                            : "bg-gray-200 text-gray-500"
                         }`}
                       >
                         {confirmStep === 2 ? ctaLabel : <>Continuar <ChevronRight className="ml-2 h-5 w-5" /></>}
@@ -1764,20 +1630,20 @@ export default function MandadoMapFlow() {
             initial={{ y: "100%" }}
             animate={{ y: 0 }}
             exit={{ y: "100%" }}
-            transition={{ type: "spring", damping: 30, stiffness: 280 }}
+            transition={{ duration: DRIVE_MOTION_DURATION.standard, ease: DRIVE_MOTION_EASE.enter }}
             className="absolute inset-x-0 bottom-0 z-40 mx-auto w-full max-w-md"
           >
             <div
-              className="rounded-t-3xl border-t border-slate-200 bg-[#F7F8FA]/85 px-4 pt-3 shadow-2xl backdrop-blur-2xl"
+              className={`${DRIVE_ELEVATION.sheet} border-t border-black/[0.06] bg-white px-4 pt-3`}
               style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 14px)" }}
             >
               <div className="mb-2 flex items-center justify-between gap-2">
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                <p className="text-xs font-bold uppercase tracking-wide text-gray-500">
                   {isPickup ? "Enviando tu mandado" : "Comprando por ti"}
                 </p>
                 <button
                   onClick={() => setRouteOpen(false)}
-                  className="flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-[#09193B] transition hover:bg-slate-200"
+                  className="flex shrink-0 items-center gap-1 border-2 border-gray-200 px-3 py-1.5 text-xs font-black text-[#09193B] transition active:bg-gray-50"
                 >
                   <ChevronDown className="h-3.5 w-3.5" /> Ver direcciones
                 </button>
@@ -1785,10 +1651,10 @@ export default function MandadoMapFlow() {
               <Button
                 onClick={goToCheckout}
                 disabled={!canConfirm}
-                className={`h-14 w-full rounded-full text-base font-bold shadow-lg transition-all duration-200 active:scale-[0.98] disabled:shadow-none ${
+                className={`w-full py-4 text-base font-black uppercase tracking-wide transition-all active:scale-[0.99] ${
                   canConfirm
-                    ? "bg-[#eb1901] text-white hover:bg-[#c91602]"
-                    : "bg-slate-300 text-slate-500"
+                    ? "bg-[#eb1902] text-white hover:bg-[#c11300]"
+                    : "bg-gray-200 text-gray-500"
                 }`}
               >
                 {ctaLabel}
@@ -1805,7 +1671,7 @@ export default function MandadoMapFlow() {
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
-    <section className="rounded-2xl border border-slate-100 bg-white p-4 shadow-[0_1px_3px_rgba(9,25,59,0.08)]">
+    <section className="border-2 border-gray-200 bg-white p-4">
       {children}
     </section>
   );
@@ -1822,44 +1688,63 @@ function OptionalOption({
   hint,
   active,
   onClick,
+  children,
 }: {
   icon: typeof Navigation;
   label: string;
   hint: string;
   active: boolean;
   onClick: () => void;
+  children?: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={`flex w-full items-center gap-3 rounded-xl border p-3 text-left transition ${
-        active
-          ? "border-[#eb1901]/40 bg-rose-50/60"
-          : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50"
-      }`}
-    >
-      <span
-        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl ${
-          active ? "bg-[#eb1901]/10" : "bg-[#09193B]/[0.06]"
+    <div className={`border-2 transition-colors ${active ? "border-[#eb1902]" : "border-gray-200"}`}>
+      <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={active}
+        aria-expanded={active}
+        className={`flex w-full items-center gap-3 p-3 text-left transition ${
+          active ? "bg-[#eb1902]/[0.04]" : "bg-white hover:bg-gray-50"
         }`}
       >
-        <Icon className={`h-4 w-4 ${active ? "text-[#eb1901]" : "text-[#09193B]"}`} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="block text-sm font-bold text-[#09193B]">{label}</span>
-        <span className="mt-0.5 block text-xs text-slate-500">{hint}</span>
-      </span>
-      <span
-        aria-hidden
-        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-white ${
-          active ? "bg-[#eb1901]" : "bg-slate-300"
-        }`}
-      >
-        {active ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
-      </span>
-    </button>
+        <span
+          className={`flex h-8 w-8 shrink-0 items-center justify-center ${
+            active ? "bg-[#eb1902]/10 text-[#eb1902]" : "bg-gray-100 text-[#09193B]"
+          }`}
+        >
+          <Icon className="h-4 w-4" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-black text-[#09193B]">{label}</span>
+          <span className="mt-0.5 block text-xs text-gray-500">{hint}</span>
+        </span>
+        <span
+          aria-hidden
+          className={`flex h-6 w-6 shrink-0 items-center justify-center text-white ${
+            active ? "bg-[#eb1902]" : "bg-gray-300"
+          }`}
+        >
+          {active ? <Check className="h-3.5 w-3.5" /> : <Plus className="h-3.5 w-3.5" />}
+        </span>
+      </button>
+      {/* Formulario del detalle: se despliega EN LÍNEA, dentro de la misma
+          tarjeta y justo debajo de su opción (nunca al final de la lista). */}
+      <AnimatePresence initial={false}>
+        {active && children && (
+          <motion.div
+            key="detail"
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: DRIVE_MOTION_DURATION.standard, ease: DRIVE_MOTION_EASE.enter }}
+            className="overflow-hidden"
+          >
+            {children}
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
   );
 }
 
@@ -1872,7 +1757,7 @@ function ModernSwitch({ checked, onChange, label }: { checked: boolean; onChange
       aria-label={label}
       onClick={() => onChange(!checked)}
       className={`relative h-7 w-12 shrink-0 rounded-full transition-colors duration-300 ${
-        checked ? "bg-[#eb1901]" : "bg-slate-300"
+        checked ? "bg-[#eb1902]" : "bg-gray-300"
       }`}
     >
       <motion.span
@@ -1896,18 +1781,18 @@ function AddressSummaryRow({
   onEdit: () => void;
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-2xl border border-slate-100 bg-white p-3.5 shadow-[0_1px_3px_rgba(9,25,59,0.08)]">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#09193B]/[0.06]">
+    <div className="flex items-center gap-3 border-2 border-gray-200 bg-white p-3.5">
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center bg-gray-100">
         <Icon className="h-4 w-4 text-[#09193B]" />
       </div>
       <div className="min-w-0 flex-1">
-        <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">{label}</p>
+        <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">{label}</p>
         <p className="truncate text-sm font-semibold text-[#09193B]">{point.label}</p>
       </div>
       <button
         type="button"
         onClick={onEdit}
-        className="flex shrink-0 items-center gap-1 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-bold text-[#09193B] transition hover:bg-slate-200"
+        className="flex shrink-0 items-center gap-1 border-2 border-gray-200 px-3 py-1.5 text-xs font-black text-[#09193B] transition active:bg-gray-50"
       >
         <Pencil className="h-3 w-3" /> Editar
       </button>
