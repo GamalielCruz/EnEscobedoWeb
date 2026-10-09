@@ -1,8 +1,8 @@
 'use client';
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { Button } from "@/components/ui/button";
 import { LoadingOrbs } from "@/components/Loader";
@@ -10,19 +10,39 @@ import useBasketStore from "@/store/store";
 
 export default function SuccessPage() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const orderNumber = searchParams?.get("orderNumber") ?? "";
-const sessionId = searchParams?.get("session_id") ?? "";
+  const sessionId = searchParams?.get("session_id") ?? "";
+  const isMandado = searchParams?.get("service") === "mandado";
+  const trackParam = searchParams?.get("track") ?? null;
   const clearBasket = useBasketStore((state) => state.clearBasket);
   const [confirmationError, setConfirmationError] = useState<string | null>(
     null
   );
   const [isConfirming, setIsConfirming] = useState(false);
 
+  // UX estilo Uber: los pedidos a domicilio y los mandados aterrizan en la
+  // pantalla de seguimiento. Pickup conserva esta página de confirmación (no
+  // hay repartidor que esperar). Dependemos de valores PRIMITIVOS (no del
+  // objeto searchParams) para que los efectos no se re-ejecuten por render.
+  const shouldTrack = useMemo(
+    () => isMandado || trackParam !== "0",
+    [isMandado, trackParam]
+  );
+
   useEffect(() => {
-    if (orderNumber) {
-      clearBasket();
-    }
+    if (orderNumber) clearBasket();
   }, [orderNumber, clearBasket]);
+
+  // Sin session_id (p. ej. una visita directa) no hay orden que confirmar: si
+  // el pedido debe rastrearse, vamos al seguimiento de inmediato. CON
+  // session_id esperamos a que /api/checkout/confirm cree la orden, porque la
+  // pantalla /pedido valida su existencia server-side y si no, redirige a
+  // /orders: esa era la carrera que rompía el tracking con TARJETA.
+  useEffect(() => {
+    if (!orderNumber || sessionId) return;
+    if (shouldTrack) router.replace(`/pedido/${encodeURIComponent(orderNumber)}`);
+  }, [orderNumber, sessionId, shouldTrack, router]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -52,6 +72,12 @@ const sessionId = searchParams?.get("session_id") ?? "";
         if (!response.ok || !data.success) {
           throw new Error(data?.error || "No se pudo confirmar la orden");
         }
+
+        // La orden YA existe en Sanity (confirm es síncrono y además arranca el
+        // despacho): recién ahora es seguro ir a /pedido.
+        if (!cancelled && shouldTrack) {
+          router.replace(`/pedido/${encodeURIComponent(orderNumber)}`);
+        }
       } catch (error) {
         if (!cancelled) {
           setConfirmationError(
@@ -72,7 +98,7 @@ const sessionId = searchParams?.get("session_id") ?? "";
     return () => {
       cancelled = true;
     };
-  }, [sessionId, orderNumber]);
+  }, [sessionId, orderNumber, shouldTrack, router]);
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-gray-50">

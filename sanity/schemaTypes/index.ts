@@ -15,6 +15,14 @@ import { storeUpdateRequest } from './storeUpdateRequest';
 import { deliveryPricingConfigType } from './deliveryPricingConfigType';
 import { repartidorType } from './repartidorType';
 import { legalAcceptanceType } from './legalAcceptanceType';
+import { deliveryScheduleConfigType } from './deliveryScheduleConfigType';
+import { whatsappTemplateDeliveryType } from './whatsappTemplateDeliveryType';
+import { commercialSettingsType } from './commercialSettingsType';
+import { commercialAuditType } from './commercialAuditType';
+import { commercialCommissionUsageType } from './commercialCommissionUsageType';
+import { dispatchConfigType } from './dispatchConfigType';
+import { dispatchAuditType } from './dispatchAuditType';
+import { orderRatingType } from './orderRatingType';
 
 export const schema: { types: SchemaTypeDefinition[] } = {
   types: [
@@ -32,6 +40,14 @@ export const schema: { types: SchemaTypeDefinition[] } = {
     repartidorType,
     legalAcceptanceType,
     storeCategoryType,
-    deliveryPricingConfigType
+    deliveryPricingConfigType,
+    deliveryScheduleConfigType,
+    whatsappTemplateDeliveryType,
+    commercialSettingsType,
+    commercialAuditType,
+    commercialCommissionUsageType,
+    dispatchConfigType,
+    dispatchAuditType,
+    orderRatingType
   ],
 };

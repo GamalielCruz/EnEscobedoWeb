@@ -3,6 +3,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { revalidatePath } from "next/cache";
 import { writeClient } from "@/sanity/lib/client";
+import { getCommercialSettings } from "@/lib/commercial-config";
+import { resolveEffectiveCommercialConditions } from "@/lib/commercial-rules";
 
 export async function GET(request: NextRequest) {
   try {
@@ -24,7 +26,8 @@ export async function GET(request: NextRequest) {
          return NextResponse.json({ error: "No autorizado" }, { status: 403 });
     }
 
-    return NextResponse.json({ store });
+    const commercial = resolveEffectiveCommercialConditions(store, await getCommercialSettings());
+    return NextResponse.json({ store: { ...store, commercial } });
   } catch (e) {
     console.error("[store-config]", e);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });
@@ -102,7 +105,8 @@ export async function PATCH(request: NextRequest) {
     revalidatePath("/dashboard");
     revalidatePath(`/store/${storeId}`);
 
-    return NextResponse.json({ success: true, store: updated });
+    const commercial = resolveEffectiveCommercialConditions(updated as any, await getCommercialSettings());
+    return NextResponse.json({ success: true, store: { ...updated, commercial } });
   } catch (e) {
     console.error("[store-config PATCH]", e);
     return NextResponse.json({ error: "Error interno" }, { status: 500 });

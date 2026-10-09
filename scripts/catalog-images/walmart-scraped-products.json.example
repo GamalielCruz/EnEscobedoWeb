@@ -1,0 +1,17 @@
+[
+  {
+    "barcode": "7501055300016",
+    "targetProductName": "Leche Entera Alpura 1 L",
+    "imageUrl": "https://catalogo-autorizado.example/images/leche-entera-alpura-1l.jpg"
+  },
+  {
+    "barcode": "7501011134529",
+    "targetProductName": "Papas Sabritas Sal 170 g",
+    "imageUrl": "https://catalogo-autorizado.example/images/papas-sabritas-sal-170g.jpg"
+  },
+  {
+    "barcode": "7501055300023",
+    "targetProductName": "Coca Cola Original 600 ml",
+    "imageUrl": "https://catalogo-autorizado.example/images/coca-cola-original-600ml.jpg"
+  }
+]

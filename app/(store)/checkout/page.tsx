@@ -14,6 +14,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ArrowLeft, CreditCard, MapPin, Loader2 } from "lucide-react";
+import { calculateOrderTotal, PLATFORM_SERVICE_FEE_MXN } from "@/lib/platform-service-fee";
 import Loader from "@/components/Loader";
 
 export const dynamic = "force-dynamic";
@@ -38,9 +39,12 @@ export default function CheckoutPage() {
   const { user } = useUser();
   const basketItems = useBasketStore((state) => state.items);
   const groupedItems = useMemo(() => basketItems.filter((item) => isVisibleBasketProduct(item.product)), [basketItems]);
+  const cartStoreId = (groupedItems[0]?.product?.affiliateStore as any)?._ref || (groupedItems[0]?.product?.affiliateStore as any)?._id;
 
   const [isClient, setIsClient] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [platformServiceFee, setPlatformServiceFee] = useState(PLATFORM_SERVICE_FEE_MXN);
+  const [onlinePaymentsEnabled, setOnlinePaymentsEnabled] = useState(true);
   const [clickCollectStore, setClickCollectStore] =
     useState<ClickCollectStore | null>(null);
 
@@ -61,6 +65,16 @@ export default function CheckoutPage() {
     }
   }, [isClickCollectMode, router]);
 
+  useEffect(() => {
+    if (!cartStoreId) return;
+    fetch(`/api/store-service-types?storeId=${cartStoreId}`, { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => {
+        setPlatformServiceFee(Number(data?.commercial?.serviceFee ?? PLATFORM_SERVICE_FEE_MXN));
+        setOnlinePaymentsEnabled(data?.commercial?.onlinePaymentsEnabled !== false);
+      })
+      .catch(() => {});
+  }, [cartStoreId]);
   // Redirigir si no estÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡ autenticado o no hay productos
   useEffect(() => {
     if (isClient && (!isSignedIn || groupedItems.length === 0)) {
@@ -80,9 +94,10 @@ export default function CheckoutPage() {
     (sum, item) => sum + (item.product.price ?? 0) * item.quantity,
     0
   );
+  const total = calculateOrderTotal({ productsSubtotal: subtotal, platformServiceFee });
 
   const handleCheckout = async () => {
-    if (!user) return;
+    if (!user || !onlinePaymentsEnabled) return;
 
     setLoading(true);
 
@@ -261,15 +276,19 @@ export default function CheckoutPage() {
                     {isClickCollectMode ? "GRATIS" : "Se calcula en checkout"}
                   </span>
                 </div>
+                <div className="flex justify-between">
+                  <span>Tarifa de servicio:</span>
+                  <span>${platformServiceFee.toFixed(2)}</span>
+                </div>
                 <div className="border-t pt-2 flex justify-between font-bold text-lg">
                   <span>Total:</span>
-                  <span>${subtotal.toFixed(2)} MXN</span>
+                  <span>${total.toFixed(2)} MXN</span>
                 </div>
               </div>
 
               <Button
                 onClick={handleCheckout}
-                disabled={loading}
+                disabled={loading || !onlinePaymentsEnabled}
                 className="w-full"
                 size="lg"
               >
@@ -279,7 +298,7 @@ export default function CheckoutPage() {
                     Procesando...
                   </>
                 ) : (
-                  `Pagar ${subtotal.toFixed(2)} MXN`
+                  onlinePaymentsEnabled ? `Pagar ${total.toFixed(2)} MXN` : "Pago en línea no disponible"
                 )}
               </Button>
 

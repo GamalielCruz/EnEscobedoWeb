@@ -39,6 +39,7 @@ export function useDashboardData() {
   const [productsLoading, setProductsLoading] = React.useState(false);
   const [refreshingProducts, setRefreshingProducts] = React.useState(false);
   const [availableCategories, setAvailableCategories] = React.useState<CategoryOption[]>([]);
+  const [categoryOrdering, setCategoryOrdering] = React.useState<string[]>([]);
 
   const [storeConfig, setStoreConfig] = React.useState<StoreConfig | null>(null);
   const [storeConfigLoading, setStoreConfigLoading] = React.useState(false);
@@ -205,7 +206,27 @@ export function useDashboardData() {
     const response = await fetch(`/api/dashboard/categories?storeId=${selectedStoreId}`, { cache: "no-store" });
     const data = await response.json();
     setAvailableCategories(data.categories || []);
+    setCategoryOrdering(data.categoryOrder || []);
   }, [selectedStoreId]);
+
+  const saveCategoryOrder = React.useCallback(
+    async (categoryIds: string[]) => {
+      if (!selectedStoreId) return false;
+      const response = await fetch("/api/dashboard/categories", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ storeId: selectedStoreId, categoryIds }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        alert(data.error || "No se pudo guardar el orden de categorías");
+        return false;
+      }
+      setCategoryOrdering(categoryIds);
+      return true;
+    },
+    [selectedStoreId]
+  );
 
   const createCategory = React.useCallback(async (title: string) => {
     if (!selectedStoreId) return null;
@@ -359,6 +380,8 @@ export function useDashboardData() {
         if (formState.optionGroups.length > 0) {
           changes.optionGroups = formState.optionGroups;
         }
+        changes.allowSpecialInstructions = formState.allowSpecialInstructions;
+        changes.acceptsAllergyRequests = formState.acceptsAllergyRequests;
 
         const response = await fetch("/api/dashboard/product-update-requests", {
           method: "POST",
@@ -380,6 +403,8 @@ export function useDashboardData() {
             image: formState.image,
             categories: formState.categories.length > 0 ? formState.categories : undefined,
             optionGroups: formState.optionGroups.length > 0 ? formState.optionGroups : undefined,
+            allowSpecialInstructions: formState.allowSpecialInstructions,
+            acceptsAllergyRequests: formState.acceptsAllergyRequests,
           }),
         });
         const data = await response.json();
@@ -517,6 +542,7 @@ export function useDashboardData() {
     productsLoading,
     refreshingProducts,
     availableCategories,
+    categoryOrdering,
     activeOrders,
     todayOrders: todayOrdersHook.orders,
     historyOrders: historyOrdersHook.orders,
@@ -540,6 +566,7 @@ export function useDashboardData() {
     submitProduct,
     updateProductAvailability,
     saveProductOrder,
+    saveCategoryOrder,
     submitStoreChanges,
     refreshRequests,
     refreshActiveOrders: todayOrdersHook.refresh,

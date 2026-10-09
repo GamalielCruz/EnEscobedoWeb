@@ -36,6 +36,7 @@ import { ProductCard } from "./ProductCard";
 import { ProductEditorDialog } from "./ProductEditorDialog";
 import type {
   CategoryOption,
+  CategoryOrdering,
   Product,
   ProductFormState,
   ProductOrdering,
@@ -49,12 +50,14 @@ type DashboardProductsSectionProps = {
   loading: boolean;
   refreshing: boolean;
   availableCategories: CategoryOption[];
+  categoryOrdering: CategoryOrdering;
   loadCategories: () => Promise<void>;
   onCreateCategory: (title: string) => Promise<CategoryOption | null>;
   onRefresh: () => void;
   onSubmitProduct: (payload: { editingProductId: string | null; formState: ProductFormState }) => Promise<boolean>;
   onUpdateAvailability: (productId: string, isVisible: boolean, stock?: number) => Promise<boolean>;
   onSaveProductOrder: (categoryId: string | null, productIds: string[]) => Promise<boolean>;
+  onSaveCategoryOrder: (categoryIds: string[]) => Promise<boolean>;
   onImageUpload: (file: File) => Promise<{ _type: string; asset: { _type: string; _ref: string } } | null>;
 };
 
@@ -65,12 +68,14 @@ export function DashboardProductsSection({
   loading,
   refreshing,
   availableCategories,
+  categoryOrdering,
   loadCategories,
   onCreateCategory,
   onRefresh,
   onSubmitProduct,
   onUpdateAvailability,
   onSaveProductOrder,
+  onSaveCategoryOrder,
   onImageUpload,
 }: DashboardProductsSectionProps) {
   const [modalOpen, setModalOpen] = React.useState(false);
@@ -78,10 +83,12 @@ export function DashboardProductsSection({
   const [submitting, setSubmitting] = React.useState(false);
   const [uploadingImage, setUploadingImage] = React.useState(false);
   const [categoryFilter, setCategoryFilter] = React.useState("all");
-  const [isOrdering, setIsOrdering] = React.useState(false);
+  const [orderingType, setOrderingType] = React.useState<"products" | "categories" | null>(null);
   const [savingOrder, setSavingOrder] = React.useState(false);
   const [draftIds, setDraftIds] = React.useState<string[]>([]);
   const [formState, setFormState] = React.useState<ProductFormState>(createEmptyProductForm());
+  const isOrdering = orderingType !== null;
+  const isCategoryOrdering = orderingType === "categories";
 
   const filteredProducts = products.filter((product) => {
     if (categoryFilter === "all") return true;
@@ -99,6 +106,9 @@ export function DashboardProductsSection({
   const draftProducts = draftIds
     .map((productId) => productsById.get(productId))
     .filter((product): product is Product => Boolean(product));
+  const orderedCategories = orderProducts(availableCategories, categoryOrdering);
+  const savedCategoryIds = orderedCategories.map((category) => category._id);
+  const hasCategoryOrderChanges = isCategoryOrdering && draftIds.join("\u0000") !== savedCategoryIds.join("\u0000");
 
   const handleCategoryChange = (nextCategory: string) => {
     setCategoryFilter(nextCategory);
@@ -116,12 +126,19 @@ export function DashboardProductsSection({
 
   const handleOpenOrdering = () => {
     setDraftIds(savedIds);
-    setIsOrdering(true);
+    setOrderingType("products");
+  };
+
+  const handleOpenCategoryOrdering = () => {
+    setDraftIds(savedCategoryIds);
+    setOrderingType("categories");
   };
 
   const handleSaveOrder = async () => {
     setSavingOrder(true);
-    await onSaveProductOrder(categoryFilter === "all" ? null : categoryFilter, draftIds);
+    await (isCategoryOrdering
+      ? onSaveCategoryOrder(draftIds)
+      : onSaveProductOrder(categoryFilter === "all" ? null : categoryFilter, draftIds));
     setSavingOrder(false);
   };
 
@@ -203,18 +220,31 @@ export function DashboardProductsSection({
               type="button"
               variant="outline"
               className="h-9 rounded-lg border-black/8 px-3 shadow-none hover:bg-gray-50"
-              onClick={
-                isOrdering
-                  ? () => {
-                      setDraftIds(savedIds);
-                      setIsOrdering(false);
-                    }
-                  : handleOpenOrdering
-              }
+              onClick={() => {
+                if (isOrdering) {
+                  setDraftIds(isCategoryOrdering ? savedCategoryIds : savedIds);
+                  setOrderingType(null);
+                } else handleOpenOrdering();
+              }}
               disabled={savingOrder}
             >
               <ListOrdered className="h-4 w-4" />
-              {isOrdering ? "Salir del orden" : "Ordenar menu"}
+              {isOrdering ? "Salir del orden" : "Ordenar productos"}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-9 rounded-lg border-black/8 px-3 shadow-none hover:bg-gray-50"
+              onClick={() => {
+                if (isCategoryOrdering) {
+                  setDraftIds(savedCategoryIds);
+                  setOrderingType(null);
+                } else handleOpenCategoryOrdering();
+              }}
+              disabled={savingOrder || (isOrdering && !isCategoryOrdering)}
+            >
+              <ListOrdered className="h-4 w-4" />
+              {isCategoryOrdering ? "Salir del orden" : "Ordenar categorías"}
             </Button>
             <Button
               type="button"
@@ -239,6 +269,35 @@ export function DashboardProductsSection({
         </DashboardPanelHeader>
 
         <DashboardPanelBody className="space-y-4">
+          {isCategoryOrdering ? (
+            <div className="rounded-2xl border border-[#20096F]/10 bg-[#f7f7ff] p-3 sm:p-4">
+              <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <DashboardStatusPill tone={hasCategoryOrderChanges ? "accent" : "neutral"}>
+                    {hasCategoryOrderChanges ? "Borrador sin guardar" : <><Check className="h-3.5 w-3.5" /> Orden guardado</>}
+                  </DashboardStatusPill>
+                  <DashboardDescription className="mt-2 text-[13px]">
+                    Arrastra las categorías para definir el orden en que aparecen en el menú.
+                  </DashboardDescription>
+                </div>
+                <div className="flex gap-2">
+                  <Button type="button" variant="outline" className="rounded-lg border-black/8 bg-white shadow-none" disabled={!hasCategoryOrderChanges || savingOrder} onClick={() => setDraftIds(savedCategoryIds)}>
+                    <Undo2 className="h-4 w-4" /> Descartar
+                  </Button>
+                  <Button type="button" className="rounded-lg bg-[#20096F] text-white hover:bg-[#180752]" disabled={!hasCategoryOrderChanges || savingOrder} onClick={handleSaveOrder}>
+                    <Save className="h-4 w-4" /> {savingOrder ? "Guardando..." : "Guardar orden"}
+                  </Button>
+                </div>
+              </div>
+              <SortableOrderList
+                items={orderedCategories.map((category) => ({ id: category._id, label: category.title }))}
+                order={draftIds}
+                onReorder={setDraftIds}
+              />
+            </div>
+          ) : null}
+
+          {!isCategoryOrdering ? (
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
@@ -270,8 +329,9 @@ export function DashboardProductsSection({
               </SelectContent>
             </Select>
           </div>
+          ) : null}
 
-          {isOrdering && orderedProducts.length > 0 ? (
+          {orderingType === "products" && orderedProducts.length > 0 ? (
             <div className="rounded-2xl border border-[#20096F]/10 bg-[#f7f7ff] p-3 sm:p-4">
               <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -332,7 +392,7 @@ export function DashboardProductsSection({
                 onReorder={setDraftIds}
               />
             </div>
-          ) : loading ? (
+          ) : isCategoryOrdering ? null : loading ? (
             <DashboardEmptyState
               title="Cargando productos"
               description="Estamos preparando el catalogo para esta tienda."
