@@ -584,19 +584,19 @@ function BasketPage() {
 
   if (groupedItems.length === 0) {
     return (
-      <div className="container mx-auto p-4 flex flex-col items-center justify-center min-h-[60vh] mt-20">
-        <div className="text-center space-y-4">
-          <div className="w-24 h-24 mx-auto bg-gray-100 rounded-full flex items-center justify-center">
-            <Store className="w-12 h-12 text-gray-400" />
+      <div className="min-h-screen bg-gray-50 px-4 pb-8 pt-20">
+        <div className="container mx-auto flex min-h-[60vh] max-w-7xl items-center justify-center">
+          <div className="w-full max-w-lg border-2 border-gray-200 bg-white p-8 text-center">
+            <Store className="mx-auto h-12 w-12 text-gray-300" />
+            <h1 className="mt-4 text-xl font-black text-[#09193B]">Tu carrito está vacío</h1>
+            <p className="mt-2 text-sm text-gray-500">Agrega productos para comenzar tu compra</p>
+            <button
+              onClick={() => router.push('/')}
+              className="mt-6 bg-[#eb1902] px-5 py-3 font-black uppercase tracking-wide text-white transition-colors hover:bg-[#c11300]"
+            >
+              Ir a comprar
+            </button>
           </div>
-          <h1 className="text-2xl font-bold text-gray-800">Tu carrito está vacío</h1>
-          <p className="text-gray-600">Agrega productos para comenzar tu compra</p>
-          <button
-            onClick={() => router.push('/')}
-            className="mt-4 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            Ir a comprar
-          </button>
         </div>
       </div>
     );
@@ -1115,14 +1115,12 @@ function BasketPage() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 pt-20 pb-8">
+    <div className="min-h-screen bg-gray-50 pb-8 pt-20">
       <div className="container mx-auto px-4 max-w-7xl">
         {/* Header */}
         <div className="mb-6">
-          <h1 className="text-2xl md:text-3xl font-bold text-gray-900">
-            Tu Carrito
-          </h1>
-          <p className="text-gray-600 mt-1">
+          <h1 className="text-2xl font-black text-[#09193B] md:text-3xl">Tu carrito</h1>
+          <p className="mt-1 text-gray-600">
             {groupedItems.reduce((total, item) => total + item.quantity, 0)} {groupedItems.reduce((total, item) => total + item.quantity, 0) === 1 ? 'producto' : 'productos'}
           </p>
         </div>
@@ -1133,7 +1131,7 @@ function BasketPage() {
             {groupedItems?.map((item, index) => (
               <div
                 key={`${item.product._id}-${index}`}
-                className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 hover:shadow-md transition-shadow"
+                className="border-2 border-gray-200 bg-white p-4 transition-colors hover:border-gray-300"
               >
                 <div className="flex gap-4">
                   {/* Imagen del producto */}
@@ -1147,7 +1145,7 @@ function BasketPage() {
                         alt={item.product.name ?? "Product image"}
                         width={96}
                         height={96}
-                        className="rounded-lg object-cover w-full h-full"
+                        className="h-full w-full object-cover"
                       />
                     )}
                   </div>
@@ -1155,7 +1153,7 @@ function BasketPage() {
                   {/* Info del producto */}
                   <div className="flex-1 min-w-0">
                     <h2
-                      className="text-base md:text-lg font-semibold text-gray-900 cursor-pointer hover:text-blue-600 transition-colors line-clamp-2"
+                      className="cursor-pointer text-base font-semibold text-gray-900 transition-colors hover:text-[#eb1902] md:text-lg line-clamp-2"
                       onClick={() => router.push(`/product/${item.product.slug?.current}`)}
                     >
                       {item.product.name}
@@ -1178,7 +1176,7 @@ function BasketPage() {
                       <X className="w-5 h-5" />
                     </button>
                     
-                    <div className="flex items-center bg-gray-100 rounded-lg">
+                    <div className="flex items-center border-2 border-gray-200 bg-gray-50">
                       <button
                         onClick={() => {
                           if (item.quantity > 1) {
@@ -1208,15 +1206,15 @@ function BasketPage() {
           {/* Sidebar de resumen. min-w-0 evita que el contenido ancho (direcciones
               largas, montos) estire la columna y se desborde sobre la lista. */}
           <div className="min-w-0 w-full lg:w-[420px] xl:w-[480px] lg:sticky lg:top-24 h-fit">
-            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4 sm:p-5 md:p-6">
-              <h3 className="text-xl font-bold text-gray-900 mb-4">Resumen de Compra</h3>              
+            <div className="border-2 border-gray-200 bg-white p-4 sm:p-5 md:p-6">
+              <h3 className="mb-4 text-xl font-bold text-gray-900">Resumen de Compra</h3>
 
               {isSignedIn ? (
-                <div className="space-y-4 mt-6">
+                <div className="mt-6 space-y-5">
                   {/* Paso 1: Tipo de servicio */}
                   <div>
-                    <h4 className="font-semibold text-gray-900 mb-3 flex items-center gap-2">
-                      <span className="w-6 h-6 bg-[#eb1901] text-white rounded-full flex items-center justify-center text-sm">1</span>
+                      <h4 className="mb-3 flex items-center gap-2 text-base font-bold text-gray-900">
+                        <span className="flex h-7 w-7 items-center justify-center bg-[#eb1902] text-sm font-black text-white">1</span>
                       Servicio
                     </h4>
                     <div className="grid grid-cols-2 rounded-full bg-gray-100 p-1">
@@ -1291,13 +1289,13 @@ function BasketPage() {
                   {serviceType === 'delivery' && !selectedStore && (
                     <div className="space-y-3">
                       <h4 className="font-semibold text-gray-900 flex items-center gap-2">
-                        <span className="w-6 h-6 bg-[#eb1901] text-white rounded-full flex items-center justify-center text-sm">2</span>
+                        <span className="flex h-7 w-7 items-center justify-center bg-[#eb1902] text-sm font-black text-white">2</span>
                         Ubicación o Dirección 
                       </h4>
 
                       {/* Entrega en: dirección guardada destacada + cambiar dirección */}
                       {user && customerAddress && (
-                        <div className="rounded-xl border border-rose-200 bg-white p-4">
+                        <div className="border-2 border-gray-200 bg-white p-4">
                           <div className="flex items-center justify-between gap-3">
                             <div className="flex items-center gap-3">
                               <MapPin className="h-5 w-5 shrink-0 text-[#eb1901]" />
@@ -1316,7 +1314,7 @@ function BasketPage() {
                             <button
                               type="button"
                               onClick={() => setAddressDialogOpen(true)}
-                              className="shrink-0 rounded-full border border-rose-200 px-3 py-1.5 text-xs font-semibold text-[#eb1901] transition hover:bg-rose-50"
+                              className="shrink-0 border-2 border-gray-200 px-3 py-1.5 text-xs font-semibold text-[#09193B] transition hover:bg-gray-50"
                             >
                               {changingAddress ? "Actualizando…" : "Cambiar dirección"}
                             </button>
@@ -1324,7 +1322,7 @@ function BasketPage() {
                         </div>
                       )}
 
-                      <div className="border-2 border-rose-200 rounded-lg bg-white p-4 md:p-6">
+                      <div className="border-2 border-gray-200 bg-white p-4 md:p-6">
                         <ModernDeliveryFlow
                           userId={user!.id}
                           onComplete={(data) => {
@@ -1367,10 +1365,10 @@ function BasketPage() {
                   {serviceType === 'pickup' && !selectedStore && (
                     <div className="space-y-3">
                       <h4 className="font-semibold text-gray-900 flex items-center gap-2">
-                        <span className="w-6 h-6 bg-[#eb1901] text-white rounded-full flex items-center justify-center text-sm">2</span>
+                        <span className="flex h-7 w-7 items-center justify-center bg-[#eb1902] text-sm font-black text-white">2</span>
                         Tu sucursal de retiro
                       </h4>
-                      <div className="border border-rose-200 rounded-lg bg-white p-4">
+                      <div className="border-2 border-gray-200 bg-white p-4">
                         <p className="hidden">
                           🏪 Selecciona donde recogerás tu pedido
                         </p>
@@ -1415,7 +1413,7 @@ function BasketPage() {
                   {serviceType && selectedStore && (
                     <div className="space-y-3">
                       <h4 className="font-semibold text-gray-900 flex items-center gap-2">
-                        <span className="w-6 h-6 bg-[#eb1902] text-white rounded-full flex items-center justify-center text-sm">{serviceType === 'pickup' ? '2' : '3'}</span>
+                        <span className="flex h-7 w-7 items-center justify-center bg-[#eb1902] text-sm font-black text-white">{serviceType === 'pickup' ? '2' : '3'}</span>
                         {serviceType === 'pickup' ? 'Confirma tu retiro' : 'Método de pago'}
                       </h4>
 
@@ -1494,9 +1492,9 @@ function BasketPage() {
                           {method === "card" && (
                             <div className="mt-2">
                               {hasPhoneAndConsent && !editingPhone ? (
-                                <div className="flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                                  <div className="flex items-center justify-between border-2 border-emerald-200 bg-emerald-50 px-4 py-3">
                                   <div className="flex items-center gap-3">
-                                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-100 text-lg">
+                                    <div className="flex h-9 w-9 items-center justify-center bg-emerald-100 text-lg">
                                       📱
                                     </div>
                                     <div>
@@ -1520,7 +1518,7 @@ function BasketPage() {
                                   </button>
                                 </div>
                               ) : (
-                                <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                                  <div className="space-y-3 border-2 border-gray-200 bg-white p-4">
                                   <p className="text-sm font-semibold text-gray-800">
                                     {editingPhone ? "Actualiza tu número de WhatsApp" : "Número para notificaciones de WhatsApp"}
                                   </p>
@@ -1589,7 +1587,7 @@ function BasketPage() {
                               {serviceType === 'delivery' ? (
                                 <>
                                   {hasPhoneAndConsent && !showCodPhoneForm ? (
-                                    <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5">
+                                    <div className="flex items-center justify-between border-2 border-gray-200 bg-gray-50 px-4 py-2.5">
                                       <div className="flex items-center gap-2 text-xs text-gray-600">
                                         📱 <span className="font-medium">+52 {clerkPhone.slice(0, 3)} {clerkPhone.slice(3, 6)} {clerkPhone.slice(6)}</span>
                                       </div>
@@ -1606,7 +1604,7 @@ function BasketPage() {
                                       </button>
                                     </div>
                                   ) : (
-                                    <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                                    <div className="space-y-3 border-2 border-gray-200 bg-white p-4">
                                       <p className="text-sm font-semibold text-gray-800">📱 Teléfono de contacto</p>
                                       <div className="flex items-center gap-2 rounded-lg border-2 border-gray-200 bg-gray-50 px-3 py-2.5 focus-within:border-[#eb1902] focus-within:bg-white focus-within:ring-2 focus-within:ring-[#eb1902]/20 transition-all">
                                         <span className="text-sm font-semibold text-gray-600 whitespace-nowrap select-none">🇲🇽 +52</span>
@@ -1642,7 +1640,7 @@ function BasketPage() {
                               ) : (
                                 <>
                                   {hasPhoneAndConsent && !showPickupPhoneForm ? (
-                                    <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5">
+                                    <div className="flex items-center justify-between border-2 border-gray-200 bg-gray-50 px-4 py-2.5">
                                       <div className="flex items-center gap-2 text-xs text-gray-600">
                                         📱 <span className="font-medium">+52 {clerkPhone.slice(0, 3)} {clerkPhone.slice(3, 6)} {clerkPhone.slice(6)}</span>
                                       </div>
@@ -1659,7 +1657,7 @@ function BasketPage() {
                                       </button>
                                     </div>
                                   ) : (
-                                    <div className="space-y-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                                    <div className="space-y-3 border-2 border-gray-200 bg-white p-4">
                                       <p className="text-sm font-semibold text-gray-800">📱 Teléfono de contacto</p>
                                       <div className="flex items-center gap-2 rounded-lg border-2 border-gray-200 bg-gray-50 px-3 py-2.5 focus-within:border-green-600 focus-within:bg-white focus-within:ring-2 focus-within:ring-green-600/20 transition-all">
                                         <span className="text-sm font-semibold text-gray-600 whitespace-nowrap select-none">🇲🇽 +52</span>
@@ -1698,7 +1696,7 @@ function BasketPage() {
 
                           {/* Instrucciones de entrega (solo para delivery) y aceptación de términos legales */}
                           {serviceType === 'delivery' && method && (
-                            <label className="block rounded-xl border border-gray-200 bg-white p-4 mt-2">
+                            <label className="mt-2 block border-2 border-gray-200 bg-white p-4">
                               <span className="block text-sm font-semibold text-gray-900">Instrucciones para la entrega (opcional)</span>
                               <span className="mt-1 block text-xs text-gray-500">Privada, condominio, edificio, acceso, referencias o indicaciones para encontrarte.</span>
                               <textarea
@@ -1707,7 +1705,7 @@ function BasketPage() {
                                 maxLength={500}
                                 rows={3}
                                 placeholder="Ej. Privada Los Olivos, casa 12. Marcar al llegar; caseta por la entrada norte."
-                                className="mt-3 w-full resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 outline-none focus:border-[#eb1902] focus:ring-2 focus:ring-[#eb1902]/20"
+                                className="mt-3 w-full resize-none border-2 border-gray-200 px-3 py-2 text-sm text-gray-900 outline-none focus:border-[#09193B]"
                               />
                             </label>
                           )}
@@ -1717,16 +1715,16 @@ function BasketPage() {
                           {/* ── RESUMEN DE COMPRA ── */}
                           <div className="mt-2">
                             {serviceType === 'delivery' && customerAddress && (
-                              <div className="p-4 border border-rose-200 rounded-lg bg-white">
+                              <div className="border-2 border-rose-200 bg-white p-4">
                                 <div className="flex items-start gap-2">
                                   <CheckCircle className="w-5 h-5 text-[#70E000] flex-shrink-0 mt-0.5" />
                                   <div className="flex-1">
                                     <p className="text-sm font-semibold text-[#000]">Todo listo</p>
                                     {/* Entrega en: dirección destacada con cambio rápido */}
-                                    <div className="mt-2 rounded-lg border border-rose-100 bg-rose-50/50 p-3">
+                                    <div className="mt-2 border-2 border-gray-200 bg-gray-50 p-3">
                                       <div className="flex items-center justify-between gap-3">
                                         <div className="min-w-0 flex-1">
-                                          <p className="text-[11px] font-bold uppercase tracking-wide text-rose-700 font-semibold">
+                                          <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
                                             Entrega en
                                           </p>
                                           <p className="truncate text-sm font-bold text-gray-900">
@@ -1742,7 +1740,7 @@ function BasketPage() {
                                           <button
                                             type="button"
                                             onClick={() => setAddressDialogOpen(true)}
-                                            className="shrink-0 rounded-full border border-rose-200 bg-white px-3 py-1.5 text-xs font-semibold text-[#eb1901] transition hover:bg-rose-50"
+                                            className="shrink-0 border-2 border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-[#09193B] transition hover:bg-gray-50"
                                           >
                                             {changingAddress ? "Actualizando…" : "Cambiar dirección"}
                                           </button>
@@ -1793,7 +1791,7 @@ function BasketPage() {
                             )}
 
                             {serviceType === 'pickup' && (
-                              <div className="p-4 border border-rose-200 rounded-lg bg-white">
+                              <div className="border-2 border-rose-200 bg-white p-4">
                                 <div className="flex items-start gap-2">
                                   <CheckCircle className="w-5 h-5 text-[#70E000] flex-shrink-0 mt-0.5" />
                                   <div className="flex-1">
@@ -1858,11 +1856,11 @@ function BasketPage() {
                           )}
 
                           {/* ── CTA PRINCIPAL ÚNICO ── */}
-                          <div className="mt-2">
+                              <div className="mt-2">
                             {isSelectedStoreClosed ? (
                               <button
                                 disabled={true}
-                                className="w-full bg-gray-300 text-white px-4 py-3.5 rounded-xl cursor-not-allowed flex items-center justify-center gap-2.5 font-semibold shadow-sm"
+                                className="flex w-full cursor-not-allowed items-center justify-center gap-2.5 bg-gray-200 px-4 py-4 font-black uppercase tracking-wide text-gray-500"
                               >
                                 Tienda Cerrada
                               </button>
@@ -1876,7 +1874,7 @@ function BasketPage() {
                                   }
                                 }}
                                 disabled={isLoading || !onlinePaymentsEnabled}
-                                className="w-full bg-[#eb1902] text-white px-4 py-3.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
+                                className="flex w-full items-center justify-center gap-2.5 bg-[#eb1902] px-4 py-4 font-black uppercase tracking-wide text-white transition-colors hover:bg-[#c11300] disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500"
                               >
                                 {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <CreditCard className="w-5 h-5" />}
                                 {isLoading ? "Procesando..." : onlinePaymentsEnabled ? "Pagar con tarjeta" : "Pago en línea no disponible"}
@@ -1885,7 +1883,7 @@ function BasketPage() {
                               <button
                                 onClick={serviceType === 'delivery' ? handleCashOnDeliverySubmit : handlePickupPayment}
                                 disabled={isLoading}
-                                className="w-full bg-[#eb1902] text-white px-4 py-3.5 rounded-xl hover:bg-[#c11300] disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2.5 transition-colors font-semibold shadow-sm"
+                                className="flex w-full items-center justify-center gap-2.5 bg-[#eb1902] px-4 py-4 font-black uppercase tracking-wide text-white transition-colors hover:bg-[#c11300] disabled:cursor-not-allowed disabled:bg-gray-200 disabled:text-gray-500"
                               >
                                 {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Banknote className="w-5 h-5" />}
                                 {isLoading ? 'Procesando...' : serviceType === 'pickup' ? 'Pagar en tienda (Efectivo)' : 'Pagar al recibir (Efectivo)'}
@@ -1893,7 +1891,7 @@ function BasketPage() {
                             ) : (
                               <button
                                 disabled={true}
-                                className="w-full bg-gray-300 text-white px-4 py-3.5 rounded-xl cursor-not-allowed flex items-center justify-center gap-2.5 font-semibold shadow-sm"
+                                className="flex w-full cursor-not-allowed items-center justify-center gap-2.5 bg-gray-200 px-4 py-4 font-black uppercase tracking-wide text-gray-500"
                               >
                                 Elige un método de pago
                               </button>
@@ -1915,7 +1913,7 @@ function BasketPage() {
                   )}
                   {/* Beneficios */}
                   {serviceType && (
-                    <div className="bg-gray-50 rounded-lg p-3 space-y-2 text-xs text-gray-600">
+                    <div className="border-2 border-gray-100 bg-gray-50 p-3 text-xs text-gray-600">
                       <div className="flex items-center justify-center py-2">
                         <Image
                           src="/Powered by Stripe - blurple.svg"
