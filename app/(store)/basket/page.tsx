@@ -1718,11 +1718,11 @@ function BasketPage() {
                               <div className="border-2 border-rose-200 bg-white p-4">
                                 <div className="flex items-start gap-2">
                                   <CheckCircle className="w-5 h-5 text-[#70E000] flex-shrink-0 mt-0.5" />
-                                  <div className="flex-1">
+                                  <div className="min-w-0 flex-1">
                                     <p className="text-sm font-semibold text-[#000]">Todo listo</p>
                                     {/* Entrega en: dirección destacada con cambio rápido */}
                                     <div className="mt-2 border-2 border-gray-200 bg-gray-50 p-3">
-                                      <div className="flex items-center justify-between gap-3">
+                                      <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                                         <div className="min-w-0 flex-1">
                                           <p className="text-[11px] font-bold uppercase tracking-wide text-gray-500">
                                             Entrega en
@@ -1740,7 +1740,7 @@ function BasketPage() {
                                           <button
                                             type="button"
                                             onClick={() => setAddressDialogOpen(true)}
-                                            className="shrink-0 border-2 border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-[#09193B] transition hover:bg-gray-50"
+                                            className="w-full border-2 border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-[#09193B] transition hover:bg-gray-50 sm:w-auto sm:shrink-0"
                                           >
                                             {changingAddress ? "Actualizando…" : "Cambiar dirección"}
                                           </button>
@@ -1764,21 +1764,21 @@ function BasketPage() {
                                       </p>
                                     )}
                                     <br/>
-                                    <div className="flex items-center justify-between mt-1 text-sm font-semibold">
+                                    <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 text-sm font-semibold">
                                       <span>Subtotal ({groupedItems.reduce((total, item) => total + item.quantity, 0)} {groupedItems.reduce((total, item) => total + item.quantity, 0) === 1 ? 'producto' : 'productos'})</span>
                                       <span>${useBasketStore.getState().getTotalPrice().toFixed(2)}</span>
                                     </div>
                                     {shippingCost !== null && (
-                                      <div className="flex items-center justify-between mt-1 text-sm font-semibold">
+                                      <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 text-sm font-semibold">
                                         <span>Costo de envío</span>
                                         <span>${shippingCost} MXN</span>
                                       </div>
                                     )}
-                                    <div className="flex items-center justify-between mt-1 text-sm font-semibold">
+                                    <div className="mt-1 flex flex-wrap items-center justify-between gap-x-2 text-sm font-semibold">
                                       <span>Tarifa de servicio</span>
                                       <span>${platformServiceFee.toFixed(2)} MXN</span>
                                     </div>
-                                    <div className="flex items-baseline justify-between pt-3 border-t-2 border-rose-200 mt-3">
+                                    <div className="mt-3 flex flex-wrap items-baseline justify-between gap-x-2 border-t-2 border-rose-200 pt-3">
                                       <span className="text-sm font-semibold text-gray-700">Total:</span>
                                       <span className="text-2xl font-bold text-[#000]">
                                         ${calculateOrderTotal({ productsSubtotal: useBasketStore.getState().getTotalPrice(), shippingFee: shippingCost ?? 0, platformServiceFee }).toFixed(2).split('.')[0]}
