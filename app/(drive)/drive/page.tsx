@@ -2,7 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAuth, SignIn } from "@clerk/nextjs";
-import { GoogleMap, Marker, Polyline, useJsApiLoader } from "@react-google-maps/api";
+import type {
+  Map as MapboxMapInstance,
+  Marker as MapboxMarker,
+  StyleSpecification,
+} from "mapbox-gl";
+import {
+  MapboxMap,
+  type MapboxMapHandle,
+  type MapboxMapLine,
+  type MapboxMapMarker,
+} from "@/components/map/MapboxMap";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Loader2,
@@ -28,6 +38,7 @@ import { DriveOrderDetails } from "@/components/drive/DriveOrderDetails";
 import { DriveSimPanel } from "@/components/drive/DriveSimPanel";
 import { RatingSection } from "@/components/ratings/RatingSection";
 import {
+  destinationPinHtml,
   getDestinationPinVariants,
   resetDestinationPins,
 } from "@/components/drive/DriveDestinationPins";
@@ -62,21 +73,17 @@ import {
   DRIVE_MOTION_EASE,
 } from "@/components/drive/motion";
 import {
-  DRIVE_MAP_STYLES,
+  DRIVE_MAP_STYLE_URL,
   OFFER_PREVIEW_COLOR,
   ROUTE_BLUE,
+  loadDriveMapStyle,
 } from "@/lib/drive/map-styles";
 
 // ── Map config ─────────────────────────────────────────────────────
 
-// Map ID del mapa vectorial de marca (Cloud Console → Map Management). Sin
-// él el mapa es raster: sin rotación heading-up ni tilt. El estilo visual
-// vive en el PROPIO Map ID (JSON de marca importado); el fallback inline de
-// DRIVE_MAP_STYLES es solo transitorio hasta crear el Map ID.
-const DRIVE_MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID || "";
-
+// El estilo del mapa vive en lib/drive/map-styles.ts (estilo de Mapbox, con
+// rotación heading-up y tilt nativos: no hace falta Map ID ni mapa vectorial).
 const DEFAULT_CENTER = { lat: 20.502, lng: -100.145 };
-const containerStyle = { width: "100%", height: "100%" };
 
 // ── Camera (navegación tipo GPS) ───────────────────────────────────
 // Aire alrededor del trayecto al encuadrar (fracción del tamaño del encuadre).
@@ -166,7 +173,7 @@ const SIM_ROUTE_RETRY_MS = 5_000;
 // Margen (px) para que la ruta A → B no quede pegada a los bordes al
 // encuadrar el preview. El margen inferior es mayor: la tarjeta de oferta
 // tapa la parte baja de la pantalla.
-const OFFER_PREVIEW_CAMERA_MARGIN = { top: 72, right: 64, bottom: 320, left: 64 };
+const OFFER_PREVIEW_CAMERA_MARGIN = { top: 72, right: 64, bottom: 320, left: 64 } as const;
 // Zoom máximo al encuadrar el preview (mismo criterio que frameRouteView).
 const OFFER_PREVIEW_CAMERA_MAX_ZOOM = 16;
 // Restaurar la cámara solo si la oferta vivió al menos este tiempo: evita
@@ -211,25 +218,6 @@ type OfferPreviewState = {
 const ARRIVAL_RADIUS_METERS = 50;
 // El simulador de viaje SOLO existe fuera de producción (dev local/preview).
 const DRIVE_SIM_ENABLED = getDeploymentEnvironment() !== "production";
-const mapOptions = {
-  disableDefaultUI: true,
-  // Los atajos de teclado NO los apaga disableDefaultUI: se desactivan aparte.
-  keyboardShortcuts: false,
-  zoomControl: false,
-  fullscreenControl: false,
-  mapTypeControl: false,
-  streetViewControl: false,
-  gestureHandling: "greedy",
-  clickableIcons: false,
-  // Map ID VECTORIAL (Cloud Console): habilita rotación heading-up + tilt
-  // vía map.moveCamera y el estilo de marca configurado en el mismo Map ID.
-  ...(DRIVE_MAP_ID ? { mapId: DRIVE_MAP_ID } : {}),
-  // Fallback TRANSITORIO (solo si aún no existe el Map ID): estilo inline con
-  // el mismo JSON de marca. Estado final = Map ID + estilo de marca + rotación
-  // siempre juntos; este branch desaparece cuando DRIVE_MAP_ID esté en env.
-  ...(DRIVE_MAP_ID ? {} : { styles: DRIVE_MAP_STYLES }),
-};
-
 // ── Pin SVG ────────────────────────────────────────────────────────
 
 // Flecha de navegación del conductor como SVG data-URI: la rotación se aplica
@@ -270,30 +258,15 @@ function driverArrowIcon(headingDeg: number): string {
 // para no tocar el marcador si el ángulo no cambió de bucket.
 
 const ICON_SIZE_PX = 44;
-const ICON_ANCHOR_PX = ICON_SIZE_PX / 2;
 const ICON_BUCKET_DEG = 10;
 const ICON_BUCKET_COUNT = 360 / ICON_BUCKET_DEG;
 
-// Cache a nivel módulo: se construye UNA vez con google.maps ya cargado.
-let driverIconBuckets: google.maps.Icon[] | null = null;
-let driverIconScaledSize: google.maps.Size | null = null;
-let driverIconAnchor: google.maps.Point | null = null;
+// El HTML del marcador se construye UNA vez (flecha apuntando arriba): la
+// rotación ya no requiere un icono por ángulo porque el propio marcador de
+// Mapbox gira con marker.setRotation().
+const DRIVER_MARKER_ID = "drive-driver-marker";
+const DRIVER_MARKER_HTML = `<img src="${driverArrowIcon(0)}" width="${ICON_SIZE_PX}" height="${ICON_SIZE_PX}" alt="" style="display:block" />`;
 let lastDriverIconBucket: number | null = null;
-
-function getDriverIconBuckets(): google.maps.Icon[] | null {
-  if (driverIconBuckets) return driverIconBuckets;
-  // google.maps solo existe tras cargar el script de Maps (SSR-safe).
-  if (typeof google === "undefined" || !google.maps) return null;
-  // Un único objeto Size/Point reutilizado por TODOS los buckets.
-  driverIconScaledSize = new google.maps.Size(ICON_SIZE_PX, ICON_SIZE_PX);
-  driverIconAnchor = new google.maps.Point(ICON_ANCHOR_PX, ICON_ANCHOR_PX);
-  driverIconBuckets = Array.from({ length: ICON_BUCKET_COUNT }, (_, i) => ({
-    url: driverArrowIcon(i * ICON_BUCKET_DEG),
-    scaledSize: driverIconScaledSize!,
-    anchor: driverIconAnchor!,
-  }));
-  return driverIconBuckets;
-}
 
 /**
  * Aplica la rotación del marcador del conductor de forma IMPERATIVA.
@@ -302,13 +275,11 @@ function getDriverIconBuckets(): google.maps.Icon[] | null {
  * No-op si el ángulo sigue en el mismo bucket de 10° (no toca el marcador).
  */
 function applyDriverMarkerIcon(
-  marker: google.maps.Marker | null,
+  marker: MapboxMarker | null,
   driverHeadingDeg: number,
   mapHeadingDeg: number | null
 ): void {
   if (!marker) return;
-  const buckets = getDriverIconBuckets();
-  if (!buckets) return;
   const relative =
     mapHeadingDeg == null
       ? normalizeDeg(driverHeadingDeg)
@@ -317,7 +288,13 @@ function applyDriverMarkerIcon(
     Math.round(normalizeDeg(relative) / ICON_BUCKET_DEG) % ICON_BUCKET_COUNT;
   if (bucket === lastDriverIconBucket) return;
   lastDriverIconBucket = bucket;
-  marker.setIcon(buckets[bucket]);
+  // Mapbox gira en sentido antihorario; el rumbo se mide en sentido horario.
+  marker.setRotation(-(bucket * ICON_BUCKET_DEG));
+}
+
+/** Mueve el marcador del conductor sin re-renderizar (hot path del rAF). */
+function setDriverMarkerPosition(marker: MapboxMarker | null, position: RoutePoint): void {
+  marker?.setLngLat([position.lng, position.lat]);
 }
 
 /** Marca el bucket como desconocido (remount del marcador / reset). */
@@ -399,23 +376,20 @@ function hasValidCoords(lat: number, lng: number): boolean {
  * Viewport real del mapa. Se lee con un tipo estructural porque los tipos
  * del proyecto (types/google-maps.d.ts) solo declaran una parte de la API.
  */
-function getMapViewport(map: google.maps.Map): {
+function getMapViewport(map: MapboxMapInstance): {
   minLat: number;
   maxLat: number;
   minLng: number;
   maxLng: number;
 } | null {
-  const bounds = map.getBounds() as
-    | {
-        getNorthEast(): { lat(): number; lng(): number };
-        getSouthWest(): { lat(): number; lng(): number };
-      }
-    | null
-    | undefined;
+  const bounds = map.getBounds();
   if (!bounds) return null;
-  const ne = bounds.getNorthEast();
-  const sw = bounds.getSouthWest();
-  return { minLat: sw.lat(), maxLat: ne.lat(), minLng: sw.lng(), maxLng: ne.lng() };
+  return {
+    minLat: bounds.getSouth(),
+    maxLat: bounds.getNorth(),
+    minLng: bounds.getWest(),
+    maxLng: bounds.getEast(),
+  };
 }
 
 function normalizeDeg(deg: number): number {
@@ -754,7 +728,7 @@ function createDriveHeadingResolver(options: {
  * un punto POR DELANTE del vehículo. El vehículo queda entonces en el tercio
  * inferior y la carretera delante ocupa la mayor parte de la pantalla.
  */
-function aheadCameraPoint(map: google.maps.Map, driver: RoutePoint, headingDeg: number): RoutePoint {
+function aheadCameraPoint(map: MapboxMapInstance, driver: RoutePoint, headingDeg: number): RoutePoint {
   const vp = getMapViewport(map);
   let viewHeightMeters = 500;
   if (vp) {
@@ -771,27 +745,41 @@ function aheadCameraPoint(map: google.maps.Map, driver: RoutePoint, headingDeg: 
   return movePointAlong(driver, headingDeg, meters);
 }
 
+type DriveCamera = {
+  center?: { lat: number; lng: number };
+  heading?: number | null;
+  tilt?: number | null;
+  zoom?: number;
+  offset?: [number, number];
+};
+
 /**
- * Aplica la cámara en UNA llamada vía map.moveCamera (compose de
- * center/heading/tilt/zoom, mapa vectorial): evita los saltos y la doble
- * animación de setCenter/setHeading/setZoom por separado. Con mapa raster
- * (sin Map ID) moveCamera no existe: cae a setCenter + setHeading.
+ * Aplica la cámara en UNA llamada (center/bearing/pitch/zoom a la vez): evita
+ * los saltos y la doble animación de mover cada propiedad por separado.
+ * Acepta cámara PARCIAL (solo zoom, solo heading, ...).
  */
-function moveMapCamera(
-  map: google.maps.Map,
-  camera: google.maps.CameraOptions
-): void {
-  if (typeof map.moveCamera === "function") {
-    map.moveCamera(camera);
-    return;
-  }
-  // Fallback transitorio raster: mismo encuadre, sin tilt. Acepta cámara
-  // PARCIAL (solo zoom, solo heading, ...) para no romper llamadas nuevas.
-  if (camera.center != null) {
-    map.setCenter(camera.center as google.maps.LatLngLiteral);
-  }
-  if (camera.heading != null) map.setHeading(camera.heading);
-  if (camera.zoom != null) map.setZoom(camera.zoom);
+function moveMapCamera(map: MapboxMapInstance, camera: DriveCamera): void {
+  map.jumpTo({
+    ...(camera.center ? { center: [camera.center.lng, camera.center.lat] as [number, number] } : {}),
+    ...(camera.heading != null ? { bearing: camera.heading } : {}),
+    ...(camera.tilt != null ? { pitch: camera.tilt } : {}),
+    ...(camera.zoom != null ? { zoom: camera.zoom } : {}),
+    ...(camera.offset ? { offset: camera.offset } : {}),
+  });
+}
+
+function getDriveVisibleMapOffset(map: MapboxMapInstance): [number, number] {
+  const containerHeight =
+    map.getContainer()?.clientHeight || window.innerHeight || 0;
+  const overlayHeight = Math.min(
+    containerHeight,
+    Math.max(
+      0,
+      document.getElementById("drive-bottom-overlay")?.getBoundingClientRect().height ?? 0
+    )
+  );
+  const visibleHeight = containerHeight - overlayHeight;
+  return [0, Math.round(visibleHeight / 2 - containerHeight / 2)];
 }
 
 /**
@@ -801,17 +789,17 @@ function moveMapCamera(
  * restauración cae al fallback: ubicación ACTUAL del repartidor + zoom drive.
  */
 function captureOfferPreviewCamera(
-  map: google.maps.Map,
+  map: MapboxMapInstance,
   followDriver: boolean
 ): OfferPreviewCameraState | null {
-  const center = map.getCenter?.();
-  const zoom = map.getZoom?.();
+  const center = map.getCenter();
+  const zoom = map.getZoom();
   if (!center || typeof zoom !== "number") return null;
   return {
-    center: { lat: center.lat(), lng: center.lng() },
+    center: { lat: center.lat, lng: center.lng },
     zoom,
-    heading: map.getHeading?.() ?? null,
-    tilt: map.getTilt?.() ?? null,
+    heading: map.getBearing(),
+    tilt: map.getPitch(),
     followDriver,
   };
 }
@@ -823,7 +811,7 @@ function captureOfferPreviewCamera(
  * animaciones encadenadas (sección 13).
  */
 function frameOfferPreview(
-  map: google.maps.Map,
+  map: MapboxMapInstance,
   pickup: RoutePoint,
   destination: RoutePoint,
   routePath: RoutePoint[] | null
@@ -844,18 +832,18 @@ function frameOfferPreview(
   const latPad = (maxLat - minLat) * CAMERA_PADDING;
   const lngPad = (maxLng - minLng) * CAMERA_PADDING;
   map.fitBounds(
+    [
+      [minLng - lngPad, minLat - latPad],
+      [maxLng + lngPad, maxLat + latPad],
+    ],
     {
-      south: minLat - latPad,
-      west: minLng - lngPad,
-      north: maxLat + latPad,
-      east: maxLng + lngPad,
-    },
-    OFFER_PREVIEW_CAMERA_MARGIN
+      padding: OFFER_PREVIEW_CAMERA_MARGIN,
+      maxZoom: OFFER_PREVIEW_CAMERA_MAX_ZOOM,
+      bearing: 0,
+      pitch: 0,
+      duration: 0,
+    }
   );
-  const zoom = map.getZoom?.();
-  if (typeof zoom === "number" && zoom > OFFER_PREVIEW_CAMERA_MAX_ZOOM) {
-    map.setZoom(OFFER_PREVIEW_CAMERA_MAX_ZOOM);
-  }
 }
 
 /**
@@ -900,14 +888,6 @@ function formatMetersShort(meters: number): string {
 
 export default function DrivePage() {
   const { isSignedIn } = useAuth();
-  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
-
-  const { isLoaded: mapsLoaded } = useJsApiLoader({
-    id: "driver-app-google-maps",
-    googleMapsApiKey: apiKey,
-    // Carga el mapa vectorial asociado al Map ID (rotación/tilt habilitados).
-    ...(DRIVE_MAP_ID ? { mapIds: [DRIVE_MAP_ID] } : {}),
-  });
 
   // El sondeo solo arranca cuando Clerk confirma la sesión: sin sesión no se
   // llama /api/driver/state (evita los 401 repetidos en la subdominio Drive).
@@ -967,6 +947,28 @@ export default function DrivePage() {
   // Timestamp del último paneo del mapa: un arrastre NO debe contar como
   // toque (no cierra "Tu ruta").
   const mapDraggedAtRef = useRef(0);
+  // Mapa listo (onLoad de <MapboxMap>): los efectos que necesitan mapRef no
+  // vacío (p. ej. OFFER_ROUTE_PREVIEW) se re-ejecutan cuando cambia.
+  const [mapReady, setMapReady] = useState(false);
+  // Estilo de MARCA (streets-v12 recoloreado con la paleta de navegación).
+  // Mientras se resuelve se muestra el loader del mapa.
+  const [driveStyle, setDriveStyle] = useState<StyleSpecification | null>(null);
+  const [driveStyleReady, setDriveStyleReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    loadDriveMapStyle().then((style) => {
+      if (cancelled) return;
+      setDriveStyle(style);
+      setDriveStyleReady(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  // Alias histórico: antes indicaba que el script de Google Maps había
+  // cargado. Con Mapbox el mapa se carga solo y expone `mapReady`.
+  const mapsLoaded = mapReady;
   // Intención de disponibilidad OPTIMISTA: la tarjeta de fin de ruta aparece /
   // desaparece al instante mientras el backend confirma (luego se sincroniza).
   const [stopOffersIntent, setStopOffersIntent] = useState<boolean | null>(null);
@@ -1436,7 +1438,10 @@ export default function DrivePage() {
   // se mueve y rota DEBAJO del conductor; currentLocation nunca cambia. Cuando
   // el usuario arrastra o hace zoom (interacción manual) salimos del modo; los
   // cambios internos de zoom usan un guard para no confundirse con el usuario.
-  const mapRef = useRef<google.maps.Map | null>(null);
+  const mapRef = useRef<MapboxMapInstance | null>(null);
+  // El handle permite además acceder a los marcadores por id (rotación del
+  // conductor sin re-renderizar).
+  const mapHandleRef = useRef<MapboxMapHandle | null>(null);
   const mapListenersRef = useRef<Array<{ remove: () => void }>>([]);
   const lastFollowPosRef = useRef<RoutePoint | null>(null);
   const lastFramedRouteRef = useRef<RoadRoute | null>(null);
@@ -1460,7 +1465,49 @@ export default function DrivePage() {
   // ticks de GPS vía rAF (nunca se teletransportan). El marcador se mueve por
   // ref (setPosition) para no re-renderizar la página a 60 fps.
   const initialDriverPosRef = useRef(currentLocation);
-  const driverMarkerRef = useRef<google.maps.Marker | null>(null);
+  const driverMarkerRef = useRef<MapboxMarker | null>(null);
+  const centerOnGpsRef = useRef(false);
+
+  // ── Centrado del mapa en el repartidor (offset de la hoja inferior) ──
+  // El mapa ocupa toda la pantalla pero la tarjeta inferior tapa la zona baja:
+  // el centro "puro" del contenedor quedaría bajo la hoja. El offset coloca al
+  // conductor en el centro del ÁREA VISIBLE (~72%), que es donde Waze/Google
+  // Maps lo dejan al navegar.
+  const centerOnDriver = useCallback(
+    (options: { duration?: number; zoom?: number; heading?: number | null } = {}) => {
+      const map = mapRef.current;
+      if (!map) return;
+      const position = currentLocationRef.current;
+
+      map.easeTo({
+        center: [position.lng, position.lat],
+        ...(options.zoom != null ? { zoom: options.zoom } : {}),
+        offset: getDriveVisibleMapOffset(map),
+        bearing: options.heading ?? 0,
+        pitch: 0,
+        duration: options.duration ?? 450,
+        easing: (t: number) => 1 - Math.pow(1 - t, 3),
+        essential: true,
+      });
+      visualPosRef.current = position;
+      lastFollowPosRef.current = position;
+      setDriverMarkerPosition(driverMarkerRef.current, position);
+    },
+    []
+  );
+
+  // ── Primer encuadre en el repartidor ─────────────────────────────
+  // Sin pedido activo NUNCA corre el loop de seguimiento: si el mapa arranca
+  // en su centro por defecto el puck del conductor quedaba fuera de vista (y
+  // se dibujaba incluso por encima de la tarjeta inferior). El primer vuelo se
+  // hace una sola vez, en cuanto hay GPS válido y el mapa está listo; después
+  // el usuario es libre de explorar.
+  const initialCenteredRef = useRef(false);
+  useEffect(() => {
+    if (initialCenteredRef.current || !mapReady || !driverHasLocation) return;
+    initialCenteredRef.current = true;
+    centerOnDriver({ duration: 0, zoom: DEFAULT_ZOOM });
+  }, [mapReady, driverHasLocation, centerOnDriver]);
   const visualPosRef = useRef<RoutePoint>(currentLocation);
   const followTargetRef = useRef<RoutePoint | null>(null);
   const followRafRef = useRef<number | null>(null);
@@ -1476,9 +1523,6 @@ export default function DrivePage() {
   // incluida la apertura antes de maniobras.
   const NAV_AHEAD_BASE = 90;
   const [isRecalculating, setIsRecalculating] = useState(false);
-  // Mapa listo (onLoad del GoogleMap): los efectos que necesitan mapRef no
-  // vacío (p. ej. OFFER_ROUTE_PREVIEW) se re-ejecutan cuando cambia.
-  const [mapReady, setMapReady] = useState(false);
   // OFFER_ROUTE_PREVIEW: estado del preview de oferta. Declarado aquí para
   // que los efectos de cámara (más abajo) puedan leerlo sin TDZ.
   const [offerPreview, setOfferPreview] = useState<OfferPreviewState | null>(null);
@@ -1514,7 +1558,7 @@ export default function DrivePage() {
   // interpolación del loop.
   useEffect(() => {
     if (!followDriver && driverMarkerRef.current) {
-      driverMarkerRef.current.setPosition(currentLocation);
+      setDriverMarkerPosition(driverMarkerRef.current, currentLocation);
       visualPosRef.current = currentLocation;
     }
   }, [followDriver, currentLocation]);
@@ -1743,7 +1787,7 @@ export default function DrivePage() {
         next = movePointAlong(cur, bearingBetween(cur, target), stepMeters);
       }
       visualPosRef.current = next;
-      driverMarkerRef.current?.setPosition(next);
+      setDriverMarkerPosition(driverMarkerRef.current, next);
 
       // 2) Centro de cámara ANCLADO AL VEHÍCULO VISUAL + target adelantado:
       //    la cámara mira a un punto POR DELANTE del vehículo para que la
@@ -1760,10 +1804,14 @@ export default function DrivePage() {
       // abrirse la cámara antes de un giro, el ancla se adelanta MÁS para que
       // el conductor no suba en pantalla y queden visibles el punto exacto de
       // la maniobra, el tramo previo y el tramo posterior al giro.
-      const currentZoom = map.getZoom?.();
+      const currentZoom = map.getZoom();
       const zoomNow = typeof currentZoom === "number" ? currentZoom : NAV_ZOOM_BASE;
       const aheadMeters = NAV_AHEAD_BASE * Math.pow(2, zoomNow - NAV_ZOOM_BASE);
-      const desiredCenter = movePointAlong(next, navHeading, aheadMeters);
+      const centerOnGps = centerOnGpsRef.current;
+      const desiredCenter = centerOnGps
+        ? next
+        : movePointAlong(next, navHeading, aheadMeters);
+      const cameraOffset = centerOnGps ? getDriveVisibleMapOffset(map) : undefined;
 
       // Suavizado angular de la cámara basado en delta time para que el giro sea
       // consistente a diferentes FPS y no salte instantáneamente ante cambios de
@@ -1780,18 +1828,33 @@ export default function DrivePage() {
           const visualCameraHeading = normalizeDeg(prevHeading + sign * maxDeg);
           cam.current = visualCameraHeading;
           cam.lastTs = now;
-          moveMapCamera(map, { center: desiredCenter, heading: visualCameraHeading, tilt: 0 });
+          moveMapCamera(map, {
+            center: desiredCenter,
+            heading: visualCameraHeading,
+            tilt: 0,
+            offset: cameraOffset,
+          });
         } else {
           cam.current = navHeading;
           cam.lastTs = now;
-          moveMapCamera(map, { center: desiredCenter, heading: navHeading, tilt: 0 });
+          moveMapCamera(map, {
+            center: desiredCenter,
+            heading: navHeading,
+            tilt: 0,
+            offset: cameraOffset,
+          });
         }
       } else {
         if (navHeading != null) {
           cam.current = navHeading;
           cam.lastTs = now;
         }
-        moveMapCamera(map, { center: desiredCenter, heading: navHeading ?? 0, tilt: 0 });
+        moveMapCamera(map, {
+          center: desiredCenter,
+          heading: navHeading ?? 0,
+          tilt: 0,
+          offset: cameraOffset,
+        });
       }
       // ── ZOOM ADAPTATIVO SUAVE (frame a frame) ──
       // Objetivo por VELOCIDAD (más lejos al acelerar, más cerca al frenar)
@@ -1887,8 +1950,8 @@ export default function DrivePage() {
       }
 
       if (dist < 0.5) {
-        const c = map.getCenter?.() as { lat(): number; lng(): number } | undefined;
-        if (!c || haversineMeters({ lat: c.lat(), lng: c.lng() }, desiredCenter) < 1) {
+        const c = map.getCenter();
+        if (!c || haversineMeters({ lat: c.lat, lng: c.lng }, desiredCenter) < 1) {
           followRafRef.current = null;
           return;
         }
@@ -1901,6 +1964,7 @@ export default function DrivePage() {
   /** Sale del modo navegación/seguimiento (interacción manual del usuario). */
   const exitFollowMode = useCallback(() => {
     setFollowDriver(false);
+    centerOnGpsRef.current = false;
     cancelFollowLoop();
     stopHeadingAnimation();
     visualHeadingRef.current = null;
@@ -1908,33 +1972,57 @@ export default function DrivePage() {
     applyDriverMarkerIcon(driverMarkerRef.current, 0, null);
     const map = mapRef.current;
     // Norte arriba y sin tilt: vista de exploración tras el gesto del usuario.
-    if (map && map.getHeading?.()) {
+    if (map && map.getBearing?.()) {
       moveMapCamera(map, { heading: 0, tilt: 0 });
     }
   }, [cancelFollowLoop, stopHeadingAnimation]);
 
   const handleMapLoad = useCallback(
-    (map: google.maps.Map) => {
+    (map: MapboxMapInstance) => {
       mapRef.current = map;
       setMapReady(true);
-      // Solo dev: expone el mapa para probar en DevTools Console, p. ej.
-      // __driveMap.getRenderingType() → "VECTOR" con el Map ID configurado.
+      // Solo dev: expone el mapa para probar en DevTools Console.
       if (process.env.NODE_ENV !== "production") {
-        (window as unknown as { __driveMap?: google.maps.Map }).__driveMap = map;
+        (window as unknown as { __driveMap?: MapboxMapInstance }).__driveMap = map;
       }
       mapListenersRef.current.forEach((listener) => listener.remove());
+
+      // Pan manual → exploración.
+      const onDragStart = () => exitFollowMode();
+      // Zoom gestual (pinch/rueda) → exploración. Los cambios de zoom de la
+      // propia cámara (Centrar GPS / encuadres / Ver viaje) llevan guard.
+      const onZoom = () => {
+        if (!internalZoomRef.current) exitFollowMode();
+      };
+      // Fin del arrastre: un paneo NO debe contar como toque simple (no
+      // cierra "Tu ruta").
+      const onDragEnd = () => {
+        mapDraggedAtRef.current = Date.now();
+      };
+      map.on("dragstart", onDragStart);
+      map.on("dragend", onDragEnd);
+      map.on("zoom", onZoom);
       mapListenersRef.current = [
-        // Pan manual → exploración.
-        map.addListener("dragstart", () => exitFollowMode()),
-        // Zoom gestual (pinch/rueda) → exploración. Los cambios de zoom de la
-        // propia cámara (Centrar GPS / encuadres / Ver viaje) llevan guard.
-        map.addListener("zoom_changed", () => {
-          if (!internalZoomRef.current) exitFollowMode();
-        }),
+        { remove: () => map.off("dragstart", onDragStart) },
+        { remove: () => map.off("dragend", onDragEnd) },
+        { remove: () => map.off("zoom", onZoom) },
       ];
     },
     [exitFollowMode]
   );
+
+  // El mapa avisa "listo" antes de crear los marcadores: cuando el marcador
+  // del conductor ya existe se conecta la ref con su instancia para moverlo y
+  // rotarlo sin re-renderizar.
+  useEffect(() => {
+    if (!mapReady) return;
+    const driverMarker = mapHandleRef.current?.marker(DRIVER_MARKER_ID) ?? null;
+    driverMarkerRef.current = driverMarker;
+    if (driverMarker) {
+      resetDriverMarkerIconBucket();
+      applyDriverMarkerIcon(driverMarker, 0, null);
+    }
+  }, [mapReady]);
 
   const handleMapUnmount = useCallback(() => {
     cancelFollowLoop();
@@ -1946,7 +2034,7 @@ export default function DrivePage() {
     resetDriverMarkerIconBucket();
     resetDestinationPins();
     if (process.env.NODE_ENV !== "production") {
-      delete (window as unknown as { __driveMap?: google.maps.Map }).__driveMap;
+      delete (window as unknown as { __driveMap?: MapboxMapInstance }).__driveMap;
     }
     driverMarkerRef.current = null;
   }, [cancelFollowLoop, stopHeadingAnimation]);
@@ -2004,9 +2092,9 @@ export default function DrivePage() {
       applyDriverMarkerIcon(driverMarkerRef.current, 0, null);
       moveMapCamera(map, { heading: 0, tilt: 0 });
       markInternalZoom();
-      map.setZoom(DEFAULT_ZOOM);
+      moveMapCamera(map, { zoom: DEFAULT_ZOOM });
       lastFollowPosRef.current = currentLocation;
-      map.setCenter(currentLocation);
+      moveMapCamera(map, { center: currentLocation });
       setFollowDriver(true);
       setIsRecalculating(false);
     }
@@ -2031,7 +2119,7 @@ export default function DrivePage() {
       // actualizándose con GPS (este efecto corre en cada tick de
       // currentLocation); solo la cámara queda bajo control del preview.
       visualPosRef.current = currentLocation;
-      driverMarkerRef.current?.setPosition(currentLocation);
+      setDriverMarkerPosition(driverMarkerRef.current, currentLocation);
       return;
     }
     if (!mapsLoaded || !map || !followDriver || !driverHasLocation) {
@@ -2051,7 +2139,7 @@ export default function DrivePage() {
       // experiencia sea similar a un GPS aunque la ruta aún no esté lista.
       cancelFollowLoop();
       visualPosRef.current = currentLocation;
-      driverMarkerRef.current?.setPosition(currentLocation);
+      setDriverMarkerPosition(driverMarkerRef.current, currentLocation);
       const target = headingResolverRef.current();
       if (target != null) {
         applyHeading(target);
@@ -2170,7 +2258,7 @@ export default function DrivePage() {
     // la posición real, orientada al rumbo conocido, con zoom de navegación.
     lastFollowPosRef.current = currentLocation;
     visualPosRef.current = currentLocation;
-    driverMarkerRef.current?.setPosition(currentLocation);
+    setDriverMarkerPosition(driverMarkerRef.current, currentLocation);
     followTargetRef.current = currentLocation;
     lastZoomRef.current = null;
     markInternalZoom();
@@ -2245,16 +2333,16 @@ export default function DrivePage() {
     const onInteraction = () => {
       lastMapInteractionAtRef.current = Date.now();
     };
-    const listeners = [
-      map.addListener("dragstart", onInteraction),
-      map.addListener("zoom_changed", () => {
-        // Los zooms PROGRAMÁTICOS (encuadre del preview, cámara drive) no son
-        // gestos del usuario: el guard internalZoomRef los excluye.
-        if (!internalZoomRef.current) onInteraction();
-      }),
-    ];
+    const onZoom = () => {
+      // Los zooms PROGRAMÁTICOS (encuadre del preview, cámara drive) no son
+      // gestos del usuario: el guard internalZoomRef los excluye.
+      if (!internalZoomRef.current) onInteraction();
+    };
+    map.on("dragstart", onInteraction);
+    map.on("zoom", onZoom);
     return () => {
-      listeners.forEach((l) => l.remove());
+      map.off("dragstart", onInteraction);
+      map.off("zoom", onZoom);
     };
   }, [mapReady]);
 
@@ -2292,7 +2380,7 @@ export default function DrivePage() {
         // el loop interpola la cámara de vuelta sin salto brusco.
         followTargetRef.current = current;
         visualPosRef.current = current;
-        driverMarkerRef.current?.setPosition(current);
+        setDriverMarkerPosition(driverMarkerRef.current, current);
         markInternalZoom();
         moveMapCamera(map, { zoom: NAV_ZOOM_BASE });
         ensureFollowLoop();
@@ -2300,8 +2388,8 @@ export default function DrivePage() {
       }
       lastFollowPosRef.current = current;
       markInternalZoom();
-      map.setZoom(DEFAULT_ZOOM);
-      map.setCenter(current);
+      moveMapCamera(map, { zoom: DEFAULT_ZOOM });
+      moveMapCamera(map, { center: current });
     },
     [markInternalZoom, ensureFollowLoop]
   );
@@ -2495,17 +2583,19 @@ export default function DrivePage() {
         moveMapCamera(map, { heading: target, tilt: 0 });
       }
     } else {
+      // Sin ruta activa: el botón DEBE recentrar al repartidor dentro del
+      // área visible (encima de la tarjeta), con norte arriba y sin tilt.
       cancelFollowLoop();
       stopHeadingAnimation();
       visualHeadingRef.current = null;
       applyDriverMarkerIcon(driverMarkerRef.current, 0, null);
-      moveMapCamera(map, { heading: 0, tilt: 0 });
+      centerOnDriver({ duration: 450 });
     }
     lastFollowPosRef.current = currentLocation;
     // El marcador parte de la posición real y el loop lleva el CENTRO hasta
     // el anclaje (conductor abajo) con transición fluida.
     visualPosRef.current = currentLocation;
-    driverMarkerRef.current?.setPosition(currentLocation);
+    setDriverMarkerPosition(driverMarkerRef.current, currentLocation);
     followTargetRef.current = currentLocation;
     if (withRoute) {
       ensureFollowLoop();
@@ -2528,6 +2618,7 @@ export default function DrivePage() {
     startHeadingTween,
     stopHeadingAnimation,
     applyHeading,
+    centerOnDriver,
     deviceOrientation,
   ]);
 
@@ -2537,6 +2628,7 @@ export default function DrivePage() {
     // Intención explícita del usuario: la restauración del preview no debe
     // pisar esta vista cuando la oferta termine.
     lastMapInteractionAtRef.current = Date.now();
+    centerOnGpsRef.current = true;
     // Al centrar, también intentar activar brújula si no lo está (iOS puede
     // requerir permiso explícito; la hook se encarga de pedirlo cuando sea
     // necesario sin mostrar un prompt innecesario).
@@ -3164,6 +3256,104 @@ export default function DrivePage() {
   // asume "sin sesión → desconectado" si existe una orden activa.
   const showingTripSheet = !donePanelVisible && orders.length > 0;
 
+  // ── Marcadores y capas del mapa (Mapbox) ─────────────────────────
+  // Se recalculan por render (diff por id + firma dentro de <MapboxMap>): el
+  // único dato que cambia a 60 fps es la posición/rotación del conductor, que
+  // se mueve de forma IMPERATIVA con las refs, nunca por estado de React.
+  const pinVariants = getDestinationPinVariants();
+  const mapMarkers: MapboxMapMarker[] = [
+    {
+      id: DRIVER_MARKER_ID,
+      lat: initialDriverPosRef.current.lat,
+      lng: initialDriverPosRef.current.lng,
+      html: DRIVER_MARKER_HTML,
+      anchor: "center",
+      zIndex: 60,
+    },
+  ];
+
+  if (activeOrder) {
+    const storeArriving = navPhase === "to_pickup" && arrivingActive;
+    mapMarkers.push({
+      id: "drive-store-pin",
+      lat: activeOrder.storeLat,
+      lng: activeOrder.storeLng,
+      html: destinationPinHtml(
+        storeArriving ? pinVariants.store.arriving : pinVariants.store.standard,
+        activeOrder.storeName
+      ),
+      anchor: "bottom",
+      zIndex: 20,
+    });
+
+    const destArriving =
+      (navPhase === "to_delivery" && arrivingActive) || navPhase === "at_delivery";
+    mapMarkers.push({
+      id: "drive-destination-pin",
+      lat: activeOrder.destLat,
+      lng: activeOrder.destLng,
+      html: destinationPinHtml(
+        destArriving ? pinVariants.dest.arriving : pinVariants.dest.standard,
+        "Entrega"
+      ),
+      anchor: "bottom",
+      zIndex: 20,
+    });
+  }
+
+  if (offerPreview?.pickup) {
+    mapMarkers.push({
+      id: "offer-pickup-pin",
+      lat: offerPreview.pickup.lat,
+      lng: offerPreview.pickup.lng,
+      html: destinationPinHtml(pinVariants.store.standard, offerPreview.pickupLabel),
+      anchor: "bottom",
+      zIndex: 20,
+    });
+  }
+  if (offerPreview?.destination) {
+    mapMarkers.push({
+      id: "offer-destination-pin",
+      lat: offerPreview.destination.lat,
+      lng: offerPreview.destination.lng,
+      html: destinationPinHtml(pinVariants.dest.standard, offerPreview.destinationLabel),
+      anchor: "bottom",
+      zIndex: 20,
+    });
+  }
+
+  // Route line: SOLO la geometría vial real de Directions. Nunca se dibuja una
+  // línea recta entre los dos puntos: si no hay ruta, no se dibuja nada.
+  const mapLines: MapboxMapLine[] = [];
+  if (roadRoute?.path) {
+    mapLines.push({
+      id: "drive-road-route",
+      points: roadRoute.path,
+      color: ROUTE_BLUE,
+      width: 4,
+      opacity: 0.7,
+    });
+  }
+
+  // OFFER_ROUTE_PREVIEW — capa temporal de la oferta: ruta vial A → B +
+  // marcadores temporales. NUNCA es la ruta de navegación.
+  if (offerPreview?.route?.path) {
+    mapLines.push({
+      id: "offer-route-casing",
+      points: offerPreview.route.path,
+      color: "#FFFFFF",
+      width: 7,
+      opacity: 0.9,
+    });
+    mapLines.push({
+      id: "offer-route",
+      points: offerPreview.route.path,
+      color: OFFER_PREVIEW_COLOR,
+      width: 4,
+      opacity: 0.95,
+    });
+  }
+
   // ── Main UI ──────────────────────────────────────────────────────
 
   return (
@@ -3223,176 +3413,34 @@ export default function DrivePage() {
         </div>
       )}
 
-      {/* Map — pantalla completa como fondo; los overlays flotan encima */}
-      <div className="absolute inset-0">
-        {mapsLoaded ? (
-          <GoogleMap
-            mapContainerStyle={containerStyle}
-            center={DEFAULT_CENTER}
-            zoom={DEFAULT_ZOOM}
-            options={mapOptions}
-            onLoad={handleMapLoad}
-            onUnmount={handleMapUnmount}
-            /* Marca el paneo para no confundirlo con un toque simple. */
-            onDragEnd={() => {
-              mapDraggedAtRef.current = Date.now();
-            }}
-            /* CIERRE DE "TU RUTA" AL TOCAR EL MAPA: el evento lo emite el
-               propio mapa (sin capa invisible encima), así que después de
-               cerrar los gestos de pan/zoom/tap funcionan con normalidad. */
-            onClick={() => {
-              if (Date.now() - mapDraggedAtRef.current < 300) return;
-              // Primero cierra la capa superior (Hoja de ruta); si no está
-              // abierta, colapsa el panel de pedido.
-              if (routeSheetOpen) {
-                setRouteSheetOpen(false);
-                return;
-              }
-              if (tripSheetExpanded) setTripSheetCollapseToken((n) => n + 1);
-            }}
-          >
-            {/* Driver marker: flecha de navegación que se rota según rumbo.
-                La posición se controla imperativamente (setPosition) desde el
-                loop de seguimiento suave para interpolar entre ticks de GPS y
-                evitar la "teletransportación" del vehículo.
-
-                La rotación del icono es RELATIVA AL MAPA (F1) y se aplica de
-                forma IMPERATIVA con marker.setIcon() desde el loop rAF
-                (applyDriverMarkerIcon), reutilizando iconos pre-generados por
-                buckets de 10°. Aquí solo se fija el icono inicial (flecha
-                arriba): ningún setState de heading en el hot path. */}
-            <Marker
-              position={initialDriverPosRef.current}
-              onLoad={(marker) => {
-                driverMarkerRef.current = marker;
-                // Marcador nuevo: forzar la primera aplicación del icono.
-                resetDriverMarkerIconBucket();
-              }}
-              onUnmount={() => {
-                driverMarkerRef.current = null;
-                resetDriverMarkerIconBucket();
-              }}
-              icon={getDriverIconBuckets()?.[0]}
-            />
-
-            {/* Store marker — pines pre-generados por variante (Fase 4);
-                el swap standard→arriving es solo cambio de referencia en el
-                evento de etapa (misma filosofía que los buckets de H1). */}
-            {activeOrder &&
-              (() => {
-                const pins = getDestinationPinVariants();
-                if (!pins) return null;
-                const storeArriving = navPhase === "to_pickup" && arrivingActive;
-                return (
-                  <Marker
-                    position={{ lat: activeOrder.storeLat, lng: activeOrder.storeLng }}
-                    icon={storeArriving ? pins.store.arriving.icon : pins.store.standard.icon}
-                    label={{
-                      text: activeOrder.storeName,
-                      className:
-                        storeArriving ? pins.store.arriving.labelClass : pins.store.standard.labelClass,
-                    }}
-                  />
-                );
-              })()}
-
-            {/* Destination marker */}
-            {activeOrder &&
-              (() => {
-                const pins = getDestinationPinVariants();
-                if (!pins) return null;
-                const destArriving =
-                  (navPhase === "to_delivery" && arrivingActive) ||
-                  navPhase === "at_delivery";
-                return (
-                  <Marker
-                    position={{ lat: activeOrder.destLat, lng: activeOrder.destLng }}
-                    icon={destArriving ? pins.dest.arriving.icon : pins.dest.standard.icon}
-                    label={{
-                      text: "Entrega",
-                      className:
-                        destArriving ? pins.dest.arriving.labelClass : pins.dest.standard.labelClass,
-                    }}
-                  />
-                );
-              })()}
-
-            {/* Route line: SOLO la geometría vial real de Google Directions.
-                Nunca se dibuja una línea recta entre los dos puntos: si no
-                hay ruta (API caída o todavía cargando), no se dibuja nada y
-                el mapa sigue funcionando con los marcadores. */}
-            {roadRoute?.path && (
-              <Polyline
-                path={roadRoute.path}
-                options={{
-                  strokeColor: ROUTE_BLUE,
-                  strokeWeight: 4,
-                  strokeOpacity: 0.7,
-                  geodesic: true,
-                }}
-              />
-            )}
-
-            {/* OFFER_ROUTE_PREVIEW — capa temporal de la oferta: ruta vial
-                A → B (pickup → destino, sección 11) + marcadores temporales.
-                NUNCA es la ruta de navegación: vive solo mientras la oferta
-                está en pantalla y se desmonta sola al terminar (secciones 3,
-                5, 9, 16). */}
-            {offerPreview?.route?.path && (
-              <>
-                <Polyline
-                  path={offerPreview.route.path}
-                  options={{
-                    strokeColor: "#FFFFFF",
-                    strokeWeight: 7,
-                    strokeOpacity: 0.9,
-                    geodesic: true,
-                    zIndex: 1,
-                  }}
-                />
-                <Polyline
-                  path={offerPreview.route.path}
-                  options={{
-                    strokeColor: OFFER_PREVIEW_COLOR,
-                    strokeWeight: 4,
-                    strokeOpacity: 0.95,
-                    geodesic: true,
-                    zIndex: 2,
-                  }}
-                />
-              </>
-            )}
-            {offerPreview?.pickup &&
-              (() => {
-                const pins = getDestinationPinVariants();
-                if (!pins) return null;
-                return (
-                  <Marker
-                    position={offerPreview.pickup}
-                    icon={pins.store.standard.icon}
-                    label={{
-                      text: offerPreview.pickupLabel,
-                      className: pins.store.standard.labelClass,
-                    }}
-                  />
-                );
-              })()}
-            {offerPreview?.destination &&
-              (() => {
-                const pins = getDestinationPinVariants();
-                if (!pins) return null;
-                return (
-                  <Marker
-                    position={offerPreview.destination}
-                    icon={pins.dest.standard.icon}
-                    label={{
-                      text: offerPreview.destinationLabel,
-                      className: pins.dest.standard.labelClass,
-                    }}
-                  />
-                );
-              })()}
-          </GoogleMap>
+      {/* Map — pantalla completa como fondo; los overlays flotan encima.
+          `isolate` crea un stacking context propio: los marcadores del mapa
+          (puck, pines) no pueden pintarse POR ENCIMA de la tarjeta inferior. */}
+      <div className="absolute inset-0 isolate">
+        {driveStyleReady ? (
+        <MapboxMap
+          ref={mapHandleRef}
+          className="h-full w-full"
+          center={DEFAULT_CENTER}
+          zoom={DEFAULT_ZOOM}
+          styleUrl={DRIVE_MAP_STYLE_URL}
+          styleSpec={driveStyle}
+          rotate
+          markers={mapMarkers}
+          lines={mapLines}
+          onLoad={handleMapLoad}
+          onUnmount={handleMapUnmount}
+          onClick={() => {
+            if (Date.now() - mapDraggedAtRef.current < 300) return;
+            // Primero cierra la capa superior (Hoja de ruta); si no está
+            // abierta, colapsa el panel de pedido.
+            if (routeSheetOpen) {
+              setRouteSheetOpen(false);
+              return;
+            }
+            if (tripSheetExpanded) setTripSheetCollapseToken((n) => n + 1);
+          }}
+        />
         ) : (
           <div className="flex h-full items-center justify-center bg-[#0d1526]">
             <Loader2 className="h-6 w-6 animate-spin text-white/40" />
@@ -3450,6 +3498,7 @@ export default function DrivePage() {
           encima; la hoja expandida crece por encima sin despegarse nunca del
           borde inferior. */}
       <div
+        id="drive-bottom-overlay"
         className="fixed inset-x-0 bottom-0 z-30"
         style={
           showingTripSheet && tripSheetCollapsedHeight != null
@@ -3457,13 +3506,14 @@ export default function DrivePage() {
             : undefined
         }
       >
-        {/* RECENTR — único control de cámara, ubicado sobre el panel de datos
-            del viaje: discreto y accesible, NO bloquea la ruta ni las
-            instrucciones. Aparece solo cuando el repartidor exploró el mapa
-            (seguimiento inactivo); el seguimiento también se recupera solo al
-            volver a conducir. */}
+        {/* RECENTR — único control de cámara, flotando SOBRE la tarjeta (en el
+            mapa, no dentro de la hoja): justo encima del contenedor inferior,
+            alineado a la derecha, fuera de la ruta y de las instrucciones.
+            Aparece solo cuando el repartidor exploró el mapa (seguimiento
+            inactivo); el seguimiento también se recupera solo al volver a
+            conducir. */}
         {mapsLoaded && (
-          <div className="absolute right-3 bottom-2 z-10">
+          <div className="absolute right-3 bottom-full z-10 mb-3">
             <AnimatePresence>
               {!followDriver && (
                 <motion.button

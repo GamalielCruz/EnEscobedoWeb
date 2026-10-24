@@ -1,14 +1,13 @@
-
-
 /**
  * Pines de destino del mapa (Fase 4).
  *
  * MISMA filosofía que los buckets de icono del marcador del conductor (H1,
- * Fase 3 LOCKED): todos los data-URIs y objetos Size/Point se pre-generan
+ * Fase 3 LOCKED): todos los data-URIs y el HTML de cada variante se pre-generan
  * UNA vez a nivel módulo y el swap standard→arriving es SOLO un cambio de
  * referencia (evento de etapa). Cero construcción por render, cero
  * asignaciones en tiempo de navegación.
  *
+ * Con Mapbox el "icono" es HTML (imagen + etiqueta):
  * - STANDARD: pin 28px clásico (mismo SVG que existía en la página).
  * - ARRIVING: mismo trazo escalado a 40px con aro de énfasis para el
  *   destino activo al llegar (viewBox fijo 28 → escala nítida).
@@ -40,53 +39,70 @@ function pinSvg(kind: PinKind, emphasize: boolean): string {
   );
 }
 
-// `google` llega como global (ver types/google-maps.d.ts), igual que en
-// app/(drive)/drive/page.tsx.
-type PinVariant = { icon: google.maps.Icon; labelClass: string };
+export type DestinationPinVariant = {
+  /** `<img>` del pin ya escalado (28px o 40px). */
+  iconHtml: string;
+  /** Clases Tailwind de la etiqueta (nombre del negocio / "Entrega"). */
+  labelClass: string;
+};
 
-function buildVariants(kind: PinKind): { standard: PinVariant; arriving: PinVariant } {
+function imageHtml(kind: PinKind, emphasize: boolean): string {
+  const size = emphasize ? 40 : 28;
+  const svg = pinSvg(kind, emphasize);
+  return `<img src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}" width="${size}" height="${size}" alt="" style="display:block" />`;
+}
+
+function buildVariants(kind: PinKind): {
+  standard: DestinationPinVariant;
+  arriving: DestinationPinVariant;
+} {
   return {
     standard: {
-      icon: {
-        url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(pinSvg(kind, false))}`,
-        scaledSize: new google.maps.Size(28, 28),
-        anchor: new google.maps.Point(14, 28),
-      },
+      iconHtml: imageHtml(kind, false),
       labelClass: "text-[10px] font-bold bg-white rounded px-1 shadow-sm whitespace-nowrap",
     },
     arriving: {
-      icon: {
-        url: `data:image/svg+xml;charset=utf-8,${encodeURIComponent(pinSvg(kind, true))}`,
-        scaledSize: new google.maps.Size(40, 40),
-        anchor: new google.maps.Point(20, 40),
-      },
+      iconHtml: imageHtml(kind, true),
       labelClass:
         "text-[11px] font-black bg-white rounded-md px-1.5 py-px shadow-md whitespace-nowrap ring-1 ring-black/10",
     },
   };
 }
 
-// Construcción única: requiere google.maps cargado (se llama tras mapsLoaded).
-// Guardado a nivel módulo; posteriores llamadas reutilizan la referencia.
-let cache: {
-  store: { standard: PinVariant; arriving: PinVariant };
-  dest: { standard: PinVariant; arriving: PinVariant };
-} | null = null;
+// Construcción única a nivel módulo; posteriores llamadas reutilizan referencia.
+const cache = {
+  store: buildVariants("store"),
+  dest: buildVariants("dest"),
+};
 
-export function getDestinationPinVariants():
-  | {
-      store: { standard: PinVariant; arriving: PinVariant };
-      dest: { standard: PinVariant; arriving: PinVariant };
-    }
-  | null {
-  if (cache) return cache;
-  // google.maps global (cargado por el loader de Maps antes de renderizar).
-  if (typeof google === "undefined" || !google.maps) return null;
-  cache = { store: buildVariants("store"), dest: buildVariants("dest") };
+export function getDestinationPinVariants(): {
+  store: { standard: DestinationPinVariant; arriving: DestinationPinVariant };
+  dest: { standard: DestinationPinVariant; arriving: DestinationPinVariant };
+} {
   return cache;
+}
+
+/**
+ * HTML final del marcador: etiqueta arriba + pin abajo, con el pie del pin
+ * apoyado en la coordenada (anchor "bottom" en Mapbox).
+ */
+export function destinationPinHtml(
+  variant: DestinationPinVariant,
+  label: string
+): string {
+  const safeLabel = label.replace(/[<>&]/g, (char) =>
+    char === "<" ? "&lt;" : char === ">" ? "&gt;" : "&amp;"
+  );
+  return (
+    `<div style="display:flex;flex-direction:column;align-items:center;gap:2px;line-height:1">` +
+    `<span class="${variant.labelClass}" style="font-family:system-ui,sans-serif">${safeLabel}</span>` +
+    variant.iconHtml +
+    `</div>`
+  );
 }
 
 /** Resetea el cache (map unmount / reset). No toca referencias ya asignadas. */
 export function resetDestinationPins(): void {
-  cache = null;
+  // El cache es constante (HTML inmutable): nada que liberar. Se mantiene la
+  // exportación para no romper el ciclo de limpieza de la página del driver.
 }

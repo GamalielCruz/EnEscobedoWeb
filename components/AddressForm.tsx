@@ -6,9 +6,9 @@
 // usuario descubre su dirección de tres formas y después la confirma:
 //
 //   ¿Dónde quieres guardar esta dirección?
-//     📍 Usar mi ubicación      → navigator.geolocation → reverse geocode
-//     🔎 Buscar una dirección   → Google Places Autocomplete (México)
-//     🗺️ Elegir en el mapa      → pin arrastrable + reverse geocode
+//     📍 Usar mi ubicación      → navigator.geolocation → geocodificación inversa
+//     🔎 Buscar una dirección   → sugerencias de Mapbox (México)
+//     🗺️ Elegir en el mapa      → pin arrastrable + geocodificación inversa
 //        ↓
 //   Confirma tu ubicación (mapa + dirección encontrada)
 //        ↓
@@ -20,15 +20,7 @@
 // para que restaurantes, cobertura, tarifas, tienda y Mandados lo reutilicen
 // sin geocodificar de nuevo.
 //
-// Reutiliza la infraestructura de Google Maps del proyecto:
-//  - hooks/useGoogleMaps.ts (loader compartido, no crea otro script)
-//  - Google Places Autocomplete + Google Geocoder (misma API que
-//    GooglePlacesAutocomplete / MandadoMapFlow / ModernDeliveryFlow)
-//  - helpers de geocodificación en lib/address-utils.ts (parsing de
-//    address_components centralizado)
-// Si Google no está disponible (sin API key o error de carga) cae a un
-// formulario de texto simple para no bloquear la libreta.
-//
+// El mapa y la búsqueda usan Mapbox (components/map/MapboxMap + lib/mapbox.ts).
 // La interfaz de props no cambia: los consumidores (AddressManager,
 // AddressSelector, AddressPicker) siguen funcionando igual.
 
@@ -45,20 +37,25 @@ import {
   Search,
   Users,
 } from "lucide-react";
-import { CustomerAddress, normalizeCustomerAddress } from "@/lib/customer-address";
-import { useGoogleMaps } from "@/hooks/useGoogleMaps";
+import { CustomerAddress } from "@/lib/customer-address";
 import {
   geocodeCustomerAddress,
-  googlePlaceToCustomerAddress,
+  mapboxResultToCustomerAddress,
   reverseGeocodeCustomerAddress,
 } from "@/lib/address-utils";
+import { mapboxForwardGeocode } from "@/lib/mapbox";
+import {
+  MapboxMap,
+  type MapboxMapHandle,
+  type MapboxMapMarker,
+} from "./map/MapboxMap";
 
 const LABEL_OPTIONS = ["Casa", "Oficina", "Casa de mamá", "Otro"] as const;
 const DEFAULT_CENTER = { lat: 20.502, lng: -100.145 };
-const API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
 
 type Step = "start" | "map" | "label";
 type AddressStatus = "idle" | "resolving" | "resolved" | "failed";
+type Suggestion = { label: string; lat: number; lng: number };
 
 const LABEL_ICONS: Record<string, React.ReactNode> = {
   Casa: <Home className="h-4 w-4" />,
@@ -69,6 +66,10 @@ const LABEL_ICONS: Record<string, React.ReactNode> = {
 
 const inputCls =
   "box-border w-full min-w-0 max-w-full rounded-lg border border-gray-300 bg-white py-2.5 pl-10 pr-3 text-sm outline-none focus:border-[#eb1901] focus:ring-2 focus:ring-[#eb1901]/20";
+
+const PIN_HTML = `<img src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 28 28"><path fill="#EB1901" d="M14 2C9.03 2 5 6.03 5 11c0 6.75 9 15 9 15s9-8.25 9-15c0-4.97-4.03-9-9-9z"/><circle cx="14" cy="11" r="3.2" fill="white"/></svg>'
+)}" width="40" height="40" alt="" style="display:block" />`;
 
 export function AddressForm({
   initial,
@@ -83,8 +84,6 @@ export function AddressForm({
   busy?: boolean;
   submitLabel?: string;
 }) {
-  const { isLoaded, loadError } = useGoogleMaps({ apiKey: API_KEY, libraries: ["places"] });
-
   // ── Estado del flujo ────────────────────────────────────────────────
   // En edición se abre directo en el mapa con la ubicación actual (si tiene
   // coordenadas) para poder ajustarla sin volver a escribir nada.
@@ -96,21 +95,17 @@ export function AddressForm({
   const [locating, setLocating] = useState(false);
   const [geocodingFallback, setGeocodingFallback] = useState(false);
 
-  // Ref de mapa / búsqueda
-  const mapContainerRef = useRef<HTMLDivElement>(null);
+  // Búsqueda
+  const [searchText, setSearchText] = useState(initial?.formattedAddress ?? "");
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [searching, setSearching] = useState(false);
+  const skipPrediction = useRef(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const mapRef = useRef<google.maps.Map | null>(null);
-  const markerRef = useRef<google.maps.Marker | null>(null);
-  const autocompleteRef = useRef<google.maps.places.Autocomplete | null>(null);
-  const autocompleteReady = useRef(false);
+  const mapRef = useRef<MapboxMapHandle | null>(null);
   const mounted = useRef(true);
   // Indica si el punto actual ya resolvió su dirección (evita geocodificar
   // dos veces el mismo punto al crearse el mapa).
   const resolvedOnceRef = useRef(false);
-
-  // Fallback sin Google Maps (formulario de texto simple)
-  const [manualAddress, setManualAddress] = useState(initial?.formattedAddress ?? "");
-  const [manualLabel, setManualLabel] = useState(initial?.label ?? "");
 
   useEffect(() => {
     mounted.current = true;
@@ -140,8 +135,6 @@ export function AddressForm({
         latitude: lat,
         longitude: lng,
       }));
-      markerRef.current?.setPosition({ lat, lng });
-      mapRef.current?.panTo({ lat, lng });
 
       reverseGeocodeCustomerAddress(lat, lng).then((resolved) => {
         if (!mounted.current) return;
@@ -149,9 +142,8 @@ export function AddressForm({
           resolvedOnceRef.current = true;
           setDraft((prev) => (prev ? { ...prev, ...resolved, latitude: lat, longitude: lng } : null));
           setAddressStatus("resolved");
-          if (searchInputRef.current) {
-            searchInputRef.current.value = resolved.formattedAddress || fallback;
-          }
+          skipPrediction.current = true;
+          setSearchText(resolved.formattedAddress || fallback);
         } else {
           setAddressStatus("failed");
         }
@@ -160,8 +152,8 @@ export function AddressForm({
     [initial?.id]
   );
 
-  // Aplica una dirección ya resuelta (place de Autocomplete o geocode por
-  // texto): reemplaza los campos estructurados + coloca el pin en el mapa.
+  // Aplica una dirección ya resuelta (sugerencia o geocode por texto):
+  // reemplaza los campos estructurados + coloca el pin en el mapa.
   const applyLocation = useCallback(
     (partial: Partial<CustomerAddress>) => {
       const lat = partial.latitude;
@@ -187,138 +179,78 @@ export function AddressForm({
       setAddressStatus("resolved");
       setLocationError(false);
       resolvedOnceRef.current = true;
+      skipPrediction.current = true;
+      setSearchText(formattedAddress);
 
-      const map = mapRef.current;
-      if (map) {
-        map.panTo({ lat, lng });
-        map.setZoom(17);
-      }
-      if (markerRef.current) {
-        markerRef.current.setPosition({ lat, lng });
-      } else if (map) {
-        const marker = new google.maps.Marker({
-          position: { lat, lng },
-          map,
-          draggable: true,
-          animation: google.maps.Animation.DROP,
-        });
-        marker.addListener("dragend", () => {
-          const position = marker.getPosition();
-          if (position) movePin(position.lat(), position.lng());
-        });
-        markerRef.current = marker;
-      }
-      if (searchInputRef.current) searchInputRef.current.value = formattedAddress;
+      mapRef.current?.map?.jumpTo({ center: [lng, lat], zoom: 17 });
     },
-    [initial?.id, movePin]
+    [initial?.id]
   );
 
-  // ── Mapa: se crea al entrar al paso "map" ───────────────────────────
+  // ── Autocompletado: sugerencias de Mapbox (México) ─────────────────
   useEffect(() => {
     if (step !== "map") {
-      mapRef.current = null;
-      markerRef.current = null;
+      setSuggestions([]);
       return;
     }
-    if (!isLoaded || !mapContainerRef.current || mapRef.current) return;
-
-    const startCenter = hasCoords
-      ? { lat: draft.latitude as number, lng: draft.longitude as number }
-      : DEFAULT_CENTER;
-    const map = new google.maps.Map(mapContainerRef.current, {
-      center: startCenter,
-      zoom: hasCoords ? 17 : 13,
-      disableDefaultUI: true,
-      zoomControl: true,
-      streetViewControl: false,
-      mapTypeControl: false,
-      fullscreenControl: false,
-      clickableIcons: false,
-      gestureHandling: "greedy",
-    });
-    mapRef.current = map;
-
-    map.addListener("click", (event: google.maps.MapMouseEvent) => {
-      const lat = event.latLng?.lat();
-      const lng = event.latLng?.lng();
-      if (lat != null && lng != null) movePin(lat, lng);
-    });
-
-    if (hasCoords) {
-      const marker = new google.maps.Marker({
-        position: { lat: draft.latitude as number, lng: draft.longitude as number },
-        map,
-        draggable: true,
-        animation: google.maps.Animation.DROP,
-      });
-      marker.addListener("dragend", () => {
-        const position = marker.getPosition();
-        if (position) movePin(position.lat(), position.lng());
-      });
-      markerRef.current = marker;
-
-      // Si el punto se colocó antes de que Google terminara de cargar (p. ej.
-      // "Usar mi ubicación" con red lenta), el reverse geocode inicial falló:
-      // se reintenta ahora que el mapa ya existe.
-      if (!resolvedOnceRef.current) {
-        reverseGeocodeCustomerAddress(
-          draft.latitude as number,
-          draft.longitude as number
-        ).then((resolved) => {
-          if (!mounted.current) return;
-          if (resolved) {
-            resolvedOnceRef.current = true;
-            setDraft((prev) => (prev ? { ...prev, ...resolved } : null));
-            setAddressStatus("resolved");
-            if (searchInputRef.current) {
-              searchInputRef.current.value = resolved.formattedAddress || "";
-            }
-          } else {
-            setAddressStatus("failed");
-          }
-        });
-      }
-    }
-  }, [step, isLoaded, hasCoords, draft?.latitude, draft?.longitude, movePin]);
-
-  // ── Autocompletado de Google Places en el campo de búsqueda ─────────
-  useEffect(() => {
-    if (step !== "map") {
-      autocompleteReady.current = false;
-      autocompleteRef.current = null;
+    const text = searchText.trim();
+    if (text.length < 3 || skipPrediction.current) {
+      skipPrediction.current = false;
+      setSuggestions([]);
       return;
     }
-    if (!isLoaded || !searchInputRef.current || autocompleteReady.current) return;
-    autocompleteReady.current = true;
 
     let cancelled = false;
-    const init = async () => {
-      try {
-        const gmaps = (window as { google?: any }).google?.maps;
-        if (!gmaps) return;
-        // importLibrary garantiza la librería "places" aunque otro componente
-        // haya cargado el script sin ella; si no existe, usamos la global.
-        const places = gmaps.importLibrary ? await gmaps.importLibrary("places") : gmaps.places;
-        if (cancelled || !places?.Autocomplete || !searchInputRef.current) return;
-        const autocomplete = new places.Autocomplete(searchInputRef.current, {
-          types: ["address"],
-          componentRestrictions: { country: "mx" },
-          fields: ["formatted_address", "address_components", "geometry", "place_id"],
-        });
-        autocomplete.addListener("place_changed", () => {
-          const place = autocomplete.getPlace();
-          if (place?.geometry?.location) applyLocation(googlePlaceToCustomerAddress(place));
-        });
-        autocompleteRef.current = autocomplete;
-      } catch {
-        // Sin autocompletado: el usuario puede buscar con Enter (geocode).
-      }
-    };
-    void init();
+    const timer = window.setTimeout(async () => {
+      const results = await mapboxForwardGeocode(text, {
+        limit: 5,
+        country: "mx",
+        language: "es",
+      });
+      if (cancelled || !mounted.current) return;
+      setSuggestions(
+        results.map((result) => ({
+          label: result.fullAddress || result.label,
+          lat: result.latitude,
+          lng: result.longitude,
+        }))
+      );
+    }, 250);
+
     return () => {
       cancelled = true;
+      window.clearTimeout(timer);
     };
-  }, [step, isLoaded, applyLocation]);
+  }, [searchText, step]);
+
+  const chooseSuggestion = async (suggestion: Suggestion) => {
+    setSuggestions([]);
+    const [match] = await mapboxForwardGeocode(suggestion.label, {
+      limit: 1,
+      country: "mx",
+      language: "es",
+      proximity: { lat: suggestion.lat, lng: suggestion.lng },
+    });
+    const partial = mapboxResultToCustomerAddress(match);
+    applyLocation(partial ?? suggestion);
+  };
+
+  // Al entrar al mapa con coordenadas (edición o "Usar mi ubicación" con red
+  // lenta) se reintenta la geocodificación inversa del punto actual.
+  useEffect(() => {
+    if (step !== "map" || !hasCoords || resolvedOnceRef.current) return;
+    reverseGeocodeCustomerAddress(
+      draft!.latitude as number,
+      draft!.longitude as number
+    ).then((resolved) => {
+      if (!mounted.current || !resolved) return;
+      resolvedOnceRef.current = true;
+      setDraft((prev) => (prev ? { ...prev, ...resolved } : null));
+      setAddressStatus("resolved");
+      skipPrediction.current = true;
+      setSearchText(resolved.formattedAddress || "");
+    });
+  }, [step, hasCoords, draft]);
 
   // ── Geolocalización del dispositivo ─────────────────────────────────
   const requestLocation = useCallback(() => {
@@ -346,22 +278,23 @@ export function AddressForm({
 
   // ── Búsqueda por texto (Enter, sin depender del autocompletado) ─────
   const submitSearch = useCallback(
-    (event: React.FormEvent) => {
+    async (event: React.FormEvent) => {
       event.preventDefault();
-      const text = searchInputRef.current?.value.trim();
-      if (!text || text.length < 3 || !isLoaded) return;
+      const text = searchText.trim();
+      if (!text || text.length < 3) return;
       setGeocodingFallback(true);
-      geocodeCustomerAddress(text).then((resolved) => {
-        if (!mounted.current) return;
-        setGeocodingFallback(false);
-        if (resolved && resolved.latitude != null && resolved.longitude != null) {
-          applyLocation(resolved);
-        } else {
-          setAddressStatus("failed");
-        }
-      });
+      setSearching(true);
+      const resolved = await geocodeCustomerAddress(text);
+      if (!mounted.current) return;
+      setGeocodingFallback(false);
+      setSearching(false);
+      if (resolved && resolved.latitude != null && resolved.longitude != null) {
+        applyLocation(resolved);
+      } else {
+        setAddressStatus("failed");
+      }
     },
-    [isLoaded, applyLocation]
+    [searchText, applyLocation]
   );
 
   const openMap = useCallback((mode: "search" | "map") => {
@@ -402,86 +335,6 @@ export function AddressForm({
   // Se puede confirmar con un punto en el mapa o con una dirección de texto
   // (p. ej. una dirección antigua sin coordenadas que solo se está editando).
   const canConfirm = Boolean(draft) && (hasCoords || Boolean(displayAddress));
-
-  // ── Fallback: Google Maps no disponible → formulario de texto simple ──
-  if (loadError || !API_KEY) {
-    const saveManual = () => {
-      const value = manualAddress.trim();
-      const finalLabel = manualLabel.trim();
-      if (value.length < 5 || !finalLabel || busy) return;
-      const normalized = normalizeCustomerAddress({
-        formattedAddress: value,
-        street: value,
-        country: "México",
-      });
-      if (!normalized) return;
-      onSave({ ...normalized, id: initial?.id ?? normalized.id, label: finalLabel });
-    };
-
-    return (
-      <div className="min-w-0 max-w-full space-y-3 overflow-hidden rounded-xl bg-gray-50 p-3">
-        <label className="block space-y-2">
-          <span className="text-xs font-semibold text-gray-700">Dirección completa</span>
-          <div className="relative min-w-0">
-            <MapPin className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-            <input
-              value={manualAddress}
-              onChange={(event) => setManualAddress(event.target.value.slice(0, 240))}
-              maxLength={240}
-              autoComplete="street-address"
-              placeholder="Ej. Calle, número, colonia y municipio"
-              className={inputCls}
-            />
-          </div>
-          <span className="block text-xs text-gray-500">
-            El mapa no está disponible en este momento. Escribe tu dirección completa.
-          </span>
-        </label>
-        <div className="space-y-2">
-          <label htmlFor="address-label-fallback" className="text-xs font-semibold text-gray-700">
-            Etiqueta
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {LABEL_OPTIONS.map((option) => (
-              <button
-                key={option}
-                type="button"
-                onClick={() => setManualLabel(option)}
-                className={`rounded-full border px-3 py-1.5 text-xs font-semibold ${
-                  manualLabel === option
-                    ? "border-[#eb1901] bg-rose-50 text-[#eb1901]"
-                    : "border-gray-200 bg-white text-gray-600"
-                }`}
-              >
-                {option}
-              </button>
-            ))}
-          </div>
-          <input
-            id="address-label-fallback"
-            value={manualLabel}
-            onChange={(event) => setManualLabel(event.target.value.slice(0, 60))}
-            maxLength={60}
-            placeholder="Casa, Oficina, Casa de mamá…"
-            className="box-border w-full min-w-0 max-w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 text-sm outline-none focus:border-[#eb1901] focus:ring-2 focus:ring-[#eb1901]/20"
-          />
-        </div>
-        <button
-          onClick={saveManual}
-          disabled={manualAddress.trim().length < 5 || !manualLabel.trim() || busy}
-          className="box-border w-full min-w-0 max-w-full rounded-lg bg-[#eb1901] px-4 py-2.5 text-sm font-semibold text-white disabled:bg-gray-300"
-        >
-          {busy ? (
-            <span className="inline-flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" /> Guardando…
-            </span>
-          ) : (
-            submitLabel ?? (initial ? "Guardar cambios" : "Guardar dirección")
-          )}
-        </button>
-      </div>
-    );
-  }
 
   // ── Paso 1: ¿Dónde quieres guardar esta dirección? ──────────────────
   if (step === "start") {
@@ -560,6 +413,20 @@ export function AddressForm({
     );
   }
 
+  const pinMarkers: MapboxMapMarker[] = hasCoords
+    ? [
+        {
+          id: "address-pin",
+          lat: draft!.latitude as number,
+          lng: draft!.longitude as number,
+          html: PIN_HTML,
+          anchor: "bottom",
+          draggable: true,
+          onDragEnd: (next) => movePin(next.lat, next.lng),
+        },
+      ]
+    : [];
+
   // ── Paso 2: Confirma tu ubicación (mapa) ────────────────────────────
   if (step === "map") {
     return (
@@ -588,15 +455,34 @@ export function AddressForm({
           <MapPin className="pointer-events-none absolute left-3 top-1/2 z-10 h-4 w-4 -translate-y-1/2 text-gray-400" />
           <input
             ref={searchInputRef}
-            defaultValue={initial?.formattedAddress ?? ""}
+            value={searchText}
+            onChange={(event) => {
+              skipPrediction.current = false;
+              setSearchText(event.target.value);
+            }}
             autoComplete="off"
             placeholder="Busca calle, colonia, lugar o negocio"
-            disabled={!isLoaded}
             className={inputCls}
           />
-          {geocodingFallback && (
+          {geocodingFallback || searching ? (
             <Loader2 className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-gray-400" />
-          )}
+          ) : null}
+
+          {suggestions.length ? (
+            <div className="absolute z-30 mt-1 w-full overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl">
+              {suggestions.map((suggestion) => (
+                <button
+                  key={`${suggestion.lat}-${suggestion.lng}`}
+                  type="button"
+                  onClick={() => void chooseSuggestion(suggestion)}
+                  className="flex w-full items-start gap-2 border-b border-gray-100 px-3 py-2.5 text-left text-xs last:border-0 hover:bg-rose-50"
+                >
+                  <MapPin className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[#eb1901]" />
+                  <span>{suggestion.label}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </form>
 
         <button
@@ -618,13 +504,18 @@ export function AddressForm({
 
         {/* Mapa */}
         <div className="overflow-hidden rounded-2xl border border-gray-200 bg-gray-100">
-          {isLoaded ? (
-            <div ref={mapContainerRef} className="h-64 w-full sm:h-72" />
-          ) : (
-            <div className="flex h-64 items-center justify-center gap-2 text-sm text-gray-500 sm:h-72">
-              <Loader2 className="h-4 w-4 animate-spin" /> Cargando mapa…
-            </div>
-          )}
+          <MapboxMap
+            ref={mapRef}
+            className="h-64 w-full sm:h-72"
+            center={
+              hasCoords
+                ? { lat: draft!.latitude as number, lng: draft!.longitude as number }
+                : DEFAULT_CENTER
+            }
+            zoom={hasCoords ? 17 : 13}
+            markers={pinMarkers}
+            onClick={(next) => movePin(next.lat, next.lng)}
+          />
         </div>
 
         {/* Dirección encontrada + confirmación */}

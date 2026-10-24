@@ -2,11 +2,17 @@
 
 import { CustomerAddress } from "@/lib/customer-address";
 import { MapPin } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { MapboxMap, type MapboxMapLine, type MapboxMapMarker } from "./map/MapboxMap";
+import {
+  mapboxDirections,
+  mapboxForwardGeocode,
+  type MapboxPoint,
+} from "@/lib/mapbox";
 
-type Point = { lat: number; lng: number };
-type RouteMode = "DRIVING" | "WALKING" | "TWO_WHEELER";
-type RouteResult = { path: any[]; mode: RouteMode };
+type Point = MapboxPoint;
+type RouteMode = "DRIVING" | "WALKING";
+type RouteResult = { path: Point[]; mode: RouteMode };
 
 const point = (value: any): Point | null => {
   const latitude = Number(value?.latitude ?? value?.lat);
@@ -16,45 +22,10 @@ const point = (value: any): Point | null => {
     : null;
 };
 
-const loadMaps = () =>
-  new Promise<void>((resolve, reject) => {
-    if (window.google?.maps) return resolve();
-    const existing = document.querySelector('script[src*="maps.googleapis.com"]');
-    if (existing) {
-      const started = Date.now();
-      const timer = window.setInterval(() => {
-        if (window.google?.maps) {
-          window.clearInterval(timer);
-          resolve();
-        } else if (Date.now() - started > 10000) {
-          window.clearInterval(timer);
-          reject(new Error("Google Maps no respondió"));
-        }
-      }, 100);
-      return;
-    }
-
-    const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-    if (!apiKey) return reject(new Error("Google Maps no está configurado"));
-    const callback = `initFulfillmentMap_${Date.now()}`;
-    (window as any)[callback] = () => {
-      delete (window as any)[callback];
-      resolve();
-    };
-    const script = document.createElement("script");
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&loading=async&callback=${callback}`;
-    script.async = true;
-    script.onerror = () => reject(new Error("No se pudo cargar Google Maps"));
-    document.head.appendChild(script);
-  });
-
-const geocode = (address: string) =>
-  new Promise<Point | null>((resolve) => {
-    new window.google.maps.Geocoder().geocode({ address }, (results, status) => {
-      const location = status === "OK" ? results?.[0]?.geometry.location : null;
-      resolve(location ? { lat: location.lat(), lng: location.lng() } : null);
-    });
-  });
+const geocode = async (address: string): Promise<Point | null> => {
+  const [match] = await mapboxForwardGeocode(address, { limit: 1, country: "mx", language: "es" });
+  return match ? { lat: match.latitude, lng: match.longitude } : null;
+};
 
 const currentLocation = () =>
   new Promise<Point>((resolve, reject) => {
@@ -81,56 +52,23 @@ const withTimeout = <T,>(promise: Promise<T>, milliseconds: number) =>
     );
   });
 
-const directionsPath = (origin: Point, destination: Point, mode: "DRIVING" | "WALKING") =>
-  new Promise<any[] | null>((resolve) => {
-    const maps: any = window.google.maps;
-    new maps.DirectionsService().route(
-      { origin, destination, travelMode: maps.TravelMode[mode] },
-      (result: any, status: string) => {
-        const path = status === "OK" ? result?.routes?.[0]?.overview_path : null;
-        resolve(Array.isArray(path) && path.length > 1 ? path : null);
-      }
-    );
-  });
-
-const motorcyclePath = async (origin: Point, destination: Point) => {
-  const { Route } = await window.google.maps.importLibrary("routes") as any;
-  const { routes } = await Route.computeRoutes({
-    origin,
-    destination,
-    travelMode: "TWO_WHEELER",
-    fields: ["path"],
-  });
-  const path = routes?.[0]?.path;
-  return Array.isArray(path) && path.length > 1 ? path : null;
-};
-
-const openStreetMapPath = async (origin: Point, destination: Point) => {
-  // ponytail: respaldo vial mientras la clave de Google no tenga Routes API autorizada.
-  const response = await fetch(
-    `https://router.project-osrm.org/route/v1/driving/${origin.lng},${origin.lat};${destination.lng},${destination.lat}?overview=full&geometries=geojson`
-  );
-  if (!response.ok) return null;
-  const data = await response.json();
-  const coordinates = data?.routes?.[0]?.geometry?.coordinates;
-  return Array.isArray(coordinates) && coordinates.length > 1
-    ? coordinates.map(([lng, lat]: [number, number]) => ({ lat, lng }))
-    : null;
-};
-
 const routePath = async (origin: Point, destination: Point): Promise<RouteResult | null> => {
-  const driving = await withTimeout(directionsPath(origin, destination, "DRIVING"), 2500).catch(() => null);
-  if (driving) return { path: driving, mode: "DRIVING" };
+  const driving = await withTimeout(
+    mapboxDirections(origin, destination, { profile: "driving-traffic", language: "es", steps: false }),
+    6000
+  ).catch(() => null);
+  if (driving?.path.length) return { path: driving.path, mode: "DRIVING" };
 
-  const roadPath = await withTimeout(openStreetMapPath(origin, destination), 5000).catch(() => null);
-  if (roadPath) return { path: roadPath, mode: "DRIVING" };
-
-  const walking = await withTimeout(directionsPath(origin, destination, "WALKING"), 3500).catch(() => null);
-  if (walking) return { path: walking, mode: "WALKING" };
-
-  const motorcycle = await withTimeout(motorcyclePath(origin, destination), 3500).catch(() => null);
-  return motorcycle ? { path: motorcycle, mode: "TWO_WHEELER" } : null;
+  const walking = await withTimeout(
+    mapboxDirections(origin, destination, { profile: "walking", language: "es", steps: false }),
+    5000
+  ).catch(() => null);
+  return walking?.path.length ? { path: walking.path, mode: "WALKING" } : null;
 };
+
+/** Enlace externo de ruta (OpenStreetMap, sin API key) para el respaldo. */
+const externalRoute = (origin: Point, destination: Point) =>
+  `https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route=${origin.lat}%2C${origin.lng}%3B${destination.lat}%2C${destination.lng}`;
 
 export function FulfillmentMap({
   type,
@@ -141,128 +79,68 @@ export function FulfillmentMap({
   customerAddress: CustomerAddress | null;
   store: any;
 }) {
-  const container = useRef<HTMLDivElement>(null);
   const [error, setError] = useState("");
   const [routeStatus, setRouteStatus] = useState<"loading" | "ready" | "external">(
     type === "pickup" ? "loading" : "ready"
   );
   const [routeMode, setRouteMode] = useState<RouteMode>("DRIVING");
   const [routeHref, setRouteHref] = useState("");
+  const [customerPoint, setCustomerPoint] = useState<Point | null>(null);
+  const [storePoint, setStorePoint] = useState<Point | null>(null);
+  const [routeLine, setRouteLine] = useState<Point[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    let animation = 0;
-    let route: any;
-    let markers: any[] = [];
 
     const render = async () => {
       try {
         setError("");
-        setRouteStatus(type === "pickup" ? "loading" : "ready");
+        setRouteLine(null);
+        setStorePoint(null);
         setRouteHref("");
-        await loadMaps();
-        if (cancelled || !container.current) return;
+        setRouteStatus(type === "pickup" ? "loading" : "ready");
         if (type === "delivery" && !customerAddress) throw new Error("Sin dirección de entrega");
 
-        const customerPoint =
+        const start =
           type === "pickup"
             ? await currentLocation()
             : point(customerAddress) ||
               (await withTimeout(geocode(customerAddress!.formattedAddress), 5000).catch(() => null));
-        if (!customerPoint || cancelled) throw new Error("Sin coordenadas");
+        if (!start || cancelled) throw new Error("Sin coordenadas");
+        setCustomerPoint(start);
 
-        const maps: any = window.google.maps;
-        const map = new maps.Map(container.current, {
-          center: customerPoint,
-          zoom: 16,
-          disableDefaultUI: true,
-          gestureHandling: "cooperative",
-        });
+        if (type !== "pickup") return;
 
-        markers.push(new maps.Marker({
-          position: customerPoint,
-          map,
-          title: type === "delivery" ? "Punto de entrega" : "Tu ubicación",
-          icon: "https://maps.google.com/mapfiles/ms/icons/blue-dot.png",
-        }));
+        const storeAddress = [
+          store?.storeAddress,
+          store?.summary?.address,
+          store?.store?.address?.street,
+          store?.store?.address?.city,
+        ].filter(Boolean).join(", ");
+        const target =
+          point(store?.store?.coordinates) ||
+          point(store?.coordinates) ||
+          (storeAddress ? await withTimeout(geocode(storeAddress), 5000).catch(() => null) : null);
 
-        if (type === "pickup") {
-          const storeAddress = [
-            store?.storeAddress,
-            store?.summary?.address,
-            store?.store?.address?.street,
-            store?.store?.address?.city,
-          ].filter(Boolean).join(", ");
-          const storePoint =
-            point(store?.store?.coordinates) ||
-            point(store?.coordinates) ||
-            (storeAddress
-              ? await withTimeout(geocode(storeAddress), 5000).catch(() => null)
-              : null);
-
-          if (storeAddress) {
-            const directionsUrl = new URL("https://www.google.com/maps/dir/");
-            directionsUrl.searchParams.set("api", "1");
-            directionsUrl.searchParams.set("origin", `${customerPoint.lat},${customerPoint.lng}`);
-            directionsUrl.searchParams.set("destination", storeAddress);
-            directionsUrl.searchParams.set("travelmode", "driving");
-            setRouteHref(directionsUrl.toString());
-          }
-
-          if (storePoint && !cancelled) {
-            const directionsUrl = new URL("https://www.google.com/maps/dir/");
-            directionsUrl.searchParams.set("api", "1");
-            directionsUrl.searchParams.set("origin", `${customerPoint.lat},${customerPoint.lng}`);
-            directionsUrl.searchParams.set("destination", `${storePoint.lat},${storePoint.lng}`);
-            directionsUrl.searchParams.set("travelmode", "driving");
-            setRouteHref(directionsUrl.toString());
-
-            markers.push(new maps.Marker({
-              position: storePoint,
-              map,
-              title: "Sucursal de retiro",
-              icon: "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
-            }));
-
-            const result = await withTimeout(routePath(customerPoint, storePoint), 9000).catch(() => null);
-            const bounds = new maps.LatLngBounds();
-            (result?.path ?? [customerPoint, storePoint]).forEach((location: Point) => bounds.extend(location));
-            map.fitBounds(bounds, 42);
-
-            if (!result || cancelled) {
-              if (!cancelled) setRouteStatus("external");
-              return;
-            }
-
-            route = new maps.Polyline({
-              path: result.path,
-              strokeOpacity: 0,
-              icons: [{
-                icon: {
-                  path: maps.SymbolPath.CIRCLE,
-                  scale: 3,
-                  fillColor: "#111827",
-                  fillOpacity: 1,
-                  strokeOpacity: 0,
-                },
-                offset: "0%",
-                repeat: "18px",
-              }],
-              map,
-            });
-            setRouteMode(result.mode);
-            setRouteStatus("ready");
-            let offset = 0;
-            animation = window.setInterval(() => {
-              offset = (offset + 1) % 100;
-              const icons = route.get("icons");
-              icons[0].offset = `${offset}%`;
-              route.set("icons", icons);
-            }, 45);
-          } else if (!cancelled) {
-            setRouteStatus("external");
-          }
+        if (cancelled) return;
+        if (!target) {
+          setRouteStatus("external");
+          setRouteHref(storeAddress ? externalRoute(start, { lat: start.lat, lng: start.lng }) : "");
+          return;
         }
+
+        setStorePoint(target);
+        setRouteHref(externalRoute(start, target));
+
+        const result = await withTimeout(routePath(start, target), 9000).catch(() => null);
+        if (cancelled) return;
+        if (!result) {
+          setRouteStatus("external");
+          return;
+        }
+        setRouteMode(result.mode);
+        setRouteLine(result.path);
+        setRouteStatus("ready");
       } catch (cause) {
         if (!cancelled) {
           setError(cause instanceof Error ? cause.message : "Vista del mapa no disponible");
@@ -273,12 +151,44 @@ export function FulfillmentMap({
     render();
     return () => {
       cancelled = true;
-      window.clearInterval(animation);
-      route?.setMap(null);
-      markers.forEach((marker) => marker.setMap(null));
-      markers = [];
     };
   }, [customerAddress, store, type]);
+
+  const markers = useMemo<MapboxMapMarker[]>(() => {
+    const list: MapboxMapMarker[] = [];
+    if (customerPoint) {
+      list.push({
+        id: "customer",
+        lat: customerPoint.lat,
+        lng: customerPoint.lng,
+        color: "#2563EB",
+        title: type === "delivery" ? "Punto de entrega" : "Tu ubicación",
+      });
+    }
+    if (storePoint) {
+      list.push({
+        id: "store",
+        lat: storePoint.lat,
+        lng: storePoint.lng,
+        color: "#EF4444",
+        title: "Sucursal de retiro",
+      });
+    }
+    return list;
+  }, [customerPoint, storePoint, type]);
+
+  const lines = useMemo<MapboxMapLine[]>(
+    () =>
+      routeLine
+        ? [{ id: "fulfillment-route", points: routeLine, color: "#111827", width: 3, dashed: true }]
+        : [],
+    [routeLine]
+  );
+
+  const fitPoints = useMemo(
+    () => [customerPoint, storePoint].filter((value): value is Point => Boolean(value)),
+    [customerPoint, storePoint]
+  );
 
   if (error) {
     return (
@@ -293,20 +203,26 @@ export function FulfillmentMap({
       className="relative h-36 overflow-hidden rounded-xl bg-gray-100"
       aria-label={type === "pickup" ? "Ruta hacia la sucursal" : "Punto de entrega"}
     >
-      <div ref={container} className="relative h-full w-full" />
+      <MapboxMap
+        className="h-full w-full"
+        center={customerPoint ?? { lat: 20.502, lng: -100.145 }}
+        zoom={16}
+        markers={markers}
+        lines={lines}
+        fitPoints={fitPoints.length > 1 ? fitPoints : undefined}
+        fitPadding={42}
+      />
       <div className="absolute bottom-2 left-2 rounded-full bg-white/95 px-2.5 py-1 text-[11px] font-semibold shadow">
         {type === "pickup"
           ? routeStatus === "ready"
             ? routeMode === "DRIVING"
               ? "Ruta en auto hacia la sucursal"
-              : routeMode === "WALKING"
-                ? "Ruta a pie · verifica banquetas"
-                : "Ruta en moto · verifica el trayecto"
+              : "Ruta a pie · verifica banquetas"
             : routeStatus === "loading"
               ? "Calculando ruta por calles…"
               : routeHref
                 ? <a href={routeHref} target="_blank" rel="noreferrer" className="text-[#eb1902] underline">
-                    Abrir ruta en Google Maps
+                    Abrir ruta en el mapa
                   </a>
                 : "Selecciona una dirección para trazar la ruta"
           : "Entregaremos en este punto"}

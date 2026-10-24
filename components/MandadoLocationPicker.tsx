@@ -1,16 +1,22 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
-import { GoogleMap, Marker, useJsApiLoader } from "@react-google-maps/api";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Crosshair, Loader2, MapPin, Search } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
+import { MapboxMap, type MapboxMapMarker } from "./map/MapboxMap";
+import { mapboxReverseGeocode } from "@/lib/mapbox";
 import type { MandadoAddressPoint } from "@/lib/mandado";
 
 type AddressSuggestion = MandadoAddressPoint;
 
 const defaultCenter = { lat: 20.502, lng: -100.145 };
+
+/** Pin negro del proyecto (mismo trazo que usa el flujo de mandados). */
+const PICKER_PIN = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" width="42" height="42" viewBox="0 0 24 24"><path fill="#09193B" d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><circle cx="12" cy="9" r="3.2" fill="none" stroke="#ffffff" stroke-width="1.5"/></svg>'
+)}`;
 
 export default function MandadoLocationPicker({
   label,
@@ -21,11 +27,6 @@ export default function MandadoLocationPicker({
   initialValue?: MandadoAddressPoint | null;
   onChange: (point: MandadoAddressPoint) => void;
 }) {
-  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
-  const { isLoaded, loadError } = useJsApiLoader({
-    id: "mandado-google-maps",
-    googleMapsApiKey: apiKey,
-  });
   const [input, setInput] = useState(initialValue?.label || "");
   const [point, setPoint] = useState<MandadoAddressPoint | null>(initialValue || null);
   const [predictions, setPredictions] = useState<AddressSuggestion[]>([]);
@@ -38,7 +39,7 @@ export default function MandadoLocationPicker({
   useEffect(() => () => { mounted.current = false; }, []);
 
   useEffect(() => {
-    if (!isLoaded || input.trim().length < 3 || skipPrediction.current) {
+    if (input.trim().length < 3 || skipPrediction.current) {
       skipPrediction.current = false;
       setPredictions([]);
       return;
@@ -58,9 +59,11 @@ export default function MandadoLocationPicker({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [input, isLoaded]);
+  }, [input]);
 
-  const choosePoint = (position: google.maps.LatLngLiteral, address?: string) => {
+  // Punto elegido en el mapa: se pinta al instante y la dirección exacta se
+  // resuelve con geocodificación inversa de Mapbox (no bloquea la UI).
+  const choosePoint = useCallback(async (position: { lat: number; lng: number }, address?: string) => {
     const fallback = address || "Punto seleccionado en el mapa";
     const next = { label: fallback, ...position };
     setPoint(next);
@@ -69,32 +72,39 @@ export default function MandadoLocationPicker({
     setError("");
     onChange(next);
 
-    new google.maps.Geocoder().geocode({ location: position }, (results, status) => {
-      if (!mounted.current) return;
-      const resolved = status === "OK" ? results?.[0]?.formatted_address : null;
-      if (!resolved) return;
-      skipPrediction.current = true;
-      const resolvedPoint = { ...next, label: resolved };
-      setPoint(resolvedPoint);
-      setInput(resolved);
-      onChange(resolvedPoint);
-    });
+    if (address) return;
+
+    const resolved = await mapboxReverseGeocode(position.lat, position.lng);
+    if (!mounted.current || !resolved?.fullAddress) return;
+    skipPrediction.current = true;
+    const resolvedPoint = { ...next, label: resolved.fullAddress };
+    setPoint(resolvedPoint);
+    setInput(resolved.fullAddress);
+    onChange(resolvedPoint);
+  }, [onChange]);
+
+  const choosePrediction = (prediction: AddressSuggestion) => {
+    void choosePoint(prediction, prediction.label);
   };
 
-  const choosePrediction = (prediction: AddressSuggestion) => choosePoint(prediction, prediction.label);
-
-  const searchAddress = (event: FormEvent) => {
+  const searchAddress = async (event: FormEvent) => {
     event.preventDefault();
-    if (!isLoaded || !input.trim()) return;
+    if (!input.trim()) return;
     setSearching(true);
-    new google.maps.Geocoder().geocode({ address: input, region: "mx" }, (results, status) => {
-      if (!mounted.current) return;
-      setSearching(false);
-      const result = status === "OK" ? results?.[0] : null;
-      const location = result?.geometry.location;
-      if (!location) return setError("No encontramos esa dirección. Agrega calle, número y colonia.");
-      choosePoint({ lat: location.lat(), lng: location.lng() }, result.formatted_address);
-    });
+    try {
+      const response = await fetch(`/api/geocode/search?q=${encodeURIComponent(input)}`);
+      const results: AddressSuggestion[] = response.ok ? await response.json() : [];
+      const match = results[0];
+      if (!match) {
+        setError("No encontramos esa dirección. Agrega calle, número y colonia.");
+        return;
+      }
+      await choosePoint(match, match.label);
+    } catch {
+      setError("No pudimos buscar la dirección. Intenta de nuevo.");
+    } finally {
+      if (mounted.current) setSearching(false);
+    }
   };
 
   const useMyLocation = () => {
@@ -103,7 +113,7 @@ export default function MandadoLocationPicker({
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
         setLocating(false);
-        choosePoint({ lat: coords.latitude, lng: coords.longitude });
+        void choosePoint({ lat: coords.latitude, lng: coords.longitude });
       },
       () => {
         setLocating(false);
@@ -113,9 +123,25 @@ export default function MandadoLocationPicker({
     );
   };
 
-  if (loadError || !apiKey) {
-    return <p className="rounded-xl bg-red-50 p-4 text-sm text-red-700">No pudimos cargar el mapa. Intenta de nuevo en unos minutos.</p>;
-  }
+  const center = point ? { lat: point.lat, lng: point.lng } : defaultCenter;
+
+  const markers = useMemo<MapboxMapMarker[]>(
+    () =>
+      point
+        ? [
+            {
+              id: "mandado-picker",
+              lat: point.lat,
+              lng: point.lng,
+              html: `<img src="${PICKER_PIN}" width="42" height="42" alt="" style="display:block" />`,
+              draggable: true,
+              anchor: "bottom",
+              onDragEnd: (next) => void choosePoint(next),
+            },
+          ]
+        : [],
+    [point, choosePoint]
+  );
 
   return (
     <div className="space-y-4">
@@ -135,10 +161,9 @@ export default function MandadoLocationPicker({
               placeholder="Calle, número y colonia"
               autoComplete="off"
               className="h-12 rounded-xl pl-10 text-base"
-              disabled={!isLoaded}
             />
           </div>
-          <Button type="submit" size="icon" aria-label="Buscar dirección" disabled={!isLoaded || searching || !input.trim()} className="h-12 w-12 rounded-xl bg-[#09193B] hover:bg-[#162d5c]">
+          <Button type="submit" size="icon" aria-label="Buscar dirección" disabled={searching || !input.trim()} className="h-12 w-12 rounded-xl bg-[#09193B] hover:bg-[#162d5c]">
             {searching ? <Loader2 className="animate-spin" /> : <Search />}
           </Button>
         </div>
@@ -160,38 +185,18 @@ export default function MandadoLocationPicker({
         ) : null}
       </form>
 
-      <Button type="button" variant="outline" onClick={useMyLocation} disabled={!isLoaded || locating} className="h-11 w-full rounded-xl border-[#eb1901] text-[#eb1901] hover:bg-rose-50 hover:text-[#eb1901]">
+      <Button type="button" variant="outline" onClick={useMyLocation} disabled={locating} className="h-11 w-full rounded-xl border-[#eb1901] text-[#eb1901] hover:bg-rose-50 hover:text-[#eb1901]">
         {locating ? <Loader2 className="animate-spin" /> : <Crosshair />} Usar mi ubicación
       </Button>
 
       <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
-        {isLoaded ? (
-          <GoogleMap
-            mapContainerStyle={{ width: "100%", height: "300px" }}
-            center={point || defaultCenter}
-            zoom={point ? 17 : 14}
-            onClick={(event) => {
-              const lat = event.latLng?.lat();
-              const lng = event.latLng?.lng();
-              if (lat != null && lng != null) choosePoint({ lat, lng });
-            }}
-            options={{ disableDefaultUI: true, zoomControl: true, gestureHandling: "greedy", clickableIcons: false }}
-          >
-            {point ? (
-              <Marker
-                position={point}
-                draggable
-                onDragEnd={(event) => {
-                  const lat = event.latLng?.lat();
-                  const lng = event.latLng?.lng();
-                  if (lat != null && lng != null) choosePoint({ lat, lng });
-                }}
-              />
-            ) : null}
-          </GoogleMap>
-        ) : (
-          <div className="flex h-[300px] items-center justify-center gap-2 text-sm text-slate-500"><Loader2 className="animate-spin" /> Cargando mapa…</div>
-        )}
+        <MapboxMap
+          className="h-[300px] w-full"
+          center={center}
+          zoom={point ? 17 : 14}
+          markers={markers}
+          onClick={(next) => void choosePoint(next)}
+        />
       </div>
 
       <p className="text-center text-xs text-slate-500">Toca el mapa o arrastra el pin para ajustar el punto exacto.</p>

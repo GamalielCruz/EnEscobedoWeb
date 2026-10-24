@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Search, MapPin } from "lucide-react";
+import { mapboxForwardGeocode } from "@/lib/mapbox";
 
 interface SimpleAddressInputProps {
   onAddressSubmit: (address: {
@@ -46,40 +47,36 @@ export default function SimpleAddressInput({
       // Parsear la dirección de forma simple
       const parts = address.split(',').map(part => part.trim());
       
-      // Intentar geocodificar la dirección para obtener coordenadas
-      let coordinates = undefined;
+      // Geocodificar con Mapbox para obtener coordenadas + componentes reales
+      let result = null;
       try {
-        console.log('🌍 Geocodificando dirección:', address);
-        const encodedAddress = encodeURIComponent(address);
-        const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodedAddress}&limit=1&countrycodes=mx`;
-        
-        const response = await fetch(url);
-        const data = await response.json();
-        
-        if (data && data.length > 0) {
-          const result = data[0];
-          coordinates = {
-            latitude: parseFloat(result.lat),
-            longitude: parseFloat(result.lon),
-          };
-          console.log('✅ Coordenadas obtenidas:', coordinates);
+        console.log('🌍 Geocodificando dirección con Mapbox:', address);
+        const [first] = await mapboxForwardGeocode(address, {
+          limit: 1,
+          country: 'mx',
+        });
+        result = first ?? null;
+        if (result) {
+          console.log('✅ Coordenadas obtenidas:', result.latitude, result.longitude);
         } else {
           console.log('⚠️ No se pudieron obtener coordenadas');
         }
       } catch (geoError) {
         console.error('Error geocodificando:', geoError);
       }
-      
+
       const addressData = {
-        fullAddress: address,
+        fullAddress: result?.fullAddress || address,
         components: {
-          street: parts[0] || '',
-          city: parts[1] || 'Pedro Escobedo',
-          state: parts[2] || 'Querétaro',
-          country: 'México',
-          postalCode: '',
+          street: result?.street || parts[0] || '',
+          city: result?.city || parts[1] || 'Pedro Escobedo',
+          state: result?.state || parts[2] || 'Querétaro',
+          country: result?.country || 'México',
+          postalCode: result?.postalCode || '',
         },
-        coordinates: coordinates,
+        coordinates: result
+          ? { latitude: result.latitude, longitude: result.longitude }
+          : undefined,
       };
       
       console.log('📍 Dirección procesada:', addressData);

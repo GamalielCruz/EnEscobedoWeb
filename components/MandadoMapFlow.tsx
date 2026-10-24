@@ -2,7 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { GoogleMap, Marker, Polyline, useJsApiLoader } from "@react-google-maps/api";
+import {
+  MapboxMap,
+  type MapboxMapHandle,
+  type MapboxMapLine,
+  type MapboxMapMarker,
+} from "./map/MapboxMap";
+import {
+  MAPBOX_STYLE_LIGHT,
+  mapboxForwardGeocode,
+  mapboxReverseGeocode,
+} from "@/lib/mapbox";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowLeft,
@@ -76,44 +86,9 @@ const pinIcon = (label?: string) => {
 };
 
 // El mapa llena exactamente su contenedor absoluto (inset-0 del overlay fijo).
-// Usar 100vw/100vh fijos puede desbordarlo en móvil cuando la barra del
-// navegador cambia de tamaño (la hoja del panel se traba al scrollear).
-const containerStyle = {
-  width: "100%",
-  height: "100%",
-};
-
-const mapOptions = {
-  disableDefaultUI: true,
-  zoomControl: true,
-  gestureHandling: "greedy",
-  clickableIcons: false,
-  styles: [
-    { featureType: "landscape", elementType: "geometry.fill", stylers: [{ color: "#f3efe6" }] },
-    { featureType: "landscape.man_made", elementType: "geometry.fill", stylers: [{ color: "#e7e2d6" }] },
-    { featureType: "landscape.natural", elementType: "geometry.fill", stylers: [{ color: "#efe9db" }] },
-    { featureType: "road", elementType: "geometry.fill", stylers: [{ color: "#ffffff" }] },
-    { featureType: "road", elementType: "geometry.stroke", stylers: [{ color: "#cfc4b6" }, { weight: 1 }] },
-    { featureType: "road.arterial", elementType: "geometry.fill", stylers: [{ color: "#fff1ea" }] },
-    { featureType: "road.arterial", elementType: "geometry.stroke", stylers: [{ color: "#e0c3b8" }, { weight: 1 }] },
-    { featureType: "road.highway", elementType: "geometry.fill", stylers: [{ color: "#ffc9c0" }] },
-    { featureType: "road.highway", elementType: "geometry.stroke", stylers: [{ color: "#e0513d" }, { weight: 1.5 }] },
-    { featureType: "water", elementType: "geometry.fill", stylers: [{ color: "#9ecdec" }] },
-    { featureType: "poi.park", elementType: "geometry.fill", stylers: [{ color: "#c9e3b6" }] },
-    { featureType: "poi.park", elementType: "labels.text.fill", stylers: [{ color: "#4d7c3a" }] },
-    { featureType: "poi.place_of_worship", elementType: "geometry.fill", stylers: [{ color: "#e8dfd0" }] },
-    { featureType: "poi.place_of_worship", elementType: "labels.text.fill", stylers: [{ color: "#7a6845" }] },
-    { featureType: "poi.school", elementType: "geometry.fill", stylers: [{ color: "#e4e0d6" }] },
-    { featureType: "poi.school", elementType: "labels.text.fill", stylers: [{ color: "#5a7a9a" }] },
-    { featureType: "poi", elementType: "geometry.fill", stylers: [{ color: "#eae4d8" }] },
-    { featureType: "poi.business", elementType: "labels.icon", stylers: [{ visibility: "on" }] },
-    { featureType: "poi.business", elementType: "labels.text", stylers: [{ visibility: "on" }] },
-    { featureType: "transit", elementType: "geometry", stylers: [{ visibility: "off" }] },
-    { featureType: "transit", elementType: "labels", stylers: [{ visibility: "off" }] },
-    { featureType: "all", elementType: "labels.text.fill", stylers: [{ color: "#3a3a3a" }] },
-    { featureType: "all", elementType: "labels.text.stroke", stylers: [{ color: "#ffffff" }, { weight: 2 }] },
-  ],
-};
+// El estilo (antes un JSON de estilos de Google) ahora es un estilo de Mapbox.
+const MAP_STYLE_URL =
+  process.env.NEXT_PUBLIC_MAPBOX_MANDADO_STYLE?.trim() || MAPBOX_STYLE_LIGHT;
 
 const inputCls =
   "w-full border-2 border-gray-200 bg-white px-3.5 py-3 text-sm font-medium text-[#09193B] placeholder:text-gray-400 transition focus:border-[#09193B] focus:outline-none";
@@ -121,11 +96,6 @@ const labelCls = "mb-1.5 block text-xs font-bold uppercase tracking-wide text-gr
 
 export default function MandadoMapFlow() {
   const router = useRouter();
-  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
-  const { isLoaded, loadError } = useJsApiLoader({
-    id: "mandado-map-google-maps",
-    googleMapsApiKey: apiKey,
-  });
 
   // ── Flujo principal ───────────────────────────────────────────────
   const [mode, setMode] = useState<Mode>("pickup");
@@ -194,28 +164,68 @@ export default function MandadoMapFlow() {
   const [locating, setLocating] = useState(false);
   const [mapCenter, setMapCenter] = useState(defaultCenter);
   const [mapZoom, setMapZoom] = useState(14);
+  const [mapReady, setMapReady] = useState(false);
   const [isGeocoding, setIsGeocoding] = useState(false);
   const [locationDetected, setLocationDetected] = useState(false);
+  const [locationError, setLocationError] = useState("");
   const [pinHint, setPinHint] = useState(false);
   const pinHintTimer = useRef<number | null>(null);
-  const suppressPinHint = useRef(false);
 
-  const mapRef = useRef<google.maps.Map | null>(null);
+  const mapRef = useRef<MapboxMapHandle | null>(null);
+  const mapViewportRef = useRef<HTMLDivElement | null>(null);
+  const pickingHeaderRef = useRef<HTMLDivElement | null>(null);
+  const pickingSheetRef = useRef<HTMLDivElement | null>(null);
+  const latestGpsLocation = useRef<{ lat: number; lng: number } | null>(null);
+  const pendingGpsRecenter = useRef(false);
   const mounted = useRef(true);
   const skipPrediction = useRef(false);
   const fittedRouteKey = useRef<string | null>(null);
-  const routeLineRef = useRef<google.maps.Polyline | null>(null);
-  const dotOffsetRef = useRef(0);
 
-  // Centra y aplica zoom al mapa usando la instancia viva (panTo/setZoom),
-  // porque las props center/zoom de <GoogleMap> solo se aplican al montarse.
-  // Sin esto, al editar un punto el pin quedaba fuera de pantalla y el zoom
-  // lejano del paso 2 nunca se ejecutaba.
-  const panMap = useCallback((position: google.maps.LatLngLiteral, zoom: number) => {
+  const getVisibleMapPadding = useCallback(() => {
+    const viewport = mapViewportRef.current?.getBoundingClientRect();
+    if (!viewport) return { top: 0, right: 0, bottom: 0, left: 0 };
+
+    const header = pickingHeaderRef.current?.getBoundingClientRect();
+    const sheet = pickingSheetRef.current?.getBoundingClientRect();
+    const maxPadding = Math.max(0, Math.floor(viewport.height) - 1);
+    const top = header ? Math.max(0, Math.ceil(header.bottom - viewport.top)) : 0;
+    const bottom = sheet ? Math.max(0, Math.ceil(viewport.bottom - sheet.top)) : 0;
+    const verticalPadding = top + bottom;
+    const scale = verticalPadding > maxPadding ? maxPadding / verticalPadding : 1;
+    return {
+      top: Math.floor(top * scale),
+      right: 0,
+      bottom: Math.floor(bottom * scale),
+      left: 0,
+    };
+  }, []);
+
+  const centerOnGpsLocation = useCallback((position: { lat: number; lng: number }) => {
+    latestGpsLocation.current = position;
+    const map = mapRef.current?.map;
+    if (!map || !map.loaded()) {
+      pendingGpsRecenter.current = true;
+      return;
+    }
+
+    pendingGpsRecenter.current = false;
+    map.easeTo({
+      center: [position.lng, position.lat],
+      zoom: 16,
+      padding: getVisibleMapPadding(),
+      retainPadding: false,
+      duration: 900,
+      essential: true,
+    });
+  }, [getVisibleMapPadding]);
+
+  // Centra y aplica zoom sobre la instancia viva del mapa (la cámara de Mapbox
+  // no sigue las props center/zoom después del montaje). Sin esto, al editar
+  // un punto el pin quedaba fuera de pantalla.
+  const panMap = useCallback((position: { lat: number; lng: number }, zoom: number) => {
     setMapCenter(position);
     setMapZoom(zoom);
-    mapRef.current?.panTo(position);
-    mapRef.current?.setZoom(zoom);
+    mapRef.current?.map?.jumpTo({ center: [position.lng, position.lat], zoom });
   }, []);
 
   const isPickup = mode === "pickup";
@@ -283,23 +293,25 @@ export default function MandadoMapFlow() {
     const key = `${origin.lat.toFixed(5)},${origin.lng.toFixed(5)}|${destination.lat.toFixed(5)},${destination.lng.toFixed(5)}|${routeOpen ? "route" : "panel"}`;
     if (fittedRouteKey.current === key) return;
     fittedRouteKey.current = key;
-    const bounds = new google.maps.LatLngBounds();
-    bounds.extend(origin);
-    bounds.extend(destination);
     const height = window.innerHeight || 0;
     // El padding de fitBounds se mide desde los bordes del mapa. Con el panel
     // de direcciones abierto (68svh) la ruta debe quedar centrada en la franja
     // libre de arriba, así que el padding inferior equivale a la altura del
     // panel (+ margen para el pin). Con la vista de ruta ocupa el mapa entero.
-    mapRef.current.fitBounds(
-      bounds,
-      routeOpen
-        ? { top: 84, bottom: 130, left: 48, right: 48 }
-        : { top: 84, bottom: height * 0.68 + 56, left: 48, right: 48 }
+    mapRef.current.map?.fitBounds(
+      [
+        [Math.min(origin.lng, destination.lng), Math.min(origin.lat, destination.lat)],
+        [Math.max(origin.lng, destination.lng), Math.max(origin.lat, destination.lat)],
+      ],
+      {
+        padding: routeOpen
+          ? { top: 84, bottom: 130, left: 48, right: 48 }
+          : { top: 84, bottom: height * 0.68 + 56, left: 48, right: 48 },
+        maxZoom: 16,
+        duration: 0,
+      }
     );
-    // isLoaded en deps: si el mapa termina de cargar después de tener ambos
-    // puntos (red lenta), el encuadre se recalcula al montarse.
-  }, [view, origin, destination, isLoaded, routeOpen]);
+  }, [view, origin, destination, routeOpen]);
 
   // ── Al salir de la pantalla de confirmación o al editar un punto,
   //    la vista de ruta vuelve al contenedor de direcciones. ──
@@ -307,25 +319,9 @@ export default function MandadoMapFlow() {
     if (view !== "main" || progress !== "confirm" || confirmStep !== 2) setRouteOpen(false);
   }, [view, progress, confirmStep]);
 
-  // ── Puntitos animados sobre la ruta (misma animación que en el carrito) ──
-  useEffect(() => {
-    if (!routeOpen || !origin || !destination) return;
-    const timer = window.setInterval(() => {
-      const line = routeLineRef.current;
-      if (!line) return;
-      dotOffsetRef.current = (dotOffsetRef.current + 1) % 100;
-      const icons = line.get("icons");
-      if (icons?.[0]) {
-        icons[0].offset = `${dotOffsetRef.current}%`;
-        line.set("icons", icons);
-      }
-    }, 45);
-    return () => window.clearInterval(timer);
-  }, [routeOpen, origin, destination]);
-
   // ── Autocompletado de búsqueda ────────────────────────────────────
   useEffect(() => {
-    if (!isLoaded || searchInput.trim().length < 3 || skipPrediction.current) {
+    if (searchInput.trim().length < 3 || skipPrediction.current) {
       skipPrediction.current = false;
       setPredictions([]);
       return;
@@ -343,9 +339,13 @@ export default function MandadoMapFlow() {
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [searchInput, isLoaded]);
+  }, [searchInput]);
 
-  const choosePoint = useCallback((position: google.maps.LatLngLiteral, address?: string) => {
+  const choosePoint = useCallback(async (
+    position: { lat: number; lng: number },
+    address?: string,
+    options: { pan?: boolean } = {}
+  ) => {
     setIsGeocoding(true);
     (document.activeElement as HTMLElement | null)?.blur?.();
     const fallback = address || "";
@@ -353,27 +353,30 @@ export default function MandadoMapFlow() {
     setDraftAddress(next);
     setSearchInput(fallback || "Buscando dirección...");
     setPredictions([]);
-    panMap(position, 16);
+    if (options.pan !== false) panMap(position, 16);
 
-    new google.maps.Geocoder().geocode({ location: position }, (results, status) => {
-      if (!mounted.current) return;
+    if (fallback) {
       setIsGeocoding(false);
-      const resolved = status === "OK" ? results?.[0]?.formatted_address : null;
-      if (!resolved) {
-        if (!fallback) setSearchInput("Dirección no encontrada");
-        return;
-      }
-      skipPrediction.current = true;
-      setDraftAddress({ ...next, label: resolved });
-      setSearchInput(resolved);
-    });
-  }, []);
+      return;
+    }
+
+    const resolved = await mapboxReverseGeocode(position.lat, position.lng);
+    if (!mounted.current) return;
+    setIsGeocoding(false);
+    if (!resolved?.fullAddress) {
+      setSearchInput("Dirección no encontrada");
+      return;
+    }
+    skipPrediction.current = true;
+    setDraftAddress({ ...next, label: resolved.fullAddress });
+    setSearchInput(resolved.fullAddress);
+  }, [panMap]);
 
   const choosePrediction = useCallback((prediction: AddressPoint) => {
     choosePoint(prediction, prediction.label);
   }, [choosePoint]);
 
-  const movePoint = useCallback((position: google.maps.LatLngLiteral, target: "draft" | "origin" | "destination") => {
+  const movePoint = useCallback(async (position: { lat: number; lng: number }, target: "draft" | "origin" | "destination") => {
     setIsGeocoding(true);
     const fallback =
       target === "draft" ? draftAddress?.label || ""
@@ -390,57 +393,60 @@ export default function MandadoMapFlow() {
       setDestination(next);
     }
 
-    new google.maps.Geocoder().geocode({ location: position }, (results, status) => {
-      if (!mounted.current) return;
-      setIsGeocoding(false);
-      const resolved = status === "OK" ? results?.[0]?.formatted_address : null;
-      if (!resolved) {
-        if (target === "draft") setSearchInput(fallback || "Dirección no encontrada");
-        return;
-      }
-      const resolvedPoint = { ...next, label: resolved };
-      if (target === "draft") {
-        skipPrediction.current = true;
-        setDraftAddress(resolvedPoint);
-        setSearchInput(resolved);
-      } else if (target === "origin") {
-        setOrigin(resolvedPoint);
-      } else {
-        setDestination(resolvedPoint);
-      }
-    });
+    const resolved = await mapboxReverseGeocode(position.lat, position.lng);
+    if (!mounted.current) return;
+    setIsGeocoding(false);
+    if (!resolved?.fullAddress) {
+      if (target === "draft") setSearchInput(fallback || "Dirección no encontrada");
+      return;
+    }
+    const resolvedPoint = { ...next, label: resolved.fullAddress };
+    if (target === "draft") {
+      skipPrediction.current = true;
+      setDraftAddress(resolvedPoint);
+      setSearchInput(resolved.fullAddress);
+    } else if (target === "origin") {
+      setOrigin(resolvedPoint);
+    } else {
+      setDestination(resolvedPoint);
+    }
   }, [draftAddress, origin, destination]);
 
   const searchAddress = useCallback(async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!isLoaded || !searchInput.trim()) return;
+    if (!searchInput.trim()) return;
     setSearching(true);
-    new google.maps.Geocoder().geocode({ address: searchInput, region: "mx" }, (results, status) => {
-      if (!mounted.current) return;
-      setSearching(false);
-      const result = status === "OK" ? results?.[0] : null;
-      const location = result?.geometry.location;
-      if (!location) return;
-      choosePoint({ lat: location.lat(), lng: location.lng() }, result.formatted_address);
-    });
-  }, [isLoaded, searchInput, choosePoint]);
+    const [match] = await mapboxForwardGeocode(searchInput, { limit: 1, country: "mx", language: "es" });
+    if (!mounted.current) return;
+    setSearching(false);
+    if (!match) return;
+    await choosePoint({ lat: match.latitude, lng: match.longitude }, match.fullAddress || match.label);
+  }, [searchInput, choosePoint]);
 
   const useMyLocation = useCallback(() => {
-    if (!navigator.geolocation) return;
+    if (!navigator.geolocation) {
+      setLocationError("Tu dispositivo no permite compartir la ubicación.");
+      return;
+    }
     setLocating(true);
+    setLocationError("");
     navigator.geolocation.getCurrentPosition(
       ({ coords }) => {
         setLocating(false);
         setLocationDetected(true);
-        choosePoint({ lat: coords.latitude, lng: coords.longitude });
+        const position = { lat: coords.latitude, lng: coords.longitude };
+        latestGpsLocation.current = position;
+        void choosePoint(position, undefined, { pan: false });
+        centerOnGpsLocation(position);
       },
       () => {
         setLocating(false);
         setLocationDetected(false);
+        setLocationError("No pudimos obtener tu ubicación. Revisa el permiso de GPS e inténtalo de nuevo.");
       },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
     );
-  }, [choosePoint]);
+  }, [centerOnGpsLocation, choosePoint]);
 
   // ── Navegación del flujo ──────────────────────────────────────────
   const startPicking = useCallback((target: "origin" | "destination") => {
@@ -748,164 +754,124 @@ export default function MandadoMapFlow() {
     else goToCheckout();
   };
 
-  // Opciones dinámicas del mapa: cuando el panel de confirmación está abierto
-  // se bloquea el arrastre y el zoom para que el mapa no se mueva (haga scroll)
-  // mientras el cliente completa cada pantalla. La vista de ruta vuelve a ser
-  // interactiva.
-  const mapOptionsDynamic = useMemo(() => {
-    const lockMap = view === "main" && progress === "confirm" && !routeOpen;
-    return {
-      ...mapOptions,
-      draggable: !lockMap,
-      scrollwheel: !lockMap,
-      disableDoubleClickZoom: lockMap,
-      gestureHandling: view === "picking" ? "greedy" : lockMap ? "cooperative" : "greedy",
-    };
-  }, [view, progress, routeOpen]);
+  // Cuando el panel de confirmación está abierto se bloquea el arrastre y el
+  // zoom para que el mapa no se mueva (la hoja haría scroll) mientras el
+  // cliente completa cada pantalla. La vista de ruta vuelve a ser interactiva.
+  const lockMap = view === "main" && progress === "confirm" && !routeOpen;
 
-  if (loadError || !apiKey) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-gray-50">
-        <p className="border-2 border-red-200 bg-red-50 p-4 text-sm font-medium text-red-700">No pudimos cargar el mapa. Intenta de nuevo en unos minutos.</p>
-      </div>
-    );
-  }
+  useEffect(() => {
+    const map = mapRef.current?.map;
+    if (!map) return;
+    if (lockMap) {
+      map.dragPan.disable();
+      map.scrollZoom.disable();
+      map.doubleClickZoom.disable();
+    } else {
+      map.dragPan.enable();
+      map.scrollZoom.enable();
+      map.doubleClickZoom.enable();
+    }
+  }, [lockMap, mapReady]);
+
+  const pinHtml = (url: string) =>
+    `<img src="${url}" width="42" height="42" alt="" style="display:block" />`;
+
+  const mapMarkers = useMemo<MapboxMapMarker[]>(() => {
+    const list: MapboxMapMarker[] = [];
+    const draggable = view !== "picking" && !routeOpen;
+
+    if (origin) {
+      list.push({
+        id: "mandado-origin",
+        lat: origin.lat,
+        lng: origin.lng,
+        html: pinHtml(pinIcon("1")),
+        anchor: "bottom",
+        draggable,
+        zIndex: 10,
+        onClick: () => {
+          if (view === "picking" && pickingFor === "destination") {
+            setPinHint(true);
+            if (pinHintTimer.current) window.clearTimeout(pinHintTimer.current);
+            pinHintTimer.current = window.setTimeout(() => setPinHint(false), 2600);
+          }
+        },
+        onDragEnd: (next) => void movePoint(next, "origin"),
+      });
+    }
+
+    if (destination) {
+      list.push({
+        id: "mandado-destination",
+        lat: destination.lat,
+        lng: destination.lng,
+        html: pinHtml(pinIcon("2")),
+        anchor: "bottom",
+        draggable,
+        zIndex: 10,
+        onDragEnd: (next) => void movePoint(next, "destination"),
+      });
+    }
+
+    if (draftAddress && view === "picking") {
+      list.push({
+        id: "mandado-draft",
+        lat: draftAddress.lat,
+        lng: draftAddress.lng,
+        html: pinHtml(pinIcon()),
+        anchor: "bottom",
+        draggable: true,
+        zIndex: 20,
+        onDragEnd: (next) => void movePoint(next, "draft"),
+      });
+    }
+
+    return list;
+  }, [origin, destination, draftAddress, view, routeOpen, pickingFor, movePoint]);
+
+  const mapLines = useMemo<MapboxMapLine[]>(() => {
+    if (!origin || !destination || view !== "main") return [];
+    return [
+      {
+        id: "mandado-route",
+        points: [
+          { lat: origin.lat, lng: origin.lng },
+          { lat: destination.lat, lng: destination.lng },
+        ],
+        color: "#EB1901",
+        width: routeOpen ? 5 : 4,
+        opacity: 0.95,
+      },
+    ];
+  }, [origin, destination, view, routeOpen]);
 
   return (
-    <div className="fixed inset-0 overflow-hidden bg-gray-100">
+    <div ref={mapViewportRef} className="fixed inset-0 overflow-hidden bg-gray-100">
       {/* ── Mapa de fondo (siempre fijo) ── */}
       <div className="absolute inset-0 z-0">
-        {isLoaded ? (
-          <GoogleMap
-            mapContainerStyle={containerStyle}
-            center={mapCenter}
-            zoom={mapZoom}
-            onLoad={(map) => {
-              mapRef.current = map;
-            }}
-            onClick={(event) => {
-              if (view === "picking") {
-                const lat = event.latLng?.lat();
-                const lng = event.latLng?.lng();
-                if (lat != null && lng != null) choosePoint({ lat, lng });
-              } else if (view === "main" && progress === "confirm" && confirmStep === 2 && origin && destination) {
-                // Al tocar el mapa se alterna entre ver la ruta y volver a las direcciones
-                setRouteOpen((open) => !open);
-              }
-            }}
-            options={mapOptionsDynamic}
-          >
-            {origin && (
-              <Marker
-                position={origin}
-                // Durante la elección de un punto, los marcadores ya colocados
-                // no se pueden arrastrar para evitar confusiones (ej. arrastrar
-                // el marcador 1 mientras se coloca el 2). En la vista de ruta
-                // tampoco, para que la animación no se interrumpa.
-                draggable={view !== "picking" && !routeOpen}
-                zIndex={10}
-                onDragStart={() => {
-                  suppressPinHint.current = true;
-                }}
-                onClick={() => {
-                  if (suppressPinHint.current) {
-                    suppressPinHint.current = false;
-                    return;
-                  }
-                  if (view === "picking" && pickingFor === "destination") {
-                    setPinHint(true);
-                    if (pinHintTimer.current) window.clearTimeout(pinHintTimer.current);
-                    pinHintTimer.current = window.setTimeout(() => setPinHint(false), 2600);
-                  }
-                }}
-                onDragEnd={(event) => {
-                  const lat = event.latLng?.lat();
-                  const lng = event.latLng?.lng();
-                  if (lat != null && lng != null) movePoint({ lat, lng }, "origin");
-                }}
-                icon={{ url: pinIcon("1"), scaledSize: new google.maps.Size(42, 42), anchor: new google.maps.Point(21, 42) }}
-              />
-            )}
-            {destination && (
-              <Marker
-                position={destination}
-                draggable={view !== "picking" && !routeOpen}
-                zIndex={10}
-                onDragEnd={(event) => {
-                  const lat = event.latLng?.lat();
-                  const lng = event.latLng?.lng();
-                  if (lat != null && lng != null) movePoint({ lat, lng }, "destination");
-                }}
-                icon={{ url: pinIcon("2"), scaledSize: new google.maps.Size(42, 42), anchor: new google.maps.Point(21, 42) }}
-              />
-            )}
-            {draftAddress && view === "picking" && (
-              <Marker
-                position={draftAddress}
-                draggable
-                zIndex={20}
-                onDragEnd={(event) => {
-                  const lat = event.latLng?.lat();
-                  const lng = event.latLng?.lng();
-                  if (lat != null && lng != null) movePoint({ lat, lng }, "draft");
-                }}
-                icon={{ url: pinIcon(), scaledSize: new google.maps.Size(42, 42), anchor: new google.maps.Point(21, 42) }}
-              />
-            )}
-            {origin && destination && view === "main" && (
-              <>
-                <Polyline
-                  path={[
-                    { lat: origin.lat, lng: origin.lng },
-                    { lat: destination.lat, lng: destination.lng },
-                  ]}
-                  options={{
-                    strokeColor: "#EB1901",
-                    strokeOpacity: 0.95,
-                    strokeWeight: 4,
-                    geodesic: true,
-                  }}
-                />
-                {routeOpen && (
-                  <Polyline
-                    onLoad={(line) => {
-                      routeLineRef.current = line;
-                    }}
-                    onUnmount={() => {
-                      routeLineRef.current = null;
-                    }}
-                    path={[
-                      { lat: origin.lat, lng: origin.lng },
-                      { lat: destination.lat, lng: destination.lng },
-                    ]}
-                    options={{
-                      strokeOpacity: 0,
-                      geodesic: true,
-                      icons: [
-                        {
-                          icon: {
-                            path: google.maps.SymbolPath.CIRCLE,
-                            scale: 3.5,
-                            fillColor: "#ffffff",
-                            fillOpacity: 1,
-                            strokeColor: "#EB1901",
-                            strokeWeight: 1.5,
-                          },
-                          offset: `${dotOffsetRef.current}%`,
-                          repeat: "16px",
-                        },
-                      ],
-                    }}
-                  />
-                )}
-              </>
-            )}
-          </GoogleMap>
-        ) : (
-          <div className="flex h-full items-center justify-center gap-2 text-sm text-gray-500">
-            <Loader2 className="animate-spin" /> Cargando mapa…
-          </div>
-        )}
+        <MapboxMap
+          ref={mapRef}
+          className="h-full w-full"
+          center={mapCenter}
+          zoom={mapZoom}
+          styleUrl={MAP_STYLE_URL}
+          markers={mapMarkers}
+          lines={mapLines}
+          onLoad={() => {
+            setMapReady(true);
+            if (pendingGpsRecenter.current && latestGpsLocation.current) {
+              centerOnGpsLocation(latestGpsLocation.current);
+            }
+          }}
+          onClick={(point) => {
+            if (view === "picking") {
+              void choosePoint(point);
+            } else if (view === "main" && progress === "confirm" && confirmStep === 2 && origin && destination) {
+              // Al tocar el mapa se alterna entre ver la ruta y volver a las direcciones
+              setRouteOpen((open) => !open);
+            }
+          }}
+        />
 
         {/* Guía flotante mientras se elige un punto */}
         {view === "picking" && !draftAddress && (
@@ -999,6 +965,7 @@ export default function MandadoMapFlow() {
             {/* Tarjeta superior de búsqueda */}
             <motion.div
               key="picking-top"
+              ref={pickingHeaderRef}
               initial={{ y: -20, opacity: 0 }}
               animate={{ y: 0, opacity: 1 }}
               exit={{ y: -20, opacity: 0 }}
@@ -1092,6 +1059,11 @@ export default function MandadoMapFlow() {
                       <><Navigation className="mr-2 h-3.5 w-3.5" /> Usar mi ubicación</>
                     )}
                   </Button>
+                  {locationError && (
+                    <p role="alert" className="mt-2 text-xs text-red-600">
+                      {locationError}
+                    </p>
+                  )}
                 </div>
               </div>
             </motion.div>
@@ -1099,6 +1071,7 @@ export default function MandadoMapFlow() {
             {/* Panel inferior de confirmación */}
             <motion.div
               key="picking-sheet"
+              ref={pickingSheetRef}
               initial={{ y: "100%" }}
               animate={{ y: 0 }}
               exit={{ y: "100%" }}

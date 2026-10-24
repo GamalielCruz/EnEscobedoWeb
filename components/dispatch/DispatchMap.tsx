@@ -1,9 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DirectionsRenderer, GoogleMap, Marker, Polyline, Polygon, useJsApiLoader } from "@react-google-maps/api";
+import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ChevronDown, Loader2, MapPin, Store } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  MapboxMap,
+  type MapboxMapLine,
+  type MapboxMapMarker,
+} from "@/components/map/MapboxMap";
+import {
+  MAPBOX_STYLE_DARK,
+  MAPBOX_STYLE_LIGHT,
+  mapboxDirections,
+  type MapboxPoint,
+} from "@/lib/mapbox";
 import type {
   DispatchDriverCard,
   DispatchOrderCard,
@@ -28,45 +38,6 @@ type Props = {
 
 const DEFAULT_CENTER = { lat: 20.502, lng: -100.145 };
 
-const darkMapStyles: google.maps.MapTypeStyle[] = [
-  { elementType: "geometry", stylers: [{ color: "#0d1526" }] },
-  { elementType: "labels.text.stroke", stylers: [{ color: "#0d1526" }] },
-  { elementType: "labels.text.fill", stylers: [{ color: "#94a3b8" }] },
-  {
-    featureType: "road",
-    elementType: "geometry",
-    stylers: [{ color: "#1e293b" }],
-  },
-  {
-    featureType: "road",
-    elementType: "labels.text.fill",
-    stylers: [{ color: "#64748b" }],
-  },
-  {
-    featureType: "water",
-    elementType: "geometry",
-    stylers: [{ color: "#0b1220" }],
-  },
-  {
-    featureType: "poi",
-    elementType: "geometry",
-    stylers: [{ color: "#1e293b" }],
-  },
-  {
-    featureType: "administrative",
-    elementType: "geometry.stroke",
-    stylers: [{ color: "#334155" }],
-  },
-];
-
-const lightMapStyles: google.maps.MapTypeStyle[] = [
-  {
-    featureType: "poi.business",
-    elementType: "labels",
-    stylers: [{ visibility: "off" }],
-  },
-];
-
 const driverColors: Record<DispatchDriverCard["estado"], string> = {
   available: "#10b981",
   busy: "#f59e0b",
@@ -76,19 +47,14 @@ const driverColors: Record<DispatchDriverCard["estado"], string> = {
   blocked: "#ef4444",
 };
 
-function buildMapOptions(dark: boolean): google.maps.MapOptions {
-  return {
-    disableDefaultUI: false,
-    zoomControl: true,
-    mapTypeControl: false,
-    streetViewControl: false,
-    fullscreenControl: true,
-    styles: dark ? darkMapStyles : lightMapStyles,
-  };
-}
-
 function hasLocation(driver: DispatchDriverCard): boolean {
   return Number.isFinite(driver.lastLocation?.lat) && Number.isFinite(driver.lastLocation?.lng);
+}
+
+/** Círculo de color como HTML del marcador (mismo trazo que en Google Maps). */
+function circleHtml(color: string, radius: number, strokeWidth: number, box: number): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${box}" height="${box}" viewBox="0 0 ${box} ${box}"><circle cx="${box / 2}" cy="${box / 2}" r="${radius}" fill="${color}" stroke="white" stroke-width="${strokeWidth}"/></svg>`;
+  return `<img src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}" width="${box}" height="${box}" alt="" style="display:block" />`;
 }
 
 export function DispatchMap({
@@ -103,23 +69,10 @@ export function DispatchMap({
   onSelectDriver,
   dark,
 }: Props) {
-  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || "";
-  const { isLoaded, loadError } = useJsApiLoader({
-    id: "dispatch-center-map",
-    googleMapsApiKey: apiKey,
-  });
-  const mapRef = useRef<google.maps.Map | null>(null);
   const [fitKey, setFitKey] = useState(0);
   const [legendOpen, setLegendOpen] = useState(false);
-  const [directions, setDirections] = useState<google.maps.DirectionsResult | null>(null);
-
-  const onLoad = useCallback((map: google.maps.Map) => {
-    mapRef.current = map;
-  }, []);
-
-  const onUnmount = useCallback(() => {
-    mapRef.current = null;
-  }, []);
+  const [routePath, setRoutePath] = useState<MapboxPoint[] | null>(null);
+  const [available, setAvailable] = useState(true);
 
   // Reajustar el encuadre solo cuando cambian los CONTADOS (no cada poll),
   // para no pelear con el paneo manual del operador.
@@ -127,41 +80,27 @@ export function DispatchMap({
     setFitKey((k) => k + 1);
   }, [orders.length, stores.length, drivers.length]);
 
-  const bounds = useMemo(() => {
-    if (typeof window === "undefined" || !window.google?.maps) return null;
-    const mapBounds = new window.google.maps.LatLngBounds();
-    let hasPoint = false;
+  const fitPoints = useMemo<MapboxPoint[]>(() => {
+    void fitKey;
+    const points: MapboxPoint[] = [];
     for (const order of orders) {
       if (order.storeLat != null && order.storeLng != null) {
-        mapBounds.extend({ lat: order.storeLat, lng: order.storeLng });
-        hasPoint = true;
+        points.push({ lat: order.storeLat, lng: order.storeLng });
       }
       if (order.destLat != null && order.destLng != null) {
-        mapBounds.extend({ lat: order.destLat, lng: order.destLng });
-        hasPoint = true;
+        points.push({ lat: order.destLat, lng: order.destLng });
       }
     }
     for (const store of stores) {
-      if (store.lat != null && store.lng != null) {
-        mapBounds.extend({ lat: store.lat, lng: store.lng });
-        hasPoint = true;
-      }
+      if (store.lat != null && store.lng != null) points.push({ lat: store.lat, lng: store.lng });
     }
     for (const driver of drivers) {
       if (hasLocation(driver) && driver.lastLocation) {
-        mapBounds.extend({ lat: driver.lastLocation.lat!, lng: driver.lastLocation.lng! });
-        hasPoint = true;
+        points.push({ lat: driver.lastLocation.lat!, lng: driver.lastLocation.lng! });
       }
     }
-    return hasPoint ? mapBounds : null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fitKey, isLoaded]);
-
-  useEffect(() => {
-    if (isLoaded && mapRef.current && bounds) {
-      mapRef.current.fitBounds(bounds as unknown as google.maps.LatLngBounds);
-    }
-  }, [isLoaded, bounds]);
+    return points;
+  }, [fitKey, orders, stores, drivers]);
 
   const selectedOrder = orders.find((o) => o._id === selectedOrderId) ?? null;
   const selectedDriver = drivers.find((d) => d._id === selectedDriverId) ?? null;
@@ -183,8 +122,8 @@ export function DispatchMap({
 
   // ── Ruta sugerida: repartidor → origen → destino (si hay datos reales) ──
   useEffect(() => {
-    setDirections(null);
-    if (!isLoaded || !selectedOrder) return;
+    setRoutePath(null);
+    if (!selectedOrder) return;
     if (selectedOrder.storeLat == null || selectedOrder.storeLng == null || selectedOrder.destLat == null || selectedOrder.destLng == null) {
       return; // sin coordenadas → la UI muestra "Sin estimar"
     }
@@ -192,198 +131,176 @@ export function DispatchMap({
     const destination = { lat: selectedOrder.destLat, lng: selectedOrder.destLng };
     const driverLoc = selectedDriver?.lastLocation;
     const useDriver = driverLoc && Number.isFinite(driverLoc.lat) && Number.isFinite(driverLoc.lng);
-    const request: google.maps.DirectionsRequest = {
-      origin: useDriver ? { lat: driverLoc.lat!, lng: driverLoc.lng! } : origin,
-      destination,
-      travelMode: google.maps.TravelMode.DRIVING,
-      ...(useDriver ? { waypoints: [{ location: origin, stopover: true }] } : {}),
-    };
+
     let cancelled = false;
-    new google.maps.DirectionsService().route(request, (result, status) => {
-      if (cancelled) return;
-      if (status === "OK" && result) {
-        setDirections(result);
+    mapboxDirections(
+      useDriver ? { lat: driverLoc.lat!, lng: driverLoc.lng! } : origin,
+      destination,
+      {
+        profile: "driving-traffic",
+        language: "es",
+        steps: false,
+        waypoints: useDriver ? [origin] : undefined,
       }
+    ).then((route) => {
+      if (cancelled) return;
+      setRoutePath(route?.path ?? null);
     });
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isLoaded, routeKey]);
+  }, [routeKey]);
 
   const topRecDriverId = recommendations[0]?.driver._id;
 
+  const markers = useMemo<MapboxMapMarker[]>(() => {
+    const list: MapboxMapMarker[] = [];
+
+    for (const driver of drivers) {
+      if (!hasLocation(driver) || !driver.lastLocation) continue;
+      const isSelected = driver._id === selectedDriverId;
+      const isTopRec = driver._id === topRecDriverId;
+      const size = isSelected ? 15 : isTopRec ? 13 : 10;
+      list.push({
+        id: `driver-${driver._id}`,
+        lat: driver.lastLocation.lat!,
+        lng: driver.lastLocation.lng!,
+        html: circleHtml(driverColors[driver.estado], size, isSelected ? 4 : 2.5, 34),
+        title: `${driver.name} (${driver.estado})`,
+        zIndex: isSelected ? 45 : isTopRec ? 35 : 25,
+        onClick: () => onSelectDriver(driver._id),
+      });
+    }
+
+    for (const store of stores) {
+      if (store.lat == null || store.lng == null) continue;
+      list.push({
+        id: `store-${store._id}`,
+        lat: store.lat,
+        lng: store.lng,
+        html: circleHtml("#EB1902", 11, 2.5, 28),
+        title: store.name,
+        zIndex: 30,
+      });
+    }
+
+    for (const order of orders) {
+      if (order.destLat == null || order.destLng == null) continue;
+      const isSelected = order._id === selectedOrderId;
+      const color =
+        order.serviceKind === "mandado" ? "#8b5cf6" : order.priority === "urgent" ? "#ef4444" : order.priority === "high" ? "#f59e0b" : "#0ea5e9";
+      list.push({
+        id: order._id,
+        lat: order.destLat,
+        lng: order.destLng,
+        html: circleHtml(color, isSelected ? 11 : 8, isSelected ? 3 : 2, 30),
+        zIndex: isSelected ? 40 : 20,
+        onClick: () => onSelectOrder(order._id),
+      });
+    }
+
+    // Punto de origen de mandados (siempre que exista y no haya tienda marcada)
+    for (const order of orders) {
+      if (order.serviceKind !== "mandado" || order.storeLat == null || order.storeLng == null) continue;
+      const pin = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z" fill="#8b5cf6" stroke="white" stroke-width="1.5"/></svg>`;
+      list.push({
+        id: `origin-${order._id}`,
+        lat: order.storeLat,
+        lng: order.storeLng,
+        html: `<img src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(pin)}" width="24" height="24" alt="" style="display:block" />`,
+        anchor: "bottom",
+        zIndex: 15,
+        onClick: () => onSelectOrder(order._id),
+      });
+    }
+
+    return list;
+  }, [
+    drivers,
+    stores,
+    orders,
+    selectedDriverId,
+    selectedOrderId,
+    topRecDriverId,
+    onSelectDriver,
+    onSelectOrder,
+  ]);
+
+  const lines = useMemo<MapboxMapLine[]>(() => {
+    const list: MapboxMapLine[] = [];
+    if (routePath?.length) {
+      list.push({ id: "dispatch-route", points: routePath, color: "#EB1902", width: 5, opacity: 0.85 });
+    }
+    for (const order of orders) {
+      if (order.storeLat == null || order.storeLng == null || order.destLat == null || order.destLng == null) continue;
+      const isSelected = order._id === selectedOrderId;
+      const color = isSelected
+        ? "#EB1902"
+        : order.priority === "urgent"
+          ? "#ef4444"
+          : order.priority === "high"
+            ? "#f59e0b"
+            : "#0ea5e9";
+      list.push({
+        id: `route-${order._id}`,
+        points: [
+          { lat: order.storeLat, lng: order.storeLng },
+          { lat: order.destLat, lng: order.destLng },
+        ],
+        color,
+        width: isSelected ? 3.5 : 2,
+        opacity: isSelected ? 0.4 : 0.45,
+      });
+    }
+    return list;
+  }, [orders, selectedOrderId, routePath]);
+
+  const polygons = useMemo(
+    () =>
+      zones.map((zone) => ({
+        id: zone.id,
+        points: zone.coordinates,
+        color: zone.color ?? "#EB1902",
+        fillOpacity: 0.08,
+        strokeWidth: 1.5,
+      })),
+    [zones]
+  );
+
   return (
     <div className="relative h-full min-h-[180px] overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-white/10 dark:bg-[#0d1526]">
-      {loadError ? (
-        <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+      <MapboxMap
+        className="h-full w-full"
+        center={DEFAULT_CENTER}
+        zoom={13}
+        styleUrl={dark ? MAPBOX_STYLE_DARK : MAPBOX_STYLE_LIGHT}
+        markers={markers}
+        lines={lines}
+        polygons={polygons}
+        fitPoints={fitPoints.length ? fitPoints : undefined}
+        fitPadding={56}
+        fitMaxZoom={14}
+        onError={() => setAvailable(false)}
+      />
+
+      {!available ? (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-100/95 p-6 text-center dark:bg-[#0d1526]/95">
           <AlertTriangle className="h-8 w-8 text-amber-500" />
           <p className="text-sm font-medium text-slate-600 dark:text-slate-300">No se pudo cargar el mapa.</p>
           <p className="max-w-xs text-xs text-slate-400 dark:text-slate-500">
-            Revisa la clave <code className="rounded bg-slate-200 px-1 dark:bg-white/10">NEXT_PUBLIC_GOOGLE_MAPS_API_KEY</code>.
+            Revisa la conexión y el token <code className="rounded bg-slate-200 px-1 dark:bg-white/10">NEXT_PUBLIC_MAPBOX_TOKEN</code>.
           </p>
         </div>
-      ) : !isLoaded ? (
-        <div className="flex h-full flex-col items-center justify-center gap-3">
-          <Loader2 className="h-8 w-8 animate-spin text-slate-400" />
-          <p className="text-xs font-medium text-slate-500 dark:text-slate-400">Cargando mapa de operaciones…</p>
+      ) : null}
+
+      {!fitPoints.length ? (
+        <div className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center">
+          <span className="flex items-center gap-2 rounded-full bg-white/95 px-3 py-1.5 text-[11px] font-semibold text-slate-500 shadow-sm dark:bg-[#0d1526]/95 dark:text-slate-400">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" /> Esperando ubicaciones en vivo…
+          </span>
         </div>
-      ) : (
-        <GoogleMap
-          mapContainerStyle={{ width: "100%", height: "100%" }}
-          center={DEFAULT_CENTER}
-          zoom={13}
-          options={buildMapOptions(dark)}
-          onLoad={onLoad}
-          onUnmount={onUnmount}
-        >
-          {/* Zonas de reparto */}
-          {zones.map((zone) => (
-            <Polygon
-              key={zone.id}
-              paths={zone.coordinates.map((c) => ({ lat: c.lat, lng: c.lng }))}
-              options={{
-                fillColor: zone.color ?? "#EB1902",
-                fillOpacity: 0.08,
-                strokeColor: zone.color ?? "#EB1902",
-                strokeOpacity: 0.6,
-                strokeWeight: 1.5,
-                clickable: false,
-              }}
-            />
-          ))}
-
-          {/* Repartidores (solo si reportaron ubicación; datos reales) */}
-          {drivers.map((driver) => {
-            if (!hasLocation(driver) || !driver.lastLocation) return null;
-            const isSelected = driver._id === selectedDriverId;
-            const isTopRec = driver._id === topRecDriverId;
-            const color = driverColors[driver.estado];
-            const size = isSelected ? 15 : isTopRec ? 13 : 10;
-            return (
-              <Marker
-                key={`driver-${driver._id}`}
-                position={{ lat: driver.lastLocation.lat!, lng: driver.lastLocation.lng! }}
-                onClick={() => onSelectDriver(driver._id)}
-                title={`${driver.name} (${driver.estado})`}
-                icon={{
-                  url:
-                    "data:image/svg+xml;charset=UTF-8," +
-                    encodeURIComponent(
-                      `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="34" viewBox="0 0 34 34"><circle cx="17" cy="17" r="${size}" fill="${color}" stroke="white" stroke-width="${isSelected ? 4 : 2.5}"/></svg>`
-                    ),
-                  anchor: { x: 17, y: 17 } as google.maps.Point,
-                }}
-                zIndex={isSelected ? 45 : isTopRec ? 35 : 25}
-              />
-            );
-          })}
-
-          {/* Ruta sugerida (Google Directions cuando hay datos; si no, línea recta) */}
-          {directions && (
-            <DirectionsRenderer
-              directions={directions}
-              options={{
-                suppressMarkers: true,
-                polylineOptions: {
-                  strokeColor: "#EB1902",
-                  strokeWeight: 5,
-                  strokeOpacity: 0.85,
-                  zIndex: 50,
-                },
-              }}
-            />
-          )}
-
-          {/* Rutas de pedidos (línea recta de referencia) */}
-          {orders.map((order) => {
-            if (order.storeLat == null || order.storeLng == null || order.destLat == null || order.destLng == null) return null;
-            const isSelected = order._id === selectedOrderId;
-            const color = isSelected
-              ? "#EB1902"
-              : order.priority === "urgent"
-                ? "#ef4444"
-                : order.priority === "high"
-                  ? "#f59e0b"
-                  : "#0ea5e9";
-            return (
-              <Polyline
-                key={`route-${order._id}`}
-                path={[
-                  { lat: order.storeLat, lng: order.storeLng },
-                  { lat: order.destLat, lng: order.destLng },
-                ]}
-                options={{
-                  strokeColor: color,
-                  strokeOpacity: isSelected ? 0.4 : 0.45,
-                  strokeWeight: isSelected ? 3.5 : 2,
-                  zIndex: isSelected ? 20 : 5,
-                }}
-              />
-            );
-          })}
-
-          {/* Restaurantes / puntos de origen */}
-          {stores.map((store) => (
-            <Marker
-              key={store._id}
-              position={{ lat: store.lat!, lng: store.lng! }}
-              icon={{
-                url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(
-                  `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28"><circle cx="14" cy="14" r="11" fill="#EB1902" stroke="white" stroke-width="2.5"/></svg>`
-                ),
-                anchor: { x: 14, y: 14 } as google.maps.Point,
-              }}
-              title={store.name}
-              zIndex={30}
-            />
-          ))}
-
-          {/* Ordenes: destino del cliente */}
-          {orders.map((order) => {
-            if (order.destLat == null || order.destLng == null) return null;
-            const isSelected = order._id === selectedOrderId;
-            const color =
-              order.serviceKind === "mandado" ? "#8b5cf6" : order.priority === "urgent" ? "#ef4444" : order.priority === "high" ? "#f59e0b" : "#0ea5e9";
-            return (
-              <Marker
-                key={order._id}
-                position={{ lat: order.destLat, lng: order.destLng }}
-                onClick={() => onSelectOrder(order._id)}
-                icon={{
-                  url:
-                    "data:image/svg+xml;charset=UTF-8," +
-                    encodeURIComponent(
-                      `<svg xmlns="http://www.w3.org/2000/svg" width="30" height="30" viewBox="0 0 30 30"><circle cx="15" cy="15" r="${isSelected ? 11 : 8}" fill="${color}" stroke="white" stroke-width="${isSelected ? 3 : 2}"/></svg>`
-                    ),
-                  anchor: { x: 15, y: 15 } as google.maps.Point,
-                }}
-                zIndex={isSelected ? 40 : 20}
-              />
-            );
-          })}
-
-          {/* Punto de origen de mandados (siempre que exista y no haya tienda marcada) */}
-          {orders
-            .filter((o) => o.serviceKind === "mandado" && o.storeLat != null && o.storeLng != null)
-            .map((order) => (
-              <Marker
-                key={`origin-${order._id}`}
-                position={{ lat: order.storeLat!, lng: order.storeLng! }}
-                onClick={() => onSelectOrder(order._id)}
-                icon={{
-                  url:
-                    "data:image/svg+xml;charset=UTF-8," +
-                    encodeURIComponent(
-                      `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path d="M12 2C8 2 5 5 5 9c0 5 7 13 7 13s7-8 7-13c0-4-3-7-7-7z" fill="#8b5cf6" stroke="white" stroke-width="1.5"/></svg>`
-                    ),
-                  anchor: { x: 12, y: 22 } as google.maps.Point,
-                }}
-                zIndex={15}
-              />
-            ))}
-        </GoogleMap>
-      )}
+      ) : null}
 
       {/* Overlay compacto: una sola píldora de estado. La leyenda y los
           conteos secundarios se agrupan detrás de un toggle para no competir
@@ -420,7 +337,6 @@ export function DispatchMap({
           </div>
         )}
       </div>
-
     </div>
   );
 }

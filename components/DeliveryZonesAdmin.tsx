@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { GoogleMap, Marker, Polygon, useJsApiLoader } from "@react-google-maps/api";
+import { MapboxMap, type MapboxMapMarker } from "@/components/map/MapboxMap";
 import { AlertTriangle, Copy, Loader2, MapPin, Plus, Save, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,11 +27,6 @@ import {
   updateDeliveryZone,
   validateZoneOverlaps,
 } from "@/lib/delivery-zones";
-
-const mapContainerStyle = {
-  width: "100%",
-  height: "420px",
-};
 
 const defaultCenter = {
   lat: 20.5888,
@@ -59,11 +54,6 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter, si
   const endpoint = storeId
     ? `/api/dashboard/delivery-pricing?storeId=${encodeURIComponent(storeId)}`
     : "/api/dashboard/delivery-pricing";
-  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
-  const { isLoaded } = useJsApiLoader({
-    id: "delivery-zones-map",
-    googleMapsApiKey: apiKey,
-  });
 
   const [config, setConfig] = useState<DeliveryPricingConfig>(DEFAULT_DELIVERY_CONFIG);
   const [selectedZoneId, setSelectedZoneId] = useState(DEFAULT_DELIVERY_CONFIG.zones[0]?.id ?? "");
@@ -181,15 +171,31 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter, si
     });
   };
 
-  const handlePolygonEdit = (zoneId: string, polygon: google.maps.Polygon) => {
-    const path = polygon.getPath();
-    const coordinates: LatLng[] = [];
-    for (let index = 0; index < path.getLength(); index += 1) {
-      const point = path.getAt(index);
-      coordinates.push({ lat: point.lat(), lng: point.lng() });
-    }
+  // Vértice del polígono seleccionado: se edita arrastrando su marcador.
+  const updateZoneVertex = (zoneId: string, index: number, point: LatLng) => {
+    const zone = config.zones.find((item) => item.id === zoneId);
+    if (!zone) return;
+    const coordinates = zone.coordinates.map((current, position) =>
+      position === index ? point : current
+    );
     updateZone(zoneId, { coordinates });
   };
+
+  // Cada vértice de la zona seleccionada es un marcador arrastrable: sustituye
+  // los handles de edición del polígono de Google.
+  const zoneVertexMarkers: MapboxMapMarker[] = (selectedZone?.coordinates ?? []).map(
+    (coordinate, index) => ({
+      id: `${selectedZone?.id}-vertex-${index}`,
+      lat: coordinate.lat,
+      lng: coordinate.lng,
+      color: selectedZone?.color ?? "#f97316",
+      size: 6,
+      draggable: true,
+      title: `Vértice ${index + 1}`,
+      onDragEnd: (next) =>
+        selectedZone ? updateZoneVertex(selectedZone.id, index, next) : undefined,
+    })
+  );
 
   const applyJsonDraft = () => {
     try {
@@ -311,61 +317,32 @@ export default function DeliveryZonesAdmin({ storeId, center = defaultCenter, si
             </CardDescription>
           </CardHeader>
           <CardContent>
-            {!apiKey ? (
-              <div className="flex h-[420px] items-center justify-center rounded-md border bg-gray-50 text-sm text-gray-600">
-                Falta NEXT_PUBLIC_GOOGLE_MAPS_API_KEY.
-              </div>
-            ) : !isLoaded ? (
-              <div className="flex h-[420px] items-center justify-center rounded-md border bg-gray-50">
-                <Loader2 className="h-8 w-8 animate-spin text-[#ff8800]" />
-              </div>
-            ) : (
-              <div className="overflow-hidden rounded-md border">
-                <GoogleMap
-                  mapContainerStyle={mapContainerStyle}
-                  center={selectedZone?.coordinates?.[0] ?? center}
-                  zoom={13}
-                  onClick={(event) => {
-                    if (!event.latLng) return;
-                    setPreviewPoint({ lat: event.latLng.lat(), lng: event.latLng.lng() });
-                  }}
-                  options={{
-                    streetViewControl: false,
-                    mapTypeControl: false,
-                    fullscreenControl: false,
-                  }}
-                >
-                  {config.zones.map((zone) => (
-                    <Polygon
-                      key={zone.id}
-                      paths={zone.coordinates}
-                      editable={zone.id === selectedZone?.id}
-                      draggable={zone.id === selectedZone?.id}
-                      onMouseUp={(event) => {
-                        const polygon = event.domEvent?.target ? undefined : undefined;
-                        void polygon;
-                      }}
-                      onLoad={(polygon) => {
-                        polygon.addListener("mouseup", () => handlePolygonEdit(zone.id, polygon));
-                        polygon.addListener("dragend", () => handlePolygonEdit(zone.id, polygon));
-                        polygon.getPath().addListener("set_at", () => handlePolygonEdit(zone.id, polygon));
-                        polygon.getPath().addListener("insert_at", () => handlePolygonEdit(zone.id, polygon));
-                      }}
-                      options={{
-                        fillColor: zone.color ?? "#f97316",
-                        fillOpacity: zone.id === selectedZone?.id ? 0.28 : 0.15,
-                        strokeColor: zone.color ?? "#f97316",
-                        strokeOpacity: zone.active === false ? 0.35 : 0.95,
-                        strokeWeight: zone.id === selectedZone?.id ? 3 : 2,
-                        clickable: true,
-                      }}
-                      onClick={() => setSelectedZoneId(zone.id)}
-                    />
-                  ))}
-                  <Marker position={previewPoint} />
-                </GoogleMap>
-              </div>
-            )}
+            <div className="overflow-hidden rounded-md border">
+              <MapboxMap
+                className="h-[420px] w-full"
+                center={selectedZone?.coordinates?.[0] ?? center}
+                zoom={13}
+                onClick={(point) => setPreviewPoint({ lat: point.lat, lng: point.lng })}
+                polygons={config.zones.map((zone) => ({
+                  id: zone.id,
+                  points: zone.coordinates,
+                  color: zone.color ?? "#f97316",
+                  fillOpacity: zone.id === selectedZone?.id ? 0.28 : 0.15,
+                  strokeWidth: zone.id === selectedZone?.id ? 3 : 2,
+                }))}
+                markers={[
+                  {
+                    id: "preview-point",
+                    lat: previewPoint.lat,
+                    lng: previewPoint.lng,
+                    color: "#111827",
+                    size: 7,
+                    title: "Punto de prueba",
+                  },
+                  ...zoneVertexMarkers,
+                ]}
+              />
+            </div>
           </CardContent>
         </Card>
 

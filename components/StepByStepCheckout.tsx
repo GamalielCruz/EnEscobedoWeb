@@ -556,7 +556,6 @@ export default function StepByStepCheckout({
               <div className="space-y-4">
                 {showLocationPicker ? (
                   <InteractiveLocationPicker
-                    apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
                     initialLocation={selectedAddress || undefined}
                     onLocationConfirmed={handleLocationConfirmed}
                     onCancel={() => {
@@ -592,7 +591,6 @@ export default function StepByStepCheckout({
                       </div>
                       
                       <SimpleAddressInputFixed
-                        apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
                         onAddressSelected={(addressData) => {
                           console.log('Address selected in StepByStepCheckout:', addressData);
                           try {
@@ -645,7 +643,6 @@ export default function StepByStepCheckout({
                     window.dispatchEvent(new Event('storeSelected'));
                   }}
                   onAddressChange={(addr) => setCustomerAddress(addr)}
-                  apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
                   filterStoreId={cartStoreId}
                 />
               </div>

@@ -1401,7 +1401,6 @@ function BasketPage() {
                             setShippingCost(0);
                           }}
                           onAddressChange={() => {}}
-                          apiKey={process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || ''}
                           filterStoreId={cartStoreId}
                         />}
                               

@@ -1,9 +1,9 @@
 /**
  * Capa aislada de routing vial para el mapa del repartidor.
  *
- * Usa la API de Google Maps Directions (client-side, misma clave
- * NEXT_PUBLIC_GOOGLE_MAPS_API_KEY que ya carga la página del repartidor)
- * y devuelve la geometría de la ruta + distancia + duración.
+ * Usa la API de Mapbox Directions (client-side, mismo token
+ * NEXT_PUBLIC_MAPBOX_TOKEN que carga el mapa) y devuelve la geometría de la
+ * ruta + distancia + duración.
  *
  * CACHÉ: la ruta se reutiliza mientras el destino siga siendo el mismo y el
  * origen no se mueva más de ROUTE_REUSE_METERS. Las actualizaciones
@@ -18,16 +18,22 @@
  * se reintenta en cada tick de GPS.
  */
 
+import {
+  MAPBOX_PUBLIC_TOKEN,
+  mapboxDirections,
+  type MapboxRoadRoute,
+} from "@/lib/mapbox";
+
 export type RoutePoint = { lat: number; lng: number };
 
 /**
  * Un paso (step) del tramo, normalizado a datos pequeños y estables para la
- * UI (sin exponer objetos gigantes de Google Maps al componente).
+ * UI (sin exponer objetos gigantes del proveedor al componente).
  */
 export type RouteStep = {
   /** Texto legible de la maniobra ("Gira a la derecha en Av. X", ...). */
   instruction: string;
-  /** Maniobra cruda de Google cuando existe ("turn-right", "straight", ...). */
+  /** Maniobra normalizada ("turn-right", "straight", ...). */
   maneuver?: string;
   distanceMeters: number;
   durationSeconds: number;
@@ -36,7 +42,7 @@ export type RouteStep = {
 };
 
 export type RoadRoute = {
-  /** Geometría vial completa (overview_path). Nunca [origin, destination]. */
+  /** Geometría vial completa. Nunca [origin, destination]. */
   path: RoutePoint[];
   distanceMeters: number | null;
   durationSeconds: number | null;
@@ -52,6 +58,31 @@ export type RoadRoute = {
 const ROUTE_REUSE_METERS = 200;
 /** Si Directions no responde en este tiempo, se devuelve null (fallback). */
 const ROUTE_TIMEOUT_MS = 6_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      lastErrorReason = "timeout";
+      resolve(null);
+    }, ms);
+    promise
+      .then((value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      });
+  });
+}
 const MAX_CACHE_ENTRIES = 4;
 
 /**
@@ -235,106 +266,55 @@ const cacheKeyFor = (origin: RoutePoint, destination: RoutePoint) =>
   `${snap(origin.lat)},${snap(origin.lng)}|${snap(destination.lat)},${snap(destination.lng)}`;
 
 function isLoaded(): boolean {
-  return (
-    typeof window !== "undefined" &&
-    typeof window.google !== "undefined" &&
-    typeof window.google.maps?.DirectionsService === "function"
+  return Boolean(MAPBOX_PUBLIC_TOKEN);
+}
+
+function toRoadRoute(route: MapboxRoadRoute | null): RoadRoute | null {
+  if (!route) return null;
+  return {
+    path: route.path,
+    distanceMeters: route.distanceMeters,
+    durationSeconds: route.durationSeconds,
+    distanceText: route.distanceText,
+    durationText: route.durationText,
+    steps: route.steps.map((step) => ({
+      instruction: step.instruction,
+      maneuver: step.maneuver,
+      distanceMeters: step.distanceMeters,
+      durationSeconds: step.durationSeconds,
+      start: step.start,
+      end: step.end,
+    })),
+    destination: route.destination,
+  };
+}
+
+async function requestDirections(
+  origin: RoutePoint,
+  destination: RoutePoint
+): Promise<RoadRoute | null> {
+  const route = await withTimeout(
+    mapboxDirections(origin, destination, {
+      // `driving-traffic` incorpora tráfico en vivo, igual que el modo de
+      // conducción de Google que se usaba antes.
+      profile: "driving-traffic",
+      language: "es",
+    }),
+    ROUTE_TIMEOUT_MS
   );
-}
 
-/** Limpia el html_instructions de Google a texto plano legible. */
-function cleanStepInstruction(html: string): string {
-  const withoutTags = html.replace(/<[^>]*>/g, " ");
-  return withoutTags
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function requestDirections(origin: RoutePoint, destination: RoutePoint): Promise<RoadRoute | null> {
-  return new Promise((resolve) => {
-    let settled = false;
-    const timer = window.setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        lastErrorReason = "timeout";
-        resolve(null);
-      }
-    }, ROUTE_TIMEOUT_MS);
-
-    try {
-      const service = new window.google.maps.DirectionsService();
-      service.route(
-        {
-          origin,
-          destination,
-          travelMode: window.google.maps.TravelMode.DRIVING,
-          // Pedir SIEMPRE el texto ya localizado a es-MX: Google devuelve
-          // html_instructions en español y la UI no depende del traductor
-          // de respaldo (nav-instructions.ts). La capa de respaldo sigue
-          // existiendo por si algún step llega sin localizar.
-          language: "es-MX",
-        },
-        (result, status) => {
-          if (settled) return;
-          settled = true;
-          window.clearTimeout(timer);
-
-          const route = result?.routes?.[0];
-          const leg = route?.legs?.[0];
-          const path = route?.overview_path;
-          if (status !== "OK" || !Array.isArray(path) || path.length < 2) {
-            lastErrorReason = status !== "OK" ? String(status) : "empty_path";
-            if (status !== "OK") {
-              // Diagnóstico: la causa más común es que la Directions API no esté
-              // habilitada para la clave NEXT_PUBLIC_GOOGLE_MAPS_API_KEY.
-              console.warn(
-                `[routing] Google Directions devolvió "${status}" para el tramo seleccionado. Verifica que la Directions API esté habilitada para la clave de Google Maps.`
-              );
-            }
-            resolve(null);
-            return;
-          }
-
-          lastErrorReason = null;
-          resolve({
-            path: path.map((point) => ({ lat: point.lat(), lng: point.lng() })),
-            distanceMeters: leg?.distance?.value ?? null,
-            durationSeconds: leg?.duration?.value ?? null,
-            distanceText: leg?.distance?.text ?? null,
-            durationText: leg?.duration?.text ?? null,
-            steps: (leg?.steps ?? []).map((step) => ({
-              instruction: cleanStepInstruction(
-                // En runtime Directions entrega `html_instructions`; los tipos
-                // la llaman `instructions`. Leer ambas para no depender de
-                // cuál esté presente en la versión cargada del Maps JS API.
-                (step as unknown as { html_instructions?: string }).html_instructions ??
-                  step.instructions ??
-                  ""
-              ),
-              maneuver: step.maneuver ?? undefined,
-              distanceMeters: step.distance?.value ?? 0,
-              durationSeconds: step.duration?.value ?? 0,
-              start: { lat: step.start_location.lat(), lng: step.start_location.lng() },
-              end: { lat: step.end_location.lat(), lng: step.end_location.lng() },
-            })),
-            destination,
-          });
-        }
+  if (!route) {
+    if (lastErrorReason !== "timeout") {
+      lastErrorReason = "directions_unavailable";
+      console.warn(
+        "[routing] Mapbox Directions no devolvió una ruta para el tramo seleccionado."
       );
-    } catch {
-      if (!settled) {
-        settled = true;
-        lastErrorReason = "directions_unavailable";
-        window.clearTimeout(timer);
-        resolve(null);
-      }
     }
-  });
+    return null;
+  }
+
+  lastErrorReason = null;
+  return toRoadRoute(route);
 }
 
 /** Distancia lateral mínima de `point` a la polyline (metros). */
