@@ -7,17 +7,9 @@
 // importa dinámicamente desde el componente).
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Token público por defecto (pk.*). Se puede sobreescribir con
- * NEXT_PUBLIC_MAPBOX_TOKEN al compilar. Deliberadamente incluido como
- * fallback para que la app siga funcionando; el token es público por diseño.
- */
-export const MAPBOX_DEFAULT_TOKEN =
-  "pk.eyJ1IjoiZ2FtYWxpZWxjcnV6IiwiYSI6ImNtc2dzeWxzdTBsZmQyeXBuaTMweXJ0a3QifQ.iIiG3hft-jN6lAUaWIogoA";
-
-/** Token para el navegador (mapa + geocoding + directions). */
+/** Token público: se configuravia NEXT_PUBLIC_MAPBOX_TOKEN al compilar. */
 export const MAPBOX_PUBLIC_TOKEN =
-  process.env.NEXT_PUBLIC_MAPBOX_TOKEN?.trim() || MAPBOX_DEFAULT_TOKEN;
+  process.env.NEXT_PUBLIC_MAPBOX_TOKEN?.trim() || '__DEFAULT_TOKEN_PLEASE_CONFIGURE__';
 
 /** Token para llamadas desde el servidor (geocodificación en API routes). */
 export const MAPBOX_ACCESS_TOKEN =
