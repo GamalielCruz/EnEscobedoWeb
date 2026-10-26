@@ -20,12 +20,37 @@ type BaserowOrder = {
   discount?: number;
   grossTotal?: number;
   platformCommission?: number;
+  platformServiceFee?: number;
   storeNetTotal?: number;
   driverPayout?: number;
   stripeCheckoutSessionId?: string;
   baserowRowId?: number;
   restaurantName?: string;
   orderUrl?: string;
+  fulfillmentTiming?: string;
+  scheduledSlot?: { startAt?: string; endAt?: string; timezone?: string };
+  scheduleStatus?: string;
+  settlementSnapshot?: {
+    version?: number;
+    createdAt?: string;
+    paymentProvider?: string;
+    settlementPolicy?: string;
+    currency?: string;
+    restaurantSubtotal?: number;
+    deliveryAmount?: number;
+    platformCommission?: number;
+    platformServiceFee?: number;
+    paymentProcessingFee?: number;
+    paymentProcessingFeePercentage?: number;
+    paymentProcessingFixedFee?: number;
+    restaurantProcessingFee?: number;
+    courierProcessingFee?: number;
+    platformProcessingFee?: number;
+    restaurantSettlement?: number;
+    courierSettlement?: number;
+    platformNetRevenue?: number;
+    grossTotal?: number;
+  };
 };
 
 const BASEROW_ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
@@ -43,11 +68,16 @@ const BASEROW_ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   discount,
   grossTotal,
   platformCommission,
+  platformServiceFee,
   storeNetTotal,
   driverPayout,
   stripeCheckoutSessionId,
   baserowRowId,
-  "restaurantName": coalesce(pickupStore->name, affiliateStore->name)
+  fulfillmentTiming,
+  scheduledSlot,
+  scheduleStatus,
+  settlementSnapshot,
+  "restaurantName": coalesce(pickupStore->name, affiliateStore->name, sellerSnapshot.name)
 }`;
 
 export class BaserowError extends Error {
@@ -201,6 +231,11 @@ export async function createBaserowOrder(order: BaserowOrder) {
   const restaurantRowId = await findRestaurantRowId(order.restaurantName);
   const rowId = order.baserowRowId ?? await findOrderRowId(order._id, ordersTableId);
   const phone = resolveOrderPhone(order);
+  
+  // Use settlement snapshot data if available, otherwise fall back to calculated fields
+  const snapshot = order.settlementSnapshot;
+  const useSnapshot = snapshot && snapshot.version !== undefined && snapshot.version > 0;
+  
   const fields = {
     "Número de pedido": order.orderNumber,
     "ID de orden": order._id,
@@ -215,11 +250,33 @@ export async function createBaserowOrder(order: BaserowOrder) {
     "Costo de envío": order.shippingFee,
     Descuento: order.discount,
     Total: order.grossTotal,
-    "Comisión de ElMenu": roundForIntegerColumn(order.platformCommission),
-    "Pago al restaurante": roundForIntegerColumn(order.storeNetTotal),
-    "Pago al repartidor": order.driverPayout,
+    "Comisión de ElMenu": roundForIntegerColumn(Number(order.platformCommission || 0) + Number(order.platformServiceFee || 0)),
+    "Pago al restaurante": roundForIntegerColumn(useSnapshot ? snapshot.restaurantSettlement : order.storeNetTotal),
+    "Pago al repartidor": roundForIntegerColumn(useSnapshot ? snapshot.courierSettlement : order.driverPayout),
     "ID de Stripe": order.stripeCheckoutSessionId,
     "URL del pedido": order.orderUrl,
+    "Horario programado": order.scheduledSlot?.startAt,
+    "Fin del intervalo": order.scheduledSlot?.endAt,
+    "Zona horaria": order.scheduledSlot?.timezone,
+    "Estado de programación": order.scheduleStatus,
+    // Settlement snapshot metadata for auditing
+    "Versión del snapshot": useSnapshot ? snapshot.version : undefined,
+    "Política de liquidación": useSnapshot ? snapshot.settlementPolicy : undefined,
+    // Detailed financial breakdown from snapshot (only if snapshot exists)
+    ...(useSnapshot ? {
+      "Proveedor de pago": snapshot.paymentProvider,
+      "Comisión del procesador": snapshot.paymentProcessingFee,
+      "Porcentaje del procesador": snapshot.paymentProcessingFeePercentage,
+      "Tarifa fija del procesador": snapshot.paymentProcessingFixedFee,
+      "Comisión procesador (restaurante)": snapshot.restaurantProcessingFee,
+      "Comisión procesador (repartidor)": snapshot.courierProcessingFee,
+      "Comisión procesador (plataforma)": snapshot.platformProcessingFee,
+      "Subtotal restaurante": snapshot.restaurantSubtotal,
+      "Monto de envío": snapshot.deliveryAmount,
+      "Comisión plataforma": snapshot.platformCommission,
+      "Tarifa de servicio plataforma": snapshot.platformServiceFee,
+      "Ingreso neto plataforma": snapshot.platformNetRevenue,
+    } : {}),
     ...(restaurantRowId ? { Restaurante: [restaurantRowId] } : {}),
   };
   const path = rowId

@@ -25,6 +25,12 @@ export const storeUpdateRequest = defineType({
         defineField({ name: "isOpen", title: "Tienda Abierta", type: "boolean" }),
         defineField({ name: "highDemandMode", title: "Modo Alta Demanda", type: "boolean" }),
         defineField({ name: "hasOwnDelivery", title: "Repartidores propios", type: "boolean" }),
+        defineField({ name: "scheduledOrdersEnabled", title: "Pedidos programados", type: "boolean" }),
+        defineField({ name: "minimumPreparationMinutes", title: "Preparacion minima", type: "number" }),
+        defineField({ name: "scheduledOrderIntervalMinutes", title: "Intervalos", type: "number" }),
+        defineField({ name: "maximumScheduledDays", title: "Dias maximos", type: "number" }),
+        defineField({ name: "lastDeliveryOrderMinutesBeforeClose", title: "Limite delivery", type: "number" }),
+        defineField({ name: "lastPickupOrderMinutesBeforeClose", title: "Limite pickup", type: "number" }),
         
         defineField({
           name: "contact",

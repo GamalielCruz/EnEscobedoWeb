@@ -3,6 +3,7 @@ import { backendClient } from '@/sanity/lib/backendClient'
 import { appendOrderEvent } from '@/lib/order-events'
 import { redispatchOrders, releaseOrdersForDriver } from '@/lib/delivery-dispatch'
 import { sendBotMessage } from '@/lib/whatsapp'
+import { processScheduledOrders } from '@/lib/scheduled-orders'
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -14,6 +15,7 @@ type RepartidorCron = {
   telefono: string
   disponibleHasta?: string
   estadoDisponibilidad?: 'available' | 'offline' | 'busy' | 'offer_pending'
+  aceptaNuevasOfertas?: boolean
   extensionPendiente?: boolean
   extensionPreguntadaAt?: string
   ofertaTipo?: 'single' | 'bundle'
@@ -64,9 +66,11 @@ export async function GET(req: NextRequest) {
     ocupadosOmitidos: 0,
     ofertasPendientesOmitidas: 0,
     errores: 0,
+    programados: null as Awaited<ReturnType<typeof processScheduledOrders>> | null,
   }
 
   try {
+    summary.programados = await processScheduledOrders(now)
     const candidatosOfertasExpiradas: RepartidorCron[] = await backendClient.fetch(
       `*[
         _type == "repartidor" &&
@@ -212,6 +216,7 @@ export async function GET(req: NextRequest) {
         telefono,
         estadoDisponibilidad,
         disponibleHasta,
+        aceptaNuevasOfertas,
         extensionPendiente,
         extensionPreguntadaAt
       }`,
@@ -241,6 +246,21 @@ export async function GET(req: NextRequest) {
               estadoDisponibilidad: rep.estadoDisponibilidad,
               disponibleHasta: rep.disponibleHasta,
             })
+            // REGLA: la expiración de sesión NUNCA cancela una orden activa ni
+            // saca al repartidor de la navegación. Solo registra la intención:
+            // al completar la entrega quedará fuera de servicio.
+            // Idempotente: si ya se registró la intención, NO se re-avisa
+            // (el cron corre repetidamente mientras el servicio continúa).
+            if (rep.aceptaNuevasOfertas !== false) {
+              await backendClient
+                .patch(rep._id)
+                .set({ aceptaNuevasOfertas: false, ultimaActividad: nowIso })
+                .commit()
+              await sendBotMessage(
+                rep.telefono,
+                `Tu sesion de disponibilidad termino.\nSigues en servicio hasta completar tu pedido actual: al entregar quedaras fuera de servicio.`
+              ).catch(() => null)
+            }
             return
           }
 

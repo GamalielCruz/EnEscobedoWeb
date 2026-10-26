@@ -1,4 +1,4 @@
-﻿import { ImagesIcon } from "@sanity/icons";
+import { ImagesIcon } from "@sanity/icons";
 import { defineField, defineType } from "sanity";
 
 const bannerTypeLabels: Record<string, string> = {
@@ -113,6 +113,13 @@ export const promoBannerType = defineType({
       type: "reference",
       to: [{ type: "affiliateStore" }],
       description: "Opcional. Si se asigna, el banner mostrara la tienda relacionada.",
+    }),
+    defineField({
+      name: "premiumOnly",
+      title: "Solo Premium",
+      type: "boolean",
+      initialValue: false,
+      description: "Solo se publica cuando el restaurante asociado tiene elegibilidad Premium.",
     }),
     defineField({
       name: "product",

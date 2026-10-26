@@ -1,4 +1,5 @@
 import { appendOrderEvent } from "@/lib/order-events";
+import { createOrderWithCommercialCap } from "@/lib/commercial-order";
 import { buildOrderDocument, buildStoreMapsUrl, OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/order-pricing";
 import { notifyRestaurantNewOrder } from "@/lib/restaurant-notifications";
 import { getPaymentMethodLabel } from "@/lib/payment";
@@ -10,6 +11,12 @@ import { dispatchDeliveryOffer } from "@/lib/delivery-dispatch";
 import { backendClient } from "@/sanity/lib/backendClient";
 import { after } from "next/server";
 import Stripe from "stripe";
+import { sendScheduledOrderConfirmation } from "@/lib/scheduled-order-whatsapp";
+import { buildMandadoOrderDocument, quoteMandado, createMandadoSettlementSnapshot } from "@/lib/mandado-order";
+import { resolveMandadoNipChannel } from "@/lib/mandado-nip-channel";
+import { getMexicoDateKey } from "@/lib/mexico-time";
+import { calculateEstimatedFees, calculateFeesFromActual, getProcessorType } from "@/lib/payment-processor-fees";
+import { createSettlementSnapshot, type OrderFinancials } from "@/lib/settlements";
 
 type ExistingOrder = {
   _id: string;
@@ -20,10 +27,12 @@ type ExistingOrder = {
   paymentStatus?: string;
   paidAt?: string;
   baserowRowId?: number;
+  orderEvents?: Array<{ type?: string }>;
   [key: string]: unknown;
 };
 
 type StripeSessionMetadata = {
+  serviceKind?: string;
   orderNumber?: string;
   customerName?: string;
   customerEmail?: string;
@@ -41,7 +50,28 @@ type StripeSessionMetadata = {
   shippingLatitude?: string;
   shippingLongitude?: string;
   deliveryNotes?: string;
+  fulfillmentTiming?: string;
+  scheduledStartAt?: string;
+  scheduledEndAt?: string;
+  scheduledTimezone?: string;
   orderItems?: string;
+  mandadoMode?: string;
+  mandadoPinEnabled?: string;
+  mandadoOriginLabel?: string;
+  mandadoOriginLat?: string;
+  mandadoOriginLng?: string;
+  mandadoDestinationLabel?: string;
+  mandadoDestinationLat?: string;
+  mandadoDestinationLng?: string;
+  mandadoDetails0?: string;
+  mandadoDetails1?: string;
+  mandadoRecipientPhone?: string;
+  mandadoRecipientName?: string;
+  mandadoBusinessName?: string;
+  mandadoOriginReference?: string;
+  mandadoDestinationReference?: string;
+  mandadoDestinationPerson?: string;
+  [key: string]: string | undefined;
 };
 
 type OrderDocumentRecord = {
@@ -60,7 +90,7 @@ function getMetadata(session: Stripe.Checkout.Session) {
 }
 
 async function findExistingOrder(sessionId: string, orderNumber?: string) {
-  return backendClient.fetch<ExistingOrder | null>(`*[_type == "order" && (stripeCheckoutSessionId == $sessionId || orderNumber == $orderNumber)][0]{ ..., "restaurantName": affiliateStore->name }`,
+  return backendClient.fetch<ExistingOrder | null>(`*[_type == "order" && (stripeCheckoutSessionId == $sessionId || orderNumber == $orderNumber)][0]{ ..., "restaurantName": coalesce(affiliateStore->name, sellerSnapshot.name) }`,
     { sessionId, orderNumber }
   );
 }
@@ -95,8 +125,13 @@ function getOrderType(metadata: StripeSessionMetadata) {
 }
 
 function parseOrderItems(metadata: StripeSessionMetadata) {
-  if (!metadata.orderItems) throw new Error("Missing order items metadata");
-  const parsed = JSON.parse(metadata.orderItems) as OrderItemInput[];
+  const serialized = metadata.orderItems || Object.keys(metadata)
+    .filter((key) => /^orderItems\d+$/.test(key))
+    .sort((left, right) => Number(left.slice(10)) - Number(right.slice(10)))
+    .map((key) => metadata[key])
+    .join("");
+  if (!serialized) throw new Error("Missing order items metadata");
+  const parsed = JSON.parse(serialized) as OrderItemInput[];
   if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("Invalid order items metadata");
   return parsed;
 }
@@ -121,7 +156,9 @@ function parseShippingAddress(metadata: StripeSessionMetadata): OrderAddressInpu
 }
 
 async function resolveStripeFee(stripe: Stripe, session: Stripe.Checkout.Session) {
-  if (!session.payment_intent) return 0;
+  if (!session.payment_intent) {
+    return { fee: 0, percentage: 0, fixedFee: 0, netAmount: 0 };
+  }
 
   try {
     const pi = await stripe.paymentIntents.retrieve(session.payment_intent as string, {
@@ -129,10 +166,18 @@ async function resolveStripeFee(stripe: Stripe, session: Stripe.Checkout.Session
     });
     const latestCharge = pi.latest_charge as Stripe.Charge | null;
     const balanceTx = latestCharge?.balance_transaction as Stripe.BalanceTransaction | null;
-    return Math.round((balanceTx?.fee ?? 0)) / 100;
+    const actualFee = Math.round((balanceTx?.fee ?? 0)) / 100;
+    const amount = (session.amount_total ?? 0) / 100;
+
+    // Use centralized fee calculation
+    const { calculateFeesFromActual } = await import("./payment-processor-fees");
+    return calculateFeesFromActual(amount, actualFee, "stripe");
   } catch (error) {
-    console.log("[stripe-order] Could not retrieve Stripe fee:", error);
-    return 0;
+    console.log("[stripe-order] Could not retrieve Stripe fee, using fallback:", error);
+    // Fallback to estimated calculation
+    const { calculateEstimatedFees } = await import("./payment-processor-fees");
+    const amount = (session.amount_total ?? 0) / 100;
+    return calculateEstimatedFees(amount, "stripe");
   }
 }
 
@@ -181,6 +226,77 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
   const clerkUserId = String(metadata.clerkUserId || "").trim();
   const storeId = String(metadata.pickupStoreId || "").trim();
 
+  if (metadata.serviceKind === "mandado") {
+    if (!orderNumber || !customerName || !customerEmail || !clerkUserId) throw new Error("Missing required order metadata");
+    const draft = await quoteMandado({
+      mode: metadata.mandadoMode,
+      origin: { label: metadata.mandadoOriginLabel, lat: metadata.mandadoOriginLat, lng: metadata.mandadoOriginLng },
+      destination: { label: metadata.mandadoDestinationLabel, lat: metadata.mandadoDestinationLat, lng: metadata.mandadoDestinationLng },
+      details: `${metadata.mandadoDetails0 || ""}${metadata.mandadoDetails1 || ""}`,
+      pinEnabled: metadata.mandadoPinEnabled === "true",
+    });
+    // PASO 3 + AJUSTE 1/2: revalidar el canal del NIP con la metadata de la sesión
+    // (defensa en profundidad; la sesión ya se creó con canal válido).
+    const senderPhone = String(metadata.phone || session.customer_details?.phone || "");
+    const recipientName = String(metadata.mandadoRecipientName || "");
+    const recipientPhone = String(metadata.mandadoRecipientPhone || "");
+    const recipientWhatsAppDeclared = metadata.mandadoRecipientWhatsAppDeclared === "true";
+    const senderNipFallbackAccepted = metadata.mandadoSenderNipFallbackAccepted === "true";
+    const nipChannel = resolveMandadoNipChannel({
+      pinEnabled: draft.pinEnabled === true,
+      senderPhone,
+      recipientName,
+      recipientPhone,
+      recipientWhatsAppDeclared,
+      senderFallbackAccepted: senderNipFallbackAccepted,
+      explicitNipRecipient: metadata.mandadoNipRecipient === "sender" ? "sender" : undefined,
+    });
+    if (!nipChannel.ok) throw new Error(nipChannel.error);
+    const stripeFees = await resolveStripeFee(stripe, session);
+  
+  // Create financial snapshot for mandado settlements
+  const mandadoSettlementSnapshot = createMandadoSettlementSnapshot(draft, "stripe", stripeFees.fee);
+
+  const orderData = buildMandadoOrderDocument({
+      draft,
+      orderNumber,
+      clerkUserId,
+      customerName,
+      customerEmail,
+      phone: String(metadata.phone || session.customer_details?.phone || ""),
+      paymentMethod: "stripe",
+      paymentStatus: getPaymentStatus(session),
+      stripeCheckoutSessionId: session.id,
+      stripePaymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : undefined,
+      stripeCustomerId: typeof session.customer === "string" ? session.customer : undefined,
+      stripeFee: stripeFees.fee,
+      stripeFeePercentage: stripeFees.percentage,
+      stripeFixedFee: stripeFees.fixedFee,
+      paymentProcessingFee: stripeFees.fee,
+      paymentProcessingFeePercentage: stripeFees.percentage,
+      paymentProcessingFixedFee: stripeFees.fixedFee,
+      paymentNetAmount: stripeFees.netAmount,
+      settlementSnapshot: mandadoSettlementSnapshot,
+      recipientPhone: String(metadata.mandadoRecipientPhone || ""),
+      recipientName: String(metadata.mandadoRecipientName || ""),
+      recipientWhatsAppDeclared,
+      senderNipFallbackAccepted,
+      nipRecipient: nipChannel.ok ? nipChannel.channel ?? undefined : undefined,
+      // Endurecimiento B: canal efectivo + teléfono destino desde la metadata
+      // (defensa en profundidad: se re-deriva si la metadata no los trae).
+      nipDeliveryChannel: (String(metadata.mandadoNipDeliveryChannel || "") ||
+        undefined) as "whatsapp_sender" | "whatsapp_recipient" | "none" | undefined,
+      nipDeliveryPhone: String(metadata.mandadoNipDeliveryPhone || "") || undefined,
+      businessName: String(metadata.mandadoBusinessName || ""),
+      originReference: String(metadata.mandadoOriginReference || ""),
+      destinationReference: String(metadata.mandadoDestinationReference || ""),
+      destinationPerson: String(metadata.mandadoDestinationPerson || ""),
+    }) as OrderDocumentRecord;
+    orderData._id = `stripe-order-${session.id}`;
+    orderData.restaurantName = "Mandado El Menú";
+    return orderData;
+  }
+
   if (!orderNumber || !customerName || !customerEmail || !clerkUserId || !storeId) {
     throw new Error("Missing required order metadata");
   }
@@ -195,13 +311,61 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
     orderType,
     paymentMethod,
     shippingAddress,
+    fulfillment:
+      metadata.fulfillmentTiming === "scheduled" &&
+      metadata.scheduledStartAt &&
+      metadata.scheduledEndAt
+        ? {
+            timing: "scheduled",
+            scheduledSlot: {
+              startAt: metadata.scheduledStartAt,
+              endAt: metadata.scheduledEndAt,
+              timezone: metadata.scheduledTimezone,
+            },
+          }
+        : { timing: "asap" },
   });
 
-  const stripeFee = await resolveStripeFee(stripe, session);
+  const stripeFees = await resolveStripeFee(stripe, session);
   const paymentStatus = getPaymentStatus(session);
   const deliveryNotes = orderType === "delivery"
     ? String(metadata.deliveryNotes || "").trim().slice(0, 500) || undefined
-    : metadata.pickupStoreName ? `Recoger en: ${metadata.pickupStoreName}` : undefined;
+    : undefined;
+
+  // Create financial snapshot for settlements
+  const financials: OrderFinancials = {
+    grossTotal: quote.financials.grossTotal,
+    productsSubtotal: quote.financials.productsSubtotal,
+    shippingFee: quote.financials.shippingFee,
+    platformServiceFee: quote.financials.platformServiceFee,
+    platformCommission: quote.financials.platformCommission,
+    paymentProcessingFee: stripeFees.fee,
+    paymentProcessingFeePercentage: stripeFees.percentage,
+    paymentProcessingFixedFee: stripeFees.fixedFee,
+    paymentNetAmount: stripeFees.netAmount,
+    driverPayout: quote.financials.driverPayout,
+    storeNetTotal: quote.financials.storeNetTotal,
+    platformNetTotal: quote.financials.platformNetTotal,
+  };
+  const settlementSnapshot = createSettlementSnapshot(financials, {
+    orderType,
+    storeHasOwnDelivery: quote.store.hasOwnDelivery ?? false,
+    paymentProvider: "stripe",
+  }, "stripe");
+
+  const fulfillment =
+    metadata.fulfillmentTiming === "scheduled" &&
+    metadata.scheduledStartAt &&
+    metadata.scheduledEndAt
+      ? {
+          timing: "scheduled",
+          scheduledSlot: {
+            startAt: metadata.scheduledStartAt,
+            endAt: metadata.scheduledEndAt,
+            timezone: metadata.scheduledTimezone,
+          },
+        }
+      : { timing: "asap" };
 
   const orderData = buildOrderDocument({
     orderNumber,
@@ -215,13 +379,25 @@ async function buildOrderData(session: Stripe.Checkout.Session, stripe: Stripe):
     quote,
     shippingAddress,
     paymentStatus,
-    dispatchStatus: orderType === "delivery" ? "waiting_for_driver" : "not_required",
+    dispatchStatus:
+      orderType === "delivery" && quote.fulfillment.timing === "scheduled"
+        ? "scheduled"
+        : orderType === "delivery"
+          ? "waiting_for_driver"
+          : "not_required",
     stripeCheckoutSessionId: session.id,
     stripePaymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : null,
     stripeCustomerId: typeof session.customer === "string" ? session.customer : null,
     amountDiscount: session.total_details?.amount_discount ? session.total_details.amount_discount / 100 : 0,
-    stripeFee,
+    stripeFee: stripeFees.fee,
+    stripeFeePercentage: stripeFees.percentage,
+    stripeFixedFee: stripeFees.fixedFee,
+    paymentProcessingFee: stripeFees.fee,
+    paymentProcessingFeePercentage: stripeFees.percentage,
+    paymentProcessingFixedFee: stripeFees.fixedFee,
+    paymentNetAmount: stripeFees.netAmount,
     deliveryNotes,
+    settlementSnapshot,
   }) as OrderDocumentRecord;
 
   orderData._id = `stripe-order-${session.id}`;
@@ -234,8 +410,96 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
   const orderNumber = getMetadata(session).orderNumber;
   const existingOrder = await findExistingOrder(session.id, orderNumber);
   if (existingOrder) {
-    if (!existingOrder.baserowRowId) after(() => syncBaserowOrder(existingOrder as any));
-    return existingOrder;
+    let confirmedOrder = existingOrder;
+    if (session.payment_status === "paid" && existingOrder.paymentStatus !== "paid") {
+      confirmedOrder = (await markOrderPaidBySession(session.id)) as ExistingOrder;
+    }
+    if (session.payment_status === "paid") {
+      const stripeFees = await resolveStripeFee(stripe, session);
+      const discount = (session.total_details?.amount_discount ?? 0) / 100;
+      const grossTotal = (session.amount_total ?? Number(confirmedOrder.grossTotal || 0) * 100) / 100;
+      const platformCommission = Number(confirmedOrder.platformCommission ?? 0);
+      const platformServiceFee = Number(confirmedOrder.platformServiceFee ?? 0);
+      const driverPayout = Number(confirmedOrder.driverPayout ?? 0);
+      confirmedOrder = (await backendClient
+        .patch(existingOrder._id)
+        .set({
+          amountDiscount: discount,
+          discount,
+          totalPrice: grossTotal,
+          grossTotal,
+          stripeFee: stripeFees.fee,
+          stripeFeePercentage: stripeFees.percentage,
+          stripeFixedFee: stripeFees.fixedFee,
+          stripeNetAmount: stripeFees.netAmount,
+          paymentProcessingFee: stripeFees.fee,
+          paymentProcessingFeePercentage: stripeFees.percentage,
+          paymentProcessingFixedFee: stripeFees.fixedFee,
+          paymentNetAmount: stripeFees.netAmount,
+          storeNetTotal:
+            Math.round(
+              (grossTotal - platformServiceFee - platformCommission - stripeFees.fee - driverPayout) * 100
+            ) / 100,
+          platformNetTotal:
+            Math.round((platformCommission + platformServiceFee - stripeFees.fee) * 100) / 100,
+          ...(typeof session.payment_intent === "string"
+            ? { stripePaymentIntentId: session.payment_intent }
+            : {}),
+        })
+        .commit()) as ExistingOrder;
+    }
+    const alreadySent = existingOrder.orderEvents?.some(
+      (event) => event.type === "sent_to_restaurant"
+    );
+    if (session.payment_status === "paid" && !alreadySent) {
+      await appendOrderEvent(existingOrder._id, {
+        type: "sent_to_restaurant",
+        source: "stripe-webhook",
+        actor: "stripe",
+      });
+      if (confirmedOrder.serviceKind !== "mandado") await notifyRestaurantNewOrder(existingOrder._id);
+      const phone = String(confirmedOrder.phone || "");
+      // Los Mandados no reutilizan las plantillas de restaurantes (`confirmacion_pedido`).
+      if (
+        confirmedOrder.serviceKind !== "mandado" &&
+        confirmedOrder.fulfillmentTiming !== "scheduled" &&
+        phone &&
+        confirmedOrder.orderNumber
+      ) {
+        if (confirmedOrder.orderType === "pickup") {
+          await sendPickupOrderReceived(
+            phone,
+            String(confirmedOrder.customerName || "Cliente"),
+            String(confirmedOrder.orderNumber),
+            String(confirmedOrder.restaurantName || "Restaurante"),
+            String(confirmedOrder.grossTotal || confirmedOrder.totalPrice || "0"),
+            getPaymentMethodLabel(String(confirmedOrder.paymentMethod || "")),
+            buildStoreMapsUrl({ name: String(confirmedOrder.restaurantName || "Restaurante") })
+          ).catch(() => null);
+        } else {
+          await sendOrderConfirmation(
+            phone,
+            String(confirmedOrder.customerName || "Cliente"),
+            String(confirmedOrder.orderNumber)
+          ).catch(() => null);
+        }
+      }
+    }
+    if (session.payment_status === "paid" && confirmedOrder.fulfillmentTiming === "scheduled") {
+      await sendScheduledOrderConfirmation({
+        ...confirmedOrder,
+        _id: existingOrder._id,
+        storeName: String(
+          confirmedOrder.restaurantName ||
+            (confirmedOrder.sellerSnapshot as { name?: string } | undefined)?.name ||
+            "Restaurante"
+        ),
+      });
+    }
+    if (session.payment_status === "paid" && !confirmedOrder.baserowRowId) {
+      after(() => syncBaserowOrder(confirmedOrder as any));
+    }
+    return confirmedOrder;
   }
 
   const orderData = await buildOrderData(session, stripe);
@@ -243,7 +507,7 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
   let isNewOrder = false;
 
   try {
-    order = await backendClient.create(orderData);
+    order = await createOrderWithCommercialCap(orderData);
     isNewOrder = true;
   } catch (error: any) {
     if (error.statusCode === 409 || error.message?.includes("already exists")) {
@@ -263,8 +527,20 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
       actor: "stripe",
     });
     await appendOrderEvent(order._id, { type: "sent_to_restaurant", source: "stripe-webhook", actor: "stripe" });
-    if (orderData.orderType === "delivery" && orderData.paymentStatus === "paid") {
+    if (
+      orderData.orderType === "delivery" &&
+      orderData.paymentStatus === "paid" &&
+      orderData.fulfillmentTiming !== "scheduled"
+    ) {
       await appendOrderEvent(order._id, { type: "dispatch_started", source: "stripe-webhook", actor: "stripe" });
+    }
+    if (orderData.fulfillmentTiming === "scheduled") {
+      await appendOrderEvent(order._id, {
+        type: "scheduled_order_created",
+        source: "stripe-webhook",
+        actor: "stripe",
+        payload: { scheduledSlot: orderData.scheduledSlot },
+      });
     }
   }
 
@@ -272,7 +548,8 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
   const safeCustomerName = typeof orderData.customerName === "string" && orderData.customerName ? orderData.customerName : "Cliente";
   const createdOrderNumber = typeof orderData.orderNumber === "string" ? orderData.orderNumber : "";
 
-  if (isNewOrder && customerPhone && createdOrderNumber) {
+  // Los Mandados no reutilizan las plantillas de restaurantes (`confirmacion_pedido`).
+  if (isNewOrder && orderData.serviceKind !== "mandado" && customerPhone && createdOrderNumber) {
     try {
       if (orderData.orderType === "pickup") {
         await sendPickupOrderReceived(customerPhone, safeCustomerName, createdOrderNumber, String(orderData.pickupStoreName || orderData.storeName || "Restaurante"), String(orderData.grossTotal || orderData.totalPrice || "0"), getPaymentMethodLabel(String(orderData.paymentMethod || "")), String(orderData.pickupStoreMapsUrl || buildStoreMapsUrl({ name: String(orderData.pickupStoreName || orderData.storeName || "Restaurante") })));
@@ -285,7 +562,14 @@ export async function createOrderInSanity(session: Stripe.Checkout.Session, stri
   }
 
   if (isNewOrder) {
-    await notifyRestaurantNewOrder(order._id);
+    if (orderData.serviceKind !== "mandado") await notifyRestaurantNewOrder(order._id);
+    if (orderData.fulfillmentTiming === "scheduled" && orderData.paymentStatus === "paid") {
+      await sendScheduledOrderConfirmation({
+        ...orderData,
+        _id: order._id,
+        storeName: String(orderData.restaurantName || "Restaurante"),
+      });
+    }
   }
 
   console.log("[stripe-order] Order stored in Sanity:", order._id);
@@ -307,7 +591,11 @@ export async function ensureOrderFromCheckoutSession(sessionId: string, expected
 
   const order = await createOrderInSanity(session, stripe);
 
-  if (session.payment_status === "paid" && getOrderType(getMetadata(session)) === "delivery") {
+  if (
+    session.payment_status === "paid" &&
+    getOrderType(getMetadata(session)) === "delivery" &&
+    order.fulfillmentTiming !== "scheduled"
+  ) {
     await dispatchDeliveryOffer(order._id).catch((error) => {
       console.error("[checkout/confirm] dispatchDeliveryOffer error:", error);
     });
@@ -335,5 +623,3 @@ export async function markOrderPaidBySession(sessionId: string) {
   after(() => syncBaserowOrderById(existingOrder._id));
   return updated;
 }
-
-

@@ -14,6 +14,12 @@ const ALLOWED_CHANGE_FIELDS = new Set([
   "operatingHours",
   "serviceTypes",
   "hasOwnDelivery",
+  "scheduledOrdersEnabled",
+  "minimumPreparationMinutes",
+  "scheduledOrderIntervalMinutes",
+  "maximumScheduledDays",
+  "lastDeliveryOrderMinutesBeforeClose",
+  "lastPickupOrderMinutesBeforeClose",
 ]);
 
 export async function POST(
@@ -58,6 +64,17 @@ export async function POST(
     const changes = Object.fromEntries(
       Object.entries(reqDoc.changes || {}).filter(([key]) => ALLOWED_CHANGE_FIELDS.has(key))
     );
+    if (typeof changes.maximumScheduledDays === "number") {
+      const globalMaximum = await writeClient.fetch<number | null>(
+        `*[_type == "deliveryScheduleConfig" && _id == "deliveryScheduleConfig"][0].maximumScheduledDays`
+      );
+      if (changes.maximumScheduledDays > (globalMaximum ?? 7)) {
+        return NextResponse.json(
+          { error: `El maximo global es ${globalMaximum ?? 7} dias.` },
+          { status: 400 }
+        );
+      }
+    }
     
     // Filter out undefined/nulls if necessary, but sanity patch handles objects fine.
     // We want to update only fields present in changes.

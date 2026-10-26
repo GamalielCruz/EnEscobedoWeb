@@ -1,0 +1,232 @@
+import "server-only";
+
+import { calculateDeliveryQuote, DEFAULT_DELIVERY_CONFIG, normalizeDeliveryConfig } from "@/lib/delivery-zones";
+import { createDeliveryPin } from "@/lib/delivery-pin";
+import { legalVersions } from "@/lib/legal-config";
+import { calculateMandadoQuote, MANDADO_SERVICE_FEE, type MandadoAddressPoint, type MandadoDraft, type MandadoMode } from "@/lib/mandado";
+import { buildStateFields } from "@/lib/order-state";
+import { type OrderAddressInput } from "@/lib/order-pricing";
+import { createSettlementSnapshot, type OrderFinancials } from "@/lib/settlements";
+import { backendClient } from "@/sanity/lib/backendClient";
+
+export function createMandadoSettlementSnapshot(draft: MandadoDraft, paymentMethod: "stripe" | "cash_on_delivery", stripeFee?: number) {
+  const polygonPrice = draft.polygonPrice;
+  const platformServiceFee = MANDADO_SERVICE_FEE;
+  const driverGrossPayout = polygonPrice;
+  const paidOnline = paymentMethod === "stripe";
+  const stripeFeeAmount = paidOnline ? (stripeFee || 0) : 0;
+  
+  const financials: OrderFinancials = {
+    grossTotal: draft.price,
+    productsSubtotal: 0,
+    shippingFee: polygonPrice,
+    platformServiceFee,
+    platformCommission: 0,
+    paymentProcessingFee: stripeFeeAmount,
+    paymentProcessingFeePercentage: paidOnline ? (stripeFeeAmount / draft.price) : 0,
+    paymentProcessingFixedFee: 0,
+    paymentNetAmount: paidOnline ? Math.max(0, draft.price - stripeFeeAmount) : draft.price,
+    driverPayout: driverGrossPayout,
+    storeNetTotal: 0,
+    platformNetTotal: platformServiceFee - (paidOnline ? stripeFeeAmount * 0.5 : 0),
+  };
+  
+  return createSettlementSnapshot(financials, {
+    orderType: "delivery",
+    storeHasOwnDelivery: false,
+    paymentProvider: paidOnline ? "stripe" : "cash",
+    serviceKind: "mandado",
+  }, paidOnline ? "stripe" : "cash");
+}
+
+function point(value: unknown, field: string): MandadoAddressPoint {
+  const input = value as Partial<MandadoAddressPoint> | null;
+  const label = String(input?.label || "").trim().slice(0, 300);
+  const lat = Number(input?.lat);
+  const lng = Number(input?.lng);
+  if (!label || !Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error(`${field} no es válido.`);
+  return { label, lat, lng };
+}
+
+export function normalizeMandadoDraft(value: unknown): Omit<MandadoDraft, "price" | "polygonPrice"> {
+  const input = value as Partial<MandadoDraft> | null;
+  const mode = input?.mode as MandadoMode;
+  const details = String(input?.details || "").trim().slice(0, 800);
+  if (mode !== "pickup" && mode !== "purchase") throw new Error("Selecciona el tipo de mandado.");
+  if (!details) throw new Error("Describe qué debemos recoger o comprar.");
+  return { mode, origin: point(input?.origin, "El punto de inicio"), destination: point(input?.destination, "El punto de entrega"), details, pinEnabled: input?.pinEnabled === true };
+}
+
+export async function quoteMandado(value: unknown): Promise<MandadoDraft> {
+  const draft = normalizeMandadoDraft(value);
+  const document = await backendClient.fetch(`*[_type == "deliveryPricingConfig" && _id == "deliveryPricingConfig.main"][0]`);
+  const config = normalizeDeliveryConfig(document ?? DEFAULT_DELIVERY_CONFIG);
+  const originQuote = calculateDeliveryQuote(config, draft.origin);
+  const destinationQuote = calculateDeliveryQuote(config, draft.destination);
+  const quote = calculateMandadoQuote(originQuote, destinationQuote);
+  if (!quote.allowed || quote.finalPrice == null || quote.polygonPrice == null) {
+    const label = quote.outsidePoint === "origin" ? "El punto de inicio" : "El punto de entrega";
+    throw new Error(`${label} está fuera de nuestra zona de servicio. Elige una ubicación dentro del área marcada.`);
+  }
+  return { ...draft, price: quote.finalPrice, polygonPrice: quote.polygonPrice };
+}
+
+export function buildMandadoOrderDocument(input: {
+  draft: MandadoDraft;
+  orderNumber: string;
+  clerkUserId: string;
+  customerName: string;
+  customerEmail: string;
+  phone: string;
+  paymentMethod: "stripe" | "cash_on_delivery";
+  paymentStatus: "paid" | "pending" | "unpaid";
+  stripeCheckoutSessionId?: string;
+  stripePaymentIntentId?: string;
+  stripeCustomerId?: string;
+  stripeFee?: number;
+  stripeFeePercentage?: number;
+  stripeFixedFee?: number;
+  paymentProcessingFee?: number;
+  paymentProcessingFeePercentage?: number;
+  paymentProcessingFixedFee?: number;
+  paymentNetAmount?: number;
+  settlementSnapshot?: any;
+  recipientPhone?: string;
+  recipientName?: string;
+  recipientWhatsAppDeclared?: boolean;
+  senderNipFallbackAccepted?: boolean;
+  nipRecipient?: "sender" | "recipient" | null;
+  nipDeliveryChannel?: "whatsapp_sender" | "whatsapp_recipient" | "none" | null;
+  nipDeliveryPhone?: string;
+  businessName?: string;
+  originReference?: string;
+  destinationReference?: string;
+  destinationPerson?: string;
+}) {
+  const now = new Date().toISOString();
+  const paidOnline = input.paymentMethod === "stripe";
+  const stripeFee = Math.max(0, input.stripeFee || 0);
+  const polygonPrice = input.draft.polygonPrice;
+  const platformServiceFee = MANDADO_SERVICE_FEE;
+  const driverGrossPayout = polygonPrice;
+  
+  // Calculate Stripe fee distribution (50/50)
+  const driverStripeShare = paidOnline ? stripeFee * 0.5 : 0;
+  const platformStripeShare = paidOnline ? stripeFee * 0.5 : 0;
+  
+  const driverNetPayout = driverGrossPayout - driverStripeShare;
+  const platformNetTotal = platformServiceFee - platformStripeShare;
+  
+  const states = buildStateFields({
+    orderType: "delivery",
+    orderStatus: "pending",
+    paymentStatus: input.paymentStatus,
+    dispatchStatus: "waiting_for_driver",
+    paymentMethod: input.paymentMethod,
+  });
+
+  return {
+    _type: "order",
+    orderNumber: input.orderNumber,
+    clerkUserId: input.clerkUserId,
+    customerName: input.customerName,
+    email: input.customerEmail,
+    phone: input.phone.replace(/\D/g, "").slice(-12),
+    serviceKind: "mandado",
+    mandadoMode: input.draft.mode,
+    // Campo real de "Entrega segura": SOLO esta bandera decide si la entrega
+    // requiere NIP. La existencia de un NIP almacenado NO implica requisito.
+    mandadoEntregaSegura: input.draft.pinEnabled === true,
+    mandadoOrigin: input.draft.origin,
+    mandadoDestination: input.draft.destination,
+    mandadoDetails: input.draft.details,
+    mandadoRecipientPhone: input.recipientPhone?.replace(/\D/g, "").slice(-12) || undefined,
+    mandadoRecipientName: input.recipientName?.trim().slice(0, 60) || undefined,
+    // PASO 3 + AJUSTE 1/2 + endurecimiento B: declaración de WhatsApp del
+    // destinatario (no verificada), confirmación explícita del remitente como
+    // canal fallback, RESPONSABLE del NIP (`mandadoNipRecipient`: quién debe
+    // asegurar que el destinatario tenga el código) y CANAL EFECTIVO + teléfono
+    // destino (`nipDeliveryChannel`/`nipDeliveryPhone`: a qué número se intenta
+    // entregar el código). Responsable y canal coinciden hoy; el modelo los
+    // separa para escenarios futuros (lib/mandado-nip-channel.ts).
+    mandadoRecipientWhatsAppDeclared: input.recipientWhatsAppDeclared,
+    senderNipFallbackAccepted: input.nipRecipient === "sender" ? true : undefined,
+    mandadoNipRecipient: input.nipRecipient ?? undefined,
+    nipDeliveryChannel: input.draft.pinEnabled === true ? (input.nipDeliveryChannel ?? undefined) : undefined,
+    nipDeliveryPhone: input.draft.pinEnabled === true ? (input.nipDeliveryPhone ?? undefined) : undefined,
+    mandadoBusinessName: input.businessName?.trim().slice(0, 80) || undefined,
+    mandadoOriginReference: input.originReference?.trim().slice(0, 120) || undefined,
+    mandadoDestinationReference: input.destinationReference?.trim().slice(0, 120) || undefined,
+    authorizedRecipientName: input.destinationPerson?.trim().slice(0, 60) || undefined,
+    orderType: "delivery",
+    fulfillmentType: "delivery",
+    fulfillmentTiming: "asap",
+    fulfillmentProvider: "elmenu_delivery",
+    fulfillmentProviderSnapshot: { provider: "elmenu_delivery", restaurantName: "Mandado El Menú" },
+    sellerType: "platform",
+    sellerId: "elmenu-mandados",
+    sellerSnapshot: { id: "elmenu-mandados", name: "Mandado El Menú", address: input.draft.origin.label },
+    legalTermsVersion: legalVersions.customerTerms,
+    privacyVersion: legalVersions.privacy,
+    cancellationPolicyVersion: legalVersions.cancellations,
+    paymentMethod: input.paymentMethod,
+    paymentProvider: paidOnline ? "stripe" : "cash",
+    paidOnline,
+    requiresStripeReconciliation: paidOnline,
+    currency: "mxn",
+    products: [],
+    totalPrice: input.draft.price,
+    subtotal: 0,
+    shippingCost: polygonPrice,
+    productsSubtotal: 0,
+    shippingFee: polygonPrice,
+    platformServiceFee,
+    discount: 0,
+    tax: 0,
+    platformCommission: 0,
+    stripeFee,
+    stripeFeePercentage: input.stripeFeePercentage ?? 0,
+    stripeFixedFee: input.stripeFixedFee ?? 0,
+    stripeNetAmount: paidOnline ? Math.max(0, input.draft.price - stripeFee) : 0,
+    paymentProcessingFee: stripeFee,
+    paymentProcessingFeePercentage: input.stripeFeePercentage ?? 0,
+    paymentProcessingFixedFee: input.stripeFixedFee ?? 0,
+    paymentNetAmount: paidOnline ? Math.max(0, input.draft.price - stripeFee) : 0,
+    driverPayout: driverGrossPayout,
+    grossTotal: input.draft.price,
+    storeNetTotal: 0,
+    platformNetTotal,
+    cashCollectedBy: paidOnline ? "none" : "community_driver",
+    driverType: "community",
+    settlementSnapshot: input.settlementSnapshot,
+    shippingAddress: {
+      line1: input.draft.destination.label,
+      country: "MX",
+      latitude: input.draft.destination.lat,
+      longitude: input.draft.destination.lng,
+    },
+    deliveryNotes: input.draft.details,
+    codInstructions: input.paymentMethod === "cash_on_delivery" ? input.draft.details : undefined,
+    stripeCheckoutSessionId: input.stripeCheckoutSessionId,
+    stripePaymentIntentId: input.stripePaymentIntentId,
+    stripeCustomerId: input.stripeCustomerId,
+    scheduleStatus: "not_required",
+    preparationStatus: "not_started",
+    refundStatus: "not_requested",
+    deliveryOfertaEnviada: false,
+    orderDate: now,
+    paidAt: input.paymentStatus === "paid" ? now : undefined,
+    ...states,
+    settlementStatus: paidOnline && input.paymentStatus === "paid" ? "ready" : "pending",
+    // PASO 1: estado de entrega del NIP. `pending` al crear (aún no se ha
+    // comunicado el código); el envío y la recepción real de Meta lo promueven
+    // a sent/delivered/failed (lib/nip-delivery.ts). Sin Entrega segura → not_required.
+    nipDeliveryStatus: input.draft.pinEnabled === true ? "pending" : "not_required",
+    // NIP condicional: solo se genera cuando Entrega segura está activa. Si está
+    // desactivada, no se genera ni se almacena NIP y la verificación queda en
+    // not_required para que ningún flujo lo solicite.
+    ...(input.draft.pinEnabled === true
+      ? createDeliveryPin(input.orderNumber, new Date(now))
+      : { deliveryVerificationMethod: "not_required", deliveryVerificationStatus: "not_required" } as const),
+  };
+}

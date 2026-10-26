@@ -11,6 +11,8 @@ export interface BasketItem {
   product: Product;
   quantity: number;
   customizations?: { [key: string]: string | string[] };
+  notes?: string;
+  allergies?: string[];
   customPrice?: number;
 }
 
@@ -85,6 +87,8 @@ const useBasketStore = create<BasketState>()(
             (item) =>
               item.product._id === normalizedItem.product._id &&
               areCustomizationsEqual(item.customizations, normalizedItem.customizations)
+              && item.notes === normalizedItem.notes
+              && areCustomizationsEqual(item.allergies, normalizedItem.allergies)
           );
 
           if (existingItem) {
@@ -92,6 +96,8 @@ const useBasketStore = create<BasketState>()(
               items: state.items.map((item) =>
                 item.product._id === normalizedItem.product._id &&
                 areCustomizationsEqual(item.customizations, normalizedItem.customizations)
+                && item.notes === normalizedItem.notes
+                && areCustomizationsEqual(item.allergies, normalizedItem.allergies)
                   ? { ...item, quantity: item.quantity + (normalizedItem.quantity || 1) }
                   : item
               ),
@@ -104,6 +110,8 @@ const useBasketStore = create<BasketState>()(
                   product: normalizedItem.product,
                   quantity: normalizedItem.quantity || 1,
                   customizations: normalizedItem.customizations,
+                  notes: normalizedItem.notes,
+                  allergies: normalizedItem.allergies,
                   customPrice: normalizedItem.customPrice,
                 },
               ],

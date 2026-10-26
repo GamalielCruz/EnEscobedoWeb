@@ -6,12 +6,14 @@ import { useEffect, useState } from "react";
 import { ChevronDown } from "lucide-react";
 
 import { getStoreOperationalState, getStoreServiceTiming } from "@/lib/storeOperationalState";
+import { getStorePath } from "@/lib/store-url";
 import { urlFor } from "@/sanity/lib/image";
 
 interface Store {
   _id: string;
   name?: string;
   storeId?: string;
+  slug?: { current?: string };
   image?: any;
   coverImage?: any;
   address?: {
@@ -37,6 +39,8 @@ interface Store {
   manualOperationalStatus?: "open" | "closed" | "auto";
   highDemandMode?: boolean;
   promotionalMessages?: string[];
+  promotionalMessagesEnabled?: boolean;
+  premiumBadgeEnabled?: boolean;
   serviceTypes?: {
     onDemand?: boolean;
     onDemandExtraMinutes?: number;
@@ -82,7 +86,7 @@ export default function StoreGrid({ stores }: StoreGridProps) {
   }
 
   return (
-    <div className="mt-4 grid w-full grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
+    <div className="grid w-full grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4">
       {stores.map((store) => {
         const storeState = getStoreOperationalState(store);
         const isOpen = mounted ? storeState.effectiveIsOpen : false;
@@ -94,9 +98,9 @@ export default function StoreGrid({ stores }: StoreGridProps) {
         return (
           <article
             key={store._id}
-            className="group flex flex-col overflow-hidden rounded-lg bg-white shadow-md transition-shadow duration-200 hover:shadow-lg"
+            className="group flex flex-col overflow-hidden bg-white shadow-md transition-shadow duration-200 hover:shadow-lg"
           >
-            <Link href={`/store/${store._id}`} className="relative block h-48 w-full overflow-hidden bg-black">
+            <Link href={getStorePath(store)} className="relative block h-48 w-full overflow-hidden bg-black">
               {store.coverImage ? (
                 <Image
                   src={urlFor(store.coverImage).width(600).height(400).url()}
@@ -126,8 +130,13 @@ export default function StoreGrid({ stores }: StoreGridProps) {
             </Link>
 
             <div className="space-y-2 p-4">
-              <Link href={`/store/${store._id}`} className="block space-y-2">
-                <h3 className="line-clamp-1 text-lg font-bold text-black">{store.name}</h3>
+              <Link href={getStorePath(store)} className="block space-y-2">
+                <div className="flex items-center gap-2">
+                  <h3 className="min-w-0 line-clamp-1 text-lg font-bold text-black">{store.name}</h3>
+                  {store.premiumBadgeEnabled ? (
+                    <Image src="/elmenuplus.png" alt="ElMenu Plus" title="Restaurante participante del Plan Premium de ElMenu, con pagos en línea y beneficios para sus clientes." width={28} height={28} className="shrink-0" />
+                  ) : null}
+                </div>
 
                 {store.address && (
                   <p className="line-clamp-1 text-xs text-black">
@@ -159,7 +168,7 @@ export default function StoreGrid({ stores }: StoreGridProps) {
                   </>
                 )}
               </div>
-              {isOpen && (
+              {isOpen && store.promotionalMessagesEnabled && (
                 <div className="min-h-8 overflow-hidden">
                   <p key={messageIndex} className="restaurant-message line-clamp-2 text-xs italic">
                     {messages[messageIndex % messages.length]}

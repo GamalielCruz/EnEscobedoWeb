@@ -21,6 +21,7 @@ export type PaymentStatusValue =
 
 export type DispatchStatusValue =
   | "not_required"
+  | "scheduled"
   | "waiting_for_driver"
   | "offered"
   | "accepted"
@@ -39,8 +40,10 @@ export function isOrderDispatchable(input: {
   orderStatus?: string;
   paymentStatus?: string;
   repartidorAsignado?: unknown;
+  dispatchStatus?: string;
 }) {
   if (input.repartidorAsignado) return false;
+  if (input.dispatchStatus === "scheduled") return false;
 
   const terminalLegacyStatuses = new Set(["shipped", "delivered", "cancelled", "refunded"]);
   const terminalOrderStatuses = new Set(["shipped", "delivered", "cancelled", "completed", "picked_up"]);

@@ -1,4 +1,4 @@
-const DEFAULT_ADMIN_USERS = ["user_3GF3SCTcxn9xxl8tIOPugSjGU5O"];
+const DEFAULT_ADMIN_USERS = ["user_3GF3SCTcxn9xxl8tIOPugSjGU5O", "user_392Q7p9ahx7GuGwIit2aWNeWaak"];
 
 function getAdminUsers() {
   const configured = process.env.ADMIN_USER_IDS

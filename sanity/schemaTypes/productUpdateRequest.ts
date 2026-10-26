@@ -10,6 +10,8 @@ export const productUpdateRequest = defineType({
       defineField({ name: "name", title: "Name", type: "string" }),
       defineField({ name: "price", title: "Price", type: "number" }),
       defineField({ name: "stock", title: "Stock", type: "number" }),
+      defineField({ name: "allowSpecialInstructions", title: "Allow Special Instructions", type: "boolean" }),
+      defineField({ name: "acceptsAllergyRequests", title: "Accept Allergy Requests", type: "boolean" }),
       defineField({ name: "description", title: "Description", type: "blockContent" }),
       defineField({ name: "image", title: "Image", type: "image" }),
       defineField({ name: "categories", title: "Categories", type: "array", of: [{ type: "reference", to: [{ type: "category" }] }] }),

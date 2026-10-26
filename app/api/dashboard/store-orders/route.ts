@@ -5,6 +5,8 @@ import { syncBaserowOrderById } from "@/lib/baserow";
 import { appendOrderEvent, OrderEventType } from "@/lib/order-events";
 import { sendOrderCancelled, sendOrderDelivered, sendPickupReadyForCustomer } from "@/lib/whatsapp";
 import { buildStoreMapsUrl } from "@/lib/order-pricing";
+import { sendScheduledOrderPreparationStarted } from "@/lib/scheduled-order-whatsapp";
+import { shouldStartScheduledPreparation } from "@/lib/fulfillment-schedule";
 import {
   buildStateFields,
   DispatchStatusValue,
@@ -12,6 +14,7 @@ import {
   PaymentStatusValue,
   SettlementStatusValue,
 } from "@/lib/order-state";
+import { isRestaurantVisibleOrder } from "@/lib/payment";
 
 const OWNED_STORES_QUERY = `*[_type == "affiliateStore" && ownerClerkUserId == $userId] { _id }`;
 const ORDERS_BASE_FILTER = `!(_id in path('drafts.**')) && _type == "order" && (pickupStore._ref == $storeId || affiliateStore._ref == $storeId)`;
@@ -25,6 +28,10 @@ const ORDER_PROJECTION = `{
   dispatchStatus,
   settlementStatus,
   fulfillmentProvider,
+  fulfillmentTiming,
+  scheduledSlot,
+  scheduledPreparationAt,
+  preparationStatus,
   deliveryVerificationStatus,
   pickupCode,
   "customerInfo": { "name": customerName, "email": email, "clerkUserId": clerkUserId, "phone": phone },
@@ -51,10 +58,12 @@ const ORDER_PROJECTION = `{
       title,
       "options": options[]{ _key, label, priceDelta }
     },
-    notes
+    notes,
+    allergies
   },
   "totalAmount": totalPrice,
   paymentMethod,
+  paymentProvider,
   status,
   estimatedPickupDate,
   readyAt,
@@ -88,10 +97,15 @@ const ORDER_BY_NUMBER = `*[_type == "order" && orderNumber == $orderNumber][0]{
   paymentProvider,
   requiresStripeReconciliation,
   stripeFee,
+  grossTotal,
+  totalPrice,
   orderStatus,
   paymentStatus,
   dispatchStatus,
   settlementStatus,
+  fulfillmentTiming,
+  scheduledSlot,
+  preparationStatus,
   readyAt,
   pickedUpAt,
   deliveredAt,
@@ -164,8 +178,8 @@ export async function GET(request: NextRequest) {
       queryParams.beforeAt = beforeAt;
     }
 
-    const orders = await readSanity.fetch(query, queryParams);
-    return NextResponse.json({ success: true, orders: orders ?? [], requestId }, {
+    const orders = await readSanity.fetch<Array<{ paymentProvider?: string; paymentStatus?: string }>>(query, queryParams);
+    return NextResponse.json({ success: true, orders: (orders ?? []).filter(isRestaurantVisibleOrder), requestId }, {
       headers: {
         "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
         Pragma: "no-cache",
@@ -230,6 +244,15 @@ export async function PATCH(request: NextRequest) {
       ...buildStateFields({ orderType, orderStatus, paymentStatus, dispatchStatus, settlementStatus, paymentMethod: order.paymentMethod }),
       updatedAt: now,
     };
+    const scheduledPreparationStarted = shouldStartScheduledPreparation({
+      fulfillmentTiming: order.fulfillmentTiming,
+      nextOrderStatus: orderStatus,
+      preparationStatus: order.preparationStatus,
+    });
+    if (scheduledPreparationStarted) {
+      updateData.preparationStatus = "in_preparation";
+      updateData.preparationStartedAt = now;
+    }
 
     if (orderStatus === "ready_for_pickup" && !order.readyAt) {
       updateData.readyAt = now;
@@ -243,6 +266,7 @@ export async function PATCH(request: NextRequest) {
       updateData.pickupStatus = orderType === "pickup" ? "expired" : order.pickupStatus;
       updateData.cancelledAt = now;
       updateData.settlementStatus = settlementStatus;
+      if (order.fulfillmentTiming === "scheduled") updateData.scheduleStatus = "cancelled";
       if (isStripeOrder) {
         updateData.requiresStripeReconciliation = true;
       } else {
@@ -250,22 +274,38 @@ export async function PATCH(request: NextRequest) {
         updateData.stripeFee = 0;
       }
     }
+    if (
+      order.fulfillmentTiming === "scheduled" &&
+      ["delivered", "completed", "picked_up"].includes(orderStatus)
+    ) {
+      updateData.scheduleStatus = "completed";
+    }
 
     if (paymentStatus === "refunded") {
       updateData.refundedAt = now;
       updateData.settlementStatus = "refunded";
     }
 
-    const updated = await writeClient.patch(order._id).set(updateData).commit();
+    let patchOp = writeClient.patch(order._id).set(updateData);
+    if (isCancelled && order.fulfillmentTiming === "scheduled") {
+      patchOp = patchOp.unset(["preassignedDriver", "preassignedAt"]); 
+    }
+    const updated = await patchOp.commit();
 
     const events: Array<{ type: OrderEventType; reason?: string; payload?: Record<string, unknown> }> = [];
     if (shouldEmitRestaurantAccepted(order.orderStatus, orderStatus)) {
       events.push({ type: "restaurant_accepted" });
     }
+    if (scheduledPreparationStarted) {
+      events.push({ type: "scheduled_order_preparation_started" });
+    }
     if (isCancelled && order.orderStatus !== "cancelled") {
       events.push({ type: order.orderStatus === "pending" ? "restaurant_rejected" : "cancelled", reason: order.orderStatus === "pending" ? "store_rejected_order" : "store_cancelled_order" });
       if (order.orderStatus === "pending") {
         events.push({ type: "cancelled", reason: "store_rejected_order" });
+      }
+      if (order.fulfillmentTiming === "scheduled") {
+        events.push({ type: "scheduled_order_cancelled", reason: "store_cancelled_order" });
       }
     }
     if (orderType === "pickup" && orderStatus === "ready_for_pickup" && order.orderStatus !== "ready_for_pickup") {
@@ -291,7 +331,6 @@ export async function PATCH(request: NextRequest) {
     if (orderType === "pickup" && orderStatus === "ready_for_pickup" && order.phone) {
       void sendPickupReadyForCustomer(
         order.phone,
-        order.customerName || "Cliente",
         order.orderNumber,
         order.storeName || "Restaurante",
         buildStoreMapsUrl({
@@ -321,6 +360,14 @@ export async function PATCH(request: NextRequest) {
         actor: userId,
         reason: event.reason,
         payload: event.payload,
+      });
+    }
+    if (scheduledPreparationStarted) {
+      void sendScheduledOrderPreparationStarted({
+        ...order,
+        _id: order._id,
+      }).catch((whatsappError) => {
+        console.error("[dashboard/store-orders PATCH] WhatsApp scheduled preparation error:", whatsappError);
       });
     }
 

@@ -18,7 +18,7 @@ export async function GET(
     // Verify the user owns an order with this payment intent
     const order = await backendClient.fetch(
       `*[_type == "order" && stripePaymentIntentId == $paymentIntentId && clerkUserId == $userId][0]`,
-      { paymentIntentId }
+      { paymentIntentId, userId }
     );
 
     if (!order) {

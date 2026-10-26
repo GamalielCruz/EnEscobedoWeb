@@ -15,6 +15,12 @@ const ALLOWED_CHANGE_FIELDS = new Set([
   "operatingHours",
   "serviceTypes",
   "hasOwnDelivery",
+  "scheduledOrdersEnabled",
+  "minimumPreparationMinutes",
+  "scheduledOrderIntervalMinutes",
+  "maximumScheduledDays",
+  "lastDeliveryOrderMinutesBeforeClose",
+  "lastPickupOrderMinutesBeforeClose",
 ]);
 
 export async function GET(request: NextRequest) {
@@ -104,6 +110,17 @@ export async function POST(request: NextRequest) {
     );
     if (Object.keys(safeChanges).length === 0) {
       return NextResponse.json({ error: "No hay cambios permitidos" }, { status: 400 });
+    }
+    if (typeof safeChanges.maximumScheduledDays === "number") {
+      const globalMaximum = await writeClient.fetch<number | null>(
+        `*[_type == "deliveryScheduleConfig" && _id == "deliveryScheduleConfig"][0].maximumScheduledDays`
+      );
+      if (safeChanges.maximumScheduledDays > (globalMaximum ?? 7)) {
+        return NextResponse.json(
+          { error: `El maximo permitido es ${globalMaximum ?? 7} dias.` },
+          { status: 400 }
+        );
+      }
     }
 
     const ownedStores = await writeClient.fetch<{ _id: string }[]>(OWNED_STORES_QUERY, {

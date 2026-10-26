@@ -18,7 +18,7 @@ export async function GET(
     // Get the order from Sanity
     const order = await backendClient.fetch(
       `*[_type == "order" && _id == $orderId && clerkUserId == $userId][0]`,
-      { orderId }
+      { orderId, userId }
     );
 
     if (!order) {
