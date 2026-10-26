@@ -14,18 +14,28 @@ export default clerkMiddleware(async (auth, req: NextRequest) => {
   // Browser stays at / (no redirect). Next.js internally resolves /drive.
   // Covers: drive.localhost (dev), drive.elmenu.site (prod),
   //         drive.staging.elmenu.site (preview).
-  // NOTE: req.nextUrl.hostname returns the Vercel-internal hostname,
-  // not the public hostname. On Vercel the original public hostname
-  // arrives in x-forwarded-host; in local dev it arrives in host.
-  const forwardedHost = req.headers.get("x-forwarded-host");
-  const hostHeader = forwardedHost ?? req.headers.get("host") ?? "";
-  const requestHostname = hostHeader.split(":")[0].toLowerCase();
+  // NOTE: en Vercel el hostname público puede llegar en `host` o en
+  // `x-forwarded-host` según el tipo de dominio (custom domain, preview,
+  // dominio de rama). No asumimos cuál: revisamos todos los candidatos y,
+  // como escape hatch, permitimos hosts explícitos por env var.
+  const configuredDriveHosts = (process.env.NEXT_PUBLIC_DRIVE_HOSTS ?? "")
+    .split(",")
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean);
 
-  if (
-    requestHostname.startsWith("drive.") &&
-    pathname === "/" &&
-    !pathname.startsWith("/api/")
-  ) {
+  const candidateHosts = [
+    req.headers.get("host"),
+    req.headers.get("x-forwarded-host"),
+    req.nextUrl.hostname,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => value.split(":")[0].toLowerCase());
+
+  const isDriveHost =
+    candidateHosts.some((host) => host.startsWith("drive.")) ||
+    candidateHosts.some((host) => configuredDriveHosts.includes(host));
+
+  if (isDriveHost && pathname === "/") {
     const url = req.nextUrl.clone();
     url.pathname = "/drive";
     return NextResponse.rewrite(url);
