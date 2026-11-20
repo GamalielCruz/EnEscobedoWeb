@@ -3128,6 +3128,110 @@ export default function DrivePage() {
     [refetch, stopAlertImmediate, resetAction]
   );
 
+  // ── Marcadores y capas del mapa (Mapbox) ─────────────────────────
+  // La posición del conductor se mueve de forma IMPERATIVA con las refs. Las
+  // props de capas se memorizan para que los ticks del simulador/GPS no vuelvan
+  // a procesar la geometría estática de las rutas en Mapbox.
+  const pinVariants = getDestinationPinVariants();
+  const mapMarkers = useMemo<MapboxMapMarker[]>(() => {
+    const markers: MapboxMapMarker[] = [
+      {
+        id: DRIVER_MARKER_ID,
+        lat: initialDriverPosRef.current.lat,
+        lng: initialDriverPosRef.current.lng,
+        html: DRIVER_MARKER_HTML,
+        anchor: "center",
+        zIndex: 60,
+      },
+    ];
+
+    if (activeOrder) {
+      const storeArriving = navPhase === "to_pickup" && arrivingActive;
+      markers.push({
+        id: "drive-store-pin",
+        lat: activeOrder.storeLat,
+        lng: activeOrder.storeLng,
+        html: destinationPinHtml(
+          storeArriving ? pinVariants.store.arriving : pinVariants.store.standard,
+          activeOrder.storeName
+        ),
+        anchor: "bottom",
+        zIndex: 20,
+      });
+
+      const destArriving =
+        (navPhase === "to_delivery" && arrivingActive) || navPhase === "at_delivery";
+      markers.push({
+        id: "drive-destination-pin",
+        lat: activeOrder.destLat,
+        lng: activeOrder.destLng,
+        html: destinationPinHtml(
+          destArriving ? pinVariants.dest.arriving : pinVariants.dest.standard,
+          "Entrega"
+        ),
+        anchor: "bottom",
+        zIndex: 20,
+      });
+    }
+
+    if (offerPreview?.pickup) {
+      markers.push({
+        id: "offer-pickup-pin",
+        lat: offerPreview.pickup.lat,
+        lng: offerPreview.pickup.lng,
+        html: destinationPinHtml(pinVariants.store.standard, offerPreview.pickupLabel),
+        anchor: "bottom",
+        zIndex: 20,
+      });
+    }
+    if (offerPreview?.destination) {
+      markers.push({
+        id: "offer-destination-pin",
+        lat: offerPreview.destination.lat,
+        lng: offerPreview.destination.lng,
+        html: destinationPinHtml(pinVariants.dest.standard, offerPreview.destinationLabel),
+        anchor: "bottom",
+        zIndex: 20,
+      });
+    }
+    return markers;
+  }, [activeOrder, navPhase, arrivingActive, offerPreview, pinVariants]);
+
+  // Route line: SOLO la geometría vial real de Directions. Nunca se dibuja una
+  // línea recta entre los dos puntos: si no hay ruta, no se dibuja nada.
+  const mapLines = useMemo<MapboxMapLine[]>(() => {
+    const lines: MapboxMapLine[] = [];
+    if (roadRoute?.path) {
+      lines.push({
+        id: "drive-road-route",
+        points: roadRoute.path,
+        color: ROUTE_BLUE,
+        width: 4,
+        opacity: 0.7,
+      });
+    }
+
+    // OFFER_ROUTE_PREVIEW — capa temporal de la oferta: ruta vial A → B +
+    // marcadores temporales. NUNCA es la ruta de navegación.
+    if (offerPreview?.route?.path) {
+      lines.push({
+        id: "offer-route-casing",
+        points: offerPreview.route.path,
+        color: "#FFFFFF",
+        width: 7,
+        opacity: 0.9,
+      });
+      lines.push({
+        id: "offer-route",
+        points: offerPreview.route.path,
+        color: OFFER_PREVIEW_COLOR,
+        width: 4,
+        opacity: 0.95,
+      });
+    }
+    return lines;
+  }, [roadRoute, offerPreview]);
+
   // ── Not signed in ────────────────────────────────────────────────
 
   if (!isSignedIn) {
@@ -3255,104 +3359,6 @@ export default function DrivePage() {
   // muestra, aunque la sesión de disponibilidad haya expirado. La UI nunca
   // asume "sin sesión → desconectado" si existe una orden activa.
   const showingTripSheet = !donePanelVisible && orders.length > 0;
-
-  // ── Marcadores y capas del mapa (Mapbox) ─────────────────────────
-  // Se recalculan por render (diff por id + firma dentro de <MapboxMap>): el
-  // único dato que cambia a 60 fps es la posición/rotación del conductor, que
-  // se mueve de forma IMPERATIVA con las refs, nunca por estado de React.
-  const pinVariants = getDestinationPinVariants();
-  const mapMarkers: MapboxMapMarker[] = [
-    {
-      id: DRIVER_MARKER_ID,
-      lat: initialDriverPosRef.current.lat,
-      lng: initialDriverPosRef.current.lng,
-      html: DRIVER_MARKER_HTML,
-      anchor: "center",
-      zIndex: 60,
-    },
-  ];
-
-  if (activeOrder) {
-    const storeArriving = navPhase === "to_pickup" && arrivingActive;
-    mapMarkers.push({
-      id: "drive-store-pin",
-      lat: activeOrder.storeLat,
-      lng: activeOrder.storeLng,
-      html: destinationPinHtml(
-        storeArriving ? pinVariants.store.arriving : pinVariants.store.standard,
-        activeOrder.storeName
-      ),
-      anchor: "bottom",
-      zIndex: 20,
-    });
-
-    const destArriving =
-      (navPhase === "to_delivery" && arrivingActive) || navPhase === "at_delivery";
-    mapMarkers.push({
-      id: "drive-destination-pin",
-      lat: activeOrder.destLat,
-      lng: activeOrder.destLng,
-      html: destinationPinHtml(
-        destArriving ? pinVariants.dest.arriving : pinVariants.dest.standard,
-        "Entrega"
-      ),
-      anchor: "bottom",
-      zIndex: 20,
-    });
-  }
-
-  if (offerPreview?.pickup) {
-    mapMarkers.push({
-      id: "offer-pickup-pin",
-      lat: offerPreview.pickup.lat,
-      lng: offerPreview.pickup.lng,
-      html: destinationPinHtml(pinVariants.store.standard, offerPreview.pickupLabel),
-      anchor: "bottom",
-      zIndex: 20,
-    });
-  }
-  if (offerPreview?.destination) {
-    mapMarkers.push({
-      id: "offer-destination-pin",
-      lat: offerPreview.destination.lat,
-      lng: offerPreview.destination.lng,
-      html: destinationPinHtml(pinVariants.dest.standard, offerPreview.destinationLabel),
-      anchor: "bottom",
-      zIndex: 20,
-    });
-  }
-
-  // Route line: SOLO la geometría vial real de Directions. Nunca se dibuja una
-  // línea recta entre los dos puntos: si no hay ruta, no se dibuja nada.
-  const mapLines: MapboxMapLine[] = [];
-  if (roadRoute?.path) {
-    mapLines.push({
-      id: "drive-road-route",
-      points: roadRoute.path,
-      color: ROUTE_BLUE,
-      width: 4,
-      opacity: 0.7,
-    });
-  }
-
-  // OFFER_ROUTE_PREVIEW — capa temporal de la oferta: ruta vial A → B +
-  // marcadores temporales. NUNCA es la ruta de navegación.
-  if (offerPreview?.route?.path) {
-    mapLines.push({
-      id: "offer-route-casing",
-      points: offerPreview.route.path,
-      color: "#FFFFFF",
-      width: 7,
-      opacity: 0.9,
-    });
-    mapLines.push({
-      id: "offer-route",
-      points: offerPreview.route.path,
-      color: OFFER_PREVIEW_COLOR,
-      width: 4,
-      opacity: 0.95,
-    });
-  }
 
   // ── Main UI ──────────────────────────────────────────────────────
 

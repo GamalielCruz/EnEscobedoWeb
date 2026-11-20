@@ -16,8 +16,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  bearingBetween,
-  haversineMeters,
   headingAlongPath,
   pathLengthMeters,
   pointAtDistance,
@@ -35,8 +33,8 @@ export const SIM_SPEEDS = [1, 2, 5, 10] as const;
 export const SIM_BASE_METERS_PER_SECOND = 16;
 /** Pausa al llegar a recolección/entrega antes de seguir (ms). */
 const SIM_ARRIVAL_HOLD_MS = 2_600;
-/** No actualizar la posición si se movió menos que esto (evita re-renders). */
-const SIM_MIN_STEP_METERS = 0.6;
+/** La cámara interpola entre posiciones; la UI no necesita actualizarse a 60 fps. */
+const SIM_POSITION_UPDATE_INTERVAL_MS = 100;
 
 const STAGE_LABELS: Record<DriveSimStage, string> = {
   to_pickup: "Camino a recolección",
@@ -165,6 +163,7 @@ export function useDriveSimulator({
 
     let rafId = 0;
     let lastTs = 0;
+    let lastPositionUpdateTs = 0;
 
     const step = (ts: number) => {
       rafId = requestAnimationFrame(step);
@@ -179,30 +178,30 @@ export function useDriveSimulator({
         progressRef.current + dt * SIM_BASE_METERS_PER_SECOND * speedRef.current
       );
 
-      const next = pointAtDistance(routeRef.current.path, progressRef.current);
-      const lastEmitted = lastEmittedPosRef.current;
-      const prevPos = lastEmittedPosRef.current;
       if (
-        !lastEmitted ||
-        haversineMeters(lastEmitted, next) >= SIM_MIN_STEP_METERS ||
+        lastEmittedPosRef.current === null ||
+        ts - lastPositionUpdateTs >= SIM_POSITION_UPDATE_INTERVAL_MS ||
         progressRef.current >= total
       ) {
+        const next = pointAtDistance(routeRef.current.path, progressRef.current);
+        lastPositionUpdateTs = ts;
         lastEmittedPosRef.current = next;
         setSimLocation(next);
         // Heading derivado de la ruta: headingAlongPath da el rumbo del tramo
         // actual en la posición simulada. Solo disponible cuando hay ruta.
         if (routeRef.current?.path && routeRef.current.path.length >= 2) {
           const driven = projectOntoPath(routeRef.current.path, next);
-          const segHeading = headingAlongPath(routeRef.current.path, driven);
-          setSimHeading(segHeading);
-          if (typeof window !== "undefined" && (window as any).__DRIVE_DEBUG_HEADING__) {
+          const heading = headingAlongPath(routeRef.current.path, driven);
+          setSimHeading(heading ?? 0);
+          if (
+            typeof window !== "undefined" &&
+            (window as Window & { __DRIVE_DEBUG_HEADING__?: boolean }).__DRIVE_DEBUG_HEADING__
+          ) {
             console.log("[DriveSimHeading]", {
-              simHeading: segHeading,
+              simHeading: heading,
               drivenMeters: driven,
             });
           }
-          const h = headingAlongPath(routeRef.current.path, driven);
-          setSimHeading(h ?? 0);
         } else {
           setSimHeading(null);
         }
