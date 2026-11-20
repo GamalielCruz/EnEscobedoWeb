@@ -144,6 +144,25 @@ function pointsSignature(points: MapboxPoint[]): string {
   return points.map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`).join(";");
 }
 
+function lineSignature(line: MapboxMapLine): string {
+  return [
+    line.color,
+    line.width ?? 4,
+    line.opacity ?? 0.9,
+    line.dashed ? "dashed" : "solid",
+    pointsSignature(line.points),
+  ].join("|");
+}
+
+function polygonSignature(polygon: MapboxMapPolygon): string {
+  return [
+    polygon.color,
+    polygon.fillOpacity ?? 0.12,
+    polygon.strokeWidth ?? 1.5,
+    pointsSignature(polygon.points),
+  ].join("|");
+}
+
 /**
  * Mapa declarativo sobre Mapbox GL: marcadores, líneas y polígonos se
  * actualizan por diferencia (id + firma), sin recrear el mapa. Es el
@@ -180,6 +199,8 @@ export const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(
       new Map<string, { marker: MapboxMarker; signature: string }>()
     );
     const layerIdsRef = useRef(new Set<string>());
+    const lineSignaturesRef = useRef(new Map<string, string>());
+    const polygonSignaturesRef = useRef(new Map<string, string>());
     const lastFitRef = useRef("");
     const [ready, setReady] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -285,6 +306,8 @@ export const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(
         markerRefs.current.forEach(({ marker }) => marker.remove());
         markerRefs.current.clear();
         layerIdsRef.current.clear();
+        lineSignaturesRef.current.clear();
+        polygonSignaturesRef.current.clear();
         lastFitRef.current = "";
         mapRef.current?.remove();
         mapRef.current = null;
@@ -377,8 +400,10 @@ export const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(
 
         const data = toGeoJsonLine(line.points);
         const source = map.getSource(sourceId) as GeoJSONSource | undefined;
+        const signature = lineSignature(line);
+        const signatureChanged = lineSignaturesRef.current.get(line.id) !== signature;
         if (source) {
-          source.setData(data);
+          if (signatureChanged) source.setData(data);
         } else {
           map.addSource(sourceId, { type: "geojson", data });
           map.addLayer({
@@ -394,6 +419,7 @@ export const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(
             },
           });
         }
+        lineSignaturesRef.current.set(line.id, signature);
         map.setPaintProperty(layerId, "line-color", line.color);
         map.setPaintProperty(layerId, "line-width", line.width ?? 4);
         map.setPaintProperty(layerId, "line-opacity", line.opacity ?? 0.9);
@@ -407,6 +433,7 @@ export const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(
           if (map.getLayer(layerId)) map.removeLayer(layerId);
           if (map.getSource(layerId)) map.removeSource(layerId);
           layerIdsRef.current.delete(layerId);
+          lineSignaturesRef.current.delete(layerId.replace(/^mm-line-/, ""));
         }
       }
       seen.forEach((id) => layerIdsRef.current.add(id));
@@ -428,8 +455,10 @@ export const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(
 
         const data = toGeoJsonPolygon(polygon.points);
         const source = map.getSource(sourceId) as GeoJSONSource | undefined;
+        const signature = polygonSignature(polygon);
+        const signatureChanged = polygonSignaturesRef.current.get(polygon.id) !== signature;
         if (source) {
-          source.setData(data);
+          if (signatureChanged) source.setData(data);
         } else {
           map.addSource(sourceId, { type: "geojson", data });
           map.addLayer({
@@ -452,6 +481,7 @@ export const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(
             },
           });
         }
+        polygonSignaturesRef.current.set(polygon.id, signature);
         map.setPaintProperty(fillId, "fill-color", polygon.color);
         map.setPaintProperty(outlineId, "line-color", polygon.color);
       }
@@ -464,6 +494,7 @@ export const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(
             if (map.getSource(sourceId)) map.removeSource(sourceId);
           }
           layerIdsRef.current.delete(layerId);
+          polygonSignaturesRef.current.delete(sourceId.replace(/^mm-polygon-/, ""));
         }
       }
       seen.forEach((id) => layerIdsRef.current.add(id));

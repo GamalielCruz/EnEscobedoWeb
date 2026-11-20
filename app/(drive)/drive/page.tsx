@@ -759,11 +759,36 @@ type DriveCamera = {
  * Acepta cámara PARCIAL (solo zoom, solo heading, ...).
  */
 function moveMapCamera(map: MapboxMapInstance, camera: DriveCamera): void {
+  const center = camera.center ? [camera.center.lng, camera.center.lat] as [number, number] : null;
+  const bearing = camera.heading != null ? normalizeDeg(camera.heading) : null;
+  const pitch = camera.tilt != null ? camera.tilt : null;
+  const zoom = typeof camera.zoom === "number" ? camera.zoom : null;
+
+  let changed = false;
+  if (center) {
+    const current = map.getCenter();
+    changed ||= haversineMeters(
+      { lat: current.lat, lng: current.lng },
+      { lat: center[1], lng: center[0] }
+    ) > 0.35;
+  }
+  if (bearing != null) {
+    const delta = Math.abs(shortestAngleDelta(bearing, map.getBearing()));
+    changed ||= delta > 0.12;
+  }
+  if (pitch != null) {
+    changed ||= Math.abs(pitch - map.getPitch()) > 0.1;
+  }
+  if (zoom != null) {
+    changed ||= Math.abs(zoom - map.getZoom()) > 0.01;
+  }
+  if (!changed) return;
+
   map.jumpTo({
-    ...(camera.center ? { center: [camera.center.lng, camera.center.lat] as [number, number] } : {}),
-    ...(camera.heading != null ? { bearing: camera.heading } : {}),
-    ...(camera.tilt != null ? { pitch: camera.tilt } : {}),
-    ...(camera.zoom != null ? { zoom: camera.zoom } : {}),
+    ...(center ? { center } : {}),
+    ...(bearing != null ? { bearing } : {}),
+    ...(pitch != null ? { pitch } : {}),
+    ...(zoom != null ? { zoom } : {}),
     ...(camera.offset ? { offset: camera.offset } : {}),
   });
 }
@@ -1742,13 +1767,21 @@ export default function DrivePage() {
     // que solo un rAF escriba visualHeadingRef.current (evita el doble tirón
     // del heading durante las curvas).
     stopHeadingAnimation();
-    const step = () => {
+    let lastCameraUpdateTs = 0;
+    const step = (ts: number) => {
       const map = mapRef.current;
       const target = followTargetRef.current;
       if (!map || !target) {
         followRafRef.current = null;
         return;
       }
+
+      const cameraDue = ts - lastCameraUpdateTs >= 33;
+      if (!cameraDue) {
+        followRafRef.current = requestAnimationFrame(step);
+        return;
+      }
+      lastCameraUpdateTs = ts;
 
       // Leer el heading fused cada frame para que los cambios de sensor se
       // reflejen inmediatamente en la cámara, sin depender de efectos externos.

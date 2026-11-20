@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 const MIN_DISTANCE_METERS = 20;
 const MIN_INTERVAL_MS = 10_000;
+const GPS_LOCATION_MIN_INTERVAL_MS = 250;
+const GPS_LOCATION_MIN_DISTANCE_METERS = 1.5;
 
 function haversineDistance(
   lat1: number,
@@ -30,6 +32,7 @@ export function useDriverLocation(enabled: boolean) {
   const lastReportRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
   const watchIdRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
+  const lastVisualLocationRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
 
   const reportLocation = useCallback(
     async (lat: number, lng: number) => {
@@ -74,6 +77,19 @@ export function useDriverLocation(enabled: boolean) {
       const { latitude, longitude, accuracy, heading: rawHeading } = pos.coords;
       // Skip if accuracy is poor (> 100m)
       if (accuracy > 100) return;
+      const now = Date.now();
+      const previous = lastVisualLocationRef.current;
+      if (previous) {
+        const distance = haversineDistance(previous.lat, previous.lng, latitude, longitude);
+        const elapsed = now - previous.time;
+        if (
+          elapsed < GPS_LOCATION_MIN_INTERVAL_MS &&
+          distance < GPS_LOCATION_MIN_DISTANCE_METERS
+        ) {
+          return;
+        }
+      }
+      lastVisualLocationRef.current = { lat: latitude, lng: longitude, time: now };
       setLocation({ lat: latitude, lng: longitude });
       // heading solo es válido mientras el dispositivo se mueve; el resto del
       // sistema lo usa solo cuando viene como número dentro de [0, 360).
