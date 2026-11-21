@@ -93,11 +93,21 @@ export function useDriverLocation(enabled: boolean) {
       setLocation({ lat: latitude, lng: longitude });
       // heading solo es válido mientras el dispositivo se mueve; el resto del
       // sistema lo usa solo cuando viene como número dentro de [0, 360).
-      setHeading(
+      // Solo setState si cambió de forma relevante: cada setState re-renderiza
+      // la página del repartidor completa (árbol grande) y compite con el
+      // render del mapa en el hilo principal.
+      const nextHeading =
         typeof rawHeading === "number" && Number.isFinite(rawHeading)
           ? ((rawHeading % 360) + 360) % 360
-          : null
-      );
+          : null;
+      setHeading((prev) => {
+        if (prev === nextHeading) return prev;
+        if (prev != null && nextHeading != null) {
+          const diff = Math.abs(((nextHeading - prev + 540) % 360) - 180);
+          if (diff < 1) return prev;
+        }
+        return nextHeading;
+      });
       reportLocation(latitude, longitude);
     };
 
@@ -119,13 +129,17 @@ export function useDriverLocation(enabled: boolean) {
     });
 
     // Start watching
+    // maximumAge: 0 — en Safari iOS un maximumAge alto (antes 10 s) hace que
+    // el navegador entregue posiciones cacheadas de hasta 10 segundos de
+    // antigüedad: el mapa y las instrucciones se ven "desfasados" respecto
+    // al movimiento real del vehículo. 0 = siempre posición fresca.
     watchIdRef.current = navigator.geolocation.watchPosition(
       onSuccess,
       onError,
       {
         enableHighAccuracy: true,
-        timeout: 30_000,
-        maximumAge: 10_000,
+        timeout: 20_000,
+        maximumAge: 0,
       }
     );
 

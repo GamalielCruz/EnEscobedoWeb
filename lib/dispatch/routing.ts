@@ -173,27 +173,51 @@ export function movePointAlong(point: RoutePoint, bearingDeg: number, meters: nu
   return { lat: point.lat + dLat, lng: point.lng + dLng };
 }
 
+// ── Cache de geometría por referencia ──────────────────────────────
+// Las rutas son inmutables una vez creadas, así que las longitudes acumuladas
+// se calculan UNA vez por array y se reutilizan. Antes, pathLengthMeters /
+// headingAlongPath / projectOntoPath re-sumían haversine O(n) en CADA frame
+// del loop rAF de navegación (30 fps): con geometrías de 500–2000 puntos en
+// Safari iOS eso bloqueaba el hilo principal y causaba el jank/desfase.
+const cumulativeCache = new WeakMap<RoutePoint[], Float64Array>();
+const lastProjectionIndex = new WeakMap<RoutePoint[], number>();
+
+function cumulativeLengths(path: RoutePoint[]): Float64Array {
+  let cached = cumulativeCache.get(path);
+  if (cached && cached.length === path.length) return cached;
+  cached = new Float64Array(path.length);
+  for (let i = 1; i < path.length; i++) {
+    cached[i] = cached[i - 1] + haversineMeters(path[i - 1], path[i]);
+  }
+  cumulativeCache.set(path, cached);
+  return cached;
+}
+
+/** Índice del segmento que contiene `meters` (búsqueda binaria). */
+function segmentIndexAt(cum: Float64Array, meters: number): number {
+  if (meters <= 0) return 1;
+  let lo = 1;
+  let hi = cum.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid] < meters) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
 /** Rumbo del tramo de la polyline en la posición `meters` (0 si no aplica). */
 export function headingAlongPath(path: RoutePoint[], meters: number): number | null {
   if (path.length < 2) return null;
-  let remaining = meters;
-  for (let i = 1; i < path.length; i++) {
-    const seg = haversineMeters(path[i - 1], path[i]);
-    if (remaining <= seg || i === path.length - 1) {
-      return bearingBetween(path[i - 1], path[i]);
-    }
-    remaining -= seg;
-  }
-  return null;
+  const i = segmentIndexAt(cumulativeLengths(path), meters);
+  return bearingBetween(path[i - 1], path[i]);
 }
 
 /** Longitud total de una polyline en metros (suma de segmentos). */
 export function pathLengthMeters(path: RoutePoint[]): number {
-  let total = 0;
-  for (let i = 1; i < path.length; i++) {
-    total += haversineMeters(path[i - 1], path[i]);
-  }
-  return total;
+  if (path.length < 2) return 0;
+  const cum = cumulativeLengths(path);
+  return cum[path.length - 1];
 }
 
 /**
@@ -203,21 +227,17 @@ export function pathLengthMeters(path: RoutePoint[]): number {
 export function pointAtDistance(path: RoutePoint[], meters: number): RoutePoint {
   if (path.length === 0) return { lat: 0, lng: 0 };
   if (path.length === 1 || meters <= 0) return path[0];
-  let remaining = meters;
-  for (let i = 1; i < path.length; i++) {
-    const a = path[i - 1];
-    const b = path[i];
-    const seg = haversineMeters(a, b);
-    if (remaining <= seg) {
-      const t = seg === 0 ? 0 : remaining / seg;
-      return {
-        lat: a.lat + (b.lat - a.lat) * t,
-        lng: a.lng + (b.lng - a.lng) * t,
-      };
-    }
-    remaining -= seg;
-  }
-  return path[path.length - 1];
+  const cum = cumulativeLengths(path);
+  if (meters >= cum[path.length - 1]) return path[path.length - 1];
+  const i = segmentIndexAt(cum, meters);
+  const a = path[i - 1];
+  const b = path[i];
+  const seg = cum[i] - cum[i - 1];
+  const t = seg === 0 ? 0 : (meters - cum[i - 1]) / seg;
+  return {
+    lat: a.lat + (b.lat - a.lat) * t,
+    lng: a.lng + (b.lng - a.lng) * t,
+  };
 }
 
 /**
@@ -227,12 +247,15 @@ export function pointAtDistance(path: RoutePoint[], meters: number): RoutePoint 
  */
 export function projectOntoPath(path: RoutePoint[], point: RoutePoint): number {
   if (path.length < 2) return 0;
-  let cumulative = 0;
-  let best = { meters: 0, distance: Infinity };
-  for (let i = 1; i < path.length; i++) {
+  const cum = cumulativeLengths(path);
+
+  const scanSegment = (
+    i: number,
+    best: { meters: number; distance: number }
+  ): { meters: number; distance: number } => {
     const a = path[i - 1];
     const b = path[i];
-    const segLen = haversineMeters(a, b);
+    const segLen = cum[i] - cum[i - 1];
     const midLatRad = ((a.lat + b.lat) / 2) * (Math.PI / 180);
     const cosLat = Math.cos(midLatRad) || 1;
     const bx = (b.lng - a.lng) * cosLat;
@@ -246,11 +269,44 @@ export function projectOntoPath(path: RoutePoint[], point: RoutePoint): number {
       lng: a.lng + t * (b.lng - a.lng),
     };
     const distance = haversineMeters(candidate, point);
-    if (distance < best.distance) {
-      best = { meters: cumulative + t * segLen, distance };
+    return distance < best.distance
+      ? { meters: cum[i - 1] + t * segLen, distance }
+      : best;
+  };
+
+  // Búsqueda local: el vehículo avanza de forma continua, así que el segmento
+  // más cercano casi siempre está junto al de la llamada anterior. Ventana
+  // amplia (±80 segmentos) alrededor del último índice conocido.
+  const WINDOW = 80;
+  const last = lastProjectionIndex.get(path);
+  let best = { meters: 0, distance: Infinity };
+  let bestIndex = 1;
+  if (last != null && last >= 1 && last < path.length) {
+    const from = Math.max(1, last - WINDOW);
+    const to = Math.min(path.length - 1, last + WINDOW);
+    for (let i = from; i <= to; i++) {
+      const next = scanSegment(i, best);
+      if (next !== best) {
+        best = next;
+        bestIndex = i;
+      }
     }
-    cumulative += segLen;
   }
+
+  // Fallback completo si la ventana local no encontró nada cercano (desvío
+  // grande, teletransporte, primera llamada): escaneo O(n) completo.
+  if (best.distance > 60) {
+    best = { meters: 0, distance: Infinity };
+    for (let i = 1; i < path.length; i++) {
+      const next = scanSegment(i, best);
+      if (next !== best) {
+        best = next;
+        bestIndex = i;
+      }
+    }
+  }
+
+  lastProjectionIndex.set(path, bestIndex);
   return best.meters;
 }
 

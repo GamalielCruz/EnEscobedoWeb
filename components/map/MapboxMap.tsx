@@ -238,6 +238,12 @@ export const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(
             style: styleSpec ?? styleUrl,
             center: [center.lng, center.lat],
             zoom,
+            // fadeDuration 0: en navegación continua la cámara se mueve cada
+            // frame; el fading de símbolos (300 ms por defecto) obliga a
+            // Mapbox a re-renderizar textos/etiquetas en cada frame en la GPU
+            // del iPhone. Sin fading el render por frame es mucho más barato
+            // y el mapa se siente fluido (mismo diseño, sin transiciones).
+            fadeDuration: 0,
             attributionControl: true,
             dragRotate: rotate,
             pitchWithRotate: rotate,

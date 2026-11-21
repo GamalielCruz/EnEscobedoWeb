@@ -1483,6 +1483,10 @@ export default function DrivePage() {
   const movementPrevRef = useRef<{ pos: RoutePoint; ts: number } | null>(null);
   const visualHeadingRef = useRef<number | null>(null);
   const visualCameraHeadingRef = useRef<{ current: number | null; lastTs?: number }>({ current: null });
+  // Zoom calculado en el frame ANTERIOR por el bloque de zoom adaptativo: se
+  // aplica junto con center+heading en el MISMO jumpTo (antes eran dos
+  // jumpTo por frame = doble invalidación de render de Mapbox).
+  const pendingZoomRef = useRef<number | null>(null);
   const headingRafRef = useRef<number | null>(null);
   const internalZoomRef = useRef(false);
   const internalZoomTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1845,6 +1849,9 @@ export default function DrivePage() {
         ? next
         : movePointAlong(next, navHeading, aheadMeters);
       const cameraOffset = centerOnGps ? getDriveVisibleMapOffset(map) : undefined;
+      // Zoom del frame anterior plegado en esta misma llamada de cámara.
+      const frameZoom = pendingZoomRef.current;
+      const frameZoomProps = frameZoom != null ? { zoom: frameZoom } : {};
 
       // Suavizado angular de la cámara basado en delta time para que el giro sea
       // consistente a diferentes FPS y no salte instantáneamente ante cambios de
@@ -1865,6 +1872,7 @@ export default function DrivePage() {
             center: desiredCenter,
             heading: visualCameraHeading,
             tilt: 0,
+            ...frameZoomProps,
             offset: cameraOffset,
           });
         } else {
@@ -1874,6 +1882,7 @@ export default function DrivePage() {
             center: desiredCenter,
             heading: navHeading,
             tilt: 0,
+            ...frameZoomProps,
             offset: cameraOffset,
           });
         }
@@ -1886,6 +1895,7 @@ export default function DrivePage() {
           center: desiredCenter,
           heading: navHeading ?? 0,
           tilt: 0,
+          ...frameZoomProps,
           offset: cameraOffset,
         });
       }
@@ -1978,7 +1988,9 @@ export default function DrivePage() {
           // El zoom programático necesita el guard: sin él, zoom_changed lo
           // interpretaría como gesto del usuario y cancelaría el seguimiento.
           markInternalZoom();
-          moveMapCamera(map, { zoom: clamped });
+          // NO un segundo jumpTo aquí: se pliega en la llamada de cámara del
+          // siguiente frame (un solo jumpTo por frame).
+          pendingZoomRef.current = clamped;
         }
       }
 
