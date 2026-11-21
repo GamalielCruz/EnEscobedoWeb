@@ -155,6 +155,10 @@ let cameraHeadingTs = null;
 let zoomTarget = null;
 let pendingZoom = null;
 let nowOffset = 0;
+// El resolvedor mide el tiempo con Date.now(): si corre en tiempo real mientras
+// el bucle avanza 57 s simulados en milisegundos, el límite angular por
+// segundo (dt≈0) deja de existir y el arnés miente sobre la suavidad.
+Date.now = () => T0 + nowOffset;
 
 const resolver = createDriveHeadingResolver({
   getSimHeading: () => ({ active: false, simHeading: null }),

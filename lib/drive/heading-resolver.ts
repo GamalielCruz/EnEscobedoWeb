@@ -91,7 +91,10 @@ const ROUTE_DEVIATION_LATERAL_M = 40;
 // Límite de velocidad angular del rumbo aceptado (deg/s) y confirmación de
 // vuelta en U con dos fuentes independientes (gpsHeading + bearing entre
 // ticks dentro de 25°).
-const MAX_ANGULAR_RATE_DEG_PER_S = 150;
+// Criterio de aceptación: sin vuelta en U confirmada la cámara nunca gira más
+// de 60° en 1 s. Una vuelta en U corroborada por dos fuentes (gpsHeading +
+// tick bearing) sí puede saltar de golpe, porque el giro es real.
+const MAX_ANGULAR_RATE_DEG_PER_S = 60;
 const UTURN_CONFIRM_TOLERANCE_DEG = 25;
 // Fase 2-B: el bearing entre ticks solo vale si es FRESCO y viene de un
 // desplazamiento real. En T2 el puck se quedó en 268.35° (source="GPS") 27 s
@@ -99,6 +102,9 @@ const UTURN_CONFIRM_TOLERANCE_DEG = 25;
 // GPS con 26 m de precisión a pocos metros: el vector ruido→punto se congeló
 // y el "movimiento" era la interpolación, no el vehículo.
 const TICK_BEARING_MAX_AGE_MS = 4_000;
+// Velocidad mínima para creerle el rumbo al SO: 0.22 m/s de "marcha" es ruido
+// de un teléfono quieto (T3 arrancó en 314° con el repartidor parado).
+const MIN_MOTION_FOR_HEADING_MPS = 0.4;
 
 export type DriveHeadingSource =
   | "NONE"
@@ -458,7 +464,7 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
     if (routeInit) {
       heading = routeHeading;
       source = "FOLLOWING_ROUTE";
-    } else if (speedMps > 0 && motionHeading != null) {
+    } else if ((speedMps > MIN_MOTION_FOR_HEADING_MPS || freshTickBearing != null) && motionHeading != null) {
       const biased = applyRouteBias(motionHeading);
       heading = biased.h;
       source = biased.viaRoute
@@ -478,9 +484,16 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
       // (no dar la cámara a la brújula en pleno desplazamiento).
       heading = heldHeading;
       source = "HELD";
-    } else if (gpsHeading != null || freshTickBearing != null) {
+    } else if (
+      freshTickBearing != null ||
+      (gpsHeading != null && speedMps > MIN_MOTION_FOR_HEADING_MPS)
+    ) {
       // Sin ruta (o fuera de ella): última señal de movimiento disponible.
-      heading = gpsHeading ?? freshTickBearing;
+      // Un vehículo PARADO no adquiere rumbo del `heading` del SO (iOS lo deja
+      // pegado: 314° en T3): eso arrancaba la cámara girada y la hacía barrer
+      // 119° en 1 s hasta el segmento de ruta. El tick bearing exige 8 m de
+      // desplazamiento real, así que solo él prueba marcha con vehículo lento.
+      heading = freshTickBearing ?? gpsHeading;
       source = "GPS";
     } else if (compassOk) {
       heading = compassHeading;

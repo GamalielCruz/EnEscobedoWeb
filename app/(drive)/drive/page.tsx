@@ -1508,8 +1508,20 @@ export default function DrivePage() {
 
   // Fase 1-D: registra cada transición de etapa con la distancia a la próxima
   // maniobra (sin cambiar la lógica de "Comienza tu viaje").
+  // Solo se registra cuando cambia lo que ve el repartidor (etapa, paso,
+  // maniobra o texto): la distancia cambia en cada fix y anotarla siempre
+  // llenaba la traza con 35 filas idénticas en 41 s (T3).
+  const lastPhaseKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (!TRACE_REC_ENABLED || !navPhase) return;
+    const key = [
+      navPhase,
+      guidance?.stepIndex ?? "-",
+      guidance?.maneuver ?? "-",
+      guidance?.instruction ?? "-",
+    ].join("|");
+    if (lastPhaseKeyRef.current === key) return;
+    lastPhaseKeyRef.current = key;
     traceRecorderRef.current?.recordPhase(
       navPhase,
       guidance?.distanceToManeuver ?? null,

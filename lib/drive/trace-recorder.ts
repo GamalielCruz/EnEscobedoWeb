@@ -156,7 +156,7 @@ export class TraceRecorder {
   private gps: TraceGpsSample[] = [];
   private camera: TraceCameraSample[] = [];
   private events: TraceEvent[] = [];
-  private programmatic: TraceProgrammaticCount[] = [];
+  private programmaticByKey = new Map<string, TraceProgrammaticCount>();
   readonly startedAt = Date.now();
 
   recordGps(sample: TraceGpsSample): void {
@@ -182,15 +182,22 @@ export class TraceRecorder {
         this.events.splice(0, this.events.length - MAX_EVENTS);
       return;
     }
+    // Clave por (tipo, segundo): el orden de llegada alterna tipos
+    // (movestart, movestart:exit-check, moveend, rotatestart…), así que agrupar
+    // solo contra la última fila creaba una fila por evento (T3: 2 000 filas
+    // para 2 000 eventos, justo el tope del buffer).
     const bucket = Math.floor(t / 1000) * 1000;
-    const last = this.programmatic[this.programmatic.length - 1];
-    if (last && last.type === type && last.t === bucket) {
-      last.count += 1;
-    } else {
-      this.programmatic.push({ t: bucket, type, count: 1 });
-      if (this.programmatic.length > MAX_PROGRAMMATIC)
-        this.programmatic.splice(0, this.programmatic.length - MAX_PROGRAMMATIC);
+    const key = `${type}@${bucket}`;
+    const row = this.programmaticByKey.get(key);
+    if (row) {
+      row.count += 1;
+      return;
     }
+    if (this.programmaticByKey.size >= MAX_PROGRAMMATIC) {
+      const oldest = this.programmaticByKey.keys().next().value;
+      if (oldest != null) this.programmaticByKey.delete(oldest);
+    }
+    this.programmaticByKey.set(key, { t: bucket, type, count: 1 });
   }
 
   /** Guarda de anclaje: el puck se desvió >5 % de la altura durante >2 s. */
@@ -236,7 +243,7 @@ export class TraceRecorder {
     this.gps = [];
     this.camera = [];
     this.events = [];
-    this.programmatic = [];
+    this.programmaticByKey.clear();
   }
 
   toJSON(): TraceExport {
@@ -247,7 +254,7 @@ export class TraceRecorder {
       gps: this.gps,
       camera: this.camera,
       events: this.events,
-      programmaticEvents: this.programmatic,
+      programmaticEvents: [...this.programmaticByKey.values()].sort((a, b) => a.t - b.t),
     };
   }
 

@@ -424,13 +424,28 @@ function acceptance(trace) {
   const speeds = camAll
     .map((c) => c.speedMps)
     .filter((v) => typeof v === "number" && Number.isFinite(v));
-  // Giro de cámara >60° en <1 s sin vuelta en U confirmada.
+  // Giro de cámara >60° en <1 s sin vuelta en U confirmada. Se compara cada
+  // muestra contra la ÚLTIMA que esté a ≤1 s (muestreo a 5 Hz): comparar solo
+  // con la anterior de 200 ms nunca detecta un barrido de 90°/s.
   let bigRotations = 0;
+  let maxRotation1s = 0;
+  let worstRotation = null;
   for (let i = 1; i < camAll.length; i++) {
-    const a = camAll[i - 1], b = camAll[i];
-    if (a.bearing == null || b.bearing == null) continue;
-    if (b.t - a.t > 1000) continue;
-    if (angDiff(b.bearing, a.bearing) > 60) bigRotations++;
+    if (camAll[i].bearing == null) continue;
+    let j = i;
+    while (j > 0 && camAll[i].t - camAll[j - 1].t <= 1000) j--;
+    const a = camAll[j];
+    if (!a || a.bearing == null) continue;
+    const d = angDiff(camAll[i].bearing, a.bearing);
+    if (d > maxRotation1s) {
+      maxRotation1s = d;
+      worstRotation = {
+        t: Math.round(camAll[i].t - camAll[0].t),
+        deg: +d.toFixed(1),
+        src: camAll[i].resolverSource ?? null,
+      };
+    }
+    if (d > 60) bigRotations++;
   }
   // Salidas de FOLLOWING sin gesto.
   const follows = evAll.filter((e) => e.kind === "follow");
@@ -482,6 +497,8 @@ function acceptance(trace) {
       : null,
     straightMedian: pct(straight, 0.5),
     bigRotations,
+    maxRotation1s,
+    worstRotation,
     exitsNoGesture,
     followSamples: follows.filter((f) => f.followDriver).length,
     loopAlivePct: camAll.length
@@ -501,7 +518,11 @@ console.log(`  Cámara a <5 m: ${acc.centerNear == null ? "-" : acc.centerNear.t
 console.log(`  Follow: ${acc.followSamples} muestras · salidas sin gesto: ${acc.exitsNoGesture} · loopAlive: ${acc.loopAlivePct == null ? "-" : acc.loopAlivePct.toFixed(0) + " %"}`);
 console.log(`  Velocidad máx: ${acc.speedMax == null ? "-" : acc.speedMax.toFixed(2) + " m/s"} · criterio ≤45 m/s`);
 console.log(`  Rumbo en tramo recto ≤15°: ${acc.straightIn15 == null ? "-" : acc.straightIn15.toFixed(0) + " %"} (p50 ${acc.straightMedian == null ? "-" : acc.straightMedian.toFixed(1) + "°"})`);
-console.log(`  Giros de cámara >60° en <1 s: ${acc.bigRotations} · criterio: 0 salvo vuelta en U confirmada`);
+console.log(
+  `  Giros de cámara >60° en <1 s: ${acc.bigRotations} · máx ${acc.maxRotation1s.toFixed(1)}°/s${
+    acc.worstRotation ? ` en t=${(acc.worstRotation.t / 1000).toFixed(1)} s (${acc.worstRotation.src})` : ""
+  } · criterio: 0 salvo vuelta en U confirmada`
+);
 console.log(`  Guarda de anclaje: ${acc.anchorMismatch} eventos · eventos programáticos agregados: ${acc.programmatic}`);
 
 if (cmpIdx !== -1) {
