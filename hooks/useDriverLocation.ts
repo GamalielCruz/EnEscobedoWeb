@@ -26,6 +26,8 @@ function haversineDistance(
 
 export function useDriverLocation(enabled: boolean) {
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
+  /** Precisión horizontal estimada del último fix aceptado (metros). */
+  const [accuracy, setAccuracy] = useState<number | null>(null);
   /** Rumbo del GPS (0-360°, válido solo mientras el dispositivo se mueve). */
   const [heading, setHeading] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -91,6 +93,7 @@ export function useDriverLocation(enabled: boolean) {
       }
       lastVisualLocationRef.current = { lat: latitude, lng: longitude, time: now };
       setLocation({ lat: latitude, lng: longitude });
+      setAccuracy(accuracy);
       // heading solo es válido mientras el dispositivo se mueve; el resto del
       // sistema lo usa solo cuando viene como número dentro de [0, 360).
       // Solo setState si cambió de forma relevante: cada setState re-renderiza
@@ -152,5 +155,5 @@ export function useDriverLocation(enabled: boolean) {
     };
   }, [enabled, reportLocation]);
 
-  return { location, heading, error };
+  return { location, heading, accuracy, error };
 }
