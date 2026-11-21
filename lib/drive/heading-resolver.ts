@@ -7,8 +7,12 @@
  *
  * Estrategia:
  *  - En movimiento (>= 2 m/s): el GPS domina (coords.heading, o el bearing
- *    entre ticks de GPS si el course no es válido). La brújula queda como
- *    fallback (detenido, muy lento o GPS sin rumbo).
+ *    entre ticks de GPS si el course no es válido).
+ *  - INVARIANTE: una vez adquirido un rumbo confiable, la brújula nunca lo
+ *    sobreescribe. Detenido o lento, el rumbo se mantiene ("HELD"); la
+ *    brújula solo sirve como adquisición inicial. Girar/inclinar el
+ *    teléfono en la mano NUNCA rota la cámara ni el puck — la cámara sigue
+ *    al vehículo, no a la mano.
  *  - Siguiendo la ruta: el bearing del segmento de ruta estabiliza el rumbo
  *    cuando GPS y ruta concuerdan (<= ROUTE_ALIGN_TOLERANCE_DEG).
  *  - Desvío real: GPS vs ruta con diferencia grande (> HEADING_DEVIATION_START_DEG)
@@ -49,7 +53,8 @@ export type DriveHeadingSource =
   | "GPS"
   | "FOLLOWING_ROUTE"
   | "DEVIATING"
-  | "COMPASS_FALLBACK";
+  | "COMPASS_FALLBACK"
+  | "HELD";
 
 export type DriveHeadingDebugInfo = {
   source: DriveHeadingSource;
@@ -252,12 +257,18 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
       state.deviating && state.deviationStartedAt != null ? now - state.deviationStartedAt : 0;
 
     // ── Selección de fuente por velocidad ──
-    const device = options.getDeviceHeading();
     const compassOk = deviceCompassUsable();
-    const compassHeading = compassOk ? device.heading : null;
+    const compassHeading = compassOk ? options.getDeviceHeading().heading : null;
 
     let heading: number | null = null;
     let source: DriveHeadingSource = "GPS";
+
+    // INVARIANTE DE ORIENTACIÓN: una vez adquirido un rumbo GPS/movimiento
+    // confiable, la brújula NUNCA lo sobreescribe. Girar o inclinar el
+    // teléfono en la mano no debe rotar la cámara ni el puck. La brújula
+    // solo actúa como adquisición inicial (sin rumbo previo) y como
+    // respaldo cuando no existe ninguna señal de movimiento.
+    const heldHeading = state.acceptedHeading;
 
     if (speedMps >= GPS_SPEED_DOMINANT_MPS) {
       if (gpsHeading != null) {
@@ -288,30 +299,44 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
         // de movimiento disponible (cubre el caso coords.heading == null).
         heading = state.gpsTickBearing;
         source = state.deviating ? "DEVIATING" : "GPS";
+      } else if (heldHeading != null) {
+        // Sin señal de movimiento fresca: mantener el último rumbo confiable
+        // (no dar la cámara a la brújula en pleno desplazamiento).
+        heading = heldHeading;
+        source = "HELD";
       } else if (compassOk) {
         heading = compassHeading;
         source = "COMPASS_FALLBACK";
       }
     } else if (speedMps >= COMPASS_SPEED_MAX_MPS) {
+      // Movimiento lento (1–2 m/s, p. ej. tráfico): solo señales de
+      // MOVIMIENTO (GPS/movimiento entre ticks). La brújula NO se mezcla:
+      // a esta velocidad el teléfono suele estar en la mano y cualquier
+      // giro de la muñeca se convertiría en rotación de la cámara.
       const motionRef = gpsHeading ?? movementHeading ?? state.gpsTickBearing;
-      const t = (speedMps - COMPASS_SPEED_MAX_MPS) / (GPS_SPEED_DOMINANT_MPS - COMPASS_SPEED_MAX_MPS);
-      if (motionRef != null && compassOk) {
-        heading = normalizeDeg(motionRef + shortestAngleDelta(device.heading, motionRef) * (1 - t));
-        source = "GPS";
-      } else if (motionRef != null) {
+      if (motionRef != null) {
         heading = motionRef;
         source = state.deviating ? "DEVIATING" : "GPS";
+      } else if (heldHeading != null) {
+        heading = heldHeading;
+        source = "HELD";
       } else if (compassOk) {
         heading = compassHeading;
         source = "COMPASS_FALLBACK";
       }
     } else {
-      if (compassOk) {
-        heading = compassHeading;
-        source = "COMPASS_FALLBACK";
+      // Detenido (< 1 m/s): el rumbo se MANTIENE. Si ya hay un rumbo
+      // confiable, no se toca (la cámara no sigue a la mano). Solo en la
+      // adquisición inicial (sin rumbo previo) se acepta la brújula.
+      if (heldHeading != null) {
+        heading = heldHeading;
+        source = "HELD";
       } else if (gpsHeading != null || movementHeading != null || state.gpsTickBearing != null) {
         heading = gpsHeading ?? movementHeading ?? state.gpsTickBearing;
         source = "GPS";
+      } else if (compassOk) {
+        heading = compassHeading;
+        source = "COMPASS_FALLBACK";
       }
     }
 

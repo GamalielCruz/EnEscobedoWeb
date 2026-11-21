@@ -35,7 +35,6 @@ import {
 import { DriveCancelOrderSheet } from "@/components/drive/DriveCancelOrderSheet";
 import { DriveHome } from "@/components/drive/DriveHome";
 import { DriveOrderDetails } from "@/components/drive/DriveOrderDetails";
-import { DriveSimPanel } from "@/components/drive/DriveSimPanel";
 import { RatingSection } from "@/components/ratings/RatingSection";
 import {
   destinationPinHtml,
@@ -57,7 +56,6 @@ import { shortOrderCode, shortAddress } from "@/lib/dispatch/dispatch-format";
 import {
   bearingBetween,
   distanceToPathMeters,
-  getLastRoutingError,
   getRoadRoute,
   headingAlongPath,
   haversineMeters,
@@ -166,6 +164,9 @@ const OFF_ROUTE_MAX_ACCURACY_M = 60;
 const INTERNAL_ZOOM_GUARD_MS = 900;
 // Anticipar la siguiente maniobra cuando falte menos que esto para el giro.
 const NEXT_MANEUVER_METERS = 120;
+// Tras recorrerse este desplazamiento real sobre la ruta, la instrucción
+// inicial ("depart" / "Comienza tu viaje") deja paso a la primera maniobra.
+const DEPART_ADVANCE_METERS = 40;
 // Mostrar "Estás llegando" cuando quede menos que esto para el destino.
 const NEAR_DESTINATION_METERS = 150;
 // Enfriamiento entre reintentos de ruta durante la SIMULACIÓN (si la primera
@@ -485,6 +486,11 @@ function moveMapCamera(map: MapboxMapInstance, camera: DriveCamera): void {
   });
 }
 
+// Caché del offset: se lee del DOM (clientHeight + getBoundingClientRect) en
+// cada actualización de cámara (30/s) — cachearlo evita lecturas de layout
+// forzadas por frame. Se recalcula cuando cambian las alturas implicadas
+// (hoja inferior desplegada/colapsada, rotación del dispositivo, resize).
+let cachedOffsetFor = { container: 0, overlay: 0, offset: [0, 0] as [number, number] };
 function getDriveVisibleMapOffset(map: MapboxMapInstance): [number, number] {
   const containerHeight =
     map.getContainer()?.clientHeight || window.innerHeight || 0;
@@ -495,8 +501,16 @@ function getDriveVisibleMapOffset(map: MapboxMapInstance): [number, number] {
       document.getElementById("drive-bottom-overlay")?.getBoundingClientRect().height ?? 0
     )
   );
+  if (
+    cachedOffsetFor.container === containerHeight &&
+    cachedOffsetFor.overlay === overlayHeight
+  ) {
+    return cachedOffsetFor.offset;
+  }
   const visibleHeight = containerHeight - overlayHeight;
-  return [0, Math.round(visibleHeight / 2 - containerHeight / 2)];
+  const offset: [number, number] = [0, Math.round(visibleHeight / 2 - containerHeight / 2)];
+  cachedOffsetFor = { container: containerHeight, overlay: overlayHeight, offset };
+  return offset;
 }
 
 /**
@@ -869,7 +883,6 @@ export default function DrivePage() {
   /** Antes de este instante no se reintenta la ruta de la simulación. */
   const simRouteRetryAtRef = useRef(0);
   /** Motivo del último fallo de ruta durante la simulación (solo diagnóstico). */
-  const [simRouteDiag, setSimRouteDiag] = useState<string | null>(null);
 
   // ── Simulador de viaje (SOLO dev/staging) ───────────────────────
   // Todo en estado local: entrega una posición simulada y una etapa override
@@ -985,15 +998,8 @@ export default function DrivePage() {
       simRouteRetryAtRef.current = Date.now() + SIM_ROUTE_RETRY_MS;
       getRoadRoute(simOrigin, navTarget).then((route) => {
         // Si falla se reintenta tras el enfriamiento (getRoadRoute ya evita
-        // castigar la API mientras el fallo esté cacheado). El motivo queda
-        // visible en el panel dev: "REQUEST_DENIED" ⇒ falta habilitar la
-        // Directions API, "maps_api_unavailable" ⇒ el loader no está listo.
-        if (route) {
-          setSimRouteDiag(null);
-          setRoadRoute(route);
-        } else {
-          setSimRouteDiag(getLastRoutingError() ?? "sin_ruta");
-        }
+        // castigar la API mientras el fallo esté cacheado).
+        if (route) setRoadRoute(route);
       });
       return;
     }
@@ -1022,7 +1028,6 @@ export default function DrivePage() {
   useEffect(() => {
     if (!sim.active) {
       simRouteKeyRef.current = null;
-      setSimRouteDiag(null);
     }
   }, [sim.active]);
 
@@ -1121,8 +1126,20 @@ export default function DrivePage() {
       let accEnd = 0;
       for (let i = 0; i <= pendingIdx; i++) accEnd += roadRoute.steps[i].distanceMeters;
       const distToTurn = Math.max(0, accEnd - done);
-      distanceToManeuver = distToTurn;
-      shownStep = next && distToTurn <= NEXT_MANEUVER_METERS ? next : step;
+      // Transición "depart" → primera maniobra: una vez que el vehículo se
+      // desplazó de VERDAD sobre la ruta (40 m proyectados), la tarjeta no
+      // puede quedarse bloqueada en "Comienza tu viaje" mientras la
+      // distancia restante desciende. Si no hay step siguiente (ruta de un
+      // solo tramo recto), se respeta la instrucción inicial.
+      const pastDepart =
+        step.maneuver === "depart" && done > DEPART_ADVANCE_METERS && next != null;
+      if (pastDepart) {
+        shownStep = next;
+        distanceToManeuver = Math.max(0, accEnd + next.distanceMeters - done);
+      } else {
+        distanceToManeuver = distToTurn;
+        shownStep = next && distToTurn <= NEXT_MANEUVER_METERS ? next : step;
+      }
     }
     return {
       total,
@@ -1767,6 +1784,9 @@ export default function DrivePage() {
 
       // Pan manual → exploración.
       const onDragStart = () => exitFollowMode();
+      // Rotación manual de dos dedos → exploración: sin esto, el loop de
+      // seguimiento pelearía con el gesto (jumpTo de bearing cada frame).
+      const onRotateStart = () => exitFollowMode();
       // Zoom gestual (pinch/rueda) → exploración. Los cambios de zoom de la
       // propia cámara (Centrar GPS / encuadres / Ver viaje) llevan guard.
       const onZoom = () => {
@@ -1779,10 +1799,12 @@ export default function DrivePage() {
       };
       map.on("dragstart", onDragStart);
       map.on("dragend", onDragEnd);
+      map.on("rotatestart", onRotateStart);
       map.on("zoom", onZoom);
       mapListenersRef.current = [
         { remove: () => map.off("dragstart", onDragStart) },
         { remove: () => map.off("dragend", onDragEnd) },
+        { remove: () => map.off("rotatestart", onRotateStart) },
         { remove: () => map.off("zoom", onZoom) },
       ];
     },
@@ -3189,15 +3211,19 @@ export default function DrivePage() {
           <div className="mt-0.5">
             <span className="text-white/60">Heading source:</span>
             <span className="font-mono text-white/90">
-              {deviceOrientation.state.available === "available" &&
-              deviceOrientation.state.permission === "granted" &&
-              (gpsHeading == null || movementSpeedRef.current == null || movementSpeedRef.current < 2)
-                ? "device"
-                : gpsHeading != null
+              {(() => {
+                const dbg = driveHeadingResolverRef.current?.state.debug;
+                if (dbg) {
+                  // La brújula NUNCA controla la cámara si ya hay rumbo GPS:
+                  // "device" solo puede aparecer en la adquisición inicial.
+                  return dbg.source;
+                }
+                return gpsHeading != null
                   ? "gps"
                   : movementHeadingRef.current != null
                     ? "motion"
-                    : "geometry"}
+                    : "geometry";
+              })()}
             </span>
           </div>
           <div className="mt-0.5 flex gap-2">
@@ -3247,31 +3273,9 @@ export default function DrivePage() {
           </div>
         )}
 
-        {/* Herramienta de desarrollo: simular viaje (solo dev/staging). */}
-        {mapsLoaded && (
-          <DriveSimPanel
-              visible={DRIVE_SIM_ENABLED && connected && Boolean(activeOrder) && mapsLoaded}
-              canStart={sim.canStart}
-              active={sim.active}
-              running={sim.running}
-              finished={sim.finished}
-              stageLabel={sim.stageLabel}
-              speed={sim.speed}
-              waitingForRoute={sim.waitingForRoute}
-              routeDiagnostic={simRouteDiag}
-              onStart={sim.start}
-              onPause={sim.pause}
-              onResume={sim.resume}
-              onRestart={sim.restart}
-              onStop={sim.stop}
-              onSpeed={sim.setSpeed}
-              onSkipPickup={sim.skipToPickup}
-              onSkipDelivery={sim.skipToDelivery}
-              onJumpNear={() => sim.jumpNearDestination(1000)}
-              commitOrders={simCommitOrders}
-              onToggleCommit={() => setSimCommitOrders((value) => !value)}
-            />
-          )}
+        {/* El simulador de navegación NO se expone en la interfaz del
+            repartidor (ni en staging): el GPS siempre es real. El hook y el
+            panel quedan solo como fixtures de pruebas automatizadas. */}
       </div>        {/* Barra compacta + tarjeta de maniobra (turn-by-turn) — flotan sobre
           el mapa en la parte superior. La posición respeta el notch/isla
           dinámica con env(safe-area-inset-top). */}
