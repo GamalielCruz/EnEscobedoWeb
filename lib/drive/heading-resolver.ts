@@ -93,6 +93,12 @@ const ROUTE_DEVIATION_LATERAL_M = 40;
 // ticks dentro de 25°).
 const MAX_ANGULAR_RATE_DEG_PER_S = 150;
 const UTURN_CONFIRM_TOLERANCE_DEG = 25;
+// Fase 2-B: el bearing entre ticks solo vale si es FRESCO y viene de un
+// desplazamiento real. En T2 el puck se quedó en 268.35° (source="GPS") 27 s
+// porque el bearing se calculó desde la posición VISUAL interpolada hacia un
+// GPS con 26 m de precisión a pocos metros: el vector ruido→punto se congeló
+// y el "movimiento" era la interpolación, no el vehículo.
+const TICK_BEARING_MAX_AGE_MS = 4_000;
 
 export type DriveHeadingSource =
   | "NONE"
@@ -149,6 +155,7 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
     lastGpsTickPos: RoutePoint | null;
     lastGpsTickTs: number | null;
     gpsTickBearing: number | null;
+    gpsTickBearingTs: number | null;
     /** Velocidad derivada del bearing entre ticks (m/s), para selección de fuente. */
     tickSpeedMps: number | null;
     lastGpsHeadingTs: number | null;
@@ -171,6 +178,7 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
     lastGpsTickPos: null,
     lastGpsTickTs: null,
     gpsTickBearing: null,
+    gpsTickBearingTs: null,
     tickSpeedMps: null,
     lastGpsHeadingTs: null,
     gpsHeadingConfirmStreak: 0,
@@ -270,6 +278,7 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
       const tickElapsed = state.lastGpsTickTs != null ? now - state.lastGpsTickTs : 0;
       if (tickDist >= minMovementMeters && tickElapsed >= minMovementMs) {
         state.gpsTickBearing = bearingBetween(state.lastGpsTickPos, vehiclePos);
+        state.gpsTickBearingTs = now;
         state.tickSpeedMps = tickDist / (tickElapsed / 1000);
         state.lastGpsTickPos = vehiclePos;
         state.lastGpsTickTs = now;
@@ -282,6 +291,14 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
     // Velocidad efectiva: la reportada puede ir con retardo (se deriva de
     // ticks con histéresis); la velocidad entre ticks es más fresca.
     const speedMps = Math.max(reportedSpeedMps, state.tickSpeedMps ?? 0);
+    // Bearing entre ticks FRESCO (ver TICK_BEARING_MAX_AGE_MS): un bearing
+    // viejo no puede sostener la cámara ni corroborar un giro.
+    const freshTickBearing =
+      state.gpsTickBearing != null &&
+      state.gpsTickBearingTs != null &&
+      now - state.gpsTickBearingTs <= TICK_BEARING_MAX_AGE_MS
+        ? state.gpsTickBearing
+        : null;
 
     // ── Detección de spikes de GPS heading ──
     // Un salto grande del coords.heading solo se acepta si el bearing entre
@@ -289,7 +306,7 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
     // Tras una vuelta en U real, GPS heading y bearing entre ticks giran
     // juntos → se acepta de inmediato (corroboratedBy).
     const corroboratedBy = (h: number): boolean => {
-      if (state.gpsTickBearing != null && Math.abs(shortestAngleDelta(h, state.gpsTickBearing)) <= HEADING_DEVIATION_START_DEG) return true;
+      if (freshTickBearing != null && Math.abs(shortestAngleDelta(h, freshTickBearing)) <= HEADING_DEVIATION_START_DEG) return true;
       const ref = routeHeading ?? nextSegmentBearing;
       return ref != null && Math.abs(shortestAngleDelta(h, ref)) <= HEADING_DEVIATION_START_DEG;
     };
@@ -424,9 +441,24 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
       ? courseAgreesWithGps
         ? normalizeDeg(course + shortestAngleDelta(gpsHeading as number, course) * 0.4)
         : course
-      : (gpsHeading ?? state.gpsTickBearing);
+      : (gpsHeading ?? freshTickBearing);
 
-    if (speedMps > 0 && motionHeading != null) {
+    // ── Fase 2-B: adquisición inicial desde el SEGMENTO de ruta ──
+    // Con ruta activa y SIN curso medido (primeros segundos, vehículo aún
+    // parado, GPS en calentamiento) el rumbo se inicializa con el segmento
+    // proyectado y se mantiene. Antes se tomaba el bearing entre ticks hacia
+    // un GPS impreciso a pocos metros → 268° durante 27 s y un giro de 108° de
+    // golpe al llegar datos reales.
+    const routeInit =
+      hasRoute &&
+      routeHeading != null &&
+      course == null &&
+      !state.deviating &&
+      onPath;
+    if (routeInit) {
+      heading = routeHeading;
+      source = "FOLLOWING_ROUTE";
+    } else if (speedMps > 0 && motionHeading != null) {
       const biased = applyRouteBias(motionHeading);
       heading = biased.h;
       source = biased.viaRoute
@@ -446,8 +478,9 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
       // (no dar la cámara a la brújula en pleno desplazamiento).
       heading = heldHeading;
       source = "HELD";
-    } else if (gpsHeading != null || state.gpsTickBearing != null) {
-      heading = gpsHeading ?? state.gpsTickBearing;
+    } else if (gpsHeading != null || freshTickBearing != null) {
+      // Sin ruta (o fuera de ella): última señal de movimiento disponible.
+      heading = gpsHeading ?? freshTickBearing;
       source = "GPS";
     } else if (compassOk) {
       heading = compassHeading;
@@ -470,9 +503,9 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
       if (Math.abs(delta) > maxStep) {
         const uturnConfirmed =
           gpsHeading != null &&
-          state.gpsTickBearing != null &&
+          freshTickBearing != null &&
           Math.abs(
-            shortestAngleDelta(gpsHeading, state.gpsTickBearing)
+            shortestAngleDelta(gpsHeading, freshTickBearing)
           ) <= UTURN_CONFIRM_TOLERANCE_DEG;
         if (!uturnConfirmed) {
           heading = normalizeDeg(

@@ -250,6 +250,9 @@ if (accepted.length >= 6) {
         t: accepted[i].t,
         course: d > 1 ? brg(accepted[i - 1], accepted[i]) : null,
         speed: dt > 0 ? d / dt : 0,
+        // "Verdad" solo con fixes precisos: el bearing entre dos fixes de
+        // 26 m de precisión es ruido, no rumbo de la trayectoria.
+        accuracy: accepted[i].accuracy ?? null,
       });
     }
     const turnTimes = [];
@@ -267,6 +270,9 @@ if (accepted.length >= 6) {
       if (j === -1) j = courses.length - 1;
       const s = courses[Math.max(0, j - 1)];
       if (!s || s.course == null || s.speed < 0.7) continue;
+      // Calentamiento del GPS: con accuracy > 20 m el curso entre fixes es
+      // ruido y no sirve de referencia.
+      if (s.accuracy != null && s.accuracy > 20) continue;
       const afterTurn = turnTimes.some((tt) => tt <= c.t && c.t - tt <= 3000);
       if (afterTurn) continue;
       straightErrs.push(angDiff(c.resolvedHeading, s.course));
@@ -328,15 +334,38 @@ if (bundleIdx !== -1 && process.argv[bundleIdx + 1]) {
 {
   const byType = {};
   for (const e of events) {
-    if (e.kind === "follow") continue;
+    if (e.kind === "follow" || e.kind === "phase" || e.kind === "anchor-mismatch") continue;
     byType[e.type] = byType[e.type] || { gesture: 0, prog: 0 };
     if (e.hasOriginalEvent) byType[e.type].gesture++;
     else byType[e.type].prog++;
+  }
+  // Fase 2-D: los programáticos vienen AGREGADOS por (tipo, segundo).
+  const progAggregated = Array.isArray(trace.programmaticEvents) ? trace.programmaticEvents : [];
+  for (const c of progAggregated) {
+    byType[c.type] = byType[c.type] || { gesture: 0, prog: 0 };
+    byType[c.type].prog += c.count;
   }
   const follows = events.filter((e) => e.kind === "follow");
   console.log("\n── Eventos de cámara y follow ───────────────────────────────");
   for (const [type, c] of Object.entries(byType).sort()) {
     console.log(`  ${type}: gesto=${c.gesture} · programático=${c.prog}`);
+  }
+  if (progAggregated.length) {
+    console.log(
+      `  Eventos programáticos: ${progAggregated.reduce((s2, c) => s2 + c.count, 0)} en ${progAggregated.length} filas (tipo·segundo)`
+    );
+  }
+  const mismatches = events.filter((e) => e.kind === "anchor-mismatch");
+  if (mismatches.length) {
+    console.log(
+      `  GUARDA DE ANCLAJE: ${mismatches.length} eventos anchor-mismatch ${JSON.stringify(
+        mismatches.slice(0, 3).map((m) => ({
+          desvio: +(m.deviationFraction * 100).toFixed(1) + "%",
+          ms: m.lastsForMs,
+          pad: [m.paddingTop, m.paddingBottom],
+        }))
+      )}`
+    );
   }
   const exits = follows.filter((f, i) => i > 0 && follows[i - 1].followDriver && !f.followDriver).length;
   console.log(`  Transiciones: follow ${follows.length} (salidas de seguimiento: ${exits})`);
@@ -358,10 +387,145 @@ if (bundleIdx !== -1 && process.argv[bundleIdx + 1]) {
       `  Transiciones de etapa: ${phases
         .map(
           (p) =>
-            `${p.phase}${p.distanceToManeuverM != null ? `@${Math.round(p.distanceToManeuverM)}m` : ""}`
+            `${p.phase}${p.stepIndex != null ? `#${p.stepIndex}` : ""}${
+              p.maneuverType ? `/${p.maneuverType}` : ""
+            }${p.distanceToManeuverM != null ? `@${Math.round(p.distanceToManeuverM)}m` : ""}`
         )
         .join(" → ")}`
     );
   }
 }
-console.log("\n═ Fin. Comparar contra umbrales antes de Fase 1. ═");
+// ── 5 · Aceptación (Fase 2) y comparación entre trazas ─────────────────────
+
+/**
+ * Métricas de aceptación de una traza, en un objeto — para la tabla final y
+ * para `--compare` (T1 vs T2 vs después). Todo sale de la traza: nada se
+ * modela aquí.
+ */
+function acceptance(trace) {
+  const gpsAll = trace.gps || [];
+  const camAll = trace.camera || [];
+  const evAll = trace.events || [];
+  const progAll = Array.isArray(trace.programmaticEvents) ? trace.programmaticEvents : [];
+  const accAll = gpsAll.filter((g) => g.accepted);
+  const withBand = camAll.filter(
+    (c) => c.puckPxY != null && c.visibleTopPx != null && c.visibleBottomPx != null
+  );
+  const fracs = withBand.map(
+    (c) => ((c.puckPxY - c.visibleTopPx) / (c.visibleBottomPx - c.visibleTopPx)) * 100
+  );
+  const inBand = fracs.filter((f) => f >= 70 && f <= 75).length;
+  const centers = camAll.filter(
+    (c) => c.centerLat != null && c.centerLng != null && c.vehicleLat != null
+  );
+  const near = centers.filter(
+    (c) => hav({ lat: c.centerLat, lng: c.centerLng }, { lat: c.vehicleLat, lng: c.vehicleLng }) < 5
+  ).length;
+  const speeds = camAll
+    .map((c) => c.speedMps)
+    .filter((v) => typeof v === "number" && Number.isFinite(v));
+  // Giro de cámara >60° en <1 s sin vuelta en U confirmada.
+  let bigRotations = 0;
+  for (let i = 1; i < camAll.length; i++) {
+    const a = camAll[i - 1], b = camAll[i];
+    if (a.bearing == null || b.bearing == null) continue;
+    if (b.t - a.t > 1000) continue;
+    if (angDiff(b.bearing, a.bearing) > 60) bigRotations++;
+  }
+  // Salidas de FOLLOWING sin gesto.
+  const follows = evAll.filter((e) => e.kind === "follow");
+  const gestureTimes = evAll
+    .filter((e) => e.kind !== "follow" && e.kind !== "phase" && e.hasOriginalEvent)
+    .map((e) => e.t);
+  const exitsNoGesture = follows.filter((f, i) => {
+    if (i === 0 || !follows[i - 1].followDriver || f.followDriver) return false;
+    return !gestureTimes.some((t) => t <= f.t && f.t - t <= 300);
+  }).length;
+  // Rumbo vs trayectoria en tramo recto (≥3 s tras giro, fixes precisos).
+  const courses = [];
+  for (let i = 1; i < accAll.length; i++) {
+    const d = hav(accAll[i - 1], accAll[i]);
+    const dt = (accAll[i].t - accAll[i - 1].t) / 1000;
+    courses.push({
+      t: accAll[i].t,
+      course: d > 1 ? brg(accAll[i - 1], accAll[i]) : null,
+      speed: dt > 0 ? d / dt : 0,
+      accuracy: accAll[i].accuracy ?? null,
+    });
+  }
+  const turnTimes = [];
+  for (let i = 1; i < courses.length; i++) {
+    if (courses[i].course == null || courses[i - 1].course == null) continue;
+    if (angDiff(courses[i].course, courses[i - 1].course) > 30) turnTimes.push(courses[i].t);
+  }
+  const straight = [];
+  for (const c of camAll) {
+    if (c.resolvedHeading == null) continue;
+    let j = courses.findIndex((s) => s.t > c.t);
+    if (j === -1) j = courses.length - 1;
+    const s = courses[Math.max(0, j - 1)];
+    if (!s || s.course == null || s.speed < 0.7) continue;
+    if (s.accuracy != null && s.accuracy > 20) continue;
+    if (turnTimes.some((tt) => tt <= c.t && c.t - tt <= 3000)) continue;
+    straight.push(angDiff(c.resolvedHeading, s.course));
+  }
+  return {
+    gps: gpsAll.length,
+    accepted: accAll.length,
+    camera: camAll.length,
+    puckInBand: fracs.length ? (inBand / fracs.length) * 100 : null,
+    puckMedian: pct(fracs, 0.5),
+    centerNear: centers.length ? (near / centers.length) * 100 : null,
+    speedMax: speeds.length ? Math.max(...speeds) : null,
+    straightIn15: straight.length
+      ? (straight.filter((e) => e <= 15).length / straight.length) * 100
+      : null,
+    straightMedian: pct(straight, 0.5),
+    bigRotations,
+    exitsNoGesture,
+    followSamples: follows.filter((f) => f.followDriver).length,
+    loopAlivePct: camAll.length
+      ? (camAll.filter((c) => c.loopAlive).length / camAll.length) * 100
+      : null,
+    anchorMismatch: evAll.filter((e) => e.kind === "anchor-mismatch").length,
+    programmatic: progAll.reduce((s2, c) => s2 + c.count, 0) +
+      evAll.filter((e) => e.hasOriginalEvent === false).length,
+  };
+}
+
+const cmpIdx = process.argv.indexOf("--compare");
+const acc = acceptance(trace);
+console.log("\n── Aceptación (Fase 2, sobre ESTA traza) ────────────────────");
+console.log(`  Puck 70–75 % del área visible: ${acc.puckInBand == null ? "sin datos" : acc.puckInBand.toFixed(0) + " %"} (p50 ${acc.puckMedian == null ? "-" : acc.puckMedian.toFixed(1) + " %"}) · criterio ≥95 %`);
+console.log(`  Cámara a <5 m: ${acc.centerNear == null ? "-" : acc.centerNear.toFixed(1) + " %"} · criterio: mantener 100 %`);
+console.log(`  Follow: ${acc.followSamples} muestras · salidas sin gesto: ${acc.exitsNoGesture} · loopAlive: ${acc.loopAlivePct == null ? "-" : acc.loopAlivePct.toFixed(0) + " %"}`);
+console.log(`  Velocidad máx: ${acc.speedMax == null ? "-" : acc.speedMax.toFixed(2) + " m/s"} · criterio ≤45 m/s`);
+console.log(`  Rumbo en tramo recto ≤15°: ${acc.straightIn15 == null ? "-" : acc.straightIn15.toFixed(0) + " %"} (p50 ${acc.straightMedian == null ? "-" : acc.straightMedian.toFixed(1) + "°"})`);
+console.log(`  Giros de cámara >60° en <1 s: ${acc.bigRotations} · criterio: 0 salvo vuelta en U confirmada`);
+console.log(`  Guarda de anclaje: ${acc.anchorMismatch} eventos · eventos programáticos agregados: ${acc.programmatic}`);
+
+if (cmpIdx !== -1) {
+  const otherFile = process.argv[cmpIdx + 1];
+  if (!otherFile || !fs.existsSync(otherFile)) {
+    console.log("\n(--compare: falta el archivo de la otra traza)");
+  } else {
+    const other = JSON.parse(fs.readFileSync(otherFile, "utf8"));
+    const b = acceptance(other);
+    const row = (label, a2, b2, unit = "") =>
+      console.log(
+        `  ${label.padEnd(30)} ${String(a2 ?? "-").padStart(10)}${unit}  vs  ${String(b2 ?? "-").padStart(10)}${unit}`
+      );
+    console.log("\n── Comparación de trazas ───────────────────────────────────");
+    console.log(`  ${"métrica".padEnd(30)} ${path.basename(file).padStart(10)}     vs  ${path.basename(otherFile).padStart(10)}`);
+    row("muestras cámara", acc.camera, b.camera);
+    row("puck en 70–75 % (%)", acc.puckInBand?.toFixed(0), b.puckInBand?.toFixed(0));
+    row("cámara <5 m (%)", acc.centerNear?.toFixed(1), b.centerNear?.toFixed(1));
+    row("velocidad máx (m/s)", acc.speedMax?.toFixed(2), b.speedMax?.toFixed(2));
+    row("rumbo ≤15° recto (%)", acc.straightIn15?.toFixed(0), b.straightIn15?.toFixed(0));
+    row("salidas sin gesto", acc.exitsNoGesture, b.exitsNoGesture);
+    row("giros >60° en <1 s", acc.bigRotations, b.bigRotations);
+    row("loopAlive (%)", acc.loopAlivePct?.toFixed(0), b.loopAlivePct?.toFixed(0));
+    row("eventos programáticos", acc.programmatic, b.programmatic);
+  }
+}
+console.log("\n═ Fin. Comparar contra umbrales antes de Fase 2. ═");

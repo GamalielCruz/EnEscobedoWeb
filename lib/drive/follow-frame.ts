@@ -29,6 +29,7 @@ import {
   type RoutePoint,
   type RouteStep,
 } from "@/lib/dispatch/routing";
+import { computeAnchorPadding, type AnchorPadding } from "@/lib/drive/camera-controller";
 
 export const NAV_ZOOM_BASE = 18.6;
 export const NAV_ZOOM_MAX = 19;
@@ -97,8 +98,14 @@ export type FollowFrameInput = {
   /** Velocidad de navegación (m/s) para el zoom por velocidad. */
   speedMps: number;
   route: FollowRouteInput | null;
-  /** Offset base (px) que ancla el punto al 72.5 % del área visible. */
-  baseOffsetY: number;
+  /**
+   * Y del ancla (px desde el borde superior del contenedor) dentro del área
+   * visible: 70–75 %. Se aplica con `padding` y NO con `offset`, porque
+   * `jumpTo` ignora `offset` en mapbox-gl 3.33 (ver camera-controller.ts).
+   */
+  anchorY: number;
+  /** Altura del contenedor del mapa (px): base del cálculo de `padding`. */
+  containerHeightPx: number;
   /** Zoom pendiente de plegar en esta llamada (frame anterior). */
   pendingZoom: number | null;
   /** Precisión GPS conocida (m) o null: >20 m = calentamiento. */
@@ -111,7 +118,7 @@ export type FollowFrameResult = {
     center: RoutePoint;
     bearing: number;
     pitch: 0;
-    offset: [number, number];
+    padding: AnchorPadding;
     zoom?: number;
   };
   /** El rumbo visual cambió (hay que rotar el icono del puck). */
@@ -182,7 +189,8 @@ export function computeFollowFrame(
   // vehículo en el 75 % de las muestras y el puck al 50 % de la altura.)
   const navHeading = input.simHeading ?? heading;
   const desiredCenter = vehiclePos;
-  const offsetY = Math.round(input.baseOffsetY);
+  // Anclaje por PADDING (no por offset: jumpTo lo ignora en mapbox-gl 3.33).
+  const anchorY = Math.round(input.anchorY);
 
   // ── 4) Rumbo de cámara con límite de velocidad angular ──
   let cameraHeading = state.cameraHeading;
@@ -296,7 +304,7 @@ export function computeFollowFrame(
     center: desiredCenter,
     bearing: cameraHeading ?? 0,
     pitch: 0,
-    offset: [0, offsetY],
+    padding: computeAnchorPadding(input.containerHeightPx, anchorY),
     ...(pendingZoom != null ? { zoom: pendingZoom } : {}),
   };
 

@@ -31,7 +31,15 @@ import {
   type RoutePoint,
 } from "@/lib/dispatch/routing";
 
-export const MAX_SPEED_MPS = 70;
+/**
+ * Velocidad máxima PLAUSIBLE para un repartidor (45 m/s = 162 km/h). Por
+ * encima de esto el valor es basura del SO y se DESCARTA — no se recorta:
+ * recortar convertía 1784 m/s en 70 m/s "creíbles" (traza T2: speedMps=70
+ * durante ~0.8 s, el clamp, no una velocidad real).
+ */
+export const MAX_PLAUSIBLE_SPEED_MPS = 45;
+/** Aceleración máxima plausible entre fixes (m/s²), incluye frenada fuerte. */
+export const MAX_PLAUSIBLE_ACCEL_MPS2 = 12;
 export const MIN_DT_FOR_DERIVED_SPEED_S = 0.5;
 export const MIN_DT_ACCEPT_FIX_S = 0.25;
 export const SPEED_EXPIRY_MS = 3_000;
@@ -59,8 +67,15 @@ export function shortestAngleDeltaDeg(to: number, from: number): number {
 }
 
 export type SpeedHeadingState = {
-  /** Velocidad derivada (m/s), siempre <= MAX_SPEED_MPS. */
+  /** Última velocidad VÁLIDA (m/s) — nunca un valor recortado. */
   speedMps: number;
+  /**
+   * Timestamp (ms, reloj del dispositivo) de la última velocidad VÁLIDA.
+   * Es la base de la expiración: un fix sin velocidad válida no la renueva.
+   */
+  lastValidSpeedTs: number | null;
+  /** Origen de la última velocidad válida (auditoría de la traza). */
+  speedSource: "coords" | "dt" | null;
   /** Último rumbo confiable por posiciones (0-360°) o null. */
   courseHeading: number | null;
   /** Timestamp (ms) del último fix aceptado (expiración de velocidad). */
@@ -84,6 +99,8 @@ export type SpeedHeadingState = {
 export function initialSpeedHeadingState(): SpeedHeadingState {
   return {
     speedMps: 0,
+    lastValidSpeedTs: null,
+    speedSource: null,
     courseHeading: null,
     lastFixTs: null,
     moving: false,
@@ -103,19 +120,46 @@ export function effectiveSpeedMps(
   state: SpeedHeadingState,
   now: number
 ): number {
-  if (state.lastFixTs == null || now - state.lastFixTs > SPEED_EXPIRY_MS) {
-    return 0;
-  }
+  if (!hasValidSpeed(state, now)) return 0;
   return state.speedMps;
+}
+
+/**
+ * ¿Hay una velocidad VÁLIDA y fresca? Distingue "parado con dato" (0 m/s
+ * legítimo → el panel muestra 0.0) de "sin dato" (→ el panel muestra —).
+ */
+export function hasValidSpeed(state: SpeedHeadingState, now: number): boolean {
+  return (
+    state.lastValidSpeedTs != null &&
+    now - state.lastValidSpeedTs <= SPEED_EXPIRY_MS
+  );
+}
+
+/**
+ * ¿Es plausible? > 45 m/s o una aceleración imposible entre fixes ⇒ basura.
+ * Un valor así se descarta (se conserva el último válido), nunca se recorta.
+ */
+export function isPlausibleSpeed(
+  speedMps: number,
+  previousMps: number | null,
+  dtSec: number | null
+): boolean {
+  if (!Number.isFinite(speedMps) || speedMps < 0) return false;
+  if (speedMps > MAX_PLAUSIBLE_SPEED_MPS) return false;
+  if (previousMps != null && dtSec != null && dtSec > 0) {
+    const accel = Math.abs(speedMps - previousMps) / dtSec;
+    if (accel > MAX_PLAUSIBLE_ACCEL_MPS2) return false;
+  }
+  return true;
 }
 
 /**
  * Incorpora un fix GPS al estado y devuelve el estado actualizado (nuevo
  * objeto; el estado es pequeño y se guarda en un ref).
  *
- * Aplica: descarte dt < 0.25 s, coords.speed solo si finito y >= 0 (y
- * capado), curso por posiciones solo si velocidad >= 0.7 y base >=
- * max(5 m, 2·accuracy).
+ * Aplica: descarte dt < 0.25 s, coords.speed solo si finito, >= 0 y <= 45 m/s
+ * (un valor imposible se DESCARTA, no se recorta), curso por posiciones solo
+ * si velocidad >= 0.7 y base >= max(5 m, 2·accuracy).
  */
 export function applyGpsFix(
   state: SpeedHeadingState,
@@ -134,22 +178,38 @@ export function applyGpsFix(
   }
 
   // 1) Velocidad: coords.speed si aporta; si no, dist/dt con dt >= 0.5 s.
+  // Fase 2-C: un valor IMPLAUSIBLE se DESCARTA (no se recorta); se conserva la
+  // última velocidad válida y expira a 0 pasados 3 s sin dato válido.
   let speed: number | null = null;
+  let speedSource: "coords" | "dt" | null = null;
+  const prevSpeed = hasValidSpeed(state, fix.ts) ? state.speedMps : null;
   if (
     typeof fix.coordsSpeed === "number" &&
     Number.isFinite(fix.coordsSpeed) &&
     fix.coordsSpeed >= 0
   ) {
-    speed = Math.min(fix.coordsSpeed, MAX_SPEED_MPS);
+    speed = fix.coordsSpeed;
+    speedSource = "coords";
   } else if (state.prevPos && state.prevTs != null) {
     const dt = (fix.ts - state.prevTs) / 1000;
     if (dt >= MIN_DT_FOR_DERIVED_SPEED_S) {
       const dist = haversineMeters(state.prevPos, fix.pos);
-      speed = Math.min(dist / dt, MAX_SPEED_MPS);
+      speed = dist / dt;
+      speedSource = "dt";
     }
   }
-  if (speed != null) {
-    next.speedMps = speed;
+  if (speed != null && speedSource != null) {
+    // dt para la comprobación de aceleración: desde la última velocidad
+    // VÁLIDA (no desde el fix anterior, que pudo no aportar velocidad).
+    const dtSec =
+      state.lastValidSpeedTs != null
+        ? Math.abs(fix.ts - state.lastValidSpeedTs) / 1000
+        : null;
+    if (isPlausibleSpeed(speed, prevSpeed, dtSec)) {
+      next.speedMps = speed;
+      next.speedSource = speedSource;
+      next.lastValidSpeedTs = fix.ts;
+    }
   }
   next.lastFixTs = fix.ts;
 

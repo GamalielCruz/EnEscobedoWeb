@@ -103,36 +103,71 @@ export function shouldReenterFollow(
   }
 }
 
+/** Fracción del área visible donde debe quedar el puck (70–75 %). */
+export const PUCK_ANCHOR_FRACTION = 0.725;
+
 /**
- * Offset vertical (px) que debe recibir `jumpTo({ offset })` para anclar el
- * puck al `anchorFraction` del ÁREA VISIBLE (entre la tarjeta superior y
- * el panel inferior): 70–75 % según el requisito. Mapbox `offset` es el
- * desplazamiento en px de la posición del punto (positivo hacia abajo en
- * pantalla desde el centro… en realidad desplaza el centro del mapa SIEMPRE
- * hacia arriba en pantalla para que el punto aparezca abajo).
- *
- * Cálculo: el punto debe quedar al `anchorFraction` de la altura visible
- * medida desde la parte SUPERIOR del área visible. El área visible va de
- * `visibleTopPx` a `visibleBottomPx` (px desde la parte superior del
- * contenedor). Su centro está en
- * `center = (visibleTopPx + visibleBottomPx) / 2`; Mapbox coloca el punto
- * en el centro del contenedor y `offset: [0, oy]` lo desplaza `oy` px hacia
- * abajo. Para que el punto quede en la fracción del área visible:
- *   oy = (visibleTop + f·visibleHeight) - containerHeight/2.
+ * Y (px desde el borde superior del CONTENEDOR) del ancla dentro del área
+ * visible: entre la tarjeta superior (`visibleTopPx` = su borde inferior) y
+ * el panel inferior (`visibleBottomPx` = su borde superior).
  */
-export function computeAnchorOffsetPx(
+export function anchorYForBand(
+  visibleTopPx: number,
+  visibleBottomPx: number,
+  anchorFraction = PUCK_ANCHOR_FRACTION
+): number {
+  const visibleHeight = Math.max(0, visibleBottomPx - visibleTopPx);
+  return visibleTopPx + anchorFraction * visibleHeight;
+}
+
+export type AnchorPadding = { top: number; bottom: number };
+
+/**
+ * `padding` que hay que pasar a `jumpTo`/`easeTo` para que el CENTRO del mapa
+ * (el vehículo) aparezca en `anchorY` px desde el borde superior del
+ * contenedor — 70–75 % del área visible.
+ *
+ * POR QUÉ `padding` Y NO `offset` (causa confirmada de T1/T2: puck al 49–51 %)
+ * En mapbox-gl 3.33, `Map#jumpTo` (dist/mapbox-gl-dev.js:98301-98344) lee
+ * `zoom`, `center`, `bearing`, `pitch`, `fov`, `padding`, `preloadOnly` y
+ * `retainPadding`: **NO lee `options.offset`**. `offset` solo lo resuelve
+ * `_extendCameraOptions` (dist/mapbox-gl-dev.js:97923-97931), que usan
+ * `easeTo`/`flyTo`. El seguimiento escribe con `jumpTo`, así que el offset de
+ * anclaje se descartaba silenciosamente y el puck quedaba en el centro del
+ * contenedor (348–351 px de 699 = 50 %).
+ *
+ * `padding` sí lo aplica `jumpTo` (líneas 98321-98330: `tr.padding = padding`),
+ * y el centro aparente del mapa es `EdgeInsets#getCenter`
+ * (dist/mapbox-gl-dev.js:48654-48656):
+ *   cy = (padding.top + height - padding.bottom) / 2
+ * Para que cy == anchorY:
+ *   si anchorY > H/2 → padding.top = 2·anchorY − H, bottom = 0
+ *   si anchorY ≤ H/2 → padding.bottom = H − 2·anchorY, top = 0
+ */
+export function computeAnchorPadding(
+  containerHeightPx: number,
+  anchorY: number
+): AnchorPadding {
+  const H = Math.max(1, containerHeightPx);
+  const clamped = Math.min(H, Math.max(0, anchorY));
+  if (clamped > H / 2) {
+    return { top: Math.round(2 * clamped - H), bottom: 0 };
+  }
+  return { top: 0, bottom: Math.round(H - 2 * clamped) };
+}
+
+/** Padding de anclaje a partir de la banda visible medida en el DOM. */
+export function computeAnchorPaddingForBand(
   containerHeightPx: number,
   visibleTopPx: number,
   visibleBottomPx: number,
-  anchorFraction = 0.725
-): number {
-  const visibleHeight = Math.max(0, visibleBottomPx - visibleTopPx);
-  const anchorY = visibleTopPx + anchorFraction * visibleHeight;
-  return anchorY - containerHeightPx / 2;
+  anchorFraction = PUCK_ANCHOR_FRACTION
+): AnchorPadding {
+  return computeAnchorPadding(
+    containerHeightPx,
+    anchorYForBand(visibleTopPx, visibleBottomPx, anchorFraction)
+  );
 }
-
-/** Fracción del área visible donde debe quedar el puck (70–75 %). */
-export const PUCK_ANCHOR_FRACTION = 0.725;
 
 /**
  * Escritura de cámara: EL ÚNICO camino por el que el controlador mueve la
@@ -142,8 +177,11 @@ export const PUCK_ANCHOR_FRACTION = 0.725;
 export type CameraCommand = {
   center?: { lat: number; lng: number };
   heading?: number;
-  /** `offset` de anclaje (px) calculado por `computeAnchorOffsetPx`. */
-  offsetPx?: number;
+  /**
+   * `padding` de anclaje calculado por `computeAnchorPadding` (no `offset`:
+   * `jumpTo` lo ignora en mapbox-gl 3.33).
+   */
+  padding?: AnchorPadding;
   zoom?: number;
   pitch?: number;
   animate?: boolean;

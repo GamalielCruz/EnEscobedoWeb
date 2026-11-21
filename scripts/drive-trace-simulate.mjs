@@ -20,7 +20,7 @@ import fs from "node:fs";
 import { applyGpsFix, effectiveCourseHeading, effectiveSpeedMps, initialSpeedHeadingState } from "../lib/drive/speed-heading.ts";
 import { createDriveHeadingResolver } from "../lib/drive/heading-resolver.ts";
 import { computeFollowFrame } from "../lib/drive/follow-frame.ts";
-import { applyCameraCommand, computeAnchorOffsetPx, PUCK_ANCHOR_FRACTION, nextFollowStateOnMapEvent } from "../lib/drive/camera-controller.ts";
+import { anchorYForBand, applyCameraCommand, computeAnchorPaddingForBand, PUCK_ANCHOR_FRACTION, nextFollowStateOnMapEvent } from "../lib/drive/camera-controller.ts";
 
 const outFile = process.argv[2] || "/tmp/t1-sim.json";
 
@@ -28,7 +28,8 @@ const outFile = process.argv[2] || "/tmp/t1-sim.json";
 const H = 800;
 const TOP = 60;
 const BOTTOM = 500;
-const baseOffsetY = computeAnchorOffsetPx(H, TOP, BOTTOM, PUCK_ANCHOR_FRACTION);
+const anchorY = anchorYForBand(TOP, BOTTOM, PUCK_ANCHOR_FRACTION);
+const anchorPadding = computeAnchorPaddingForBand(H, TOP, BOTTOM, PUCK_ANCHOR_FRACTION);
 
 const R = 6371000;
 const rad = Math.PI / 180;
@@ -118,6 +119,7 @@ let followState = "FOLLOWING";
 let virtualCenter = { ...path[0] };
 let virtualBearing = 0;
 let virtualZoom = 18.6;
+let virtualPadding = null;
 
 const markerEvents = (type, isGesture) => {
   events.push({ t: T0 + nowOffset, type, hasOriginalEvent: isGesture });
@@ -127,6 +129,7 @@ const markerEvents = (type, isGesture) => {
 const sink = {
   jumpTo: (cmd) => {
     if (cmd.center) virtualCenter = { ...cmd.center };
+    if (cmd.padding) virtualPadding = cmd.padding;
     if (cmd.heading != null && Math.abs(((cmd.heading - virtualBearing + 540) % 360) - 180) > 0.12) {
       virtualBearing = cmd.heading;
       // mapbox-gl 3.33 dispara rotatestart SIN originalEvent (programático).
@@ -160,8 +163,8 @@ const resolver = createDriveHeadingResolver({
   getMovementHeading: () => movementHeading,
   getDeviceHeading: () => ({ heading: 0, available: "unavailable", permission: "denied" }),
   getRouteGeometry: () => ({ path, vehiclePos }),
-  minMovementMeters: 5,
-  minMovementMs: 500,
+  minMovementMeters: 8,
+  minMovementMs: 1_000,
 });
 
 const FRAME_MS = 33;
@@ -199,7 +202,8 @@ for (let t = 0; t <= 57_000; t += FRAME_MS) {
       simHeading: null,
       speedMps: effectiveSpeedMps(speedState, T0 + t),
       route: null,
-      baseOffsetY,
+      anchorY,
+      containerHeightPx: H,
       pendingZoom,
       accuracy: gps[Math.max(0, fixIdx - 1)]?.accuracy ?? null,
     }
@@ -213,7 +217,7 @@ for (let t = 0; t <= 57_000; t += FRAME_MS) {
   applyCameraCommand(sink, {
     center: frame.command.center,
     heading: frame.command.bearing,
-    offsetPx: frame.command.offset[1],
+    padding: frame.command.padding,
     ...(frame.command.zoom != null ? { zoom: frame.command.zoom } : {}),
     pitch: 0,
     origin: "programmatic",
@@ -229,7 +233,10 @@ for (let t = 0; t <= 57_000; t += FRAME_MS) {
       );
     }
     const mpp = (156543.03392 * Math.cos((vehiclePos.lat * rad))) / Math.pow(2, virtualZoom);
-    const puckPxY = H / 2 + frame.command.offset[1];
+    // Mapa VIRTUAL: se aplica la MISMA fórmula que mapbox-gl para el centro
+    // aparente con padding (EdgeInsets#getCenter). No es evidencia de Mapbox.
+    const applied = virtualPadding ?? anchorPadding;
+    const puckPxY = (applied.top + H - applied.bottom) / 2;
     camera.push({
       t: T0 + t,
       centerLat: virtualCenter.lat,
@@ -273,7 +280,7 @@ const finalEvents = [
 const trace = {
   format: "drive-trace/v1",
   exportedAt: new Date().toISOString(),
-  userAgent: "drive-trace-simulate (T1-shaped, SIN dispositivo)",
+  userAgent: "drive-trace-simulate (T1-shaped, SIN dispositivo · mapa VIRTUAL)",
   gps: gps.map((g) => ({ ...g })),
   camera: camera.map(({ __mpp, ...c }) => c),
   events: finalEvents,

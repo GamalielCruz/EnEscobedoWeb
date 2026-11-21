@@ -56,15 +56,18 @@ import {
   applyGpsFix,
   effectiveCourseHeading,
   effectiveSpeedMps,
+  hasValidSpeed,
   initialSpeedHeadingState,
-  SPEED_EXPIRY_MS,
 } from "@/lib/drive/speed-heading";
 import {
+  anchorYForBand,
   AUTO_REENTER_MS,
   applyCameraCommand,
-  computeAnchorOffsetPx,
+  computeAnchorPadding,
+  computeAnchorPaddingForBand,
   PUCK_ANCHOR_FRACTION,
   shouldExitFollowOnMapEvent,
+  type AnchorPadding,
   type CameraSink,
 } from "@/lib/drive/camera-controller";
 import {
@@ -417,13 +420,17 @@ type DriveCamera = {
   heading?: number | null;
   tilt?: number | null;
   zoom?: number;
-  offset?: [number, number];
+  /** Anclaje por `padding` (jumpTo ignora `offset` en mapbox-gl 3.33). */
+  padding?: AnchorPadding;
 };
 
+/** Último padding aplicado al mapa (para reaplicarlo si cambia el layout). */
+let lastAppliedPadding: AnchorPadding | null = null;
+
 /**
- * Aplica la cámara en UNA llamada (center/bearing/pitch/zoom a la vez): evita
- * los saltos y la doble animación de mover cada propiedad por separado.
- * Acepta cámara PARCIAL (solo zoom, solo heading, ...).
+ * Aplica la cámara en UNA llamada (center/bearing/pitch/zoom/padding a la
+ * vez): evita los saltos y la doble animación de mover cada propiedad por
+ * separado. Acepta cámara PARCIAL (solo zoom, solo heading, ...).
  */
 function moveMapCamera(map: MapboxMapInstance, camera: DriveCamera): void {
   const center = camera.center ? [camera.center.lng, camera.center.lat] as [number, number] : null;
@@ -432,6 +439,19 @@ function moveMapCamera(map: MapboxMapInstance, camera: DriveCamera): void {
   const zoom = typeof camera.zoom === "number" ? camera.zoom : null;
 
   let changed = false;
+  // El padding de anclaje también cuenta como cambio: si solo cambió la
+  // geometría de la pantalla (hoja expandida, rotación), el frame debe
+  // reaplicarlo aunque center/bearing/zoom no cambien.
+  if (camera.padding) {
+    const p = camera.padding;
+    if (
+      lastAppliedPadding == null ||
+      lastAppliedPadding.top !== p.top ||
+      lastAppliedPadding.bottom !== p.bottom
+    ) {
+      changed = true;
+    }
+  }
   if (center) {
     const current = map.getCenter();
     changed ||= haversineMeters(
@@ -451,12 +471,14 @@ function moveMapCamera(map: MapboxMapInstance, camera: DriveCamera): void {
   }
   if (!changed) return;
 
+  if (camera.padding) lastAppliedPadding = camera.padding;
   map.jumpTo({
     ...(center ? { center } : {}),
     ...(bearing != null ? { bearing } : {}),
     ...(pitch != null ? { pitch } : {}),
     ...(zoom != null ? { zoom } : {}),
-    ...(camera.offset ? { offset: camera.offset } : {}),
+    // `padding`, NO `offset`: jumpTo ignora offset (mapbox-gl 3.33).
+    ...(camera.padding ? { padding: camera.padding } : {}),
   });
 }
 
@@ -480,26 +502,31 @@ let cachedBand: {
   containerHeight: number;
   top: number;
   bottom: number;
-  baseOffsetY: number;
+  /** Y del ancla (px desde el borde superior del contenedor). */
+  anchorY: number;
+  /** Padding de anclaje derivado (jumpTo/easeTo). */
+  padding: AnchorPadding;
 } = {
   epoch: -1,
   container: 0,
   containerHeight: 0,
   top: 0,
   bottom: 0,
-  baseOffsetY: 0,
+  anchorY: 0,
+  padding: { top: 0, bottom: 0 },
 };
 
 /**
  * Banda visible (px) del mapa —entre barra superior y panel inferior— y su
- * offset de anclaje al 72.5 %. Cacheado por época: leer rects en cada frame
- * de cámara (30/s) forzaba layout.
+ * ancla al 72.5 % del área visible. Cacheado por época: leer rects en cada
+ * frame de cámara (30/s) forzaba layout.
  */
 function readDriveVisibleBand(map: MapboxMapInstance): {
   containerHeight: number;
   top: number;
   bottom: number;
-  baseOffsetY: number;
+  anchorY: number;
+  padding: AnchorPadding;
 } {
   const containerHeight =
     map.getContainer()?.clientHeight || window.innerHeight || 0;
@@ -524,7 +551,8 @@ function readDriveVisibleBand(map: MapboxMapInstance): {
       containerHeight,
       top: visibleTop,
       bottom: visibleBottom,
-      baseOffsetY: computeAnchorOffsetPx(
+      anchorY: anchorYForBand(visibleTop, visibleBottom, PUCK_ANCHOR_FRACTION),
+      padding: computeAnchorPaddingForBand(
         containerHeight,
         visibleTop,
         visibleBottom,
@@ -535,12 +563,9 @@ function readDriveVisibleBand(map: MapboxMapInstance): {
   return cachedBand;
 }
 
-function getDriveVisibleMapOffset(
-  map: MapboxMapInstance,
-  aheadPx = 0
-): [number, number] {
-  const band = readDriveVisibleBand(map);
-  return [0, Math.round(band.baseOffsetY - aheadPx)];
+/** Padding de anclaje vigente (70–75 % del área visible). */
+function getDriveAnchorPadding(map: MapboxMapInstance): AnchorPadding {
+  return readDriveVisibleBand(map).padding;
 }
 
 /**
@@ -554,7 +579,7 @@ function createDriveCameraSink(map: MapboxMapInstance): CameraSink {
       moveMapCamera(map, {
         ...(cmd.center ? { center: cmd.center } : {}),
         ...(cmd.heading != null ? { heading: cmd.heading } : {}),
-        ...(cmd.offsetPx != null ? { offset: [0, cmd.offsetPx] as [number, number] } : {}),
+        ...(cmd.padding ? { padding: cmd.padding } : {}),
         ...(cmd.zoom != null ? { zoom: cmd.zoom } : {}),
         ...(cmd.pitch != null ? { tilt: cmd.pitch } : {}),
       });
@@ -566,7 +591,7 @@ function createDriveCameraSink(map: MapboxMapInstance): CameraSink {
           ...(cmd.heading != null ? { bearing: cmd.heading } : {}),
           ...(cmd.zoom != null ? { zoom: cmd.zoom } : {}),
           ...(cmd.pitch != null ? { pitch: cmd.pitch } : {}),
-          ...(cmd.offsetPx != null ? { offset: [0, cmd.offsetPx] } : {}),
+          ...(cmd.padding ? { padding: cmd.padding } : {}),
           duration: 450,
           essential: true,
         });
@@ -1239,6 +1264,8 @@ export default function DrivePage() {
       street: shownStep ? streetFromInstruction(shownStep.instruction) : null,
       // Metros hasta el final del step en curso (la siguiente maniobra).
       distanceToManeuver,
+      // Paso activo de la ruta (para registrar la etapa en la traza).
+      stepIndex: pendingIdx >= 0 ? pendingIdx : null,
       fractionCompleted: Math.min(1, Math.max(0, done / total)),
     };
   }, [roadRoute, currentLocation]);
@@ -1313,6 +1340,9 @@ export default function DrivePage() {
   // tick) y último error capturado (el loop ya no muere en silencio).
   const followLoopHeartbeatRef = useRef<number | null>(null);
   const followLoopErrorRef = useRef<string | null>(null);
+  // Fase 2-A: guarda de anclaje (puck medido vs ancla esperada).
+  const anchorMismatchSinceRef = useRef<number | null>(null);
+  const anchorMismatchLoggedRef = useRef(false);
 
   // ── Centrado del mapa en el repartidor (offset de la hoja inferior) ──
   // El mapa ocupa toda la pantalla pero la tarjeta inferior tapa la zona baja:
@@ -1331,7 +1361,9 @@ export default function DrivePage() {
       map.easeTo({
         center: [position.lng, position.lat],
         ...(options.zoom != null ? { zoom: options.zoom } : {}),
-        offset: getDriveVisibleMapOffset(map),
+        // Anclaje por padding (Fase 2-A): `offset` se ignora en jumpTo y no
+        // da la misma geometría que el padding en el área visible.
+        padding: getDriveAnchorPadding(map),
         bearing: options.heading ?? 0,
         pitch: 0,
         duration: options.duration ?? 450,
@@ -1441,13 +1473,15 @@ export default function DrivePage() {
       getDeviceHeading: () => deviceStateRef.current,
       getRouteGeometry: () => ({
         path: roadRouteRef.current?.path ?? null,
-        vehiclePos: visualPosRef.current,
+        // Fase 2-B: posición GPS REAL, no la visual interpolada. Con la visual
+        // el "bearing entre ticks" medía la interpolación hacia un fix
+        // impreciso a pocos metros y se congelaba en 268° (T2).
+        vehiclePos: currentLocationRef.current,
       }),
-      // Fase 1-C: la base mínima para derivar curso por posiciones es 5 m /
-      // 500 ms (antes 2 m / 250 ms, que a ritmo de caminata no se cumplía y
-      // en ráfagas iniciales producía picos absurdos).
-      minMovementMeters: 5,
-      minMovementMs: 500,
+      // Fase 2-B: 8 m / 1000 ms para el bearing entre ticks (antes 5 m /
+      // 500 ms: con GPS de 26 m de precisión eso era ruido, no movimiento).
+      minMovementMeters: 8,
+      minMovementMs: 1_000,
     });
   }
 
@@ -1478,9 +1512,21 @@ export default function DrivePage() {
     if (!TRACE_REC_ENABLED || !navPhase) return;
     traceRecorderRef.current?.recordPhase(
       navPhase,
-      guidance?.distanceToManeuver ?? null
+      guidance?.distanceToManeuver ?? null,
+      {
+        stepIndex: guidance?.stepIndex ?? null,
+        maneuverType: guidance?.maneuver ?? null,
+        instruction: guidance?.instruction ?? null,
+      }
     );
-  }, [navPhase, guidance?.distanceToManeuver, TRACE_REC_ENABLED]);
+  }, [
+    navPhase,
+    guidance?.distanceToManeuver,
+    guidance?.stepIndex,
+    guidance?.maneuver,
+    guidance?.instruction,
+    TRACE_REC_ENABLED,
+  ]);
 
   useEffect(() => {
     if (!TRACE_REC_ENABLED || !navigatingWithRoute || !mapReady) return;
@@ -1490,7 +1536,8 @@ export default function DrivePage() {
       if (!map || !rec) return;
       const center = map.getCenter();
       const vehicle = visualPosRef.current;
-      const dbg = driveHeadingResolverRef.current?.state.debug ?? null;
+      const resolverState = driveHeadingResolverRef.current?.state ?? null;
+      const dbg = resolverState?.debug ?? null;
       let puckPxY: number | null = null;
       try {
         puckPxY = map.project([vehicle.lng, vehicle.lat]).y;
@@ -1500,6 +1547,33 @@ export default function DrivePage() {
       // Banda visible: el requisito es 70–75 % del ÁREA VISIBLE (no de la
       // altura total del contenedor). Se registra para medirlo en el arnés.
       const band = readDriveVisibleBand(map);
+      // ── Guarda de anclaje (Fase 2-A, solo staging) ──
+      // Si el puck MEDIDO (map.project) se desvía >5 % de la altura del
+      // ancla durante >2 s, se registra un evento en la traza: el anclaje
+      // dejó de aplicarse (p. ej. si Mapbox ignora el padding en un build).
+      if (puckPxY != null && band.containerHeight > 0) {
+        const deviation = Math.abs(puckPxY - band.anchorY) / band.containerHeight;
+        if (deviation > 0.05) {
+          if (anchorMismatchSinceRef.current == null) {
+            anchorMismatchSinceRef.current = Date.now();
+          }
+          const lastsForMs = Date.now() - anchorMismatchSinceRef.current;
+          if (lastsForMs > 2_000 && !anchorMismatchLoggedRef.current) {
+            anchorMismatchLoggedRef.current = true;
+            rec.recordAnchorMismatch({
+              puckPxY,
+              anchorPxY: band.anchorY,
+              deviationFraction: deviation,
+              lastsForMs,
+              paddingTop: band.padding.top,
+              paddingBottom: band.padding.bottom,
+            });
+          }
+        } else {
+          anchorMismatchSinceRef.current = null;
+          anchorMismatchLoggedRef.current = false;
+        }
+      }
       rec.recordCamera({
         t: Date.now(),
         centerLat: center.lat,
@@ -1509,7 +1583,10 @@ export default function DrivePage() {
         followDriver: followDriverRef.current,
         loopAlive: followRafRef.current != null,
         resolverSource: dbg?.source ?? null,
-        resolvedHeading: headingResolverRef.current(),
+        // Se lee el rumbo ACEPTADO por el resolvedor, no se vuelve a llamar a
+        // resolve(): hacerlo desde el muestreo (5 Hz) ejecutaba efectos
+        // laterales fuera de cadencia (avanzaba anclas y el límite angular).
+        resolvedHeading: resolverState?.acceptedHeading ?? null,
         visualHeading: visualHeadingRef.current,
         speedMps: movementSpeedRef.current,
         compassHeading:
@@ -1754,7 +1831,8 @@ export default function DrivePage() {
                 steps: roadRouteRef.current.steps,
               }
             : null,
-          baseOffsetY: getDriveVisibleMapOffset(map)[1],
+          anchorY: readDriveVisibleBand(map).anchorY,
+          containerHeightPx: readDriveVisibleBand(map).containerHeight,
           pendingZoom: pendingZoomRef.current,
           accuracy: gpsAccuracyRef.current,
         }
@@ -1793,7 +1871,7 @@ export default function DrivePage() {
       applyCameraCommand(createDriveCameraSink(map), {
         center: frame.command.center,
         heading: frame.command.bearing,
-        offsetPx: frame.command.offset[1],
+        padding: frame.command.padding,
         ...(frame.command.zoom != null ? { zoom: frame.command.zoom } : {}),
         pitch: 0,
         origin: "programmatic",
@@ -1821,6 +1899,8 @@ export default function DrivePage() {
   const handleMapLoad = useCallback(
     (map: MapboxMapInstance) => {
       mapRef.current = map;
+      // Mapa nuevo ⇒ padding nuevo (el mapa anterior pudo tenerlo aplicado).
+      lastAppliedPadding = null;
       setMapReady(true);
       // Solo dev: expone el mapa para probar en DevTools Console.
       if (process.env.NODE_ENV !== "production") {
@@ -2072,7 +2152,7 @@ export default function DrivePage() {
       // 70–75 % del área visible también en este modo (Fase 1-E).
       moveMapCamera(map, {
         center: currentLocation,
-        offset: getDriveVisibleMapOffset(map),
+        padding: getDriveAnchorPadding(map),
       });
       return;
     }
@@ -3301,13 +3381,13 @@ export default function DrivePage() {
           type="button"
           aria-label="Abrir panel de diagnóstico"
           onClick={() => setSensorPanelOpen(true)}
-          className="absolute left-3 top-[calc(env(safe-area-inset-top)+5rem)] z-40 rounded-full bg-black/60 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white/70 shadow backdrop-blur-sm"
+          className="fixed left-3 top-1/2 z-40 -translate-y-1/2 rounded-full bg-black/60 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white/70 shadow backdrop-blur-sm"
         >
           SENSORS
         </button>
       )}
       {sensorDebugVisible && sensorPanelOpen && (
-        <div className="absolute left-3 top-[calc(env(safe-area-inset-top)+5rem)] z-40 rounded-lg bg-black/70 px-3 py-2 text-[11px] leading-5 text-white/80 shadow-lg backdrop-blur-sm">
+        <div className="fixed left-3 top-1/2 z-40 max-h-[70dvh] -translate-y-1/2 overflow-y-auto rounded-lg bg-black/70 px-3 py-2 text-[11px] leading-5 text-white/80 shadow-lg backdrop-blur-sm">
           <div className="flex items-center justify-between gap-3">
             <span className="font-semibold text-white/90">SENSORS</span>
             <button
@@ -3335,22 +3415,14 @@ export default function DrivePage() {
           </div>
           <div className="mt-0.5">
             <span className="text-white/60">GPS speed:</span>
-            <span className="font-mono text-white/90">
-              {/* Fase 1-C/H: velocidad YA validada (≤70 m/s, caduca a 0 a los
-                  3 s). Antes el panel mostraba valores pegados y absurdos
-                  (2222.5 km/h) que no eran la velocidad real. */}
-              {(sim.active
-                ? SIM_BASE_METERS_PER_SECOND * sim.speed
-                : Math.min(
-                    70,
-                    Math.max(
-                      0,
-                      Date.now() - (speedHeadingRef.current.lastFixTs ?? 0) > SPEED_EXPIRY_MS
-                        ? 0
-                        : (movementSpeedRef.current ?? 0)
-                    )
-                  ) * 3.6
-              ).toFixed(1)}{" "}km/h
+            <span className="font-mono text-white/90">              {/* Fase 2-C: velocidad VÁLIDA o "—". Un valor imposible se
+                  descarta (antes se recortaba a 70 m/s y el panel mostraba
+                  252 km/h antes del primer fix). */}
+              {sim.active
+                ? `${(SIM_BASE_METERS_PER_SECOND * sim.speed * 3.6).toFixed(1)} km/h`
+                : hasValidSpeed(speedHeadingRef.current, Date.now())
+                  ? `${((movementSpeedRef.current ?? 0) * 3.6).toFixed(1)} km/h`
+                  : "—"}
             </span>
             <span className="ml-1 text-white/50">
               ({movementHeadingRef.current == null

@@ -72,6 +72,38 @@ export type TraceMapEvent = {
   hasOriginalEvent: boolean;
 };
 
+/**
+ * Conteo de eventos de mapa PROGRAMÁTICOS (Fase 2-D).
+ *
+ * En T2 hubo 3 452 eventos en 55 s (704 movestart, 341 rotatestart, 89
+ * zoomstart + sus exit-check) y todos con hasOriginalEvent=false: guardarlos
+ * uno por uno llenaba el buffer de 4 000 y tapaba los gestos reales. Los
+ * programáticos se agregan por (tipo, segundo); los gestos reales y las
+ * transiciones de follow/etapa se guardan completos.
+ */
+export type TraceProgrammaticCount = {
+  /** Inicio del segundo (ms epoch) al que pertenece el conteo. */
+  t: number;
+  type: string;
+  count: number;
+};
+
+/** Guarda de anclaje (Fase 2-A): el puck medido se desvió del ancla >5 %. */
+export type TraceAnchorMismatchEvent = {
+  t: number;
+  kind: "anchor-mismatch";
+  /** Y del puck (px desde el borde superior del contenedor). */
+  puckPxY: number;
+  /** Y del ancla esperada (px desde el borde superior del contenedor). */
+  anchorPxY: number;
+  /** Desviación como fracción de la altura del contenedor. */
+  deviationFraction: number;
+  /** Cuánto duró la desviación antes de registrarse (ms). */
+  lastsForMs: number;
+  paddingTop: number;
+  paddingBottom: number;
+};
+
 export type TraceFollowEvent = {
   t: number;
   kind: "follow";
@@ -90,9 +122,19 @@ export type TracePhaseEvent = {
   phase: string;
   /** Distancia a la próxima maniobra (m) o null si no aplica. */
   distanceToManeuverM: number | null;
+  /** Índice del paso activo de la ruta (Fase 2-D). */
+  stepIndex: number | null;
+  /** Tipo de maniobra del paso activo (turn/uturn/arrive/...). */
+  maneuverType: string | null;
+  /** Instrucción visible en la tarjeta superior. */
+  instruction: string | null;
 };
 
-export type TraceEvent = TraceMapEvent | TraceFollowEvent | TracePhaseEvent;
+export type TraceEvent =
+  | TraceMapEvent
+  | TraceFollowEvent
+  | TracePhaseEvent
+  | TraceAnchorMismatchEvent;
 
 export type TraceExport = {
   format: "drive-trace/v1";
@@ -101,16 +143,20 @@ export type TraceExport = {
   gps: TraceGpsSample[];
   camera: TraceCameraSample[];
   events: TraceEvent[];
+  /** Eventos programáticos agregados por (tipo, segundo) — Fase 2-D. */
+  programmaticEvents?: TraceProgrammaticCount[];
 };
 
 const MAX_GPS = 12_000;
 const MAX_CAMERA = 12_000;
 const MAX_EVENTS = 4_000;
+const MAX_PROGRAMMATIC = 2_000;
 
 export class TraceRecorder {
   private gps: TraceGpsSample[] = [];
   private camera: TraceCameraSample[] = [];
   private events: TraceEvent[] = [];
+  private programmatic: TraceProgrammaticCount[] = [];
   readonly startedAt = Date.now();
 
   recordGps(sample: TraceGpsSample): void {
@@ -124,8 +170,32 @@ export class TraceRecorder {
       this.camera.splice(0, this.camera.length - MAX_CAMERA);
   }
 
+  /**
+   * Evento de mapa. Los PROGRAMÁTICOS se agregan (tipo, segundo) para no
+   * inundar el buffer; los gestos reales se guardan uno por uno.
+   */
   recordMapEvent(type: string, hasOriginalEvent: boolean): void {
-    this.events.push({ t: Date.now(), type, hasOriginalEvent });
+    const t = Date.now();
+    if (hasOriginalEvent) {
+      this.events.push({ t, type, hasOriginalEvent });
+      if (this.events.length > MAX_EVENTS)
+        this.events.splice(0, this.events.length - MAX_EVENTS);
+      return;
+    }
+    const bucket = Math.floor(t / 1000) * 1000;
+    const last = this.programmatic[this.programmatic.length - 1];
+    if (last && last.type === type && last.t === bucket) {
+      last.count += 1;
+    } else {
+      this.programmatic.push({ t: bucket, type, count: 1 });
+      if (this.programmatic.length > MAX_PROGRAMMATIC)
+        this.programmatic.splice(0, this.programmatic.length - MAX_PROGRAMMATIC);
+    }
+  }
+
+  /** Guarda de anclaje: el puck se desvió >5 % de la altura durante >2 s. */
+  recordAnchorMismatch(event: Omit<TraceAnchorMismatchEvent, "t" | "kind">): void {
+    this.events.push({ t: Date.now(), kind: "anchor-mismatch", ...event });
     if (this.events.length > MAX_EVENTS)
       this.events.splice(0, this.events.length - MAX_EVENTS);
   }
@@ -136,12 +206,23 @@ export class TraceRecorder {
       this.events.splice(0, this.events.length - MAX_EVENTS);
   }
 
-  recordPhase(phase: string, distanceToManeuverM: number | null): void {
+  recordPhase(
+    phase: string,
+    distanceToManeuverM: number | null,
+    context?: {
+      stepIndex?: number | null;
+      maneuverType?: string | null;
+      instruction?: string | null;
+    }
+  ): void {
     this.events.push({
       t: Date.now(),
       kind: "phase",
       phase,
       distanceToManeuverM,
+      stepIndex: context?.stepIndex ?? null,
+      maneuverType: context?.maneuverType ?? null,
+      instruction: context?.instruction ?? null,
     });
     if (this.events.length > MAX_EVENTS)
       this.events.splice(0, this.events.length - MAX_EVENTS);
@@ -155,6 +236,7 @@ export class TraceRecorder {
     this.gps = [];
     this.camera = [];
     this.events = [];
+    this.programmatic = [];
   }
 
   toJSON(): TraceExport {
@@ -165,6 +247,7 @@ export class TraceRecorder {
       gps: this.gps,
       camera: this.camera,
       events: this.events,
+      programmaticEvents: this.programmatic,
     };
   }
 
