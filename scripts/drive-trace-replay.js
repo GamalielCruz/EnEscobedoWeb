@@ -136,12 +136,27 @@ if (cam.length >= 2) {
     const big = jumpsPx.filter((j) => j > 15).length;
     console.log(`  Saltos de centro: máx=${Math.max(...jumpsPx).toFixed(1)} px · >15 px: ${big}`);
   }
-  // Ancla del puck (% de la altura del contenedor).
+  // Ancla del puck: % del ÁREA VISIBLE cuando la traza registra la banda
+  // (barra superior / panel inferior); si no, % de la altura del contenedor.
+  const hasBand = cam.some(
+    (c) => c.visibleTopPx != null && c.visibleBottomPx != null
+  );
   const fracs = cam
-    .filter((c) => c.puckPxY != null && c.containerHeight)
-    .map((c) => (c.puckPxY / c.containerHeight) * 100);
+    .filter((c) =>
+      hasBand
+        ? c.puckPxY != null && c.visibleTopPx != null && c.visibleBottomPx != null
+        : c.puckPxY != null && c.containerHeight
+    )
+    .map((c) =>
+      hasBand
+        ? ((c.puckPxY - c.visibleTopPx) / (c.visibleBottomPx - c.visibleTopPx)) * 100
+        : (c.puckPxY / c.containerHeight) * 100
+    );
   if (fracs.length) {
-    console.log(`  Puck (fracción de altura): p50=${pct(fracs, 0.5)?.toFixed(1)} % · min=${Math.min(...fracs).toFixed(1)} % · máx=${Math.max(...fracs).toFixed(1)} % (requisito 70–75 %)`);
+    const inBand = fracs.filter((f) => f >= 70 && f <= 75).length;
+    console.log(
+      `  Puck (${hasBand ? "% del área visible" : "% de la altura"}): p50=${pct(fracs, 0.5)?.toFixed(1)} % · min=${Math.min(...fracs).toFixed(1)} % · máx=${Math.max(...fracs).toFixed(1)} % · en 70–75 %: ${inBand}/${fracs.length} (${((inBand / fracs.length) * 100).toFixed(0)} %)`
+    );
   }
   // Relación brújula ↔ bearing: ¿mueve la brújula la cámara?
   let compassDrivenBearing = 0;
@@ -157,6 +172,37 @@ if (cam.length >= 2) {
     }
   }
   console.log(`  Bearing sigue a la brújula: ${compassDrivenBearing}/${compassSamples} muevas de brújula >5° (H6)`);
+
+  // ── Fase 1: métricas de la tabla de aceptación ──
+  // Cámara a <5 m del vehículo (¿el centro sigue al vehículo?).
+  const centers = cam.filter(
+    (c) => c.centerLat != null && c.centerLng != null && c.vehicleLat != null
+  );
+  const near = centers.filter(
+    (c) =>
+      hav(
+        { lat: c.centerLat, lng: c.centerLng },
+        { lat: c.vehicleLat, lng: c.vehicleLng }
+      ) < 5
+  ).length;
+  if (centers.length) {
+    const nearPctV = (near / centers.length) * 100;
+    console.log(
+      `  Cámara a <5 m del vehículo: ${near}/${centers.length} (${nearPctV.toFixed(1)} %)`
+    );
+  }
+  // Velocidad resuelta (ya validada en la app: cap 70 m/s y caducidad).
+  const speeds = cam
+    .map((c) => c.speedMps)
+    .filter((s) => typeof s === "number" && Number.isFinite(s));
+  if (speeds.length) {
+    console.log(
+      `  Velocidad resuelta: máx=${Math.max(...speeds).toFixed(2)} m/s (${(Math.max(...speeds) * 3.6).toFixed(1)} km/h) · p50=${pct(speeds, 0.5)?.toFixed(2)} m/s`
+    );
+  }
+  // Latido del loop (solo si la traza lo registra).
+  const alive = cam.filter((c) => c.loopAlive).length;
+  console.log(`  loopAlive=true en ${alive}/${cam.length} muestras`);
 }
 
 // ── 3 · Rumbo vs trayectoria + re-ejecución del resolvedor ────────────────
@@ -191,6 +237,48 @@ if (accepted.length >= 6) {
   console.log("\n── Rumbo (registrado en vivo vs trayectoria GPS suavizada) ──");
   if (errs.length) {
     console.log(`  Error de rumbo: media=${(errs.reduce((s, e) => s + e, 0) / errs.length).toFixed(1)}° · p95=${pct(errs, 0.95)?.toFixed(1)}° · máx=${Math.max(...errs).toFixed(1)}° (umbral: ≤10° tras 3 s)`);
+  }
+  // Criterio de aceptación: error en TRAMO RECTO, medido ≥3 s después de un
+  // giro real (>30° de cambio de rumbo en la trayectoria) y solo en marcha
+  // (≥0.7 m/s). Evita contar los transitorios de la maniobra como error.
+  {
+    const courses = [];
+    for (let i = 1; i < accepted.length; i++) {
+      const d = hav(accepted[i - 1], accepted[i]);
+      const dt = (accepted[i].t - accepted[i - 1].t) / 1000;
+      courses.push({
+        t: accepted[i].t,
+        course: d > 1 ? brg(accepted[i - 1], accepted[i]) : null,
+        speed: dt > 0 ? d / dt : 0,
+      });
+    }
+    const turnTimes = [];
+    for (let i = 1; i < courses.length; i++) {
+      if (courses[i].course == null || courses[i - 1].course == null) continue;
+      if (angDiff(courses[i].course, courses[i - 1].course) > 30) {
+        turnTimes.push(courses[i].t);
+      }
+    }
+    const straightErrs = [];
+    for (let i = 0; i < cam.length; i++) {
+      const c = cam[i];
+      if (c.resolvedHeading == null) continue;
+      let j = courses.findIndex((s) => s.t > c.t);
+      if (j === -1) j = courses.length - 1;
+      const s = courses[Math.max(0, j - 1)];
+      if (!s || s.course == null || s.speed < 0.7) continue;
+      const afterTurn = turnTimes.some((tt) => tt <= c.t && c.t - tt <= 3000);
+      if (afterTurn) continue;
+      straightErrs.push(angDiff(c.resolvedHeading, s.course));
+    }
+    if (straightErrs.length) {
+      const inTol = straightErrs.filter((e) => e <= 15).length;
+      console.log(
+        `  Error en tramo recto ≥3 s tras giro: media=${(straightErrs.reduce((s, e) => s + e, 0) / straightErrs.length).toFixed(1)}° · p95=${pct(straightErrs, 0.95)?.toFixed(1)}° · máx=${Math.max(...straightErrs).toFixed(1)}° · ≤15°: ${inTol}/${straightErrs.length} (${((inTol / straightErrs.length) * 100).toFixed(0)} %)`
+      );
+    } else {
+      console.log("  Error en tramo recto: sin muestras elegibles.");
+    }
   }
   console.log(`  Saltos >45° en <1 s: ${sharpJumps.length} ${sharpJumps.length ? JSON.stringify(sharpJumps.slice(0, 5)) : ""}`);
 }
@@ -252,6 +340,28 @@ if (bundleIdx !== -1 && process.argv[bundleIdx + 1]) {
   }
   const exits = follows.filter((f, i) => i > 0 && follows[i - 1].followDriver && !f.followDriver).length;
   console.log(`  Transiciones: follow ${follows.length} (salidas de seguimiento: ${exits})`);
-  console.log(`  rotatestart/zoomstart programáticos ⇒ H1 confirmada en datos reales si > 0.`);
+  // Salidas de FOLLOWING SIN gesto del usuario: para cada salida, ¿hubo algún
+  // evento de mapa con originalEvent en los 300 ms previos?
+  const gestureTimes = events
+    .filter((e) => e.kind !== "follow" && e.kind !== "phase" && e.hasOriginalEvent)
+    .map((e) => e.t);
+  const exitsWithoutGesture = follows.filter((f, i) => {
+    if (i === 0 || !follows[i - 1].followDriver || f.followDriver) return false;
+    return !gestureTimes.some((t) => t <= f.t && f.t - t <= 300);
+  }).length;
+  console.log(
+    `  Salidas de FOLLOWING SIN gesto: ${exitsWithoutGesture} (umbral: 0)`
+  );
+  const phases = events.filter((e) => e.kind === "phase");
+  if (phases.length) {
+    console.log(
+      `  Transiciones de etapa: ${phases
+        .map(
+          (p) =>
+            `${p.phase}${p.distanceToManeuverM != null ? `@${Math.round(p.distanceToManeuverM)}m` : ""}`
+        )
+        .join(" → ")}`
+    );
+  }
 }
 console.log("\n═ Fin. Comparar contra umbrales antes de Fase 1. ═");

@@ -6,6 +6,10 @@ const MIN_DISTANCE_METERS = 20;
 const MIN_INTERVAL_MS = 10_000;
 const GPS_LOCATION_MIN_INTERVAL_MS = 250;
 const GPS_LOCATION_MIN_DISTANCE_METERS = 1.5;
+const MAX_FIX_AGE_MS = 5_000;
+// Fase 1-D: descartar fixes con antigüedad > 5 s (position.timestamp vs el
+// reloj del dispositivo). En la traza T1 el primer fix tenía 21.7 s de
+// antigüedad pese a maximumAge:0 (la caché del SO puede mentir).
 
 function haversineDistance(
   lat1: number,
@@ -32,7 +36,7 @@ export type RawGpsSample = {
   heading: number | null;
   deviceT: number | null;
   accepted: boolean;
-  rejectedReason?: "accuracy" | "dedupe";
+  rejectedReason?: "accuracy" | "dedupe" | "stale";
 };
 
 export function useDriverLocation(
@@ -44,6 +48,8 @@ export function useDriverLocation(
   const [accuracy, setAccuracy] = useState<number | null>(null);
   /** Rumbo del GPS (0-360°, válido solo mientras el dispositivo se mueve). */
   const [heading, setHeading] = useState<number | null>(null);
+  /** `coords.speed` normalizada (m/s, null si el SO no la entrega). */
+  const [speed, setSpeed] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const lastReportRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
   const watchIdRef = useRef<number | null>(null);
@@ -94,7 +100,7 @@ export function useDriverLocation(
       // Instrumentación (Fase 0, staging): expone la muestra CRUDA antes de
       // los filtros para el grabador de trazas. No altera la lógica: los
       // filtros de abajo se aplican exactamente igual.
-      const emitRawSample = (accepted: boolean, rejectedReason?: "accuracy" | "dedupe") => {
+      const emitRawSample = (accepted: boolean, rejectedReason?: "accuracy" | "dedupe" | "stale") => {
         options?.onRawSample?.({
           lat: latitude,
           lng: longitude,
@@ -124,10 +130,22 @@ export function useDriverLocation(
           return;
         }
       }
+      // Antigüedad del fix: si el SO entregó una posición vieja, se
+      // descarta (no mueve marcador ni cámara).
+      const fixAgeMs = typeof pos.timestamp === "number" ? now - pos.timestamp : 0;
+      if (fixAgeMs > MAX_FIX_AGE_MS) {
+        emitRawSample(false, "stale");
+        return;
+      }
       emitRawSample(true);
       lastVisualLocationRef.current = { lat: latitude, lng: longitude, time: now };
       setLocation({ lat: latitude, lng: longitude });
       setAccuracy(accuracy);
+      setSpeed(
+        typeof rawSpeed === "number" && Number.isFinite(rawSpeed) && rawSpeed >= 0
+          ? rawSpeed
+          : null
+      );
       // heading solo es válido mientras el dispositivo se mueve; el resto del
       // sistema lo usa solo cuando viene como número dentro de [0, 360).
       // Solo setState si cambió de forma relevante: cada setState re-renderiza
@@ -162,7 +180,9 @@ export function useDriverLocation(
     navigator.geolocation.getCurrentPosition(onSuccess, onError, {
       enableHighAccuracy: true,
       timeout: 15_000,
-      maximumAge: 30_000,
+      // 0: la primera posición también debe ser fresca (T1: venía con
+      // 21.7 s de antigüedad con maximumAge 30 s).
+      maximumAge: 0,
     });
 
     // Start watching
@@ -189,5 +209,5 @@ export function useDriverLocation(
     };
   }, [enabled, reportLocation]);
 
-  return { location, heading, accuracy, error };
+  return { location, heading, accuracy, speed, error };
 }

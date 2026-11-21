@@ -34,7 +34,7 @@ export type TraceGpsSample = {
   /** La app lo aceptó como posición visual. */
   accepted: boolean;
   /** Motivo de descarte (solo cuando accepted=false). */
-  rejectedReason?: "accuracy" | "dedupe";
+  rejectedReason?: "accuracy" | "dedupe" | "stale";
 };
 
 export type TraceCameraSample = {
@@ -57,6 +57,10 @@ export type TraceCameraSample = {
   /** Posición del puck en px desde la parte superior del contenedor. */
   puckPxY: number | null;
   containerHeight: number | null;
+  /** Banda visible del mapa (px): borde inferior de la barra superior. */
+  visibleTopPx?: number | null;
+  /** Banda visible del mapa (px): borde superior del panel inferior. */
+  visibleBottomPx?: number | null;
   vehicleLat: number | null;
   vehicleLng: number | null;
 };
@@ -75,7 +79,20 @@ export type TraceFollowEvent = {
   navigatingWithRoute: boolean;
 };
 
-export type TraceEvent = TraceMapEvent | TraceFollowEvent;
+/**
+ * Transición de etapa de navegación (Fase 1-D). "Comienza tu viaje" no cambia
+ * de lógica: solo se registra el paso y la distancia a la próxima maniobra en
+ * cada transición, para diagnosticar cuándo deja de mostrarse.
+ */
+export type TracePhaseEvent = {
+  t: number;
+  kind: "phase";
+  phase: string;
+  /** Distancia a la próxima maniobra (m) o null si no aplica. */
+  distanceToManeuverM: number | null;
+};
+
+export type TraceEvent = TraceMapEvent | TraceFollowEvent | TracePhaseEvent;
 
 export type TraceExport = {
   format: "drive-trace/v1";
@@ -115,6 +132,17 @@ export class TraceRecorder {
 
   recordFollow(followDriver: boolean, navigatingWithRoute: boolean): void {
     this.events.push({ t: Date.now(), kind: "follow", followDriver, navigatingWithRoute });
+    if (this.events.length > MAX_EVENTS)
+      this.events.splice(0, this.events.length - MAX_EVENTS);
+  }
+
+  recordPhase(phase: string, distanceToManeuverM: number | null): void {
+    this.events.push({
+      t: Date.now(),
+      kind: "phase",
+      phase,
+      distanceToManeuverM,
+    });
     if (this.events.length > MAX_EVENTS)
       this.events.splice(0, this.events.length - MAX_EVENTS);
   }

@@ -52,6 +52,26 @@ import { useDriverLocation } from "@/hooks/useDriverLocation";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { useDeviceOrientation } from "@/hooks/useDeviceOrientation";
 import { TraceRecorder } from "@/lib/drive/trace-recorder";
+import {
+  applyGpsFix,
+  effectiveCourseHeading,
+  effectiveSpeedMps,
+  initialSpeedHeadingState,
+  SPEED_EXPIRY_MS,
+} from "@/lib/drive/speed-heading";
+import {
+  AUTO_REENTER_MS,
+  applyCameraCommand,
+  computeAnchorOffsetPx,
+  PUCK_ANCHOR_FRACTION,
+  shouldExitFollowOnMapEvent,
+  type CameraSink,
+} from "@/lib/drive/camera-controller";
+import {
+  computeFollowFrame,
+  NAV_HEADING_SKIP_DEG,
+  NAV_ZOOM_BASE,
+} from "@/lib/drive/follow-frame";
 import { useOfferAlertSound } from "@/hooks/useOfferAlertSound";
 import { shortOrderCode, shortAddress } from "@/lib/dispatch/dispatch-format";
 import {
@@ -93,65 +113,18 @@ const CAMERA_PADDING = 0.15;
 const DRIVER_CENTER_METERS = 20;
 // Zoom por defecto del mapa (sin navegación).
 const DEFAULT_ZOOM = 15;
-// Ancalaje visual del conductor en pantalla (fracción desde arriba).
+// Anclaje visual del conductor en pantalla al encuadrar sin navegación
+// (fracción desde arriba; el anclaje de navegación 70–75 % vive en
+// lib/drive/camera-controller.ts → PUCK_ANCHOR_FRACTION).
 const NAV_DRIVER_SCREEN_FRACTION = 0.72;
-// ── Zoom de navegación turn-by-turn ──
-// Referencia Waze/Google Maps (18.5–19). Ligeramente MÁS CERCANO que antes:
-// el repartidor distingue calles, incorporaciones y la próxima maniobra sin
-// perder el contexto de la ruta. El nivel se mantiene dentro de un rango
-// estrecho según velocidad y cercanía al giro.
-const NAV_ZOOM_BASE = 18.6;
-const NAV_ZOOM_MAX = 19;
-const NAV_ZOOM_MIN = 17.9;
-const NAV_ZOOM_SLOW = NAV_ZOOM_BASE;
-const NAV_ZOOM_FAST = NAV_ZOOM_BASE - 0.4;
-// No girar el mapa por variaciones menores de rumbo (anti-jitter).
-const NAV_HEADING_SKIP_DEG = 2.5;
-// Suavizado de rotación por frame (interpolación del ángulo más corto).
+// Suavizado de rotación del heading tween (fuera del loop): interpolación
+// por el ángulo más corto hacia el rumbo objetivo.
 const NAV_HEADING_SMOOTH = 0.16;
-// Velocidad angular máxima del giro de cámara en modo navegación para evitar
-// saltos instantáneos y mantener la rotación suave pero reactiva.
-const MAX_HEADING_ROTATION_DEG_PER_SEC = 150;
-// Rumbo derivado por movimiento: mínimo desplazamiento e intervalo.
-// Umbrales bajos (2 m / 250 ms) para que el rumbo siga en giros lentos
-// (vuelta en U a baja velocidad): con 4 m / 400 ms el rumbo quedaba
-// congelado en el valor anterior durante la maniobra.
-const NAV_MOVEMENT_MIN_METERS = 2;
-const NAV_MOVEMENT_MIN_MS = 250;
-// Interpolación de posición del vehículo entre ticks de GPS: fracción de la
-// distancia restante por frame y paso mínimo (elimina la teletransportación).
-const POSITION_SMOOTH_FACTOR = 0.18;
-const POSITION_MIN_STEP_METERS = 1.5;
-// ── Zoom adaptativo en maniobras (suave, animado) ──
-// Velocidad que alcanza el zoom lejano (≈65 km/h).
-const NAV_SPEED_REF_MPS = 18;
-// Ventana de alejamiento ANTES del giro: la cámara empieza a abrirse de
-// forma GRADUAL al entrar en esta distancia a la maniobra.
-const TURN_AWARENESS_METERS = 220;
-// Ventana de recuperación DESPUÉS del giro: la cámara se cierra de nuevo
-// gradualmente durante este tramo posterior a la maniobra.
-const TURN_RECOVERY_METERS = 70;
-// Apertura de zoom máxima al llegar a la maniobra (respecto al zoom de
-// velocidad del momento): muestra el punto exacto del giro + el tramo
-// previo + el tramo posterior.
-const TURN_ZOOM_OUT = 0.9;
-// Umbrales del ángulo entre el step actual y el siguiente para considerar
-// el giro "relevante": giros leves no abren la cámara.
-const TURN_ANGLE_SIGNIFICANT_DEG = 40;
-const TURN_ANGLE_STRONG_DEG = 80;
-// Apertura extra para giros fuertes / retornos / glorietas.
-const TURN_ZOOM_OUT_STRONG = 1.25;
-// Maniobras consecutivas: si la siguiente está a menos de esto, mantener
-// una vista útil del CONJUNTO en lugar de alternar cercano/lejano.
-const CONSECUTIVE_MANEUVER_METERS = 150;
-// Suavizado del zoom por frame en el loop de cámara (fracción del delta
-// restante): transición animada y gradual, sin saltos ni parpadeos.
-const NAV_ZOOM_SMOOTH = 0.06;
-// Umbral bajo el cual la diferencia de zoom ya no se persigue.
-const NAV_ZOOM_EPSILON = 0.01;
-// Solo recomputar el zoom objetivo cuando el cambio es relevante
-// (histéresis, evita objetivo oscilando frame a frame).
-const NAV_ZOOM_HYSTERESIS = 0.18;
+// NOTA: la geometría/zoom/umbrales del loop de cámara y la derivación de
+// rumbo-velocidad viven en módulos puros testeados en Node:
+// lib/drive/follow-frame.ts (zoom, adelanto, suavizados, anclaje) y
+// lib/drive/speed-heading.ts (velocidad/curso). Un solo origen de verdad:
+// aquí solo se importan NAV_ZOOM_BASE y NAV_HEADING_SKIP_DEG.
 
 // Desvío: distancia lateral a la geometría y ticks consecutivos antes de
 // recalcular la ruta (anti-jitter del GPS).
@@ -491,27 +464,116 @@ function moveMapCamera(map: MapboxMapInstance, camera: DriveCamera): void {
 // cada actualización de cámara (30/s) — cachearlo evita lecturas de layout
 // forzadas por frame. Se recalcula cuando cambian las alturas implicadas
 // (hoja inferior desplegada/colapsada, rotación del dispositivo, resize).
-let cachedOffsetFor = { container: 0, overlay: 0, offset: [0, 0] as [number, number] };
-function getDriveVisibleMapOffset(map: MapboxMapInstance): [number, number] {
+// Fase 1-E: el anclaje debe ser el 70–75 % del ÁREA VISIBLE (entre la barra
+// superior y el panel inferior) en TODOS los modos, y recalcularse cuando
+// cambian las alturas (hoja expandida/colapsada, rotación, teclado, barra de
+// Safari). Un contador de época invalidado por ResizeObserver/visualViewport
+// evita leer layout en cada frame (30/s) sin quedarse con valores viejos.
+let driveLayoutEpoch = 0;
+function notifyDriveLayoutChanged(): void {
+  driveLayoutEpoch += 1;
+}
+
+let cachedBand: {
+  epoch: number;
+  container: number;
+  containerHeight: number;
+  top: number;
+  bottom: number;
+  baseOffsetY: number;
+} = {
+  epoch: -1,
+  container: 0,
+  containerHeight: 0,
+  top: 0,
+  bottom: 0,
+  baseOffsetY: 0,
+};
+
+/**
+ * Banda visible (px) del mapa —entre barra superior y panel inferior— y su
+ * offset de anclaje al 72.5 %. Cacheado por época: leer rects en cada frame
+ * de cámara (30/s) forzaba layout.
+ */
+function readDriveVisibleBand(map: MapboxMapInstance): {
+  containerHeight: number;
+  top: number;
+  bottom: number;
+  baseOffsetY: number;
+} {
   const containerHeight =
     map.getContainer()?.clientHeight || window.innerHeight || 0;
-  const overlayHeight = Math.min(
-    containerHeight,
-    Math.max(
-      0,
-      document.getElementById("drive-bottom-overlay")?.getBoundingClientRect().height ?? 0
-    )
-  );
   if (
-    cachedOffsetFor.container === containerHeight &&
-    cachedOffsetFor.overlay === overlayHeight
+    cachedBand.epoch !== driveLayoutEpoch ||
+    cachedBand.container !== containerHeight
   ) {
-    return cachedOffsetFor.offset;
+    const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    const bottomRect = document
+      .getElementById("drive-bottom-overlay")
+      ?.getBoundingClientRect();
+    const topRect = document
+      .getElementById("drive-top-overlay")
+      ?.getBoundingClientRect();
+    const visibleTop = topRect ? Math.min(containerHeight, Math.max(0, topRect.bottom)) : 0;
+    const visibleBottom = bottomRect
+      ? Math.min(containerHeight, Math.max(visibleTop, bottomRect.top))
+      : Math.min(containerHeight, viewportHeight);
+    cachedBand = {
+      epoch: driveLayoutEpoch,
+      container: containerHeight,
+      containerHeight,
+      top: visibleTop,
+      bottom: visibleBottom,
+      baseOffsetY: computeAnchorOffsetPx(
+        containerHeight,
+        visibleTop,
+        visibleBottom,
+        PUCK_ANCHOR_FRACTION
+      ),
+    };
   }
-  const visibleHeight = containerHeight - overlayHeight;
-  const offset: [number, number] = [0, Math.round(visibleHeight / 2 - containerHeight / 2)];
-  cachedOffsetFor = { container: containerHeight, overlay: overlayHeight, offset };
-  return offset;
+  return cachedBand;
+}
+
+function getDriveVisibleMapOffset(
+  map: MapboxMapInstance,
+  aheadPx = 0
+): [number, number] {
+  const band = readDriveVisibleBand(map);
+  return [0, Math.round(band.baseOffsetY - aheadPx)];
+}
+
+/**
+ * SINK ÚNICO de cámara (Fase 1-B/G): adapta el contrato del controlador al
+ * mapa real. Todo movimiento de cámara del seguimiento pasa por aquí y por
+ * `applyCameraCommand`; `stop()` garantiza una sola animación a la vez.
+ */
+function createDriveCameraSink(map: MapboxMapInstance): CameraSink {
+  return {
+    jumpTo: (cmd) => {
+      moveMapCamera(map, {
+        ...(cmd.center ? { center: cmd.center } : {}),
+        ...(cmd.heading != null ? { heading: cmd.heading } : {}),
+        ...(cmd.offsetPx != null ? { offset: [0, cmd.offsetPx] as [number, number] } : {}),
+        ...(cmd.zoom != null ? { zoom: cmd.zoom } : {}),
+        ...(cmd.pitch != null ? { tilt: cmd.pitch } : {}),
+      });
+    },
+    easeTo: (cmd) => {
+      if (cmd.center) {
+        map.easeTo({
+          center: [cmd.center.lng, cmd.center.lat],
+          ...(cmd.heading != null ? { bearing: cmd.heading } : {}),
+          ...(cmd.zoom != null ? { zoom: cmd.zoom } : {}),
+          ...(cmd.pitch != null ? { pitch: cmd.pitch } : {}),
+          ...(cmd.offsetPx != null ? { offset: [0, cmd.offsetPx] } : {}),
+          duration: 450,
+          essential: true,
+        });
+      }
+    },
+    stop: () => map.stop(),
+  };
 }
 
 /**
@@ -634,8 +696,12 @@ export default function DrivePage() {
   const { state, loading, error: stateError, refetch } = useDriverState({
     enabled: isSignedIn === true,
   });
-  const { location: gpsLocation, heading: gpsHeading, accuracy: gpsAccuracy } =
-    useDriverLocation(state?.connected ?? false, {
+  const {
+    location: gpsLocation,
+    heading: gpsHeading,
+    accuracy: gpsAccuracy,
+    speed: gpsSpeed,
+  } = useDriverLocation(state?.connected ?? false, {
       onRawSample: (sample) => {
         traceRecorderRef.current?.recordGps({ t: Date.now(), ...sample });
       },
@@ -669,6 +735,9 @@ export default function DrivePage() {
   // la regla de distancia única: al expandir, la barra oculta la distancia.
   // IMPORTANTE: declarado ANTES de los early returns (Rules of Hooks).
   const [tripSheetExpanded, setTripSheetExpanded] = useState(false);
+  // Fase 1-H: el panel de diagnóstico arranca COLAPSADO (antes tapaba ~1/3
+  // del mapa). Se abre con su botón; solo existe en staging.
+  const [sensorPanelOpen, setSensorPanelOpen] = useState(false);
   // CIERRE DEL PANEL DE PEDIDO: al tocar el mapa la página incrementa este
   // token y el panel colapsa de inmediato (sin capa alguna sobre el mapa).
   const [tripSheetCollapseToken, setTripSheetCollapseToken] = useState(0);
@@ -1212,6 +1281,10 @@ export default function DrivePage() {
   const currentLocationRef = useRef<RoutePoint>(currentLocation);
   const movementHeadingRef = useRef<number | null>(null);
   const movementSpeedRef = useRef<number | null>(null);
+  // Fase 1-C: derivación robusta de velocidad/rumbo (módulo puro
+  // lib/drive/speed-heading.ts). Alimenta movementHeadingRef/
+  // movementSpeedRef en cada fix GPS.
+  const speedHeadingRef = useRef(initialSpeedHeadingState());
   // Refs espejo para el loop rAF (lecturas frescas sin recrear el callback).
   const movementSpeedLoopRef = useRef<number | null>(null);
   const simSpeedLoopRef = useRef(1);
@@ -1233,6 +1306,13 @@ export default function DrivePage() {
   const initialDriverPosRef = useRef(currentLocation);
   const driverMarkerRef = useRef<MapboxMarker | null>(null);
   const centerOnGpsRef = useRef(false);
+  // Fase 1-A: instante del gesto REAL que sacó del seguimiento (única causa
+  // de reentrada temporizada). Sin gesto, nunca se re-entra solo.
+  const gestureExitAtRef = useRef<number | null>(null);
+  // Fase 1-B: latido del loop persistente (performance.now() del último
+  // tick) y último error capturado (el loop ya no muere en silencio).
+  const followLoopHeartbeatRef = useRef<number | null>(null);
+  const followLoopErrorRef = useRef<string | null>(null);
 
   // ── Centrado del mapa en el repartidor (offset de la hoja inferior) ──
   // El mapa ocupa toda la pantalla pero la tarjeta inferior tapa la zona baja:
@@ -1245,6 +1325,9 @@ export default function DrivePage() {
       if (!map) return;
       const position = currentLocationRef.current;
 
+      // Fase 1-G: una sola animación (parar la anterior) y el anclaje
+      // 70–75 % del área visible en todos los modos.
+      map.stop();
       map.easeTo({
         center: [position.lng, position.lat],
         ...(options.zoom != null ? { zoom: options.zoom } : {}),
@@ -1360,8 +1443,11 @@ export default function DrivePage() {
         path: roadRouteRef.current?.path ?? null,
         vehiclePos: visualPosRef.current,
       }),
-      minMovementMeters: NAV_MOVEMENT_MIN_METERS,
-      minMovementMs: NAV_MOVEMENT_MIN_MS,
+      // Fase 1-C: la base mínima para derivar curso por posiciones es 5 m /
+      // 500 ms (antes 2 m / 250 ms, que a ritmo de caminata no se cumplía y
+      // en ráfagas iniciales producía picos absurdos).
+      minMovementMeters: 5,
+      minMovementMs: 500,
     });
   }
 
@@ -1386,6 +1472,16 @@ export default function DrivePage() {
     }
   }, [followDriver, navigatingWithRoute, TRACE_REC_ENABLED]);
 
+  // Fase 1-D: registra cada transición de etapa con la distancia a la próxima
+  // maniobra (sin cambiar la lógica de "Comienza tu viaje").
+  useEffect(() => {
+    if (!TRACE_REC_ENABLED || !navPhase) return;
+    traceRecorderRef.current?.recordPhase(
+      navPhase,
+      guidance?.distanceToManeuver ?? null
+    );
+  }, [navPhase, guidance?.distanceToManeuver, TRACE_REC_ENABLED]);
+
   useEffect(() => {
     if (!TRACE_REC_ENABLED || !navigatingWithRoute || !mapReady) return;
     const id = setInterval(() => {
@@ -1401,6 +1497,9 @@ export default function DrivePage() {
       } catch {
         puckPxY = null;
       }
+      // Banda visible: el requisito es 70–75 % del ÁREA VISIBLE (no de la
+      // altura total del contenedor). Se registra para medirlo en el arnés.
+      const band = readDriveVisibleBand(map);
       rec.recordCamera({
         t: Date.now(),
         centerLat: center.lat,
@@ -1419,13 +1518,40 @@ export default function DrivePage() {
             : null,
         compassAvailable: deviceStateRef.current.available,
         puckPxY,
-        containerHeight: map.getContainer()?.clientHeight ?? null,
+        containerHeight: band.containerHeight,
+        visibleTopPx: band.top,
+        visibleBottomPx: band.bottom,
         vehicleLat: vehicle.lat,
         vehicleLng: vehicle.lng,
       });
     }, 200);
     return () => clearInterval(id);
   }, [navigatingWithRoute, mapReady, TRACE_REC_ENABLED]);
+
+  // Fase 1-E: el anclaje 70–75 % depende de las alturas REALES (tarjeta
+  // superior, panel inferior, barra de Safari, teclado). Se invalida la caché
+  // del offset cuando cambian (ResizeObserver + visualViewport + resize), sin
+  // leer layout en cada frame.
+  useEffect(() => {
+    if (!mapReady) return;
+    const container = mapRef.current?.getContainer() ?? null;
+    const top = document.getElementById("drive-top-overlay");
+    const bottom = document.getElementById("drive-bottom-overlay");
+    const observer = new ResizeObserver(() => notifyDriveLayoutChanged());
+    if (container) observer.observe(container);
+    if (top) observer.observe(top);
+    if (bottom) observer.observe(bottom);
+    window.visualViewport?.addEventListener("resize", notifyDriveLayoutChanged);
+    window.addEventListener("resize", notifyDriveLayoutChanged);
+    window.addEventListener("orientationchange", notifyDriveLayoutChanged);
+    notifyDriveLayoutChanged();
+    return () => {
+      observer.disconnect();
+      window.visualViewport?.removeEventListener("resize", notifyDriveLayoutChanged);
+      window.removeEventListener("resize", notifyDriveLayoutChanged);
+      window.removeEventListener("orientationchange", notifyDriveLayoutChanged);
+    };
+  }, [mapReady, tripSheetCollapsedHeight, tripSheetExpanded]);
 
   const stopHeadingAnimation = useCallback(() => {
     if (headingRafRef.current !== null) {
@@ -1559,267 +1685,119 @@ export default function DrivePage() {
     }, INTERNAL_ZOOM_GUARD_MS);
   }, []);
 
+  /**
+   * Loop rAF de seguimiento PERSISTENTE (Fase 1-B).
+   *
+   * - Se reprograma al INICIO de cada tick: nunca muere (ni con target nulo,
+   *   ni al converger en el objetivo, ni por una excepción).
+   * - La matemática del frame vive en `computeFollowFrame` (puro, testeable
+   *   en Node): posición/rumbo/zoom/anclaje.
+   * - La cámara se escribe por el ÚNICO camino (`applyCameraCommand` sobre el
+   *   sink del mapa) — ningún otro punto del seguimiento llama jumpTo/easeTo.
+   * - Latido (`followLoopHeartbeatRef`) y último error quedan registrados para
+   *   la traza: si el loop se detuviera, se ve en los datos.
+   */
   const ensureFollowLoop = useCallback(() => {
     if (followRafRef.current !== null) return;
-    // H2: al tomar el control, cancelar cualquier heading tween en vuelo para
-    // que solo un rAF escriba visualHeadingRef.current (evita el doble tirón
-    // del heading durante las curvas).
+    // Al tomar el control, cancelar cualquier heading tween en vuelo para que
+    // solo un rAF escriba visualHeadingRef.current.
     stopHeadingAnimation();
     let lastCameraUpdateTs = 0;
     const step = (ts: number) => {
+      followRafRef.current = requestAnimationFrame(step);
+      followLoopHeartbeatRef.current = Date.now();
+      try {
+        stepBody(ts);
+      } catch (err) {
+        // Una excepción (mapa desmontado, dato raro) NO mata el seguimiento
+        // en silencio: se registra y el loop sigue vivo.
+        followLoopErrorRef.current = String(err);
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("[drive] follow loop error", err);
+        }
+      }
+    };
+    const stepBody = (ts: number) => {
       const map = mapRef.current;
       const target = followTargetRef.current;
-      if (!map || !target) {
-        followRafRef.current = null;
-        return;
-      }
-
-      const cameraDue = ts - lastCameraUpdateTs >= 33;
-      if (!cameraDue) {
-        followRafRef.current = requestAnimationFrame(step);
-        return;
-      }
-      // dt real entre actualizaciones de cámara (ms): los factores de
-      // suavizado se escalan con él para que el comportamiento sea el mismo
-      // a 30/60/120 Hz y tras pausas (pestaña oculta, frame caído).
+      // Sin mapa/target todavía: el loop sigue vivo y espera.
+      if (!map || !target) return;
+      if (ts - lastCameraUpdateTs < 33) return;
       const frameDtMs = lastCameraUpdateTs === 0 ? 33 : ts - lastCameraUpdateTs;
       const frameScale = Math.min(4, Math.max(0.5, frameDtMs / 33));
       lastCameraUpdateTs = ts;
 
-      // Leer el heading fused cada frame para que los cambios de sensor se
-      // reflejen inmediatamente en la cámara, sin depender de efectos externos.
-      const targetHeading = headingResolverRef.current();
-      let heading = visualHeadingRef.current ?? targetHeading ?? 0;
-      if (targetHeading != null && visualHeadingRef.current != null) {
-        // Suavizado progresivo: cada frame avanza hacia el target. Los giros
-        // grandes (curva cerrada / vuelta en U) usan un factor mayor para no
-        // dejar el rumbo apuntando al revés durante la maniobra.
-        const delta = shortestAngleDelta(targetHeading, heading);
-        if (Math.abs(delta) > NAV_HEADING_SKIP_DEG) {
-          const baseFactor = Math.abs(delta) > 45 ? 0.38 : 0.22;
-          const factor = 1 - Math.pow(1 - baseFactor, frameScale);
-          heading = normalizeDeg(heading + delta * factor);
-          visualHeadingRef.current = heading;
-          // Rotación imperativa del icono (sin setState): en el loop, heading
-          // del vehículo y de la cámara derivan del mismo valor visual, así
-          // que la flecha permanece apuntando hacia arriba en pantalla.
-          applyDriverMarkerIcon(driverMarkerRef.current, heading, heading);
+      const frame = computeFollowFrame(
+        {
+          vehiclePos: visualPosRef.current,
+          visualHeading: visualHeadingRef.current,
+          cameraHeading: visualCameraHeadingRef.current.current,
+          cameraHeadingTs: visualCameraHeadingRef.current.lastTs ?? null,
+          zoomTarget: targetZoomRef.current?.target ?? null,
+        },
+        {
+          now: performance.now(),
+          frameScale,
+          mapZoom: map.getZoom(),
+          target,
+          targetHeading: headingResolverRef.current(),
+          simHeading:
+            simRef.current.active && simRef.current.simHeading != null
+              ? simRef.current.simHeading
+              : null,
+          speedMps: simRef.current.active
+            ? SIM_BASE_METERS_PER_SECOND * simRef.current.speed
+            : (movementSpeedLoopRef.current ?? 0),
+          route: roadRouteRef.current
+            ? {
+                path: roadRouteRef.current.path,
+                steps: roadRouteRef.current.steps,
+              }
+            : null,
+          baseOffsetY: getDriveVisibleMapOffset(map)[1],
+          pendingZoom: pendingZoomRef.current,
+          accuracy: gpsAccuracyRef.current,
         }
-      } else if (targetHeading != null && visualHeadingRef.current == null) {
-        // Primer frame o después de exitFollowMode: saltar al target.
-        heading = targetHeading;
-        visualHeadingRef.current = heading;
-        applyDriverMarkerIcon(driverMarkerRef.current, heading, heading);
+      );
+
+      visualPosRef.current = frame.state.vehiclePos;
+      visualHeadingRef.current = frame.state.visualHeading;
+      visualCameraHeadingRef.current.current = frame.state.cameraHeading;
+      visualCameraHeadingRef.current.lastTs =
+        frame.state.cameraHeadingTs ?? undefined;
+      if (frame.state.zoomTarget != null) {
+        targetZoomRef.current = {
+          target: frame.state.zoomTarget,
+          ts: performance.now(),
+        };
       }
-
-      // 1) Interpolar la posición del vehículo hacia la posición GPS real.
-      const cur = visualPosRef.current;
-      const dist = haversineMeters(cur, target);
-      let next = cur;
-
-      if (dist < 0.5) {
-        next = target;
-      } else {
-        const smoothFactor = 1 - Math.pow(1 - POSITION_SMOOTH_FACTOR, frameScale);
-        const stepMeters = Math.max(
-          POSITION_MIN_STEP_METERS,
-          Math.min(dist, dist * smoothFactor)
+      pendingZoomRef.current = frame.pendingZoom;
+      if (frame.pendingZoom != null) {
+        lastZoomRef.current = frame.pendingZoom;
+        // El zoom programático necesita el guard: sin él, zoom_changed lo
+        // interpretaría como gesto del usuario.
+        markInternalZoom();
+      }
+      setDriverMarkerPosition(driverMarkerRef.current, frame.state.vehiclePos);
+      if (frame.headingChanged && frame.state.visualHeading != null) {
+        // Flecha relativa al rumbo de la CÁMARA (que ahora sigue el rumbo
+        // real de navegación): la desviación puck↔ruta desaparece.
+        applyDriverMarkerIcon(
+          driverMarkerRef.current,
+          frame.state.visualHeading,
+          frame.state.visualHeading
         );
-        next = movePointAlong(cur, bearingBetween(cur, target), stepMeters);
-      }
-      visualPosRef.current = next;
-      setDriverMarkerPosition(driverMarkerRef.current, next);
-
-      // 2) Centro de cámara ANCLADO AL VEHÍCULO VISUAL + target adelantado:
-      //    la cámara mira a un punto POR DELANTE del vehículo para que la
-      //    carretera delante ocupe la mayor parte de la pantalla (comportamiento
-      //    tipo Waze). El vehículo queda en el tercio inferior.
-      const currentSim = simRef.current;
-      const navHeadingForSim = currentSim.active && currentSim.simHeading != null
-        ? currentSim.simHeading
-        : null;
-      const navHeading = navHeadingForSim ?? heading;
-
-      // Calcular target de cámara: punto adelantado del vehículo en el heading
-      // de navegación. Este es el punto geográfico QUE LA CÁMARA MIRA. Al
-      // abrirse la cámara antes de un giro, el ancla se adelanta MÁS para que
-      // el conductor no suba en pantalla y queden visibles el punto exacto de
-      // la maniobra, el tramo previo y el tramo posterior al giro.
-      const currentZoom = map.getZoom();
-      const zoomNow = typeof currentZoom === "number" ? currentZoom : NAV_ZOOM_BASE;
-      const aheadMeters = NAV_AHEAD_BASE * Math.pow(2, zoomNow - NAV_ZOOM_BASE);
-      const centerOnGps = centerOnGpsRef.current;
-      const desiredCenter = centerOnGps
-        ? next
-        : movePointAlong(next, navHeading, aheadMeters);
-      const cameraOffset = centerOnGps ? getDriveVisibleMapOffset(map) : undefined;
-      // Zoom del frame anterior plegado en esta misma llamada de cámara.
-      const frameZoom = pendingZoomRef.current;
-      const frameZoomProps = frameZoom != null ? { zoom: frameZoom } : {};
-
-      // Suavizado angular de la cámara basado en delta time para que el giro sea
-      // consistente a diferentes FPS y no salte instantáneamente ante cambios de
-      // heading del simulador o de la ruta.
-      const now = performance.now();
-      const cam = visualCameraHeadingRef.current;
-      const prevHeading = cam.current;
-      if (prevHeading != null && navHeading != null) {
-        const deltaDeg = shortestAngleDelta(navHeading, prevHeading);
-        if (Math.abs(deltaDeg) > NAV_HEADING_SKIP_DEG) {
-          const dtSec = Math.max(0.001, (now - (cam.lastTs ?? now)) / 1000);
-          const maxDeg = Math.min(Math.abs(deltaDeg), MAX_HEADING_ROTATION_DEG_PER_SEC * dtSec);
-          const sign = deltaDeg > 0 ? 1 : -1;
-          const visualCameraHeading = normalizeDeg(prevHeading + sign * maxDeg);
-          cam.current = visualCameraHeading;
-          cam.lastTs = now;
-          moveMapCamera(map, {
-            center: desiredCenter,
-            heading: visualCameraHeading,
-            tilt: 0,
-            ...frameZoomProps,
-            offset: cameraOffset,
-          });
-        } else {
-          cam.current = navHeading;
-          cam.lastTs = now;
-          moveMapCamera(map, {
-            center: desiredCenter,
-            heading: navHeading,
-            tilt: 0,
-            ...frameZoomProps,
-            offset: cameraOffset,
-          });
-        }
-      } else {
-        if (navHeading != null) {
-          cam.current = navHeading;
-          cam.lastTs = now;
-        }
-        moveMapCamera(map, {
-          center: desiredCenter,
-          heading: navHeading ?? 0,
-          tilt: 0,
-          ...frameZoomProps,
-          offset: cameraOffset,
-        });
-      }
-      // ── ZOOM ADAPTATIVO SUAVE (frame a frame) ──
-      // Objetivo por VELOCIDAD (más lejos al acelerar, más cerca al frenar)
-      // y por MANIOBRA: al acercarse a un giro relevante la cámara se abre
-      // GRADUALMENTE (punto del giro + tramo previo + posterior visibles) y
-      // tras completarlo se recupera progresivamente el zoom de seguimiento.
-      // El zoom REAL se interpola cada frame: transición animada sin saltos.
-      {
-        const loopSim = simRef.current;
-        const speedMps = loopSim.active
-          ? SIM_BASE_METERS_PER_SECOND * loopSim.speed
-          : (movementSpeedLoopRef.current ?? 0);
-        let target =
-          NAV_ZOOM_SLOW - (speedMps / NAV_SPEED_REF_MPS) * (NAV_ZOOM_SLOW - NAV_ZOOM_FAST);
-        target = Math.max(NAV_ZOOM_MIN, Math.min(NAV_ZOOM_MAX, target));
-        const route = roadRouteRef.current;
-        if (route?.path && route.path.length >= 2 && route.steps.length > 0) {
-          const total = pathLengthMeters(route.path);
-          const done = Math.min(Math.max(projectOntoPath(route.path, next), 0), total);
-          // Localizar el step en curso (el que aún no termina).
-          let accEnd = 0;
-          let idx = route.steps.length - 1;
-          for (let i = 0; i < route.steps.length; i++) {
-            accEnd += route.steps[i].distanceMeters;
-            if (accEnd > done) {
-              idx = i;
-              break;
-            }
-          }
-          const stepEnd = accEnd;
-          const distToTurn = Math.max(0, stepEnd - done);
-          const curStep = route.steps[idx];
-          const nextStep = route.steps[idx + 1];
-          const nextNextStep = route.steps[idx + 2];
-          // Apertura por maniobra con PRIORIDAD sobre el zoom por velocidad:
-          // el ángulo SIEMPRE se mide entre el step en curso y el siguiente
-          // (el giro que se aproxima). Antes, con maniobras consecutivas se
-          // medía el ángulo del giro SIGUIENTE y la cámara no se abría para
-          // el giro inmediato (el zoom por velocidad ganaba y el mapa se
-          // cerraba acercándose al cruce).
-          const turnOpenFactor = (
-            fromStep: typeof curStep,
-            toStep: typeof nextStep,
-            distanceToManeuver: number
-          ): number => {
-            if (!fromStep || !toStep) return 0;
-            const before = bearingBetween(fromStep.start, fromStep.end);
-            const after = bearingBetween(toStep.start, toStep.end);
-            if (before == null || after == null) return 0;
-            const angle = Math.abs(shortestAngleDelta(after, before));
-            const strength =
-              angle >= TURN_ANGLE_STRONG_DEG
-                ? TURN_ZOOM_OUT_STRONG
-                : angle >= TURN_ANGLE_SIGNIFICANT_DEG
-                  ? TURN_ZOOM_OUT
-                  : 0;
-            if (strength === 0) return 0;
-            const rampIn = 1 - Math.min(1, distanceToManeuver / TURN_AWARENESS_METERS);
-            return strength * rampIn;
-          };
-          let openFactor = turnOpenFactor(curStep, nextStep, distToTurn);
-          // Maniobra consecutiva: si la siguiente también está cerca, abrir
-          // por el CONJUNTO (máximo de ambas aperturas, sin alternar).
-          if (nextStep != null && nextNextStep != null) {
-            const nextStepEnd = stepEnd + nextStep.distanceMeters;
-            const distToNextTurn = Math.max(0, nextStepEnd - done);
-            if (distToNextTurn <= CONSECUTIVE_MANEUVER_METERS) {
-              openFactor = Math.max(
-                openFactor,
-                turnOpenFactor(nextStep, nextNextStep, distToNextTurn)
-              );
-            }
-          }
-          // La recuperación tras el giro es natural: al pasar el fin del
-          // step en curso, `idx` avanza y el ángulo del giro ya no aplica;
-          // la persecución exponencial del zoom (NAV_ZOOM_SMOOTH) cierra la
-          // cámara progresivamente sin saltos.
-          if (openFactor > 0) {
-            // Prioridad explícita: la maniobra puede alejar el zoom hasta
-            // NAV_ZOOM_BASE - openFactor aunque la velocidad pida acercarlo.
-            const maneuverTarget = NAV_ZOOM_BASE - openFactor;
-            target = Math.min(target, maneuverTarget);
-            target = Math.max(NAV_ZOOM_MIN - 0.4, target);
-          }
-        }
-        // Histéresis del objetivo: no recalcular para micro-variaciones.
-        const lastTarget = targetZoomRef.current?.target ?? null;
-        if (lastTarget == null || Math.abs(target - lastTarget) >= NAV_ZOOM_HYSTERESIS) {
-          targetZoomRef.current = { target, ts: performance.now() };
-        }
-        // Persecución EXPONENCIAL del zoom (frame a frame): nunca hay salto;
-        // la cámara se abre al aproximarse y se cierra al salir de la maniobra.
-        const activeZoomTarget = targetZoomRef.current?.target ?? target;
-        const zoomDelta = activeZoomTarget - zoomNow;
-        if (Math.abs(zoomDelta) > NAV_ZOOM_EPSILON) {
-          const stepZoom = zoomNow + zoomDelta * NAV_ZOOM_SMOOTH;
-          const clamped = Math.max(
-            NAV_ZOOM_MIN - 0.4,
-            Math.min(NAV_ZOOM_MAX, stepZoom)
-          );
-          lastZoomRef.current = clamped;
-          // El zoom programático necesita el guard: sin él, zoom_changed lo
-          // interpretaría como gesto del usuario y cancelaría el seguimiento.
-          markInternalZoom();
-          // NO un segundo jumpTo aquí: se pliega en la llamada de cámara del
-          // siguiente frame (un solo jumpTo por frame).
-          pendingZoomRef.current = clamped;
-        }
       }
 
-      if (dist < 0.5) {
-        const c = map.getCenter();
-        if (!c || haversineMeters({ lat: c.lat, lng: c.lng }, desiredCenter) < 1) {
-          followRafRef.current = null;
-          return;
-        }
-      }
-      followRafRef.current = requestAnimationFrame(step);
+      // ÚNICO camino de escritura de cámara del seguimiento.
+      applyCameraCommand(createDriveCameraSink(map), {
+        center: frame.command.center,
+        heading: frame.command.bearing,
+        offsetPx: frame.command.offset[1],
+        ...(frame.command.zoom != null ? { zoom: frame.command.zoom } : {}),
+        pitch: 0,
+        origin: "programmatic",
+      });
     };
     followRafRef.current = requestAnimationFrame(step);
   }, [stopHeadingAnimation, markInternalZoom]);
@@ -1850,25 +1828,46 @@ export default function DrivePage() {
       }
       mapListenersRef.current.forEach((listener) => listener.remove());
 
-      // Pan manual → exploración.
-      const onDragStart = () => exitFollowMode();
-      // Rotación manual de dos dedos → exploración: sin esto, el loop de
-      // seguimiento pelearía con el gesto (jumpTo de bearing cada frame).
-      const onRotateStart = () => exitFollowMode();
-      // Zoom gestual (pinch/rueda) → exploración. Los cambios de zoom de la
-      // propia cámara (Centrar GPS / encuadres / Ver viaje) llevan guard.
-      const onZoom = () => {
-        if (!internalZoomRef.current) exitFollowMode();
+      // Fase 1-A: SOLO un gesto REAL del usuario saca del seguimiento.
+      // En mapbox-gl 3.33, `jumpTo`/`easeTo` disparan dragstart/rotatestart/
+      // zoomstart/movestart/pitchstart PROGRAMÁTICOS. La versión anterior
+      // salía de FOLLOWING en cualquiera de ellos: cada update de cámara con
+      // rotación ejecutaba exitFollowMode (traza T1: 17 ciclos entrar→salir
+      // en 57 s, 0/176 eventos con originalEvent).
+      const exitOnRealGesture = (type: string) => (e?: { originalEvent?: unknown }) => {
+        const isGesture = e?.originalEvent != null;
+        if (TRACE_REC_ENABLED) {
+          // Etiqueta el origen (gesto vs programático) en la traza.
+          traceRecorderRef.current?.recordMapEvent(`${type}:exit-check`, isGesture);
+        }
+        if (!shouldExitFollowOnMapEvent({ type: "dragstart", isGesture })) return;
+        // Guard de zoom programático (Centrar GPS / encuadres / Ver viaje).
+        if (type === "zoomstart" && internalZoomRef.current) return;
+        gestureExitAtRef.current = Date.now();
+        exitFollowMode();
+      };
+      const onDragStart = exitOnRealGesture("dragstart");
+      const onRotateStart = exitOnRealGesture("rotatestart");
+      const onZoomStart = exitOnRealGesture("zoomstart");
+      const onMoveStart = exitOnRealGesture("movestart");
+      const onPitchStart = exitOnRealGesture("pitchstart");
+      const onZoom = (e?: { originalEvent?: unknown }) => {
+        if (e?.originalEvent == null) return;
+        if (internalZoomRef.current) return;
+        onZoomStart(e);
       };
       // Fin del arrastre: un paneo NO debe contar como toque simple (no
       // cierra "Tu ruta").
       const onDragEnd = () => {
         mapDraggedAtRef.current = Date.now();
       };
-      map.on("dragstart", onDragStart);
+      map.on("dragstart", onDragStart as never);
       map.on("dragend", onDragEnd);
-      map.on("rotatestart", onRotateStart);
-      map.on("zoom", onZoom);
+      map.on("rotatestart", onRotateStart as never);
+      map.on("zoomstart", onZoomStart as never);
+      map.on("movestart", onMoveStart as never);
+      map.on("pitchstart", onPitchStart as never);
+      map.on("zoom", onZoom as never);
       // Instrumentación Fase 0 (staging): registra TODOS los eventos de
       // cámara con su `originalEvent` (gesto real vs programático) — evidencia
       // de si un gesto programático saca de seguimiento. Solo observa.
@@ -1897,10 +1896,13 @@ export default function DrivePage() {
           })
         : [];
       mapListenersRef.current = [
-        { remove: () => map.off("dragstart", onDragStart) },
+        { remove: () => map.off("dragstart", onDragStart as never) },
         { remove: () => map.off("dragend", onDragEnd) },
-        { remove: () => map.off("rotatestart", onRotateStart) },
-        { remove: () => map.off("zoom", onZoom) },
+        { remove: () => map.off("rotatestart", onRotateStart as never) },
+        { remove: () => map.off("zoomstart", onZoomStart as never) },
+        { remove: () => map.off("movestart", onMoveStart as never) },
+        { remove: () => map.off("pitchstart", onPitchStart as never) },
+        { remove: () => map.off("zoom", onZoom as never) },
         ...recHandlers.map(({ type, handler }) => ({
           remove: () => recMap.off(type, handler),
         })),
@@ -1946,38 +1948,48 @@ export default function DrivePage() {
     };
   }, [cancelFollowLoop, stopHeadingAnimation]);
 
-  // Rumbo + velocidad derivados por movimiento del GPS real (no aplica en
-  // simulación: el simulador ya entrega una posición continua por geometría).
+  // Velocidad + rumbo derivados del GPS real (Fase 1-C: módulo puro
+  // lib/drive/speed-heading.ts). Sustituye el umbral 2 m / 250 ms, que a
+  // ritmo de caminata NUNCA se cumplía y dejaba velocidad/rumbo pegados a
+  // los primeros fixes espurios (traza T1: 1784 → 617 → 433 m/s).
+  // No aplica en simulación: el simulador ya entrega posición continua.
   useEffect(() => {
     if (sim.active) {
       movementPrevRef.current = null;
+      speedHeadingRef.current = initialSpeedHeadingState();
       movementHeadingRef.current = null;
       movementSpeedRef.current = null;
       return;
     }
     const now = Date.now();
-    const prev = movementPrevRef.current;
-    movementPrevRef.current = { pos: currentLocation, ts: now };
-    if (prev) {
-      const elapsed = now - prev.ts;
-      const dist = haversineMeters(prev.pos, currentLocation);
-      if (elapsed >= NAV_MOVEMENT_MIN_MS && dist >= NAV_MOVEMENT_MIN_METERS) {
-        const raw = bearingBetween(prev.pos, currentLocation);
-        movementHeadingRef.current =
-          movementHeadingRef.current == null
-            ? raw
-            : normalizeDeg(
-                movementHeadingRef.current +
-                  shortestAngleDelta(raw, movementHeadingRef.current) * 0.35
-              );
-        const speedMps = dist / (elapsed / 1000);
-        movementSpeedRef.current =
-          movementSpeedRef.current == null
-            ? speedMps
-            : movementSpeedRef.current + (speedMps - movementSpeedRef.current) * 0.3;
-      }
-    }
-  }, [currentLocation, sim.active]);
+    speedHeadingRef.current = applyGpsFix(
+      speedHeadingRef.current,
+      {
+        pos: currentLocation,
+        ts: now,
+        coordsSpeed: gpsSpeed,
+        accuracy: gpsAccuracy,
+      },
+      gpsHeading
+    );
+    const state = speedHeadingRef.current;
+    movementSpeedRef.current = effectiveSpeedMps(state, now);
+    const course = effectiveCourseHeading(state);
+    if (course != null) movementHeadingRef.current = course;
+  }, [currentLocation, gpsSpeed, gpsAccuracy, gpsHeading, sim.active]);
+
+  // Caducidad de la velocidad: sin fix nuevo en 3 s, la velocidad vuelve a 0
+  // (parado = sin movimiento; evita que el zoom/auto-resume crean que sigue
+  // en marcha con el último valor).
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (sim.active) return;
+      const now = Date.now();
+      const next = effectiveSpeedMps(speedHeadingRef.current, now);
+      if (movementSpeedRef.current !== next) movementSpeedRef.current = next;
+    }, 500);
+    return () => clearInterval(id);
+  }, [sim.active]);
 
   // Al salir de una navegación con ruta (pedido entregado / ruta fallida):
   // restaurar norte arriba, zoom por defecto y centrar al repartidor.
@@ -2055,7 +2067,13 @@ export default function DrivePage() {
         return;
       }
       lastFollowPosRef.current = currentLocation;
-      map.setCenter(currentLocation);
+      // Fase 1-B: único camino de escritura de cámara (antes: map.setCenter
+      // directo, un segundo escritor fuera del controlador). Con el anclaje
+      // 70–75 % del área visible también en este modo (Fase 1-E).
+      moveMapCamera(map, {
+        center: currentLocation,
+        offset: getDriveVisibleMapOffset(map),
+      });
       return;
     }
 
@@ -2187,10 +2205,9 @@ export default function DrivePage() {
     if (roadRoute?.path && roadRoute.path.length >= 2) {
       ensureFollowLoop();
     }
-    // La brújula se activa en segundo plano (iOS puede pedir permiso).
-    if (deviceOrientation.state.available !== "available") {
-      deviceOrientation.enable().catch(() => {});
-    }
+    // Fase 1-F: con ruta activa NO se solicita DeviceOrientation (iOS muestra
+    // el aviso de movimiento y orientación). La brújula solo se activa por
+    // acción explícita en el panel de diagnóstico (staging).
   }, [
     mapsLoaded,
     mapReady,
@@ -2519,10 +2536,7 @@ export default function DrivePage() {
       lastZoomRef.current = null;
     }
     setFollowDriver(true);
-    // Intentar activar brújula si no está disponible todavía (sin bloquear).
-    if (deviceOrientation.state.available !== "available") {
-      deviceOrientation.enable().catch(() => {});
-    }
+    // Fase 1-F: NO se solicita permiso de brújula al entrar en seguimiento.
   }, [
     currentLocation,
     roadRoute,
@@ -2533,7 +2547,6 @@ export default function DrivePage() {
     stopHeadingAnimation,
     applyHeading,
     centerOnDriver,
-    deviceOrientation,
   ]);
 
   // "Centrar GPS" = regresar al modo navegación heading-up si el usuario
@@ -2543,39 +2556,42 @@ export default function DrivePage() {
     // pisar esta vista cuando la oferta termine.
     lastMapInteractionAtRef.current = Date.now();
     centerOnGpsRef.current = true;
-    // Al centrar, también intentar activar brújula si no lo está (iOS puede
-    // requerir permiso explícito; la hook se encarga de pedirlo cuando sea
-    // necesario sin mostrar un prompt innecesario).
-    if (deviceOrientation.state.available !== "available") {
-      deviceOrientation.enable().catch(() => {});
-    }
+    // Fase 1-G: idempotente — se corta cualquier animación en vuelo antes de
+    // iniciar la única animación de recentrado (sin apilar toques).
+    mapRef.current?.stop();
+    // El gesto es intención explícita del usuario: reinicia el temporizador
+    // de la única reentrada temporizada (el usuario acaba de pedir seguir).
+    gestureExitAtRef.current = null;
+    // Fase 1-F: sin pedir permiso de brújula al centrar.
     enterFollowCamera();
-  }, [enterFollowCamera, deviceOrientation]);
+  }, [enterFollowCamera]);
 
-  // ── Reanudación AUTOMÁTICA del seguimiento al volver a conducir ──
-  // El repartidor exploró el mapa (seguimiento inactivo); al retomar la
-  // marcha se re-engancha la cámara suavemente, sin aviso textual: solo el
-  // mapa vuelve a seguirlo. El control manual sigue disponible sobre el
-  // panel de datos.
-  const autoResumeRef = useRef(0);
+  // ── Reanudación del seguimiento: SIN temporizador por velocidad ──
+  // Fase 1-A: la reanudación automática cada ≤5 s al "volver a conducir" era
+  // el motor del ciclo entrar→matar→entrar (la cámara programática disparaba
+  // rotatestart y mataba el follow, y la velocidad lo resucitaba). Ahora el
+  // seguimiento solo se recupera por: inicio de navegación, botón de
+  // localizar, o UN ÚNICO temporizador tras un gesto real del usuario
+  // (AUTO_REENTER_MS = 30 s, ver lib/drive/camera-controller.ts).
   useEffect(() => {
-    if (followDriver || offerPreviewActive) return;
-    if (!driverHasLocation) return;
-    // Velocidad actual (m/s): GPS suavizada o simulador.
-    const speedMps = sim.active
-      ? SIM_BASE_METERS_PER_SECOND * sim.speed
-      : (movementSpeedRef.current ?? 0);
-    if (speedMps < MOVING_SPEED_MPS) return;
-    if (Date.now() - autoResumeRef.current < 5000) return;
-    autoResumeRef.current = Date.now();
-    enterFollowCamera();
+    if (followDriver || offerPreviewActive || !driverHasLocation) return;
+    const exitTs = gestureExitAtRef.current;
+    if (exitTs == null) return; // sin gesto real: nunca re-entrar solo
+    const remaining = AUTO_REENTER_MS - (Date.now() - exitTs);
+    if (remaining <= 0) {
+      gestureExitAtRef.current = null;
+      enterFollowCamera();
+      return;
+    }
+    const timer = setTimeout(() => {
+      gestureExitAtRef.current = null;
+      enterFollowCamera();
+    }, remaining);
+    return () => clearTimeout(timer);
   }, [
-    currentLocation,
     followDriver,
     offerPreviewActive,
     driverHasLocation,
-    sim.active,
-    sim.speed,
     enterFollowCamera,
   ]);
 
@@ -3278,10 +3294,31 @@ export default function DrivePage() {
 
   return (
     <div className="relative h-[100dvh] w-full overflow-hidden bg-[#0d1526]">
-      {/* Panel de diagnóstico de sensores (debug, oculto en producción). */}
-      {sensorDebugVisible && (
+      {/* Panel de diagnóstico de sensores (solo staging): COLAPSADO por
+          defecto para no tapar el mapa; se abre con el chip SENSORS. */}
+      {sensorDebugVisible && !sensorPanelOpen && (
+        <button
+          type="button"
+          aria-label="Abrir panel de diagnóstico"
+          onClick={() => setSensorPanelOpen(true)}
+          className="absolute left-3 top-[calc(env(safe-area-inset-top)+5rem)] z-40 rounded-full bg-black/60 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white/70 shadow backdrop-blur-sm"
+        >
+          SENSORS
+        </button>
+      )}
+      {sensorDebugVisible && sensorPanelOpen && (
         <div className="absolute left-3 top-[calc(env(safe-area-inset-top)+5rem)] z-40 rounded-lg bg-black/70 px-3 py-2 text-[11px] leading-5 text-white/80 shadow-lg backdrop-blur-sm">
-          <div className="font-semibold text-white/90">SENSORS</div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="font-semibold text-white/90">SENSORS</span>
+            <button
+              type="button"
+              aria-label="Cerrar panel de diagnóstico"
+              onClick={() => setSensorPanelOpen(false)}
+              className="rounded bg-white/15 px-1.5 text-[10px] font-semibold text-white"
+            >
+              ×
+            </button>
+          </div>
           <div className="mt-0.5">
             <span className="text-white/60">Device heading:</span>
             <span className="font-mono text-white/90">
@@ -3299,11 +3336,26 @@ export default function DrivePage() {
           <div className="mt-0.5">
             <span className="text-white/60">GPS speed:</span>
             <span className="font-mono text-white/90">
-              {(movementSpeedRef.current != null
-                ? `${(movementSpeedRef.current * 3.6).toFixed(1)}`
-                : sim.active
-                  ? `${(SIM_BASE_METERS_PER_SECOND * sim.speed * 3.6).toFixed(1)}`
-                  : "0.0")} km/h
+              {/* Fase 1-C/H: velocidad YA validada (≤70 m/s, caduca a 0 a los
+                  3 s). Antes el panel mostraba valores pegados y absurdos
+                  (2222.5 km/h) que no eran la velocidad real. */}
+              {(sim.active
+                ? SIM_BASE_METERS_PER_SECOND * sim.speed
+                : Math.min(
+                    70,
+                    Math.max(
+                      0,
+                      Date.now() - (speedHeadingRef.current.lastFixTs ?? 0) > SPEED_EXPIRY_MS
+                        ? 0
+                        : (movementSpeedRef.current ?? 0)
+                    )
+                  ) * 3.6
+              ).toFixed(1)}{" "}km/h
+            </span>
+            <span className="ml-1 text-white/50">
+              ({movementHeadingRef.current == null
+                ? "rumbo N/A"
+                : `${Math.round(movementHeadingRef.current)}°`})
             </span>
           </div>
           <div className="mt-0.5">
@@ -3404,7 +3456,10 @@ export default function DrivePage() {
       {/* En "done" NO hay barra superior: sin estado, folio ni etiqueta SIM.
           La confirmación limpia de finalización vive solo en el panel inferior. */}
       {navContent && navPhase && navPhase !== "done" && !navContent.variant.startsWith("action") && (
-        <div className="absolute inset-x-3 top-[calc(env(safe-area-inset-top)+0.75rem)] z-30">
+        <div
+          id="drive-top-overlay"
+          className="absolute inset-x-3 top-[calc(env(safe-area-inset-top)+0.75rem)] z-30"
+        >
           <DriveNavBar
             mainText={navContent.main}
             subText={navContent.sub}

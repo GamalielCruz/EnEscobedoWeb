@@ -20,6 +20,8 @@
     "test:scheduling": "node --experimental-strip-types --test lib/fulfillment-schedule.test.mjs lib/scheduled-order-whatsapp-config.test.mjs lib/scheduled-order-contingency.test.mjs lib/scheduled-orders.integration.test.mjs",
     "test:offers": "node --experimental-strip-types --test lib/dispatch/offer-lifecycle.test.mjs lib/dispatch/dispatch-validation.test.mjs lib/dispatch/dispatch-observability.test.mjs",
     "test:availability": "node --experimental-strip-types --test lib/dispatch/driver-availability.test.mjs",
+    "test:drive": "npx esbuild lib/drive/drive-navigation.test.mjs --bundle --platform=node --format=esm --external:node:test --external:node:assert/strict --outfile=${TMPDIR:-/tmp}/drive-navigation.test.mjs --log-level=warning && node --test ${TMPDIR:-/tmp}/drive-navigation.test.mjs",
+    "sim:drive": "npx esbuild scripts/drive-trace-simulate.mjs --bundle --platform=node --format=esm --external:node:fs --outfile=${TMPDIR:-/tmp}/drive-trace-simulate.mjs --log-level=warning && node ${TMPDIR:-/tmp}/drive-trace-simulate.mjs",
     "audit:dispatch-observability": "node --experimental-strip-types scripts/audit-dispatch-observability.ts",
     "catalog:import": "node --experimental-strip-types scripts/catalog-images/import-walmart-assets.ts"
   },
