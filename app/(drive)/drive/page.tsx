@@ -51,6 +51,7 @@ import { useDriverState, type DriverOrder, type DriverOffer } from "@/hooks/useD
 import { useDriverLocation } from "@/hooks/useDriverLocation";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { useDeviceOrientation } from "@/hooks/useDeviceOrientation";
+import { TraceRecorder } from "@/lib/drive/trace-recorder";
 import { useOfferAlertSound } from "@/hooks/useOfferAlertSound";
 import { shortOrderCode, shortAddress } from "@/lib/dispatch/dispatch-format";
 import {
@@ -622,11 +623,23 @@ export default function DrivePage() {
 
   // El sondeo solo arranca cuando Clerk confirma la sesión: sin sesión no se
   // llama /api/driver/state (evita los 401 repetidos en la subdominio Drive).
+  // Grabador de trazas reales (Fase 0 — SOLO staging, ausente en
+  // producción): buffer en memoria + muestreo de cámara a 5 Hz + export JSON
+  // desde el panel de diagnóstico. No altera la navegación.
+  const TRACE_REC_ENABLED = getDeploymentEnvironment() !== "production";
+  const traceRecorderRef = useRef<TraceRecorder | null>(null);
+  if (TRACE_REC_ENABLED && traceRecorderRef.current == null) {
+    traceRecorderRef.current = new TraceRecorder();
+  }
   const { state, loading, error: stateError, refetch } = useDriverState({
     enabled: isSignedIn === true,
   });
   const { location: gpsLocation, heading: gpsHeading, accuracy: gpsAccuracy } =
-    useDriverLocation(state?.connected ?? false);
+    useDriverLocation(state?.connected ?? false, {
+      onRawSample: (sample) => {
+        traceRecorderRef.current?.recordGps({ t: Date.now(), ...sample });
+      },
+    });
   const gpsAccuracyRef = useRef<number | null>(null);
   gpsAccuracyRef.current = gpsAccuracy;
 
@@ -635,12 +648,15 @@ export default function DrivePage() {
   // o pulsa "Centrar navegación", con explicación previa si es necesario.
   const deviceOrientation = useDeviceOrientation();
 
-  // Panel de diagnóstico de sensores (solo desarrollo/debug): muestra heading
-  // del dispositivo vs GPS, velocidad, fuente de heading y estado de permisos.
-  // Se oculta en producción o cuando no hay ruta activa.
+  // Panel de diagnóstico de sensores (solo staging/debug): muestra heading
+  // del dispositivo vs GPS, velocidad, fuente de heading, estado de permisos
+  // y los controles del grabador de trazas reales (Fase 0). Ausente en
+  // producción y cuando no hay ruta activa.
   // (declarado después de navigatingWithRoute para evitar TDZ)
   let sensorDebugVisible = false;
-  const SHOW_SENSOR_DEBUG = false;
+  const SHOW_SENSOR_DEBUG = getDeploymentEnvironment() !== "production";
+
+
 
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   // Error de la última acción de etapa (recogí / entregué / NIP). Se muestra
@@ -1359,6 +1375,58 @@ export default function DrivePage() {
   const headingResolverRef = useRef<() => number | null>(resolveNavigationHeading);
   headingResolverRef.current = resolveNavigationHeading;
 
+  // ── Instrumentación Fase 0 (staging): muestreo de cámara + transiciones ──
+  // El muestreo (5 Hz) es INDEPENDIENTE del loop rAF de seguimiento: graba
+  // aunque el loop muera, para evidenciar congelamientos y huecos.
+  const followDriverRef = useRef(followDriver);
+  useEffect(() => {
+    followDriverRef.current = followDriver;
+    if (TRACE_REC_ENABLED) {
+      traceRecorderRef.current?.recordFollow(followDriver, navigatingWithRoute);
+    }
+  }, [followDriver, navigatingWithRoute, TRACE_REC_ENABLED]);
+
+  useEffect(() => {
+    if (!TRACE_REC_ENABLED || !navigatingWithRoute || !mapReady) return;
+    const id = setInterval(() => {
+      const map = mapRef.current;
+      const rec = traceRecorderRef.current;
+      if (!map || !rec) return;
+      const center = map.getCenter();
+      const vehicle = visualPosRef.current;
+      const dbg = driveHeadingResolverRef.current?.state.debug ?? null;
+      let puckPxY: number | null = null;
+      try {
+        puckPxY = map.project([vehicle.lng, vehicle.lat]).y;
+      } catch {
+        puckPxY = null;
+      }
+      rec.recordCamera({
+        t: Date.now(),
+        centerLat: center.lat,
+        centerLng: center.lng,
+        bearing: map.getBearing(),
+        zoom: map.getZoom(),
+        followDriver: followDriverRef.current,
+        loopAlive: followRafRef.current != null,
+        resolverSource: dbg?.source ?? null,
+        resolvedHeading: headingResolverRef.current(),
+        visualHeading: visualHeadingRef.current,
+        speedMps: movementSpeedRef.current,
+        compassHeading:
+          deviceStateRef.current.available === "available"
+            ? deviceStateRef.current.heading
+            : null,
+        compassAvailable: deviceStateRef.current.available,
+        puckPxY,
+        containerHeight: map.getContainer()?.clientHeight ?? null,
+        vehicleLat: vehicle.lat,
+        vehicleLng: vehicle.lng,
+      });
+    }, 200);
+    return () => clearInterval(id);
+  }, [navigatingWithRoute, mapReady, TRACE_REC_ENABLED]);
+
   const stopHeadingAnimation = useCallback(() => {
     if (headingRafRef.current !== null) {
       cancelAnimationFrame(headingRafRef.current);
@@ -1801,11 +1869,41 @@ export default function DrivePage() {
       map.on("dragend", onDragEnd);
       map.on("rotatestart", onRotateStart);
       map.on("zoom", onZoom);
+      // Instrumentación Fase 0 (staging): registra TODOS los eventos de
+      // cámara con su `originalEvent` (gesto real vs programático) — evidencia
+      // de si un gesto programático saca de seguimiento. Solo observa.
+      const recMap = map as unknown as {
+        on: (type: string, handler: (e: { originalEvent?: unknown }) => void) => unknown;
+        off: (type: string, handler: (e: { originalEvent?: unknown }) => void) => unknown;
+      };
+      const recTypes = [
+        "dragstart",
+        "dragend",
+        "rotatestart",
+        "rotateend",
+        "zoomstart",
+        "zoomend",
+        "movestart",
+        "moveend",
+        "pitchstart",
+        "pitchend",
+      ] as const;
+      const recHandlers = TRACE_REC_ENABLED
+        ? recTypes.map((type) => {
+            const handler = (e: { originalEvent?: unknown }) =>
+              traceRecorderRef.current?.recordMapEvent(type, e?.originalEvent != null);
+            recMap.on(type, handler);
+            return { type, handler };
+          })
+        : [];
       mapListenersRef.current = [
         { remove: () => map.off("dragstart", onDragStart) },
         { remove: () => map.off("dragend", onDragEnd) },
         { remove: () => map.off("rotatestart", onRotateStart) },
         { remove: () => map.off("zoom", onZoom) },
+        ...recHandlers.map(({ type, handler }) => ({
+          remove: () => recMap.off(type, handler),
+        })),
       ];
     },
     [exitFollowMode]
@@ -3235,6 +3333,30 @@ export default function DrivePage() {
             <span className="font-mono text-white/90">
               {deviceOrientation.state.permission}
             </span>
+          </div>
+          <div className="mt-1.5 flex items-center gap-2">
+            <span className="text-white/60">Traza:</span>
+            <span className="font-mono text-white/90">
+              {traceRecorderRef.current?.counts().gps ?? 0} GPS ·{" "}
+              {traceRecorderRef.current?.counts().camera ?? 0} cám ·{" "}
+              {traceRecorderRef.current?.counts().events ?? 0} ev
+            </span>
+          </div>
+          <div className="mt-1 flex gap-2">
+            <button
+              type="button"
+              className="rounded bg-white/15 px-2 py-1 text-[11px] font-semibold text-white"
+              onClick={() => traceRecorderRef.current?.exportDownload()}
+            >
+              Exportar JSON
+            </button>
+            <button
+              type="button"
+              className="rounded bg-white/15 px-2 py-1 text-[11px] font-semibold text-white"
+              onClick={() => traceRecorderRef.current?.clear()}
+            >
+              Limpiar
+            </button>
           </div>
         </div>
       )}

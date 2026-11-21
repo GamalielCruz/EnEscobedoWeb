@@ -24,7 +24,21 @@ function haversineDistance(
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-export function useDriverLocation(enabled: boolean) {
+export type RawGpsSample = {
+  lat: number;
+  lng: number;
+  accuracy: number | null;
+  speed: number | null;
+  heading: number | null;
+  deviceT: number | null;
+  accepted: boolean;
+  rejectedReason?: "accuracy" | "dedupe";
+};
+
+export function useDriverLocation(
+  enabled: boolean,
+  options?: { onRawSample?: (sample: RawGpsSample) => void }
+) {
   const [location, setLocation] = useState<{ lat: number; lng: number } | null>(null);
   /** Precisión horizontal estimada del último fix aceptado (metros). */
   const [accuracy, setAccuracy] = useState<number | null>(null);
@@ -76,9 +90,27 @@ export function useDriverLocation(enabled: boolean) {
 
     const onSuccess = (pos: GeolocationPosition) => {
       if (!mountedRef.current) return;
-      const { latitude, longitude, accuracy, heading: rawHeading } = pos.coords;
+      const { latitude, longitude, accuracy, heading: rawHeading, speed: rawSpeed } = pos.coords;
+      // Instrumentación (Fase 0, staging): expone la muestra CRUDA antes de
+      // los filtros para el grabador de trazas. No altera la lógica: los
+      // filtros de abajo se aplican exactamente igual.
+      const emitRawSample = (accepted: boolean, rejectedReason?: "accuracy" | "dedupe") => {
+        options?.onRawSample?.({
+          lat: latitude,
+          lng: longitude,
+          accuracy,
+          speed: typeof rawSpeed === "number" && Number.isFinite(rawSpeed) ? rawSpeed : null,
+          heading: typeof rawHeading === "number" && Number.isFinite(rawHeading) ? rawHeading : null,
+          deviceT: typeof pos.timestamp === "number" ? pos.timestamp : null,
+          accepted,
+          ...(rejectedReason ? { rejectedReason } : {}),
+        });
+      };
       // Skip if accuracy is poor (> 100m)
-      if (accuracy > 100) return;
+      if (accuracy > 100) {
+        emitRawSample(false, "accuracy");
+        return;
+      }
       const now = Date.now();
       const previous = lastVisualLocationRef.current;
       if (previous) {
@@ -88,9 +120,11 @@ export function useDriverLocation(enabled: boolean) {
           elapsed < GPS_LOCATION_MIN_INTERVAL_MS &&
           distance < GPS_LOCATION_MIN_DISTANCE_METERS
         ) {
+          emitRawSample(false, "dedupe");
           return;
         }
       }
+      emitRawSample(true);
       lastVisualLocationRef.current = { lat: latitude, lng: longitude, time: now };
       setLocation({ lat: latitude, lng: longitude });
       setAccuracy(accuracy);
