@@ -23,7 +23,7 @@ export function useWakeLock(enabled: boolean) {
 
     let cancelled = false;
     const request = async () => {
-      if (document.hidden) return;
+      if (cancelled || document.hidden || sentinelRef.current) return;
       try {
         const sentinel = await nav.wakeLock!.request("screen");
         if (cancelled) {
@@ -31,6 +31,12 @@ export function useWakeLock(enabled: boolean) {
           return;
         }
         sentinelRef.current = sentinel;
+        // iOS libera el lock por su cuenta (energía, interrupciones): pedirlo de nuevo.
+        (sentinel as { addEventListener?: (t: string, f: () => void) => void })
+          .addEventListener?.("release", () => {
+            if (sentinelRef.current === sentinel) sentinelRef.current = null;
+            if (!cancelled && !document.hidden) void request();
+          });
       } catch {
         // Sin permiso / sin soporte: navegación normal, sin wake lock.
       }
