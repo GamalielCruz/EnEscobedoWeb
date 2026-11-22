@@ -104,7 +104,7 @@ import {
 import { createDriveHeadingResolver } from "@/lib/drive/heading-resolver";
 import {
   computeGuidance,
-  initialGuidanceState,
+  nextGuidanceState,
   type GuidanceState,
 } from "@/lib/drive/guidance";
 
@@ -1063,7 +1063,9 @@ export default function DrivePage() {
   // hacia el que interpola. Declarada aquí (antes de guidance) a propósito.
   // Fase 3-A: estado con histéresis de la tarjeta (depart que no regresa y
   // maniobra ejecutada que no se repite). Se reinicia al cambiar la ruta.
-  const guidanceTrackerRef = useRef<{ state: GuidanceState } | null>(null);
+  const guidanceTrackerRef = useRef<{ state: GuidanceState; legKey: string | null } | null>(
+    null
+  );
   const visualPosRef = useRef<RoutePoint>(currentLocation);
 
   // Heading de navegación para el simulador: derivado de la ruta cuando está
@@ -1243,10 +1245,20 @@ export default function DrivePage() {
     // vuelve e histéresis de «Comienza tu viaje». Aquí solo se proyecta la
     // posición visual y se normaliza el idioma.
     const routeKey = `${Math.round(total)}|${roadRoute.steps.length}|${roadRoute.steps[0]?.distanceMeters ?? 0}|${roadRoute.steps.at(-1)?.distanceMeters ?? 0}`;
-    let tracker = guidanceTrackerRef.current;
-    if (!tracker || tracker.state.routeKey !== routeKey) {
-      tracker = { state: initialGuidanceState() };
-      tracker.state.routeKey = routeKey;
+    // Fase 3.1-G: el estado de la tarjeta pertenece al VIAJE (etapa), no a la
+    // geometría. La identidad de la etapa es el destino: un recálculo a mitad
+    // de camino conserva `departed` (no reaparece «Comienza tu viaje») y la
+    // distancia se recalcula sobre la ruta nueva; cambiar de etapa o de
+    // pedido empieza de cero.
+    const legKey = `${roadRoute.destination.lat.toFixed(5)},${roadRoute.destination.lng.toFixed(5)}`;
+    const current = guidanceTrackerRef.current;
+    const sameLeg = current != null && current.legKey === legKey;
+    let tracker = current;
+    if (tracker == null || !sameLeg || tracker.state.routeKey !== routeKey) {
+      tracker = {
+        legKey,
+        state: nextGuidanceState(sameLeg && current ? current.state : null, routeKey),
+      };
       guidanceTrackerRef.current = tracker;
     }
     const g = computeGuidance(tracker.state, roadRoute.steps, total, done);
@@ -1508,6 +1520,25 @@ export default function DrivePage() {
       traceRecorderRef.current?.recordFollow(followDriver, navigatingWithRoute);
     }
   }, [followDriver, navigatingWithRoute, TRACE_REC_ENABLED]);
+
+  // Fase 3.1-E: la traza lleva la ruta ACTIVA (polilínea + steps) para poder
+  // reproducir la tarjeta con la geometría real y no con la del simulador.
+  useEffect(() => {
+    if (!TRACE_REC_ENABLED) return;
+    const rec = traceRecorderRef.current;
+    if (!rec) return;
+    if (!roadRoute || roadRoute.path.length < 2) {
+      rec.setRoute(null);
+      return;
+    }
+    rec.setRoute({
+      destination: roadRoute.destination,
+      distanceMeters: roadRoute.distanceMeters,
+      durationSeconds: roadRoute.durationSeconds,
+      steps: roadRoute.steps,
+      path: roadRoute.path,
+    });
+  }, [roadRoute, TRACE_REC_ENABLED]);
 
   // Fase 1-D: registra cada transición de etapa con la distancia a la próxima
   // maniobra (sin cambiar la lógica de "Comienza tu viaje").
@@ -3512,6 +3543,13 @@ export default function DrivePage() {
             <span className="text-white/60">Perm:</span>
             <span className="font-mono text-white/90">
               {deviceOrientation.state.permission}
+            </span>
+          </div>
+          <div className="mt-0.5 flex items-center gap-2">
+            {/* Fase 3.1-E: qué build se está probando (también va en la traza). */}
+            <span className="text-white/60">Build:</span>
+            <span className="font-mono text-white/90">
+              {TraceRecorder.buildCommit().slice(0, 8)}
             </span>
           </div>
           <div className="mt-1.5 flex items-center gap-2">

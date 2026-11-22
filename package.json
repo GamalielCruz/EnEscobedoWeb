@@ -22,6 +22,7 @@
     "test:availability": "node --experimental-strip-types --test lib/dispatch/driver-availability.test.mjs",
     "test:drive": "npx esbuild lib/drive/drive-navigation.test.mjs --bundle --platform=node --format=esm --external:node:test --external:node:assert/strict --outfile=${TMPDIR:-/tmp}/drive-navigation.test.mjs --log-level=warning && node --test ${TMPDIR:-/tmp}/drive-navigation.test.mjs",
     "sim:drive": "npx esbuild scripts/drive-trace-simulate.mjs --bundle --platform=node --format=esm --external:node:fs --outfile=${TMPDIR:-/tmp}/drive-trace-simulate.mjs --log-level=warning && node ${TMPDIR:-/tmp}/drive-trace-simulate.mjs",
+    "replay:drive": "npx esbuild scripts/drive-gps-replay.mjs --bundle --platform=node --format=esm --external:node:fs --external:node:path --outfile=${TMPDIR:-/tmp}/drive-gps-replay.mjs --log-level=warning && node ${TMPDIR:-/tmp}/drive-gps-replay.mjs",
     "audit:dispatch-observability": "node --experimental-strip-types scripts/audit-dispatch-observability.ts",
     "catalog:import": "node --experimental-strip-types scripts/catalog-images/import-walmart-assets.ts"
   },

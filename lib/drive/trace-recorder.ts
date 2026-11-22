@@ -34,7 +34,7 @@ export type TraceGpsSample = {
   /** La app lo aceptó como posición visual. */
   accepted: boolean;
   /** Motivo de descarte (solo cuando accepted=false). */
-  rejectedReason?: "accuracy" | "dedupe" | "stale";
+  rejectedReason?: "accuracy" | "dedupe" | "stale" | "stale-coords";
 };
 
 export type TraceCameraSample = {
@@ -176,10 +176,54 @@ export type TraceEvent =
   | TraceAnchorMismatchEvent
   | TraceCardEvent;
 
+/**
+ * Ruta ACTIVA en el momento de exportar (Fase 3.1-E).
+ *
+ * Las trazas T1/T2/T4 no traían la polilínea ni los steps, así que la
+ * tarjeta (guidance) no podía reproducirse con la ruta REAL: solo con la
+ * geometría inventada del simulador. Con este bloque el arnés recalcula la
+ * tarjeta muestra a muestra. La geometría se decima a `MAX_TRACE_PATH_POINTS`
+ * para no inflar el JSON (conserva primero, último y cada salto de stride).
+ */
+export type TraceRouteSnapshot = {
+  destination: { lat: number; lng: number };
+  distanceMeters: number | null;
+  durationSeconds: number | null;
+  steps: Array<{
+    maneuver: string | null;
+    instruction: string | null;
+    distanceMeters: number;
+    start: { lat: number; lng: number };
+    end: { lat: number; lng: number };
+  }>;
+  path: Array<{ lat: number; lng: number }>;
+};
+
+const MAX_TRACE_PATH_POINTS = 1500;
+
+function decimatePath(path: Array<{ lat: number; lng: number }>) {
+  if (path.length <= MAX_TRACE_PATH_POINTS) {
+    return path.map((p) => ({ lat: p.lat, lng: p.lng }));
+  }
+  const stride = Math.ceil(path.length / MAX_TRACE_PATH_POINTS);
+  const out: Array<{ lat: number; lng: number }> = [];
+  for (let i = 0; i < path.length; i += stride) {
+    out.push({ lat: path[i].lat, lng: path[i].lng });
+  }
+  const last = path[path.length - 1];
+  const tail = out[out.length - 1];
+  if (!tail || tail.lat !== last.lat || tail.lng !== last.lng) {
+    out.push({ lat: last.lat, lng: last.lng });
+  }
+  return out;
+}
+
 export type TraceExport = {
   format: "drive-trace/v1";
   exportedAt: string;
   userAgent: string;
+  /** Build que se estaba sirviendo (Fase 3.1-E): hash del commit. */
+  build?: { commit: string };
   gps: TraceGpsSample[];
   camera: TraceCameraSample[];
   events: TraceEvent[];
@@ -187,6 +231,8 @@ export type TraceExport = {
   programmaticEvents?: TraceProgrammaticCount[];
   /** Fluidez por segundo (rAF, cámaras aplicadas, renders de Mapbox). */
   perf?: TracePerfBucket[];
+  /** Ruta activa (polilínea + steps) al exportar — Fase 3.1-E. */
+  route?: TraceRouteSnapshot | null;
 };
 
 const MAX_GPS = 12_000;
@@ -212,6 +258,46 @@ export class TraceRecorder {
     }
   >();
   readonly startedAt = Date.now();
+  /** Última ruta activa (se reemplaza al recalcular; null sin navegación). */
+  private routeSnapshot: TraceRouteSnapshot | null = null;
+
+  /**
+   * Ruta activa para la exportación (Fase 3.1-E). Se llama al cambiar
+   * `roadRoute`; no se guarda historia (solo la vigente al exportar).
+   */
+  setRoute(
+    route: {
+      destination: { lat: number; lng: number };
+      distanceMeters: number | null;
+      durationSeconds: number | null;
+      steps: Array<{
+        maneuver?: string | null;
+        instruction?: string | null;
+        distanceMeters: number;
+        start: { lat: number; lng: number };
+        end: { lat: number; lng: number };
+      }>;
+      path: Array<{ lat: number; lng: number }>;
+    } | null
+  ): void {
+    if (!route) {
+      this.routeSnapshot = null;
+      return;
+    }
+    this.routeSnapshot = {
+      destination: { lat: route.destination.lat, lng: route.destination.lng },
+      distanceMeters: route.distanceMeters,
+      durationSeconds: route.durationSeconds,
+      steps: route.steps.map((s) => ({
+        maneuver: s.maneuver ?? null,
+        instruction: s.instruction ?? null,
+        distanceMeters: s.distanceMeters,
+        start: { lat: s.start.lat, lng: s.start.lng },
+        end: { lat: s.end.lat, lng: s.end.lng },
+      })),
+      path: decimatePath(route.path),
+    };
+  }
 
   recordGps(sample: TraceGpsSample): void {
     this.gps.push(sample);
@@ -370,16 +456,23 @@ export class TraceRecorder {
       });
   }
 
+  /** Hash del build en curso (inyectado por next.config.ts). */
+  static buildCommit(): string {
+    return process.env.NEXT_PUBLIC_BUILD_COMMIT || "unknown";
+  }
+
   toJSON(): TraceExport {
     return {
       format: "drive-trace/v1",
       exportedAt: new Date().toISOString(),
       userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "",
+      build: { commit: TraceRecorder.buildCommit() },
       gps: this.gps,
       camera: this.camera,
       events: this.events,
       programmaticEvents: [...this.programmaticByKey.values()].sort((a, b) => a.t - b.t),
       perf: this.perfBuckets(),
+      route: this.routeSnapshot,
     };
   }
 

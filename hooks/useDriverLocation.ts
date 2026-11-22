@@ -2,31 +2,19 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { haversineMeters } from "@/lib/dispatch/routing";
+import {
+  createFixGateState,
+  evaluateGpsFix,
+  type FixRejectionReason,
+} from "@/lib/drive/fix-gate";
+
 const MIN_DISTANCE_METERS = 20;
 const MIN_INTERVAL_MS = 10_000;
-const GPS_LOCATION_MIN_INTERVAL_MS = 250;
-const GPS_LOCATION_MIN_DISTANCE_METERS = 1.5;
-const MAX_FIX_AGE_MS = 5_000;
-// Fase 1-D: descartar fixes con antigüedad > 5 s (position.timestamp vs el
-// reloj del dispositivo). En la traza T1 el primer fix tenía 21.7 s de
-// antigüedad pese a maximumAge:0 (la caché del SO puede mentir).
-
-function haversineDistance(
-  lat1: number,
-  lng1: number,
-  lat2: number,
-  lng2: number
-): number {
-  const R = 6371000;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLng = ((lng2 - lng1) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
+// Fase 3.1-B: la política de aceptación (antigüedad, accuracy, coordenadas
+// repetidas, dedupe, regla >30 m vs ≤20 m fresco y escape de «sin fix
+// bueno») vive en lib/drive/fix-gate.ts para poder reproducirla con trazas
+// reales en Node. Aquí solo se aplica la decisión.
 
 export type RawGpsSample = {
   lat: number;
@@ -36,7 +24,7 @@ export type RawGpsSample = {
   heading: number | null;
   deviceT: number | null;
   accepted: boolean;
-  rejectedReason?: "accuracy" | "dedupe" | "stale";
+  rejectedReason?: FixRejectionReason;
 };
 
 export function useDriverLocation(
@@ -54,21 +42,19 @@ export function useDriverLocation(
   const lastReportRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
   const watchIdRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
-  const lastVisualLocationRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
-  // Fase 3-B: último fix con accuracy ≤ 20 m. Un fix peor (> 30 m) no mueve
-  // posición/velocidad/curso mientras ese fix bueno siga fresco (T4: fixes de
-  // 79 m y 52 m desplazaron el vehículo visual 50.2 m en 1.6 s).
-  const lastGoodFixRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
-  const GOOD_FIX_ACCURACY_M = 20;
-  const POOR_FIX_ACCURACY_M = 30;
-  const GOOD_FIX_TTL_MS = 10_000;
+  // Fase 3.1: estado de la puerta de fixes (coordenadas vistas, último bueno,
+  // candidato pobre para el escape). Misma política que el arnés de Node.
+  const fixGateRef = useRef(createFixGateState());
 
   const reportLocation = useCallback(
     async (lat: number, lng: number) => {
       // Filter: significant change or enough time elapsed
       const last = lastReportRef.current;
       if (last) {
-        const dist = haversineDistance(last.lat, last.lng, lat, lng);
+        const dist = haversineMeters(
+          { lat: last.lat, lng: last.lng },
+          { lat, lng }
+        );
         const elapsed = Date.now() - last.time;
         if (dist < MIN_DISTANCE_METERS && elapsed < MIN_INTERVAL_MS) {
           return; // Skip — not significant enough
@@ -107,7 +93,7 @@ export function useDriverLocation(
       // Instrumentación (Fase 0, staging): expone la muestra CRUDA antes de
       // los filtros para el grabador de trazas. No altera la lógica: los
       // filtros de abajo se aplican exactamente igual.
-      const emitRawSample = (accepted: boolean, rejectedReason?: "accuracy" | "dedupe" | "stale") => {
+      const emitRawSample = (accepted: boolean, rejectedReason?: FixRejectionReason) => {
         options?.onRawSample?.({
           lat: latitude,
           lng: longitude,
@@ -119,68 +105,54 @@ export function useDriverLocation(
           ...(rejectedReason ? { rejectedReason } : {}),
         });
       };
-      // Skip if accuracy is poor (> 100m)
-      if (accuracy > 100) {
-        emitRawSample(false, "accuracy");
-        return;
-      }
       const now = Date.now();
-      const previous = lastVisualLocationRef.current;
-      if (previous) {
-        const distance = haversineDistance(previous.lat, previous.lng, latitude, longitude);
-        const elapsed = now - previous.time;
-        if (
-          elapsed < GPS_LOCATION_MIN_INTERVAL_MS &&
-          distance < GPS_LOCATION_MIN_DISTANCE_METERS
-        ) {
-          emitRawSample(false, "dedupe");
-          return;
-        }
-      }
-      // Antigüedad del fix: si el SO entregó una posición vieja, se
-      // descarta (no mueve marcador ni cámara).
-      const fixAgeMs = typeof pos.timestamp === "number" ? now - pos.timestamp : 0;
-      if (fixAgeMs > MAX_FIX_AGE_MS) {
-        emitRawSample(false, "stale");
+      // Fase 3.1-B: decisión pura (accuracy, coordenadas repetidas, antigüedad,
+      // dedupe, fix pobre vs bueno fresco y escape de 10 s sin fix bueno).
+      const decision = evaluateGpsFix(fixGateRef.current, {
+        lat: latitude,
+        lng: longitude,
+        accuracy: typeof accuracy === "number" && Number.isFinite(accuracy) ? accuracy : null,
+        deviceT: typeof pos.timestamp === "number" ? pos.timestamp : null,
+        arrivedAt: now,
+      });
+      if (!decision.accepted) {
+        emitRawSample(false, decision.reason);
         return;
-      }
-      // Fase 3-B: un fix pobre no pisa la posición de uno bueno y fresco.
-      const good = lastGoodFixRef.current;
-      const goodFresh = good != null && now - good.time <= GOOD_FIX_TTL_MS;
-      if (accuracy > POOR_FIX_ACCURACY_M && goodFresh) {
-        emitRawSample(false, "accuracy");
-        return;
-      }
-      if (accuracy <= GOOD_FIX_ACCURACY_M) {
-        lastGoodFixRef.current = { lat: latitude, lng: longitude, time: now };
       }
       emitRawSample(true);
-      lastVisualLocationRef.current = { lat: latitude, lng: longitude, time: now };
-      setLocation({ lat: latitude, lng: longitude });
-      setAccuracy(accuracy);
-      setSpeed(
-        typeof rawSpeed === "number" && Number.isFinite(rawSpeed) && rawSpeed >= 0
-          ? rawSpeed
-          : null
-      );
+      const acceptedLat = decision.lat;
+      const acceptedLng = decision.lng;
+      setLocation({ lat: acceptedLat, lng: acceptedLng });
+      setAccuracy(decision.accuracy);
+      // Un fix aceptado por el escape con un candidato PREVIO no aporta
+      // velocidad ni rumbo nuevos: se conservan los del último fix.
+      if (decision.useCurrent) {
+        setSpeed(
+          typeof rawSpeed === "number" && Number.isFinite(rawSpeed) && rawSpeed >= 0
+            ? rawSpeed
+            : null
+        );
+      }
       // heading solo es válido mientras el dispositivo se mueve; el resto del
       // sistema lo usa solo cuando viene como número dentro de [0, 360).
       // Solo setState si cambió de forma relevante: cada setState re-renderiza
       // la página del repartidor completa (árbol grande) y compite con el
       // render del mapa en el hilo principal.
-      const nextHeading =
-        typeof rawHeading === "number" && Number.isFinite(rawHeading)
-          ? ((rawHeading % 360) + 360) % 360
-          : null;
-      setHeading((prev) => {
-        if (prev === nextHeading) return prev;
-        if (prev != null && nextHeading != null) {
-          const diff = Math.abs(((nextHeading - prev + 540) % 360) - 180);
-          if (diff < 1) return prev;
-        }
-        return nextHeading;
-      });
-      reportLocation(latitude, longitude);
+      if (decision.useCurrent) {
+        const nextHeading =
+          typeof rawHeading === "number" && Number.isFinite(rawHeading)
+            ? ((rawHeading % 360) + 360) % 360
+            : null;
+        setHeading((prev) => {
+          if (prev === nextHeading) return prev;
+          if (prev != null && nextHeading != null) {
+            const diff = Math.abs(((nextHeading - prev + 540) % 360) - 180);
+            if (diff < 1) return prev;
+          }
+          return nextHeading;
+        });
+      }
+      reportLocation(acceptedLat, acceptedLng);
     };
 
     const onError = (err: GeolocationPositionError) => {

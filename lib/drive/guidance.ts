@@ -41,6 +41,27 @@ export function initialGuidanceState(): GuidanceState {
   return { routeKey: null, maxDoneM: 0, departed: false };
 }
 
+/**
+ * Estado para una ruta NUEVA (Fase 3.1-G).
+ *
+ * Un recálculo a mitad de viaje devuelve una ruta cuyo `depart` está en la
+ * posición actual del vehículo: con `initialGuidanceState()` el `done` de la
+ * ruta nueva arranca en ≈0 y la tarjeta volvía a decir «Comienza tu viaje»
+ * aunque el repartidor llevara 500 m. El estado de viaje (`departed`) es del
+ * VIAJE, no de la geometría: se hereda mientras siga siendo la misma etapa.
+ * El progreso (`maxDoneM`) sí se reinicia —los metros de la ruta anterior no
+ * existen en la nueva— y la distancia se recalcula sobre la ruta nueva.
+ */
+export function nextGuidanceState(
+  previous: GuidanceState | null,
+  routeKey: unknown
+): GuidanceState {
+  const wasUnderway =
+    previous != null &&
+    (previous.departed || previous.maxDoneM > DEPART_ADVANCE_METERS);
+  return { routeKey, maxDoneM: 0, departed: wasUnderway };
+}
+
 export type GuidanceResult = {
   total: number;
   remaining: number;

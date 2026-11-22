@@ -1,6 +1,35 @@
+import { execSync } from "node:child_process";
+
 import type { NextConfig } from "next";
 
+/**
+ * Hash del commit que se está sirviendo (Fase 3.1-E). Va inlineado al cliente
+ * como `process.env.NEXT_PUBLIC_BUILD_COMMIT` para que la traza exportada y el
+ * panel de diagnóstico digan QUÉ build se probó (la traza T4 no lo decía y no
+ * se pudo reejecutar el arnés sobre ella).
+ *
+ * Orden: Vercel (VERCEL_GIT_COMMIT_SHA, siempre presente) → variable de CI →
+ * `git rev-parse HEAD` en local → "unknown".
+ */
+function resolveBuildCommit(): string {
+  const fromEnv =
+    process.env.VERCEL_GIT_COMMIT_SHA ||
+    process.env.GIT_COMMIT_SHA ||
+    process.env.NEXT_PUBLIC_BUILD_COMMIT;
+  if (fromEnv) return fromEnv.trim();
+  try {
+    return execSync("git rev-parse HEAD", { stdio: ["ignore", "pipe", "ignore"] })
+      .toString()
+      .trim();
+  } catch {
+    return "unknown";
+  }
+}
+
 const nextConfig: NextConfig = {
+  env: {
+    NEXT_PUBLIC_BUILD_COMMIT: resolveBuildCommit(),
+  },
   images: {
     remotePatterns: [
       {
