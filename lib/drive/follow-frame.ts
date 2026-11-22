@@ -38,8 +38,17 @@ export const NAV_ZOOM_SLOW = NAV_ZOOM_BASE;
 export const NAV_ZOOM_FAST = NAV_ZOOM_BASE - 0.4;
 /** No girar el mapa por variaciones menores de rumbo (anti-jitter). */
 export const NAV_HEADING_SKIP_DEG = 2.5;
-/** Velocidad angular máxima del giro de cámara (deg/s). */
-export const MAX_HEADING_ROTATION_DEG_PER_SEC = 150;
+/**
+ * Velocidad angular máxima del giro de cámara (deg/s) — Fase 3-B.
+ *
+ * Este es el limitador del lado CÁMARA (el otro está en el resolvedor:
+ * heading-resolver.ts → MAX_ANGULAR_RATE_DEG_PER_S = 60). Antes era 150 y era
+ * el que barría 0°→175° en 1.2 s en T4, porque la cámara arrancaba en 0 (el
+ * frame fabricaba rumbo 0 cuando aún no había rumbo) y perseguía al rumbo
+ * real con este tope. Ahora la primera adquisición es de un golpe
+ * (`cameraHeading == null`) y, ya adquirida, no pasa de 60°/s.
+ */
+export const MAX_HEADING_ROTATION_DEG_PER_SEC = 60;
 /** Interpolación de posición del vehículo entre ticks de GPS. */
 export const POSITION_SMOOTH_FACTOR = 0.18;
 export const POSITION_MIN_STEP_METERS = 1.5;
@@ -95,9 +104,17 @@ export type FollowFrameInput = {
   targetHeading: number | null;
   /** Rumbo del simulador si está activo (prioridad), si no null. */
   simHeading: number | null;
+  /** Rumbo ACTUAL del mapa (deg): se mantiene mientras no haya rumbo. */
+  mapBearing: number;
   /** Velocidad de navegación (m/s) para el zoom por velocidad. */
   speedMps: number;
   route: FollowRouteInput | null;
+  /**
+   * ¿Ya hubo un fix con accuracy ≤ 20 m? Antes del primero, un fix pobre
+   * (>30 m) no mueve la posición visual (T4: accuracy 79 m desplazó el puck
+   * 50.2 m en 1.6 s).
+   */
+  firstGoodFixSeen: boolean;
   /**
    * Y del ancla (px desde el borde superior del contenedor) dentro del área
    * visible: 70–75 %. Se aplica con `padding` y NO con `offset`, porque
@@ -151,7 +168,10 @@ export function computeFollowFrame(
     visualHeading = targetHeading;
     headingChanged = true;
   }
-  const heading = visualHeading ?? targetHeading ?? 0;
+  // Sin rumbo todavía NO se fabrica 0°: se mantiene la cámara donde está y la
+  // primera adquisición real se aplica de un solo golpe (T4: barrido de 0° a
+  // 175° en 1.2 s porque el frame inventaba norte).
+  const heading = visualHeading ?? targetHeading;
 
   // ── 2) Posición del vehículo: interpolación exponencial con tope de px ──
   const zoomNow =
@@ -160,7 +180,18 @@ export function computeFollowFrame(
   const dist = haversineMeters(cur, target);
   let vehiclePos = cur;
   const mpp = Math.max(0.01, metersPerPixelAt(zoomNow, cur.lat));
-  if (dist < 0.5) {
+  // Fase 3-B — arranque: sin ningún fix bueno todavía, un fix pobre no mueve
+  // el vehículo visual (T4: accuracy 79/52 m ⇒ 50.2 m de salto en 1.6 s).
+  const poorStart =
+    !input.firstGoodFixSeen && input.accuracy != null && input.accuracy > 20;
+  // Reubicación: un salto mayor que 50 m y mayor que lo que la velocidad
+  // permite es una re-adquisición del GPS, no desplazamiento → snap.
+  const speedMps = Math.max(0, input.speedMps);
+  if (poorStart) {
+    vehiclePos = cur;
+  } else if (dist > Math.max(50, 3 * speedMps)) {
+    vehiclePos = target;
+  } else if (dist < 0.5) {
     vehiclePos = target;
   } else {
     // Calentamiento (accuracy > 20 m): amortiguar la corrección (~1 s ya de
@@ -195,7 +226,12 @@ export function computeFollowFrame(
   // ── 4) Rumbo de cámara con límite de velocidad angular ──
   let cameraHeading = state.cameraHeading;
   let cameraHeadingTs = state.cameraHeadingTs;
-  if (cameraHeading != null) {
+  if (navHeading == null) {
+    // Sin rumbo de navegación: la cámara se queda como está (el comando usa el
+    // bearing actual del mapa más abajo) y NO se marca un rumbo de cámara.
+    cameraHeading = state.cameraHeading;
+    cameraHeadingTs = state.cameraHeadingTs;
+  } else if (cameraHeading != null) {
     const deltaDeg = shortestAngleDelta(navHeading, cameraHeading);
     if (Math.abs(deltaDeg) > NAV_HEADING_SKIP_DEG) {
       const dtSec = Math.max(0.001, (now - (cameraHeadingTs ?? now)) / 1000);
@@ -302,7 +338,7 @@ export function computeFollowFrame(
 
   const command: FollowFrameResult["command"] = {
     center: desiredCenter,
-    bearing: cameraHeading ?? 0,
+    bearing: cameraHeading ?? input.mapBearing,
     pitch: 0,
     padding: computeAnchorPadding(input.containerHeightPx, anchorY),
     ...(pendingZoom != null ? { zoom: pendingZoom } : {}),

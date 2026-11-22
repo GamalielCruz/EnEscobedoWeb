@@ -102,6 +102,11 @@ import {
   loadDriveMapStyle,
 } from "@/lib/drive/map-styles";
 import { createDriveHeadingResolver } from "@/lib/drive/heading-resolver";
+import {
+  computeGuidance,
+  initialGuidanceState,
+  type GuidanceState,
+} from "@/lib/drive/guidance";
 
 // ── Map config ─────────────────────────────────────────────────────
 
@@ -388,6 +393,19 @@ function shortestAngleDelta(to: number, from: number): number {
   return ((to - from + 540) % 360) - 180;
 }
 
+/**
+ * Distancia numérica (m) de la etiqueta renderizada «en 350 m» / «en 1.2 km».
+ * Fase 3-D: sirve para contrastar lo MOSTRADO con la distancia real a la
+ * maniobra en la traza.
+ */
+function parseDistanceLabelMeters(label: string | null): number | null {
+  if (!label) return null;
+  const match = label.match(/([\d.]+)\s*(km|m)\b/i);
+  if (!match) return null;
+  const value = Number.parseFloat(match[1]);
+  if (!Number.isFinite(value)) return null;
+  return Math.round(match[2].toLowerCase() === "km" ? value * 1000 : value);
+}
 
 /**
  * Punto de CÁMARA para que el conductor quede en el tercio inferior de la
@@ -733,6 +751,10 @@ export default function DrivePage() {
     });
   const gpsAccuracyRef = useRef<number | null>(null);
   gpsAccuracyRef.current = gpsAccuracy;
+  // Fase 3-B: ¿ya hubo un fix con accuracy ≤ 20 m? Antes del primero, un fix
+  // pobre no mueve la posición visual.
+  const firstGoodFixSeenRef = useRef(false);
+  if (gpsAccuracy != null && gpsAccuracy <= 20) firstGoodFixSeenRef.current = true;
 
   // Brújula física del dispositivo (DeviceOrientationEvent). NO pide permiso
   // automáticamente: se activa solo cuando el repartidor comienza navegación
@@ -1039,6 +1061,9 @@ export default function DrivePage() {
   // (la que dibuja el puck y ancla la cámara). Es la única referencia de
   // navegación para guidance/cámara; el GPS crudo solo alimenta el objetivo
   // hacia el que interpola. Declarada aquí (antes de guidance) a propósito.
+  // Fase 3-A: estado con histéresis de la tarjeta (depart que no regresa y
+  // maniobra ejecutada que no se repite). Se reinicia al cambiar la ruta.
+  const guidanceTrackerRef = useRef<{ state: GuidanceState } | null>(null);
   const visualPosRef = useRef<RoutePoint>(currentLocation);
 
   // Heading de navegación para el simulador: derivado de la ruta cuando está
@@ -1213,44 +1238,20 @@ export default function DrivePage() {
     const remainingSeconds =
       duration != null ? Math.max(0, duration * (remaining / total)) : null;
 
-    // Steps de Directions: el step "pendiente" es el que aún no termina.
-    let pendingIdx = -1;
-    if (roadRoute.steps.length > 0) {
-      let acc = 0;
-      for (let i = 0; i < roadRoute.steps.length; i++) {
-        acc += roadRoute.steps[i].distanceMeters;
-        if (acc > done) {
-          pendingIdx = i;
-          break;
-        }
-      }
-      if (pendingIdx === -1) pendingIdx = roadRoute.steps.length - 1;
+    // Tarjeta (Fase 3-A): la SEMÁNTICA vive en lib/drive/guidance.ts —
+    // próxima maniobra siempre, distancia real, maniobra ejecutada que no
+    // vuelve e histéresis de «Comienza tu viaje». Aquí solo se proyecta la
+    // posición visual y se normaliza el idioma.
+    const routeKey = `${Math.round(total)}|${roadRoute.steps.length}|${roadRoute.steps[0]?.distanceMeters ?? 0}|${roadRoute.steps.at(-1)?.distanceMeters ?? 0}`;
+    let tracker = guidanceTrackerRef.current;
+    if (!tracker || tracker.state.routeKey !== routeKey) {
+      tracker = { state: initialGuidanceState() };
+      tracker.state.routeKey = routeKey;
+      guidanceTrackerRef.current = tracker;
     }
-    let shownStep: (typeof roadRoute.steps)[number] | null = null;
-    let distanceToManeuver: number | null = null;
-    if (pendingIdx >= 0) {
-      const step = roadRoute.steps[pendingIdx];
-      const next = roadRoute.steps[pendingIdx + 1];
-      // Metros hasta el giro (fin del step en curso): si queda poco, mostrar
-      // la siguiente maniobra en lugar de la instrucción del tramo actual.
-      let accEnd = 0;
-      for (let i = 0; i <= pendingIdx; i++) accEnd += roadRoute.steps[i].distanceMeters;
-      const distToTurn = Math.max(0, accEnd - done);
-      // Transición "depart" → primera maniobra: una vez que el vehículo se
-      // desplazó de VERDAD sobre la ruta (40 m proyectados), la tarjeta no
-      // puede quedarse bloqueada en "Comienza tu viaje" mientras la
-      // distancia restante desciende. Si no hay step siguiente (ruta de un
-      // solo tramo recto), se respeta la instrucción inicial.
-      const pastDepart =
-        step.maneuver === "depart" && done > DEPART_ADVANCE_METERS && next != null;
-      if (pastDepart) {
-        shownStep = next;
-        distanceToManeuver = Math.max(0, accEnd + next.distanceMeters - done);
-      } else {
-        distanceToManeuver = distToTurn;
-        shownStep = next && distToTurn <= NEXT_MANEUVER_METERS ? next : step;
-      }
-    }
+    const g = computeGuidance(tracker.state, roadRoute.steps, total, done);
+    const shownStep =
+      g.shownStepIndex != null ? roadRoute.steps[g.shownStepIndex] ?? null : null;
     return {
       total,
       remaining,
@@ -1259,14 +1260,14 @@ export default function DrivePage() {
       instruction: shownStep
         ? instructionInSpanish(shownStep.instruction, shownStep.maneuver)
         : null,
-      maneuver: shownStep?.maneuver ?? null,
+      maneuver: g.maneuver,
       // Calle donde ocurre la maniobra ("Av. Panamericana") o null.
       street: shownStep ? streetFromInstruction(shownStep.instruction) : null,
-      // Metros hasta el final del step en curso (la siguiente maniobra).
-      distanceToManeuver,
+      // Metros REALES hasta la maniobra mostrada (sobre la ruta).
+      distanceToManeuver: g.distanceToManeuver,
       // Paso activo de la ruta (para registrar la etapa en la traza).
-      stepIndex: pendingIdx >= 0 ? pendingIdx : null,
-      fractionCompleted: Math.min(1, Math.max(0, done / total)),
+      stepIndex: g.stepIndex,
+      fractionCompleted: g.fractionCompleted,
     };
   }, [roadRoute, currentLocation]);
 
@@ -1339,6 +1340,8 @@ export default function DrivePage() {
   // Fase 1-B: latido del loop persistente (performance.now() del último
   // tick) y último error capturado (el loop ya no muere en silencio).
   const followLoopHeartbeatRef = useRef<number | null>(null);
+  /** Marca de tiempo del rAF anterior (fluidez, Fase 3-C). */
+  const lastRafTsRef = useRef<number>(0);
   const followLoopErrorRef = useRef<string | null>(null);
   // Fase 2-A: guarda de anclaje (puck medido vs ancla esperada).
   const anchorMismatchSinceRef = useRef<number | null>(null);
@@ -1807,6 +1810,13 @@ export default function DrivePage() {
       }
     };
     const stepBody = (ts: number) => {
+      // Fase 3-C: intervalo real entre cuadros del loop (p50/p95/máx por
+      // segundo en la traza). Se mide el rAF, no el trabajo: si el hilo está
+      // saturado el intervalo sube aunque el loop haga lo mismo.
+      if (TRACE_REC_ENABLED) {
+        traceRecorderRef.current?.recordRafInterval(ts - lastRafTsRef.current);
+      }
+      lastRafTsRef.current = ts;
       const map = mapRef.current;
       const target = followTargetRef.current;
       // Sin mapa/target todavía: el loop sigue vivo y espera.
@@ -1847,6 +1857,8 @@ export default function DrivePage() {
           containerHeightPx: readDriveVisibleBand(map).containerHeight,
           pendingZoom: pendingZoomRef.current,
           accuracy: gpsAccuracyRef.current,
+          firstGoodFixSeen: firstGoodFixSeenRef.current,
+          mapBearing: map.getBearing?.() ?? 0,
         }
       );
 
@@ -1880,6 +1892,7 @@ export default function DrivePage() {
       }
 
       // ÚNICO camino de escritura de cámara del seguimiento.
+      if (TRACE_REC_ENABLED) traceRecorderRef.current?.recordCameraApply();
       applyCameraCommand(createDriveCameraSink(map), {
         center: frame.command.center,
         heading: frame.command.bearing,
@@ -1979,6 +1992,11 @@ export default function DrivePage() {
         "pitchstart",
         "pitchend",
       ] as const;
+      // Fase 3-C: `render` de Mapbox por segundo (se agrega, no se guarda uno
+      // por evento: son ~60/s). Explica si la fluidez la limita el loop o el
+      // propio render del mapa.
+      const onRender = () => traceRecorderRef.current?.recordMapRender();
+      if (TRACE_REC_ENABLED) recMap.on("render", onRender);
       const recHandlers = TRACE_REC_ENABLED
         ? recTypes.map((type) => {
             const handler = (e: { originalEvent?: unknown }) =>
@@ -1998,6 +2016,7 @@ export default function DrivePage() {
         ...recHandlers.map(({ type, handler }) => ({
           remove: () => recMap.off(type, handler),
         })),
+        { remove: () => recMap.off("render", onRender) },
       ];
     },
     [exitFollowMode]
@@ -2135,6 +2154,9 @@ export default function DrivePage() {
     );
 
     if (!withRoute) {
+      // Fase 3-B: antes del primer fix bueno (accuracy ≤ 20 m) un fix pobre no
+      // mueve ni la cámara ni el puck (T4: 79 m ⇒ 50.2 m de salto en 1.6 s).
+      if (!firstGoodFixSeenRef.current && (gpsAccuracyRef.current ?? 0) > 20) return;
       // Sin ruta: seguimiento simple con heading del dispositivo/GPS.
       // El marcador acompaña a la posición real y el mapa se orienta según
       // el heading disponible (GPS, movimiento o brújula) para que la
@@ -2810,6 +2832,28 @@ export default function DrivePage() {
         return null;
     }
   }, [navPhase, activeOrder, guidance, sim.active, isRecalculating, arrivingActive]);
+
+  // Fase 3-D: lo que la tarjeta RENDERIZA (texto + «en X m»), no lo que
+  // calcula guidance. En T4 veía «en 360 m» con el giro a ~60 m: sin esta
+  // fila no se puede contrastar el valor mostrado con la distancia real.
+  const lastCardKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!TRACE_REC_ENABLED || !navContent) return;
+    const label = navContent.maneuverDistance ?? null;
+    const key = `${navContent.main}|${label ?? "-"}`;
+    if (lastCardKeyRef.current === key) return;
+    lastCardKeyRef.current = key;
+    traceRecorderRef.current?.recordCard({
+      instruction: navContent.main ?? null,
+      distanceLabel: label,
+      shownDistanceM: parseDistanceLabelMeters(label),
+      maneuver: navContent.maneuver ?? null,
+      realDistanceToManeuverM:
+        guidance?.distanceToManeuver != null
+          ? Math.round(guidance.distanceToManeuver)
+          : null,
+    });
+  }, [navContent, guidance?.distanceToManeuver, TRACE_REC_ENABLED]);
 
   // ── Actions ──────────────────────────────────────────────────────
 

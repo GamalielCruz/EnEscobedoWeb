@@ -55,6 +55,13 @@ export function useDriverLocation(
   const watchIdRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
   const lastVisualLocationRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
+  // Fase 3-B: último fix con accuracy ≤ 20 m. Un fix peor (> 30 m) no mueve
+  // posición/velocidad/curso mientras ese fix bueno siga fresco (T4: fixes de
+  // 79 m y 52 m desplazaron el vehículo visual 50.2 m en 1.6 s).
+  const lastGoodFixRef = useRef<{ lat: number; lng: number; time: number } | null>(null);
+  const GOOD_FIX_ACCURACY_M = 20;
+  const POOR_FIX_ACCURACY_M = 30;
+  const GOOD_FIX_TTL_MS = 10_000;
 
   const reportLocation = useCallback(
     async (lat: number, lng: number) => {
@@ -136,6 +143,16 @@ export function useDriverLocation(
       if (fixAgeMs > MAX_FIX_AGE_MS) {
         emitRawSample(false, "stale");
         return;
+      }
+      // Fase 3-B: un fix pobre no pisa la posición de uno bueno y fresco.
+      const good = lastGoodFixRef.current;
+      const goodFresh = good != null && now - good.time <= GOOD_FIX_TTL_MS;
+      if (accuracy > POOR_FIX_ACCURACY_M && goodFresh) {
+        emitRawSample(false, "accuracy");
+        return;
+      }
+      if (accuracy <= GOOD_FIX_ACCURACY_M) {
+        lastGoodFixRef.current = { lat: latitude, lng: longitude, time: now };
       }
       emitRawSample(true);
       lastVisualLocationRef.current = { lat: latitude, lng: longitude, time: now };

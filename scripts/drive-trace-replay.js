@@ -507,6 +507,73 @@ function acceptance(trace) {
     anchorMismatch: evAll.filter((e) => e.kind === "anchor-mismatch").length,
     programmatic: progAll.reduce((s2, c) => s2 + c.count, 0) +
       evAll.filter((e) => e.hasOriginalEvent === false).length,
+    ...cardStats(evAll),
+    ...perfStats(trace.perf ?? []),
+  };
+}
+
+/**
+ * Fase 3-A/D: la tarjeta RENDERIZADA contra la distancia real a la maniobra.
+ * Criterio: ≤15 m en todo el trayecto, sin repetir una maniobra ejecutada y
+ * sin volver a «Comienza tu viaje».
+ */
+function cardStats(events) {
+  const cards = events.filter((e) => e.kind === "card");
+  const compared = cards.filter(
+    (c) => c.shownDistanceM != null && c.realDistanceToManeuverM != null
+  );
+  const errors = compared.map((c) =>
+    Math.abs(c.shownDistanceM - c.realDistanceToManeuverM)
+  );
+  // Maniobra ejecutada que reaparece: la misma instrucción después de haberla
+  // dado por pasada (el stepIndex retrocede o se repite un turn ya visto).
+  const seen = new Set();
+  let repeated = 0;
+  for (const c of cards) {
+    if (!c.maneuver || ["depart", "arrive", "straight", "unknown"].includes(c.maneuver)) continue;
+    const key = `${c.maneuver}|${c.instruction ?? ""}`;
+    if (seen.has(key)) repeated += 1;
+    else seen.add(key);
+  }
+  let departReturns = 0;
+  let leftDepart = false;
+  for (const c of cards) {
+    const isDepart = (c.instruction ?? "").toLowerCase().includes("comienza tu viaje");
+    if (isDepart && leftDepart) departReturns += 1;
+    if (!isDepart) leftDepart = true;
+  }
+  return {
+    cards: cards.length,
+    cardCompared: compared.length,
+    cardMaxErrorM: errors.length ? Math.max(...errors) : null,
+    cardP50ErrorM: pct(errors, 0.5),
+    cardIn15Pct: errors.length
+      ? (errors.filter((e) => e <= 15).length / errors.length) * 100
+      : null,
+    cardRepeatedManeuver: repeated,
+    cardDepartReturns: departReturns,
+  };
+}
+
+const fmtMs = (v) => (v == null ? "-" : `${v.toFixed(1)} ms`);
+
+/** Fase 3-C: fluidez por segundo (rAF, aplicaciones de cámara, renders). */
+function perfStats(perf) {
+  if (!perf.length) return { perfSeconds: 0 };
+  const raf = perf.flatMap((p) =>
+    [p.rafP50Ms, p.rafP95Ms, p.rafMaxMs].filter((v) => v != null)
+  );
+  return {
+    perfSeconds: perf.length,
+    rafP50Ms: pct(perf.map((p) => p.rafP50Ms).filter((v) => v != null), 0.5),
+    rafP95Ms: pct(perf.map((p) => p.rafP95Ms).filter((v) => v != null), 0.5),
+    rafMaxMs: raf.length ? Math.max(...raf) : null,
+    cameraPerSec: perf.length
+      ? perf.reduce((s2, p) => s2 + (p.cameraApplies ?? 0), 0) / perf.length
+      : null,
+    rendersPerSec: perf.length
+      ? perf.reduce((s2, p) => s2 + (p.mapRenders ?? 0), 0) / perf.length
+      : null,
   };
 }
 
@@ -524,6 +591,21 @@ console.log(
   } · criterio: 0 salvo vuelta en U confirmada`
 );
 console.log(`  Guarda de anclaje: ${acc.anchorMismatch} eventos · eventos programáticos agregados: ${acc.programmatic}`);
+if (acc.cards) {
+  console.log(
+    `  Tarjeta (renderizada vs real): ${acc.cardCompared}/${acc.cards} comparables · error p50 ${acc.cardP50ErrorM == null ? "-" : acc.cardP50ErrorM.toFixed(0) + " m"} · máx ${acc.cardMaxErrorM == null ? "-" : acc.cardMaxErrorM.toFixed(0) + " m"} · ≤15 m en ${acc.cardIn15Pct == null ? "-" : acc.cardIn15Pct.toFixed(0) + " %"} · criterio ≤15 m siempre`
+  );
+  console.log(
+    `  Tarjeta: maniobra repetida ${acc.cardRepeatedManeuver} · regresos a «Comienza tu viaje» ${acc.cardDepartReturns} · criterio 0/0`
+  );
+}
+if (acc.perfSeconds) {
+  console.log(
+    `  Fluidez: ${acc.perfSeconds} s · rAF p50 ${fmtMs(acc.rafP50Ms)} p95 ${fmtMs(acc.rafP95Ms)} máx ${fmtMs(acc.rafMaxMs)} · cámaras ${acc.cameraPerSec?.toFixed(1)}/s · renders ${acc.rendersPerSec?.toFixed(1)}/s`
+  );
+} else {
+  console.log("  Fluidez: la traza no incluye intervalos de cuadro (grabada antes de la Fase 3-C).");
+}
 
 if (cmpIdx !== -1) {
   const otherFile = process.argv[cmpIdx + 1];

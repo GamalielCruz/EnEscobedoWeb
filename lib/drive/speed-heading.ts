@@ -32,12 +32,25 @@ import {
 } from "@/lib/dispatch/routing";
 
 /**
- * Velocidad máxima PLAUSIBLE para un repartidor (45 m/s = 162 km/h). Por
- * encima de esto el valor es basura del SO y se DESCARTA — no se recorta:
- * recortar convertía 1784 m/s en 70 m/s "creíbles" (traza T2: speedMps=70
- * durante ~0.8 s, el clamp, no una velocidad real).
+ * Velocidad máxima PLAUSIBLE para un repartidor (35 m/s = 126 km/h, Fase
+ * 3-B: en T4 `speedMps=42.02` durante 2.6 s con coords.speed real ≈1.2 m/s
+ * pasaba el tope anterior de 45). Por encima de esto el valor es basura del
+ * SO y se DESCARTA — no se recorta: recortar convertía 1784 m/s en 70 m/s
+ * "creíbles" (traza T2: speedMps=70 durante ~0.8 s, el clamp).
  */
-export const MAX_PLAUSIBLE_SPEED_MPS = 45;
+export const MAX_PLAUSIBLE_SPEED_MPS = 35;
+/**
+ * Fase 3-B: la velocidad derivada nunca puede exceder esta envolvente sobre
+ * `coords.speed` cuando el SO la reporta (T4: derivada de 42 m/s con
+ * coords.speed ≈1.2 m/s por saltos de 50 m con accuracy de 79/52 m).
+ */
+export const DERIVED_SPEED_ENVELOPE_FACTOR = 3;
+export const DERIVED_SPEED_ENVELOPE_SLACK_MPS = 3;
+/**
+ * Fase 3-B: accuracy máxima para derivar velocidad o curso. Con accuracy
+ * mayor el desplazamiento medido está dentro del ruido del fix.
+ */
+export const GOOD_FIX_ACCURACY_M = 20;
 /** Aceleración máxima plausible entre fixes (m/s²), incluye frenada fuerte. */
 export const MAX_PLAUSIBLE_ACCEL_MPS2 = 12;
 export const MIN_DT_FOR_DERIVED_SPEED_S = 0.5;
@@ -92,6 +105,8 @@ export type SpeedHeadingState = {
    */
   courseAnchorPos: RoutePoint | null;
   courseAnchorTs: number | null;
+  /** Accuracy del fix anterior (m): el curso exige desplazamiento ≥ 2·(acc1+acc2). */
+  prevAccuracy: number | null;
   /** Últimos bearings entre fixes consecutivos (curso rápido filtrado). */
   recentBearings: number[];
 };
@@ -108,6 +123,7 @@ export function initialSpeedHeadingState(): SpeedHeadingState {
     prevTs: null,
     courseAnchorPos: null,
     courseAnchorTs: null,
+    prevAccuracy: null,
     recentBearings: [],
   };
 }
@@ -180,17 +196,26 @@ export function applyGpsFix(
   // 1) Velocidad: coords.speed si aporta; si no, dist/dt con dt >= 0.5 s.
   // Fase 2-C: un valor IMPLAUSIBLE se DESCARTA (no se recorta); se conserva la
   // última velocidad válida y expira a 0 pasados 3 s sin dato válido.
+  // Fase 3-B: la derivada solo entre fixes BUENOS (accuracy ≤ 20 m) y nunca
+  // por encima de 3·coords.speed + 3 m/s (T4: 42 m/s con coords.speed 1.2).
+  const accuracy = fix.accuracy ?? null;
+  const fixIsGood = accuracy == null || accuracy <= GOOD_FIX_ACCURACY_M;
+  const coordsSpeedValid =
+    typeof fix.coordsSpeed === "number" &&
+    Number.isFinite(fix.coordsSpeed) &&
+    fix.coordsSpeed >= 0;
   let speed: number | null = null;
   let speedSource: "coords" | "dt" | null = null;
   const prevSpeed = hasValidSpeed(state, fix.ts) ? state.speedMps : null;
-  if (
-    typeof fix.coordsSpeed === "number" &&
-    Number.isFinite(fix.coordsSpeed) &&
-    fix.coordsSpeed >= 0
-  ) {
-    speed = fix.coordsSpeed;
+  if (coordsSpeedValid) {
+    speed = fix.coordsSpeed as number;
     speedSource = "coords";
-  } else if (state.prevPos && state.prevTs != null) {
+  } else if (
+    fixIsGood &&
+    state.prevPos &&
+    state.prevTs != null &&
+    (state.prevAccuracy == null || state.prevAccuracy <= GOOD_FIX_ACCURACY_M)
+  ) {
     const dt = (fix.ts - state.prevTs) / 1000;
     if (dt >= MIN_DT_FOR_DERIVED_SPEED_S) {
       const dist = haversineMeters(state.prevPos, fix.pos);
@@ -205,7 +230,15 @@ export function applyGpsFix(
       state.lastValidSpeedTs != null
         ? Math.abs(fix.ts - state.lastValidSpeedTs) / 1000
         : null;
-    if (isPlausibleSpeed(speed, prevSpeed, dtSec)) {
+    // Envolvente sobre el dato del SO (3·coords.speed + 3): una derivada
+    // disparatada con saltos de fix imprecisos se descarta aquí.
+    const withinEnvelope =
+      speedSource !== "dt" ||
+      !coordsSpeedValid ||
+      speed <= DERIVED_SPEED_ENVELOPE_FACTOR * (fix.coordsSpeed as number) + DERIVED_SPEED_ENVELOPE_SLACK_MPS;
+    // Un fix malo NUNCA aporta velocidad si ya hay una buena reciente.
+    const fixCanReportSpeed = fixIsGood || !hasValidSpeed(state, fix.ts);
+    if (withinEnvelope && fixCanReportSpeed && isPlausibleSpeed(speed, prevSpeed, dtSec)) {
       next.speedMps = speed;
       next.speedSource = speedSource;
       next.lastValidSpeedTs = fix.ts;
@@ -225,18 +258,21 @@ export function applyGpsFix(
   }
 
   // 2) Rumbo: (1) curso por posiciones; (2) coords.heading solo en marcha.
-  // Nunca derivar rumbo de posiciones paradas.
-  const accuracy = fix.accuracy ?? null;
+  // Nunca derivar rumbo de posiciones paradas, ni de fixes imprecisos.
+  // Fase 3-B: el desplazamiento debe superar 2·(acc1+acc2) — con accuracy de
+  // 79/52 m (T4) un salto de 50 m es ruido, no desplazamiento.
   const baseNeeded = Math.max(
     COURSE_MIN_BASE_M,
-    accuracy != null ? 2 * accuracy : 0
+    accuracy != null
+      ? 2 * (accuracy + (state.prevAccuracy ?? accuracy))
+      : 0
   );
   // ── Curso RÁPIDO: bearings de fixes consecutivos cuando coinciden ──
   // A ritmo de caminata el ancla tarda ~7 s en juntar 10 m; un giro debe
   // registrarse en ~3 s. Si los últimos 3 bearings concuerdan entre sí
   // (≤25°), es un giro real y no ruido: se aceptan de inmediato. Los saltos
   // de GPS producen bearings incoherentes y se descartan.
-  if (next.moving && state.prevPos && state.prevTs != null) {
+  if (next.moving && fixIsGood && state.prevPos && state.prevTs != null) {
     const stepDist = haversineMeters(state.prevPos, fix.pos);
     if (stepDist >= 1) {
       const rawStep = bearingBetween(state.prevPos, fix.pos);
@@ -336,6 +372,7 @@ export function applyGpsFix(
 
   next.prevPos = fix.pos;
   next.prevTs = fix.ts;
+  next.prevAccuracy = accuracy;
   return next;
 }
 
