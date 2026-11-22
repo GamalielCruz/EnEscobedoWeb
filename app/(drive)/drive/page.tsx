@@ -3662,7 +3662,13 @@ export default function DrivePage() {
           onClick={() => setSensorPanelOpen(true)}
           className="fixed left-3 top-1/2 z-40 -translate-y-1/2 rounded-full bg-black/60 px-2.5 py-1 text-[10px] font-semibold tracking-wide text-white/70 shadow backdrop-blur-sm"
         >
-          SENSORS
+          SENSORS{" "}
+          {/* Fase 5-D: el hash del build se ve SIN abrir el panel ni exportar
+              traza, para confirmar en el iPhone qué build está sirviendo
+              staging. */}
+          <span className="font-mono text-white/90">
+            · {TraceRecorder.buildCommit().slice(0, 8)}
+          </span>
         </button>
       )}
       {sensorDebugVisible && sensorPanelOpen && (
@@ -3740,7 +3746,14 @@ export default function DrivePage() {
           <div className="mt-0.5 flex items-center gap-2">
             {/* Fase 3.1-E: qué build se está probando (también va en la traza). */}
             <span className="text-white/60">Build:</span>
-            <span className="font-mono text-white/90">
+            <span
+              className={
+                TraceRecorder.buildCommit() === "dev" ||
+                TraceRecorder.buildCommit() === "unknown"
+                  ? "font-mono text-amber-300"
+                  : "font-mono text-emerald-300"
+              }
+            >
               {TraceRecorder.buildCommit().slice(0, 8)}
             </span>
           </div>
