@@ -51,7 +51,7 @@ import { useDriverState, type DriverOrder, type DriverOffer } from "@/hooks/useD
 import { useDriverLocation } from "@/hooks/useDriverLocation";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { useDeviceOrientation } from "@/hooks/useDeviceOrientation";
-import { TraceRecorder } from "@/lib/drive/trace-recorder";
+import { TraceRecorder, nearestPointOnPath } from "@/lib/drive/trace-recorder";
 import {
   applyGpsFix,
   courseAgeMs,
@@ -1723,11 +1723,19 @@ export default function DrivePage() {
       const resolverState = driveHeadingResolverRef.current?.state ?? null;
       const dbg = resolverState?.debug ?? null;
       let puckPxY: number | null = null;
+      let puckPxX: number | null = null;
       try {
-        puckPxY = map.project([vehicle.lng, vehicle.lat]).y;
+        const puckPx = map.project([vehicle.lng, vehicle.lat]);
+        puckPxX = puckPx.x;
+        puckPxY = puckPx.y;
       } catch {
         puckPxY = null;
+        puckPxX = null;
       }
+      const routePath = roadRouteRef.current?.path ?? null;
+      const nearest = routePath
+        ? nearestPointOnPath(routePath, vehicle.lat, vehicle.lng)
+        : null;
       // Banda visible: el requisito es 70–75 % del ÁREA VISIBLE (no de la
       // altura total del contenedor). Se registra para medirlo en el arnés.
       const band = readDriveVisibleBand(map);
@@ -1779,6 +1787,10 @@ export default function DrivePage() {
             : null,
         compassAvailable: deviceStateRef.current.available,
         puckPxY,
+        puckPxX,
+        routeNearestLat: nearest?.lat ?? null,
+        routeNearestLng: nearest?.lng ?? null,
+        routeOffsetMeters: nearest?.distanceMeters ?? null,
         containerHeight: band.containerHeight,
         visibleTopPx: band.top,
         visibleBottomPx: band.bottom,

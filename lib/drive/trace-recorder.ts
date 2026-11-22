@@ -63,6 +63,13 @@ export type TraceCameraSample = {
   compassAvailable: string;
   /** Posición del puck en px desde la parte superior del contenedor. */
   puckPxY: number | null;
+  /** Posición del puck en px desde la izquierda del contenedor. */
+  puckPxX?: number | null;
+  /** Punto más cercano de la ruta activa al puck (null sin ruta). */
+  routeNearestLat?: number | null;
+  routeNearestLng?: number | null;
+  /** Distancia puck → ruta en metros (desfase real sobre la calle). */
+  routeOffsetMeters?: number | null;
   containerHeight: number | null;
   /** Banda visible del mapa (px): borde inferior de la barra superior. */
   visibleTopPx?: number | null;
@@ -254,6 +261,54 @@ function decimatePath(path: Array<{ lat: number; lng: number }>) {
     out.push({ lat: last.lat, lng: last.lng });
   }
   return out;
+}
+
+/**
+ * Punto más cercano de una polilínea a (lat, lng), en metros de distancia.
+ * Proyección local equirectangular: exacta a la escala de una ruta urbana.
+ */
+export function nearestPointOnPath(
+  path: ReadonlyArray<{ lat: number; lng: number }>,
+  lat: number,
+  lng: number
+): { lat: number; lng: number; distanceMeters: number } | null {
+  if (path.length === 0) return null;
+  const kLng = Math.cos((lat * Math.PI) / 180) * 111_320;
+  const kLat = 110_540;
+  const toXY = (p: { lat: number; lng: number }) => ({
+    x: (p.lng - lng) * kLng,
+    y: (p.lat - lat) * kLat,
+  });
+  if (path.length === 1) {
+    const a = toXY(path[0]);
+    return {
+      lat: path[0].lat,
+      lng: path[0].lng,
+      distanceMeters: Math.sqrt(a.x * a.x + a.y * a.y),
+    };
+  }
+  let best: { lat: number; lng: number; distanceMeters: number } | null = null;
+  let bestD2 = Infinity;
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = toXY(path[i]);
+    const b = toXY(path[i + 1]);
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 === 0 ? 0 : Math.min(1, Math.max(0, -(a.x * dx + a.y * dy) / len2));
+    const x = a.x + dx * t;
+    const y = a.y + dy * t;
+    const d2 = x * x + y * y;
+    if (best == null || d2 < bestD2) {
+      bestD2 = d2;
+      best = {
+        lat: path[i].lat + (path[i + 1].lat - path[i].lat) * t,
+        lng: path[i].lng + (path[i + 1].lng - path[i].lng) * t,
+        distanceMeters: Math.sqrt(d2),
+      };
+    }
+  }
+  return best;
 }
 
 export type TraceExport = {
