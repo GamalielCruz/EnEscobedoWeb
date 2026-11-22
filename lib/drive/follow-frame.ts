@@ -211,7 +211,7 @@ export function computeFollowFrame(
   if (targetHeading != null && visualHeading != null) {
     const delta = shortestAngleDelta(targetHeading, visualHeading);
     if (Math.abs(delta) > NAV_HEADING_SKIP_DEG) {
-      const baseFactor = Math.abs(delta) > 45 ? 0.38 : 0.22;
+      const baseFactor = Math.abs(delta) > 45 ? 0.38 : 0.5;
       const factor = 1 - Math.pow(1 - baseFactor, frameScale);
       visualHeading = normalizeDeg(visualHeading + delta * factor);
       headingChanged = true;
