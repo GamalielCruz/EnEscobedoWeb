@@ -40,7 +40,7 @@ export const NAV_ZOOM_MIN = 17.9;
 export const NAV_ZOOM_SLOW = NAV_ZOOM_BASE;
 export const NAV_ZOOM_FAST = NAV_ZOOM_BASE - 0.4;
 /** No girar el mapa por variaciones menores de rumbo (anti-jitter). */
-export const NAV_HEADING_SKIP_DEG = 2.5;
+export const NAV_HEADING_SKIP_DEG = 1;
 /**
  * Velocidad angular máxima del giro de cámara (deg/s) — Fase 3-B.
  *

@@ -1554,8 +1554,8 @@ export default function DrivePage() {
     navTarget && mapsLoaded && driverHasLocation && roadRoute?.path
   );
 
-  // Pantalla encendida durante la navegación (como Waze/Google Maps).
-  useWakeLock(navigatingWithRoute);
+  // Pantalla encendida mientras la app está abierta (no solo al navegar).
+  useWakeLock(true);
 
   // Ref de ruta para usarla en el loop de cámara sin re-suscribirlo.
   const roadRouteRef = useRef<RoadRoute | null>(roadRoute);
@@ -3744,18 +3744,36 @@ export default function DrivePage() {
             </span>
           </div>
           {deviceOrientation.state.available === "permission_required" && (
-            <div className="mt-1">
+            <div className="mt-1 flex items-center gap-2">
               <button
                 type="button"
+                disabled={deviceOrientation.state.permission === "denied"}
                 onClick={() => {
                   void deviceOrientation.enable();
                 }}
-                className="rounded bg-white/15 px-2 py-0.5 text-[10px] font-semibold text-white"
+                className="rounded bg-white/15 px-2 py-0.5 text-[10px] font-semibold text-white disabled:opacity-40"
               >
                 Activar brújula
               </button>
+              <span
+                className={`text-[10px] font-semibold ${
+                  deviceOrientation.state.permission === "denied"
+                    ? "text-red-300"
+                    : "text-white/60"
+                }`}
+              >
+                {deviceOrientation.state.permission === "denied"
+                  ? "Denegada: actívala en Ajustes de Safari"
+                  : "Sin permiso (pendiente)"}
+              </span>
             </div>
           )}
+          {deviceOrientation.state.available === "available" &&
+            deviceOrientation.state.permission === "granted" && (
+              <div className="mt-1 text-[10px] font-semibold text-emerald-300">
+                Brújula concedida
+              </div>
+            )}
           <div className="mt-0.5 flex items-center gap-2">
             {/* Fase 3.1-E: qué build se está probando (también va en la traza). */}
             <span className="text-white/60">Build:</span>
