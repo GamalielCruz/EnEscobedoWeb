@@ -58,6 +58,22 @@ export const MIN_DT_ACCEPT_FIX_S = 0.25;
 export const SPEED_EXPIRY_MS = 3_000;
 export const COURSE_SPEED_THRESHOLD_MPS = 0.7;
 export const COURSE_SPEED_HYSTERESIS_MPS = 0.2;
+/**
+ * Fase 4-A: un curso solo se acepta con fixes de accuracy ≤ 10 m, dt ≥ 0.5 s
+ * y un desplazamiento mayor que 2·accuracy. En T6 el curso se fijó a 187°
+ * con 5–12 m de jitter cuando la velocidad cayó de 1.3 a 0.2 m/s.
+ */
+export const COURSE_MAX_ACCURACY_M = 10;
+export const COURSE_MIN_DT_S = 0.5;
+/** Velocidad mínima para creerle rumbo al GPS o al curso (Fase 4-A). */
+export const MIN_HEADING_SPEED_MPS = 0.5;
+/**
+ * Fase 4-A: sin movimiento confirmado durante este tiempo, el curso CADUCA
+ * como fuente. No caduca por edad del valor: caminar recto puede mantener el
+ * mismo rumbo muchos segundos; caduca cuando deja de haber desplazamiento
+ * plausible (T6: velocidad pegada/parado con rumbo de 187°).
+ */
+export const COURSE_EXPIRY_MS = 3_000;
 const COURSE_MIN_BASE_M = 5;
 
 export type SpeedHeadingFix = {
@@ -109,6 +125,14 @@ export type SpeedHeadingState = {
   prevAccuracy: number | null;
   /** Últimos bearings entre fixes consecutivos (curso rápido filtrado). */
   recentBearings: number[];
+  /** Timestamp del último valor de curso aceptado (auditoría). */
+  courseHeadingTs: number | null;
+  /** Último desplazamiento plausible confirmado (base de la caducidad). */
+  lastMovementTs: number | null;
+  /** Velocidad medida entre fixes válidos (no la `coords.speed` pegajosa). */
+  confirmedSpeedMps: number;
+  /** Timestamp de la última velocidad confirmada por desplazamiento. */
+  lastConfirmedSpeedTs: number | null;
 };
 
 export function initialSpeedHeadingState(): SpeedHeadingState {
@@ -125,7 +149,57 @@ export function initialSpeedHeadingState(): SpeedHeadingState {
     courseAnchorTs: null,
     prevAccuracy: null,
     recentBearings: [],
+    courseHeadingTs: null,
+    lastMovementTs: null,
+    confirmedSpeedMps: 0,
+    lastConfirmedSpeedTs: null,
   };
+}
+
+/** ¿Hay movimiento plausible y fresco? (base de la caducidad del curso). */
+export function hasFreshMovement(state: SpeedHeadingState, now: number): boolean {
+  return (
+    state.lastMovementTs != null &&
+    now - state.lastMovementTs <= COURSE_EXPIRY_MS
+  );
+}
+
+/**
+ * Curso UTILIZABLE ahora. Sin `now` se devuelve el valor crudo (compatibilidad
+ * con consumidores de solo lectura); con `now` exige movimiento confirmado en
+ * los últimos COURSE_EXPIRY_MS.
+ */
+export function effectiveCourseHeading(
+  state: SpeedHeadingState,
+  now?: number
+): number | null {
+  if (state.courseHeading == null) return null;
+  if (now == null) return state.courseHeading;
+  return hasFreshMovement(state, now) ? state.courseHeading : null;
+}
+
+/** Curso que ya caducó como fuente (respaldo por debajo del segmento). */
+export function expiredCourseHeading(
+  state: SpeedHeadingState,
+  now: number
+): number | null {
+  if (state.courseHeading == null) return null;
+  return hasFreshMovement(state, now) ? null : state.courseHeading;
+}
+
+/** Edad efectiva del curso respecto al último movimiento confirmado. */
+export function courseAgeMs(state: SpeedHeadingState, now: number): number | null {
+  if (state.courseHeading == null || state.lastMovementTs == null) return null;
+  return Math.max(0, now - state.lastMovementTs);
+}
+
+/** Velocidad medida con desplazamientos plausibles (no `coords.speed`). */
+export function effectiveMovementSpeedMps(
+  state: SpeedHeadingState,
+  now: number
+): number {
+  if (!hasFreshMovement(state, now)) return 0;
+  return state.confirmedSpeedMps;
 }
 
 /**
@@ -204,6 +278,25 @@ export function applyGpsFix(
     typeof fix.coordsSpeed === "number" &&
     Number.isFinite(fix.coordsSpeed) &&
     fix.coordsSpeed >= 0;
+  // Fase 4-A: la envolvente de plausibilidad también gobierna el CURSO. Un
+  // desplazamiento que la excede (p. ej. 8.7 m en 1.1 s con coords.speed 1.2
+  // en T7) es una corrección de posición, no movimiento, y no puede fijar el
+  // rumbo. Sin coords.speed se usa el tope absoluto de 35 m/s.
+  const dtPrevSec = state.prevTs != null ? (fix.ts - state.prevTs) / 1000 : null;
+  const displacement =
+    state.prevPos != null ? haversineMeters(state.prevPos, fix.pos) : null;
+  const displacementLimitMps = coordsSpeedValid
+    ? DERIVED_SPEED_ENVELOPE_FACTOR * (fix.coordsSpeed as number) +
+      DERIVED_SPEED_ENVELOPE_SLACK_MPS
+    : MAX_PLAUSIBLE_SPEED_MPS;
+  const withinDisplacementEnvelope =
+    dtPrevSec == null ||
+    displacement == null ||
+    dtPrevSec <= 0 ||
+    displacement <= displacementLimitMps * dtPrevSec + 0.5;
+  // Fase 4-A: no se actualiza curso/rumbo con coords.speed < 0.5 m/s.
+  const coordsSpeedAllowsHeading =
+    !coordsSpeedValid || (fix.coordsSpeed as number) >= MIN_HEADING_SPEED_MPS;
   let speed: number | null = null;
   let speedSource: "coords" | "dt" | null = null;
   const prevSpeed = hasValidSpeed(state, fix.ts) ? state.speedMps : null;
@@ -212,6 +305,7 @@ export function applyGpsFix(
     speedSource = "coords";
   } else if (
     fixIsGood &&
+    withinDisplacementEnvelope &&
     state.prevPos &&
     state.prevTs != null &&
     (state.prevAccuracy == null || state.prevAccuracy <= GOOD_FIX_ACCURACY_M)
@@ -257,23 +351,66 @@ export function applyGpsFix(
     next.moving = false;
   }
 
+  // Fase 4-A: movimiento CONFIRMADO por desplazamiento (no por la velocidad
+  // pegajosa del SO). Es la base de la caducidad del curso: si el GPS deja de
+  // entregar desplazamientos plausibles, el curso deja de ser fuente. Un
+  // desplazamiento fuera de envolvente NO renueva el movimiento.
+  const impliedSpeedMps =
+    displacement != null && dtPrevSec != null && dtPrevSec > 0
+      ? displacement / dtPrevSec
+      : null;
+  const confirmedMovement =
+    next.moving &&
+    coordsSpeedAllowsHeading &&
+    fixIsGood &&
+    withinDisplacementEnvelope &&
+    dtPrevSec != null &&
+    dtPrevSec >= MIN_DT_FOR_DERIVED_SPEED_S &&
+    impliedSpeedMps != null &&
+    impliedSpeedMps >= MIN_HEADING_SPEED_MPS;
+  if (confirmedMovement) {
+    next.lastMovementTs = fix.ts;
+    next.confirmedSpeedMps = impliedSpeedMps as number;
+    next.lastConfirmedSpeedTs = fix.ts;
+  }
+
   // 2) Rumbo: (1) curso por posiciones; (2) coords.heading solo en marcha.
   // Nunca derivar rumbo de posiciones paradas, ni de fixes imprecisos.
-  // Fase 3-B: el desplazamiento debe superar 2·(acc1+acc2) — con accuracy de
-  // 79/52 m (T4) un salto de 50 m es ruido, no desplazamiento.
+  // Fase 3-B/4-A: el desplazamiento debe superar 2·max(acc1, acc2) — con 79/52 m
+  // (T4) un salto de 50 m sigue siendo ruido, no desplazamiento.
+  // El filtro de 2·accuracy se aplica con la PEOR precisión de los dos fixes
+  // que forman el vector (no solo la del actual).
+  const vectorAccuracy =
+    accuracy != null
+      ? Math.max(accuracy, state.prevAccuracy ?? accuracy)
+      : null;
   const baseNeeded = Math.max(
     COURSE_MIN_BASE_M,
-    accuracy != null
-      ? 2 * (accuracy + (state.prevAccuracy ?? accuracy))
-      : 0
+    vectorAccuracy != null ? 2 * vectorAccuracy : 0
   );
+  const courseAccuracyOk =
+    accuracy != null &&
+    accuracy <= COURSE_MAX_ACCURACY_M &&
+    (state.prevAccuracy == null || state.prevAccuracy <= COURSE_MAX_ACCURACY_M);
+  const courseDtOk = dtPrevSec != null && dtPrevSec >= COURSE_MIN_DT_S;
+  const displacementIsSignal =
+    displacement != null && vectorAccuracy != null && displacement > 2 * vectorAccuracy;
+  // El curso por ANCLA ya exige `baseNeeded = 2·accuracy` desde el ancla; el
+  // filtro de desplazamiento por fix se aplica solo al curso RÁPIDO.
+  const courseAllowed =
+    next.moving &&
+    coordsSpeedAllowsHeading &&
+    courseAccuracyOk &&
+    courseDtOk &&
+    withinDisplacementEnvelope;
+  const stepCourseAllowed = courseAllowed && displacementIsSignal;
   // ── Curso RÁPIDO: bearings de fixes consecutivos cuando coinciden ──
   // A ritmo de caminata el ancla tarda ~7 s en juntar 10 m; un giro debe
   // registrarse en ~3 s. Si los últimos 3 bearings concuerdan entre sí
   // (≤25°), es un giro real y no ruido: se aceptan de inmediato. Los saltos
   // de GPS producen bearings incoherentes y se descartan.
-  if (next.moving && fixIsGood && state.prevPos && state.prevTs != null) {
-    const stepDist = haversineMeters(state.prevPos, fix.pos);
+  if (stepCourseAllowed && next.moving && state.prevPos && state.prevTs != null) {
+    const stepDist = displacement ?? 0;
     if (stepDist >= 1) {
       const rawStep = bearingBetween(state.prevPos, fix.pos);
       if (rawStep != null) {
@@ -334,9 +471,14 @@ export function applyGpsFix(
   // Curso por ANCLA acumulada (base ≥ max(5 m, 2·accuracy)): con 1.3 m por
   // fix, comparar fixes consecutivos nunca cumple el umbral y el rumbo se
   // queda congelado (T1: 180-199° con rumbo real 97–126°).
-  if (!next.moving) {
-    // Parado: no se deriva rumbo. El ancla se re-sitúa para exigir base
-    // recorrida al reanudar la marcha.
+  const positionCorrection =
+    !withinDisplacementEnvelope ||
+    !coordsSpeedAllowsHeading ||
+    !next.moving;
+  if (positionCorrection) {
+    // Parado, velocidad del SO < 0.5 o salto fuera de envolvente: no se deriva
+    // rumbo. El ancla se re-sitúa en la posición corregida para que el próximo
+    // desplazamiento real se mida desde aquí (nunca desde el outlier).
     next.courseAnchorPos = fix.pos;
     next.courseAnchorTs = fix.ts;
     next.recentBearings = [];
@@ -344,7 +486,7 @@ export function applyGpsFix(
     if (next.courseAnchorPos == null) {
       next.courseAnchorPos = fix.pos;
       next.courseAnchorTs = fix.ts;
-    } else {
+    } else if (courseAllowed) {
       const dist = haversineMeters(next.courseAnchorPos, fix.pos);
       if (dist >= baseNeeded) {
         const raw = bearingBetween(next.courseAnchorPos, fix.pos);
@@ -358,11 +500,15 @@ export function applyGpsFix(
                   state.courseHeading +
                     shortestAngleDeltaDeg(raw, state.courseHeading) * 0.5
                 );
+          next.courseHeadingTs = fix.ts;
         }
         next.courseAnchorPos = fix.pos;
         next.courseAnchorTs = fix.ts;
       }
     }
+  }
+  if (next.courseHeading !== state.courseHeading && next.courseHeading != null) {
+    next.courseHeadingTs = fix.ts;
   }
   // (2) coords.heading NO se mezcla aquí: es una fuente independiente que el
   // resolvedor compara contra el curso medido (si discrepan > 20° manda el
@@ -374,13 +520,4 @@ export function applyGpsFix(
   next.prevTs = fix.ts;
   next.prevAccuracy = accuracy;
   return next;
-}
-
-/**
- * Heading efectivo expuesto al resolvedor: curso por posiciones medido (1)
- * o el último rumbo confiable (4). El rumbo de ruta lo aplica el resolvedor
- * (3) y coords.heading se compara aparte (2).
- */
-export function effectiveCourseHeading(state: SpeedHeadingState): number | null {
-  return state.courseHeading;
 }

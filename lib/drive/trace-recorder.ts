@@ -16,8 +16,15 @@
  * Buffer circular en memoria (~20 min a 5 Hz + GPS). Exportable a JSON
  * desde el panel de diagnóstico de sensores (staging).
  *
- * El arnés `scripts/drive-trace-replay.js` consume el JSON exportado.
+ * Fase 5: además del muestreo a 5 Hz (que no ve las ráfagas de 1 Hz), cada
+ * APLICACIÓN de cámara aporta su desplazamiento en px a `perf` (uniformidad:
+ * cuadros quietos, media, p95 y paso máximo vs v·dt). Cada exportación lleva
+ * `exportedAt` creciente, `sessionStartedAt` y el `build.commit` real.
+ *
+ * El arnés `scripts/drive-gps-replay.mjs` consume el JSON exportado.
  */
+
+import { BUILD_COMMIT } from "@/lib/drive/build-commit";
 
 export type TraceGpsSample = {
   /** Reloj del dispositivo en ms (epoch). */
@@ -150,6 +157,37 @@ export type TracePerfBucket = {
   cameraApplies: number;
   /** Eventos `render` de Mapbox en el segundo. */
   mapRenders: number;
+  /** Fase 4-D: límite de aplicación de cámara activo (16 o 33 ms). */
+  cameraIntervalMs: number;
+  /**
+   * Fase 5-B: uniformidad por aplicación de cámara, SOLO con v ≥ 3 m/s.
+   * El muestreo de cámara a 5 Hz no veía las ráfagas (una de 250 ms cabe
+   * dentro de una muestra): estas cifras salen de CADA aplicación del loop.
+   */
+  movingApplies: number;
+  /** Aplicaciones con desplazamiento visual ≈0 px (v ≥ 3 m/s). */
+  stillApplies: number;
+  /** Fracción de cuadros quietos (criterio en dispositivo: ≤10 %). */
+  stillFraction: number | null;
+  /** Desplazamiento medio por aplicación (px). */
+  movePxMean: number | null;
+  movePxP95: number | null;
+  movePxMax: number | null;
+  /** Paso esperado medio v·dt (px) y máximo/esperado (criterio ≤2). */
+  expectedStepPxMean: number | null;
+  maxStepRatio: number | null;
+};
+
+/**
+ * Cronología de arranque (Fase 4-C). Se recogen las marcas y medidas
+ * `performance` con prefijo `drive:`: montaje, solicitud/listo de estilo,
+ * solicitud/listo de ruta, primer render de Mapbox, primer cuadro del loop,
+ * semilla GPS y primer fix bueno. Permite saber qué ocupa los 3–5 s del
+ * primer segundo (T6/T7) en vez de atribuirlo a «Mapbox».
+ */
+export type TraceTimings = {
+  marks: Array<{ name: string; startTime: number }>;
+  measures: Array<{ name: string; startTime: number; duration: number }>;
 };
 
 /**
@@ -221,6 +259,13 @@ function decimatePath(path: Array<{ lat: number; lng: number }>) {
 export type TraceExport = {
   format: "drive-trace/v1";
   exportedAt: string;
+  /**
+   * Inicio de ESTA sesión de grabación (montaje de la página). Dos trazas con
+   * el mismo `exportedAt` o el mismo `sessionStartedAt` son la MISMA
+   * exportación: el video de la Fase 5 llegó con un JSON idéntico (mismo md5
+   * y exportedAt 12:41:28Z) a la exportación anterior, una hora antes.
+   */
+  sessionStartedAt: string;
   userAgent: string;
   /** Build que se estaba sirviendo (Fase 3.1-E): hash del commit. */
   build?: { commit: string };
@@ -233,6 +278,8 @@ export type TraceExport = {
   perf?: TracePerfBucket[];
   /** Ruta activa (polilínea + steps) al exportar — Fase 3.1-E. */
   route?: TraceRouteSnapshot | null;
+  /** Cronología de arranque (Fase 4-C). */
+  timings?: TraceTimings;
 };
 
 const MAX_GPS = 12_000;
@@ -241,6 +288,17 @@ const MAX_EVENTS = 4_000;
 const MAX_PROGRAMMATIC = 2_000;
 /** Intervalos de rAF guardados por segundo (60 fps sobra; acota la memoria). */
 const MAX_RAF_INTERVALS = 128;
+/** Desplazamientos por aplicación guardados por segundo (acota la memoria). */
+const MAX_MOVE_SAMPLES = 128;
+/**
+ * Debajo de esto (px) el cuadro se considera SIN desplazamiento visual. Es un
+ * umbral sub-píxel (0.02 px): en el video se contaban píxeles enteros, aquí se
+ * mide el centro real de Mapbox y un paso de 3 m/s a 60 Hz son ~0.15 px, que
+ * NO es un cuadro quieto.
+ */
+export const STILL_FRAME_PX = 0.02;
+/** Por debajo de esta velocidad no se evalúa la uniformidad (m/s). */
+export const UNIFORMITY_MIN_SPEED_MPS = 3;
 
 export class TraceRecorder {
   private gps: TraceGpsSample[] = [];
@@ -255,11 +313,55 @@ export class TraceRecorder {
       cameraApplies: number;
       mapRenders: number;
       intervals: number[];
+      cameraIntervalMs: number;
+      /** Fase 5-B: aplicaciones con v≥3 m/s (px desplazados y esperados). */
+      movingMovedPx: number[];
+      movingExpectedPx: number[];
+      stillApplies: number;
     }
   >();
+  /** Sello de la última exportación (ms) para que `exportedAt` no se repita. */
+  private lastExportedAtMs = 0;
   readonly startedAt = Date.now();
   /** Última ruta activa (se reemplaza al recalcular; null sin navegación). */
   private routeSnapshot: TraceRouteSnapshot | null = null;
+  /** Fase 4-D: intervalo de aplicación de cámara vigente (33 ms por defecto). */
+  private cameraIntervalMs = 33;
+
+  constructor() {
+    this.mark("recorder-start");
+  }
+
+  /** Marca `performance` con el prefijo que recoge `timings` al exportar. */
+  mark(name: string): void {
+    if (typeof performance === "undefined" || typeof performance.mark !== "function") return;
+    try {
+      performance.mark(`drive:${name}`);
+    } catch {
+      /* performance no disponible */
+    }
+  }
+
+  /** Fase 4-D: configura el límite de aplicación de cámara (solo staging). */
+  setCameraInterval(intervalMs: number): void {
+    if (intervalMs === 16 || intervalMs === 33) this.cameraIntervalMs = intervalMs;
+  }
+
+  private static collectTimings(): TraceTimings | undefined {
+    if (typeof performance === "undefined" || typeof performance.getEntriesByType !== "function") {
+      return undefined;
+    }
+    const prefix = "drive:";
+    const marks = performance
+      .getEntriesByType("mark")
+      .filter((e) => e.name.startsWith(prefix))
+      .map((e) => ({ name: e.name, startTime: e.startTime }));
+    const measures = performance
+      .getEntriesByType("measure")
+      .filter((e) => e.name.startsWith(prefix))
+      .map((e) => ({ name: e.name, startTime: e.startTime, duration: e.duration }));
+    return { marks, measures };
+  }
 
   /**
    * Ruta activa para la exportación (Fase 3.1-E). Se llama al cambiar
@@ -351,9 +453,26 @@ export class TraceRecorder {
     if (row.intervals.length < MAX_RAF_INTERVALS) row.intervals.push(intervalMs);
   }
 
-  /** Una aplicación de cámara (jumpTo del controlador) en el segundo actual. */
-  recordCameraApply(): void {
-    this.perfRow(this.currentSecond()).cameraApplies += 1;
+  /**
+   * Una aplicación de cámara (jumpTo del controlador) en el segundo actual.
+   * Fase 5-B: con `sample` y v ≥ 3 m/s se acumula la uniformidad por cuadro.
+   */
+  recordCameraApply(sample?: {
+    movedPx: number;
+    speedMps: number;
+    expectedStepPx: number;
+  }): void {
+    const row = this.perfRow(this.currentSecond());
+    row.cameraApplies += 1;
+    if (!sample || !Number.isFinite(sample.movedPx)) return;
+    if (sample.speedMps < UNIFORMITY_MIN_SPEED_MPS) return;
+    if (sample.movedPx < STILL_FRAME_PX) row.stillApplies += 1;
+    if (row.movingMovedPx.length < MAX_MOVE_SAMPLES) {
+      row.movingMovedPx.push(sample.movedPx);
+      row.movingExpectedPx.push(
+        Number.isFinite(sample.expectedStepPx) ? sample.expectedStepPx : 0
+      );
+    }
   }
 
   /** Un evento `render` de Mapbox en el segundo actual. */
@@ -368,7 +487,16 @@ export class TraceRecorder {
   private perfRow(bucket: number) {
     let row = this.perfBySecond.get(bucket);
     if (!row) {
-      row = { frames: 0, cameraApplies: 0, mapRenders: 0, intervals: [] };
+      row = {
+        frames: 0,
+        cameraApplies: 0,
+        mapRenders: 0,
+        intervals: [],
+        cameraIntervalMs: this.cameraIntervalMs,
+        movingMovedPx: [],
+        movingExpectedPx: [],
+        stillApplies: 0,
+      };
       if (this.perfBySecond.size >= 3_600) {
         const oldest = this.perfBySecond.keys().next().value;
         if (oldest != null) this.perfBySecond.delete(oldest);
@@ -444,6 +572,27 @@ export class TraceRecorder {
       .sort((a, b) => a[0] - b[0])
       .map(([t, row]) => {
         const sorted = [...row.intervals].sort((a, b) => a - b);
+        const moving = row.movingMovedPx.length;
+        const sortedPx = [...row.movingMovedPx].sort((a, b) => a - b);
+        const mean =
+          moving > 0
+            ? row.movingMovedPx.reduce((a, b) => a + b, 0) / moving
+            : null;
+        const maxPx = sortedPx.length ? sortedPx[sortedPx.length - 1] : null;
+        const expectedMean =
+          moving > 0
+            ? row.movingExpectedPx.reduce((a, b) => a + b, 0) / moving
+            : null;
+        // Relación de CADA cuadro con su paso esperado v·dt (no con la media
+        // del segundo): un cambio de velocidad dentro del segundo no infla la
+        // métrica.
+        let maxStepRatio: number | null = null;
+        for (let i = 0; i < row.movingMovedPx.length; i++) {
+          const expected = row.movingExpectedPx[i] ?? 0;
+          if (expected < 0.02) continue;
+          const ratio = row.movingMovedPx[i] / expected;
+          if (maxStepRatio == null || ratio > maxStepRatio) maxStepRatio = ratio;
+        }
         return {
           t,
           frames: row.frames,
@@ -452,19 +601,50 @@ export class TraceRecorder {
           rafMaxMs: sorted.length ? sorted[sorted.length - 1] : null,
           cameraApplies: row.cameraApplies,
           mapRenders: row.mapRenders,
+          cameraIntervalMs: row.cameraIntervalMs,
+          movingApplies: moving,
+          stillApplies: row.stillApplies,
+          stillFraction: moving > 0 ? row.stillApplies / moving : null,
+          movePxMean: mean,
+          movePxP95: percentile(sortedPx, 0.95),
+          movePxMax: maxPx,
+          expectedStepPxMean: expectedMean,
+          maxStepRatio,
         };
       });
   }
 
-  /** Hash del build en curso (inyectado por next.config.ts). */
+  /**
+   * Hash del build en curso. `lib/drive/build-commit.ts` se reescribe con el
+   * hash real antes de `next build` (el build lo restaura al terminar), porque
+   * `process.env.NEXT_PUBLIC_*` no se inlinea en este bundle de cliente: se
+   * resolvía al shim de `process` con `env` vacío y `build.commit` seguía
+   * saliendo 'unknown'.
+   */
   static buildCommit(): string {
-    return process.env.NEXT_PUBLIC_BUILD_COMMIT || "unknown";
+    const commit =
+      typeof BUILD_COMMIT === "string" && BUILD_COMMIT.length > 0
+        ? BUILD_COMMIT
+        : "";
+    return commit || process.env.NEXT_PUBLIC_BUILD_COMMIT || "unknown";
+  }
+
+  /**
+   * `exportedAt` ESTRICTAMENTE creciente aunque se pulse dos veces en el mismo
+   * milisegundo: dos exportaciones nunca pueden compartir sello (el md5 de dos
+   * trazas idénticas ya no puede confundir dos grabaciones distintas).
+   */
+  private nextExportedAt(): string {
+    const ms = Math.max(Date.now(), this.lastExportedAtMs + 1);
+    this.lastExportedAtMs = ms;
+    return new Date(ms).toISOString();
   }
 
   toJSON(): TraceExport {
     return {
       format: "drive-trace/v1",
-      exportedAt: new Date().toISOString(),
+      exportedAt: this.nextExportedAt(),
+      sessionStartedAt: new Date(this.startedAt).toISOString(),
       userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "",
       build: { commit: TraceRecorder.buildCommit() },
       gps: this.gps,
@@ -473,16 +653,32 @@ export class TraceRecorder {
       programmaticEvents: [...this.programmaticByKey.values()].sort((a, b) => a.t - b.t),
       perf: this.perfBuckets(),
       route: this.routeSnapshot,
+      timings: TraceRecorder.collectTimings(),
     };
   }
 
-  exportDownload(filename = "drive-trace.json"): void {
+  /** Nombre con fecha y hora LOCAL: dos exportaciones no se sobrescriben. */
+  static defaultFilename(now = new Date()): string {
+    const pad = (n: number) => String(n).padStart(2, "0");
+    return (
+      "drive-trace-" +
+      `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+      `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.json`
+    );
+  }
+
+  /**
+   * Descarga la traza. CADA llamada construye un Blob NUEVO con su propio
+   * `exportedAt` (y nombre con fecha/hora): el archivo exportado justo después
+   * de una grabación no puede ser el de una sesión anterior.
+   */
+  exportDownload(filename?: string): void {
     if (typeof document === "undefined") return;
     const blob = new Blob([JSON.stringify(this.toJSON())], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = filename;
+    a.download = filename ?? TraceRecorder.defaultFilename();
     document.body.appendChild(a);
     a.click();
     a.remove();

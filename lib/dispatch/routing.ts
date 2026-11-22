@@ -246,7 +246,23 @@ export function pointAtDistance(path: RoutePoint[], meters: number): RoutePoint 
  * por tramo corto — suficiente para seguimiento GPS urbano.
  */
 export function projectOntoPath(path: RoutePoint[], point: RoutePoint): number {
-  if (path.length < 2) return 0;
+  return projectOntoPathDetailed(path, point).meters;
+}
+
+/**
+ * Proyección sobre la polyline con la distancia LATERAL incluida.
+ *
+ * Misma búsqueda (ventana local ±80 segmentos + fallback completo) que
+ * `projectOntoPath`, pero devuelve también cuánto está el punto fuera de la
+ * geometría. La estima entre fixes (Fase 5-A) necesita ambas cosas: el
+ * progreso para avanzar a lo largo de la ruta y la lateral para decidir si el
+ * vehículo sigue «sobre» ella (≤25 m) o debe avanzar por su rumbo resuelto.
+ */
+export function projectOntoPathDetailed(
+  path: RoutePoint[],
+  point: RoutePoint
+): { meters: number; distance: number } {
+  if (path.length < 2) return { meters: 0, distance: Infinity };
   const cum = cumulativeLengths(path);
 
   const scanSegment = (
@@ -307,7 +323,7 @@ export function projectOntoPath(path: RoutePoint[], point: RoutePoint): number {
   }
 
   lastProjectionIndex.set(path, bestIndex);
-  return best.meters;
+  return { meters: best.meters, distance: best.distance };
 }
 
 /** ¿La ruta fue solicitada hacia este destino? (mismo punto ± 50 m). */

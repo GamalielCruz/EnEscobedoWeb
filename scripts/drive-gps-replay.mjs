@@ -31,12 +31,15 @@ import path from "node:path";
 import {
   bearingBetween,
   haversineMeters,
+  movePointAlong,
   projectOntoPath,
 } from "../lib/dispatch/routing.ts";
 import { createFixGateState, evaluateGpsFix } from "../lib/drive/fix-gate.ts";
 import {
   applyGpsFix,
+  courseAgeMs,
   effectiveCourseHeading,
+  effectiveMovementSpeedMps,
   effectiveSpeedMps,
   initialSpeedHeadingState,
   MAX_PLAUSIBLE_SPEED_MPS,
@@ -48,7 +51,11 @@ import {
   anchorYForBand,
   PUCK_ANCHOR_FRACTION,
 } from "../lib/drive/camera-controller.ts";
-import { computeFollowFrame, NAV_ZOOM_BASE } from "../lib/drive/follow-frame.ts";
+import {
+  computeFollowFrame,
+  metersPerPixelAt,
+  NAV_ZOOM_BASE,
+} from "../lib/drive/follow-frame.ts";
 import { computeGuidance, nextGuidanceState } from "../lib/drive/guidance.ts";
 
 // ── Geometría de pantalla (iPhone del repartidor, banda visible) ──────
@@ -64,6 +71,11 @@ const FIXTURES = [
   "lib/drive/__fixtures__/gps-t1.json",
   "lib/drive/__fixtures__/gps-t2.json",
   "lib/drive/__fixtures__/gps-t4.json",
+  // T6/T7 se generan con `npm run fixture:drive -- <traza> <salida> --source T6`
+  // cuando el usuario entrega los JSON; el arnés los incluye si existen.
+  ...["lib/drive/__fixtures__/gps-t6.json", "lib/drive/__fixtures__/gps-t7.json"].filter(
+    (file) => fs.existsSync(file)
+  ),
 ];
 
 /** Expectativa explícita de la Fase 3.1: primer fix aceptado en T4 = #5. */
@@ -132,9 +144,10 @@ function rawDerivedSpeeds(samplesToUse) {
 /**
  * Corre la cadena completa sobre un fixture.
  * @param {any} fixture
- * @param {{mode: "before" | "after"}} options
+ * @param {{mode: "before" | "after", fps?: number}} options
  */
-function simulate(fixture, { mode }) {
+function simulate(fixture, { mode, fps = 60 }) {
+  const frameMs = 1000 / fps;
   const samples = fixture.samples;
   const route = fixture.route ?? null;
   const lastT = samples[samples.length - 1].t;
@@ -143,11 +156,16 @@ function simulate(fixture, { mode }) {
   let speedState = initialSpeedHeadingState();
   let gpsHeading = null;
   let movementHeading = null;
+  let coordsSpeedNow = null;
   let lastAccepted = null;
   let lastGood = null;
   let firstGoodFixSeen = false;
 
-  let visualPos = { lat: samples[0].lat, lng: samples[0].lng };
+  // Posición inicial REAL de la app si la fixture la declara (DEFAULT_CENTER
+  // cuando aún no había fix). Así T6 reproduce el salto inicial y no arranca
+  // «ya en el GPS».
+  const initial = fixture.initialVisual ?? { lat: samples[0].lat, lng: samples[0].lng };
+  let visualPos = { lat: initial.lat, lng: initial.lng };
   let visualHeading = null;
   let cameraHeading = null;
   let cameraHeadingTs = null;
@@ -155,6 +173,12 @@ function simulate(fixture, { mode }) {
   let pendingZoom = null;
   let mapZoom = NAV_ZOOM_BASE;
   let mapBearing = 0;
+  // Fase 5-A: memoria del frame (dt real, fix integrado y corrección
+  // pendiente). Sin persistirla, cada cuadro se trataría como el primero.
+  let frameTs = null;
+  let integratedFixTs = null;
+  let correctionMeters = 0;
+  let correctionBearing = null;
 
   const accepted = [];
   const rejections = {};
@@ -175,6 +199,16 @@ function simulate(fixture, { mode }) {
   let guidanceRouteKey = null;
   let acceptedCount = 0;
   let maxStateSpeed = 0;
+  // Fase 5-B: uniformidad por aplicación de cámara (solo v ≥ 3 m/s).
+  const uniformity = new Map();
+  const uniformityRow = (sec) => {
+    let row = uniformity.get(sec);
+    if (!row) {
+      row = { movedPx: [], expectedPx: [], still: 0, speedSum: 0 };
+      uniformity.set(sec, row);
+    }
+    return row;
+  };
 
   let nowOffset = 0;
   // El resolvedor mide con Date.now(): hay que anclarlo al reloj del replay.
@@ -187,6 +221,12 @@ function simulate(fixture, { mode }) {
     getGpsHeading: () => gpsHeading,
     getSpeedMps: () => effectiveSpeedMps(speedState, Date.now()),
     getMovementHeading: () => movementHeading,
+    getCourseHeading: () => ({
+      heading: speedState.courseHeading,
+      ageMs: courseAgeMs(speedState, Date.now()),
+    }),
+    getMovementSpeedMps: () => effectiveMovementSpeedMps(speedState, Date.now()),
+    getCoordsSpeedMps: () => coordsSpeedNow,
     getDeviceHeading: () => ({
       heading: 0,
       available: "unavailable",
@@ -239,6 +279,7 @@ function simulate(fixture, { mode }) {
     const coords = s.speed ?? null;
     if (useCurrent) {
       gpsHeading = s.heading;
+      coordsSpeedNow = s.speed ?? null;
       speedState = applyGpsFix(
         speedState,
         {
@@ -249,11 +290,15 @@ function simulate(fixture, { mode }) {
         },
         s.heading
       );
-      const course = effectiveCourseHeading(speedState);
+      const course = effectiveCourseHeading(speedState, T0 + s.t);
       if (course != null) movementHeading = course;
     }
     if ((acc ?? 999) <= 20) {
-      firstGoodFixSeen = true;
+      if (!firstGoodFixSeen) {
+        // El primer fix ≤20 m sustituye la semilla (misma regla que la página).
+        firstGoodFixSeen = true;
+        visualPos = { ...pos };
+      }
       lastGood = { ...pos };
     }
     lastAccepted = { ...pos, t: s.t, accuracy: acc };
@@ -275,8 +320,9 @@ function simulate(fixture, { mode }) {
       }
     }
 
-    // Tarjeta: solo con ruta en la traza (Fase 3.1-E la incluye).
-    if (route && route.steps?.length && route.path?.length >= 2) {
+    // Tarjeta: solo con ruta en la traza (Fase 3.1-E la incluye) y con un fix
+    // ≤20 m (Fase 4-B: sin posición buena no hay progreso).
+    if (firstGoodFixSeen && route && route.steps?.length && route.path?.length >= 2) {
       if (guidanceRouteKey == null) {
         guidanceRouteKey = `replay|${route.path.length}|${route.steps.length}`;
         guidanceState = nextGuidanceState(null, guidanceRouteKey);
@@ -295,7 +341,7 @@ function simulate(fixture, { mode }) {
   };
 
   let fixIdx = 0;
-  for (let t = 0; t <= lastT + FRAME_MS; t += FRAME_MS) {
+  for (let t = 0; t <= lastT + frameMs; t += frameMs) {
     nowOffset = t;
     while (fixIdx < samples.length && samples[fixIdx].t <= t) {
       handleFix(samples[fixIdx], fixIdx);
@@ -304,9 +350,21 @@ function simulate(fixture, { mode }) {
 
     const target = lastAccepted ?? visualPos;
     const targetHeading = resolver.resolve();
+    const speedForFrame = effectiveSpeedMps(speedState, T0 + t);
+    const prevVisual = visualPos;
 
     const frame = computeFollowFrame(
-      { vehiclePos: visualPos, visualHeading, cameraHeading, cameraHeadingTs, zoomTarget },
+      {
+        vehiclePos: visualPos,
+        visualHeading,
+        cameraHeading,
+        cameraHeadingTs,
+        zoomTarget,
+        frameTs,
+        fixTs: integratedFixTs,
+        correctionMeters,
+        correctionBearing,
+      },
       {
         now: t,
         frameScale: 1,
@@ -315,15 +373,31 @@ function simulate(fixture, { mode }) {
         targetHeading,
         simHeading: null,
         mapBearing,
-        speedMps: effectiveSpeedMps(speedState, T0 + t),
+        speedMps: speedForFrame,
         route: route ? { path: route.path, steps: route.steps } : null,
         firstGoodFixSeen,
+        navigationReady: firstGoodFixSeen || Boolean(fixture.navigationReady),
         anchorY,
         containerHeightPx: H,
         pendingZoom,
         accuracy: lastAccepted?.accuracy ?? null,
+        // Fase 5-A: la estima necesita la hora del último fix para avanzar
+        // entre fixes y detenerse si el fix caduca.
+        fixTs: lastAccepted ? T0 + lastAccepted.t : null,
       }
     );
+
+    // Fase 5-B: píxeles desplazados en ESTA aplicación de cámara. Es lo que
+    // el muestreo a 5 Hz no veía.
+    if (speedForFrame >= 3) {
+      const mpp = Math.max(0.01, metersPerPixelAt(mapZoom, prevVisual.lat));
+      const movedPx = haversineMeters(prevVisual, frame.state.vehiclePos) / mpp;
+      const row = uniformityRow(Math.floor(t / 1000));
+      row.movedPx.push(movedPx);
+      row.expectedPx.push((speedForFrame * frameMs) / 1000 / mpp);
+      row.speedSum += speedForFrame;
+      if (movedPx < 0.02) row.still += 1;
+    }
 
     const prevBearing = mapBearing;
     visualPos = frame.state.vehiclePos;
@@ -331,6 +405,10 @@ function simulate(fixture, { mode }) {
     cameraHeading = frame.state.cameraHeading;
     cameraHeadingTs = frame.state.cameraHeadingTs;
     zoomTarget = frame.state.zoomTarget;
+    frameTs = frame.state.frameTs ?? null;
+    integratedFixTs = frame.state.fixTs ?? null;
+    correctionMeters = frame.state.correctionMeters ?? 0;
+    correctionBearing = frame.state.correctionBearing ?? null;
     pendingZoom = frame.pendingZoom;
     mapBearing = frame.command.bearing;
     if (frame.command.zoom != null) mapZoom = frame.command.zoom;
@@ -419,6 +497,46 @@ function simulate(fixture, { mode }) {
     speedOverCap,
     maxZoomDeltaWindow,
     cardChanges,
+    uniformity: summarizeUniformity(uniformity),
+  };
+}
+
+/** Agrega la uniformidad de todos los segundos con v ≥ 3 m/s. */
+function summarizeUniformity(map) {
+  const movedPx = [];
+  const expectedPx = [];
+  let still = 0;
+  for (const row of map.values()) {
+    movedPx.push(...row.movedPx);
+    expectedPx.push(...row.expectedPx);
+    still += row.still;
+  }
+  if (movedPx.length === 0) return null;
+  const sorted = [...movedPx].sort((a, b) => a - b);
+  const percentile = (q) =>
+    sorted[Math.min(sorted.length - 1, Math.floor(q * (sorted.length - 1)))];
+  const mean = movedPx.reduce((a, b) => a + b, 0) / movedPx.length;
+  const expectedMean =
+    expectedPx.reduce((a, b) => a + b, 0) / expectedPx.length;
+  const max = sorted[sorted.length - 1];
+  // Paso máximo respecto al esperado DE SU PROPIO cuadro (v·dt).
+  let maxStepRatio = null;
+  for (let i = 0; i < movedPx.length; i++) {
+    const expected = expectedPx[i] ?? 0;
+    if (expected < 0.02) continue;
+    const ratio = movedPx[i] / expected;
+    if (maxStepRatio == null || ratio > maxStepRatio) maxStepRatio = ratio;
+  }
+  return {
+    applies: movedPx.length,
+    still,
+    stillFraction: still / movedPx.length,
+    mean,
+    p95: percentile(0.95),
+    max,
+    expectedMean,
+    maxStepRatio,
+    p95OverMean: mean > 0.01 ? percentile(0.95) / mean : null,
   };
 }
 
@@ -532,6 +650,26 @@ function printFixture(file, fixture) {
   console.log(
     `  Cambio de zoom en 10 s: ${fmt(after.maxZoomDeltaWindow, 2)} (criterio ≤0.3)`
   );
+  // Fase 5-B: uniformidad real por aplicación de cámara (v ≥ 3 m/s).
+  const after30 = simulate(fixture, { mode: "after", fps: 30 });
+  printUniformity("60 Hz", after.uniformity);
+  printUniformity("30 Hz", after30.uniformity);
+  // Criterios 5-B. Bloquean si hay una muestra sostenida (≥300 aplicaciones
+  // con v ≥ 3 m/s); con menos, se reportan como observación (un solo segundo
+  // cerca del umbral de 3 m/s no caracteriza la uniformidad del viaje).
+  const uni = after.uniformity;
+  if (uni) {
+    const hard = uni.applies >= 300;
+    if (uni.stillFraction > 0.1) {
+      check(hard, `cuadros quietos ${fmt(uni.stillFraction * 100)} % > 10 %`);
+    }
+    if (uni.p95OverMean > 2) {
+      check(hard, `p95/medio ${fmt(uni.p95OverMean, 2)} > 2`);
+    }
+    if (uni.maxStepRatio > 2) {
+      check(hard, `paso máx/esperado ${fmt(uni.maxStepRatio, 2)} > 2`);
+    }
+  }
   if (fixture.route) {
     console.log(
       `  Tarjeta (ruta real en la traza): ${after.cardChanges.length} cambios · ` +
@@ -558,6 +696,166 @@ function printFixture(file, fixture) {
   return failures;
 }
 
+function printUniformity(label, u) {
+  if (!u) {
+    console.log(
+      `  Uniformidad ${label}: sin tramos con v ≥ 3 m/s (no aplica el criterio por cuadro)`
+    );
+    return;
+  }
+  console.log(
+    `  Uniformidad ${label} (v ≥ 3 m/s, ${u.applies} aplicaciones): ` +
+      `quietos ${(u.stillFraction * 100).toFixed(1)} % · medio ${u.mean.toFixed(2)} px · ` +
+      `p95 ${u.p95.toFixed(2)} px · máx ${u.max.toFixed(2)} px · ` +
+      `p95/medio ${fmt(u.p95OverMean, 2)} · máx/esperado ${fmt(u.maxStepRatio, 2)}`
+  );
+}
+
+// ── Fase 5-C: flujos sintéticos de 1 Hz a 15 y 25 m/s, 30 y 60 Hz ────
+//
+// Reproduce la evidencia del video (movimiento a ráfagas de 1 Hz) sobre la
+// lógica pura: mismo GPS de 1 Hz que en la calle, cámara a 30 y 60 Hz. Los
+// criterios son los de la Fase 5-B: quietos ≤10 %, p95/medio ≤2.0 y paso
+// máximo ≤2× el esperado (v·dt).
+function syntheticFlow({ speed, fps, mode = "new" }) {
+  const frameMs = 1000 / fps;
+  const origin = { lat: 25.0, lng: -100.0 };
+  const path = Array.from({ length: 41 }, (_, i) =>
+    ({ lat: origin.lat + (i * 50) / 111_320, lng: origin.lng })
+  );
+  const steps = [
+    {
+      maneuver: "depart",
+      instruction: "Continúa recto",
+      distanceMeters: 2_000,
+      start: path[0],
+      end: path[40],
+    },
+  ];
+  let state = {
+    vehiclePos: path[0],
+    visualHeading: 0,
+    cameraHeading: 0,
+    cameraHeadingTs: 0,
+    zoomTarget: NAV_ZOOM_BASE,
+  };
+  let target = path[0];
+  let fixTs = 0;
+  let nextFix = 0;
+  let prev = state.vehiclePos;
+  const buckets = new Map();
+  const row = (sec) => {
+    let r = buckets.get(sec);
+    if (!r) {
+      r = { movedPx: [], expectedPx: [], still: 0 };
+      buckets.set(sec, r);
+    }
+    return r;
+  };
+  const durationMs = 12_000;
+  for (let t = 0; t <= durationMs; t += frameMs) {
+    if (t >= nextFix) {
+      target = {
+        lat: origin.lat + (speed * t) / 1000 / 111_320,
+        lng: origin.lng,
+      };
+      fixTs = t;
+      nextFix += 1_000;
+    }
+    const r =
+      mode === "old"
+        ? oldFrameToward(state, target, frameMs)
+        : computeFollowFrame(state, {
+            now: t,
+            frameScale: 1,
+            mapZoom: NAV_ZOOM_BASE,
+            target,
+            targetHeading: 0,
+            simHeading: null,
+            mapBearing: 0,
+            speedMps: speed,
+            route: { path, steps },
+            anchorY,
+            containerHeightPx: H,
+            pendingZoom: null,
+            accuracy: 6,
+            firstGoodFixSeen: true,
+            navigationReady: true,
+            fixTs,
+          });
+    state = r.state;
+    const mpp = Math.max(0.01, metersPerPixelAt(NAV_ZOOM_BASE, prev.lat));
+    const movedPx = haversineMeters(prev, r.state.vehiclePos) / mpp;
+    const b = row(Math.floor(t / 1000));
+    b.movedPx.push(movedPx);
+    b.expectedPx.push((speed * frameMs) / 1000 / mpp);
+    if (movedPx < 0.02) b.still += 1;
+    prev = r.state.vehiclePos;
+  }
+  // El primer cuadro no tiene dt (arranque): se retira del cómputo.
+  const first = buckets.get(0);
+  if (first && first.movedPx.length > 0) {
+    first.movedPx.shift();
+    first.expectedPx.shift();
+  }
+  return summarizeUniformity(buckets);
+}
+
+/**
+ * Algoritmo ANTERIOR (Fase 4) reproducido tal cual, solo para la columna
+ * «antes»: suavizado exponencial 0.18 con paso MÍNIMO de 1.5 m y tope de 15 px
+ * por cuadro hacia el último fix. Es el que producía las ráfagas de 1 Hz.
+ */
+function oldFrameToward(state, target, frameMs) {
+  const mpp =
+    (156543.03392 * Math.cos((state.vehiclePos.lat * Math.PI) / 180)) /
+    Math.pow(2, NAV_ZOOM_BASE);
+  const dist = haversineMeters(state.vehiclePos, target);
+  let pos = state.vehiclePos;
+  if (dist > 0.5) {
+    const smooth = 0.18;
+    const factor = 1 - Math.pow(1 - smooth, frameMs / 33);
+    let step = Math.max(1.5, Math.min(dist, dist * factor));
+    step = Math.min(step, 15 * mpp);
+    const brg = bearingBetween(pos, target);
+    pos = brg == null ? pos : movePointAlong(pos, brg, step);
+  } else {
+    pos = target;
+  }
+  return { state: { ...state, vehiclePos: pos } };
+}
+
+function runUniformitySuite() {
+  console.log("\n══ Fase 5-C · uniformidad de la estima (lógica, no dispositivo) ══");
+  let failures = 0;
+  for (const speed of [15, 25]) {
+    for (const fps of [30, 60]) {
+      const before = syntheticFlow({ speed, fps, mode: "old" });
+      const u = syntheticFlow({ speed, fps });
+      console.log(
+        `  antes · ${String(speed).padStart(2)} m/s · ${fps} Hz: ` +
+          `quietos ${(before.stillFraction * 100).toFixed(1)} % · ` +
+          `medio ${before.mean.toFixed(2)} px · p95 ${before.p95.toFixed(2)} px · ` +
+          `máx ${before.max.toFixed(2)} px · p95/medio ${before.p95OverMean.toFixed(2)}`
+      );
+      const flags = [];
+      if (u.stillFraction > 0.1) flags.push(`quietos ${(u.stillFraction * 100).toFixed(1)} % > 10 %`);
+      if (u.p95OverMean > 2) flags.push(`p95/medio ${u.p95OverMean.toFixed(2)} > 2`);
+      if (u.maxStepRatio > 2) flags.push(`máx/esperado ${u.maxStepRatio.toFixed(2)} > 2`);
+      console.log(
+        `  ${String(speed).padStart(2)} m/s · ${fps} Hz: ` +
+          `${u.applies} aplicaciones · quietos ${(u.stillFraction * 100).toFixed(1)} % · ` +
+          `medio ${u.mean.toFixed(2)} px · p95 ${u.p95.toFixed(2)} px · ` +
+          `máx ${u.max.toFixed(2)} px · p95/medio ${u.p95OverMean.toFixed(2)} · ` +
+          `máx/esperado ${u.maxStepRatio.toFixed(2)}` +
+          (flags.length ? `  ✗ ${flags.join(" · ")}` : "  ✓")
+      );
+      failures += flags.length;
+    }
+  }
+  return failures;
+}
+
 const args = process.argv.slice(2).filter((a) => !a.startsWith("--"));
 const files = args.length > 0 ? args : FIXTURES;
 let failures = 0;
@@ -565,9 +863,10 @@ for (const file of files) {
   const fixture = JSON.parse(fs.readFileSync(file, "utf8"));
   failures += printFixture(file, fixture).length;
 }
+failures += runUniformitySuite();
 console.log(
   failures === 0
-    ? `\n✓ Reproducción completa: ${files.length} trazas, 0 fallos.`
+    ? `\n✓ Reproducción completa: ${files.length} trazas + uniformidad sintética, 0 fallos.`
     : `\n✗ ${failures} criterio(s) incumplido(s).`
 );
 process.exit(failures === 0 ? 0 : 1);

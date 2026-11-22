@@ -8,24 +8,27 @@
  *  - el siguiente estado visual,
  *  - el COMANDO de cámara (center/bearing/offset/zoom) — el único camino de
  *    escritura de cámara (`applyCameraCommand` en camera-controller.ts),
- *  - cuántos px se movió el vehículo en el frame (para verificar que no hay
- *    saltos > 15 px entre frames).
+ *  - cuántos px se movió el vehículo en el frame (métrica de uniformidad).
  *
  * Portado sin cambios de comportamiento del loop histórico de page.tsx
- * (suavizado de posición/rumbo, punto de mira adelantado, zoom por velocidad
- * y por maniobra). Cambios de la Fase 1:
+ * (suavizado de rumbo, punto de mira adelantado, zoom por velocidad y por
+ * maniobra). Cambios de la Fase 1:
  *  - el anclaje 70–75 % del área visible se aplica SIEMPRE (antes solo con
- *    `centerOnGps`, y sin compensar el punto adelantado);
- *  - el paso del vehículo por frame se acota a 15 px (sin saltos visibles,
- *    incluida la corrección de un fix impreciso al arrancar).
+ *    `centerOnGps`, y sin compensar el punto adelantado).
+ *
+ * Fase 5-A: la posición ya NO persigue el último fix con suavizado exponencial
+ * (eso producía ráfagas de ~0.25 s cada 1 s). Ahora avanza en cada cuadro con
+ * estima muerta (v·dt), se corta 1.5 s después del último fix y cada fix nuevo
+ * corrige el error con una mezcla suave sin reiniciar la velocidad.
  */
 
 import {
   bearingBetween,
   haversineMeters,
+  headingAlongPath,
   movePointAlong,
   pathLengthMeters,
-  projectOntoPath,
+  projectOntoPathDetailed,
   type RoutePoint,
   type RouteStep,
 } from "@/lib/dispatch/routing";
@@ -49,11 +52,38 @@ export const NAV_HEADING_SKIP_DEG = 2.5;
  * (`cameraHeading == null`) y, ya adquirida, no pasa de 60°/s.
  */
 export const MAX_HEADING_ROTATION_DEG_PER_SEC = 60;
-/** Interpolación de posición del vehículo entre ticks de GPS. */
-export const POSITION_SMOOTH_FACTOR = 0.18;
-export const POSITION_MIN_STEP_METERS = 1.5;
-/** Paso máximo del vehículo por frame (px) — sin saltos visibles. */
-export const MAX_VEHICLE_STEP_PX = 15;
+
+// ── Fase 5-A: estima continua entre fixes ────────────────────────────
+/**
+ * Edad máxima del último fix con extrapolación PLENA (ms).
+ *
+ * Evidencia: video de iPhone a 60 fps en vehículo — 365/419 cuadros (87 %)
+ * sin desplazamiento, en ráfagas de ~0.25 s cada 1.0 s (autocorrelación 0.53
+ * en lag 1 s), con picos de 140–270 px/s frente a 66 px/s de media. La
+ * posición visual solo se movía al llegar cada fix (1 Hz). Aquí el vehículo
+ * (y la cámara, que es la misma) avanza en CADA cuadro.
+ */
+export const DEAD_RECKON_MAX_FIX_AGE_MS = 1_500;
+/** Tras ese plazo la estima se detiene suavemente durante este tiempo. */
+export const DEAD_RECKON_STOP_FADE_MS = 900;
+/** Constante de tiempo de la corrección al llegar un fix nuevo (s). */
+export const FIX_CORRECTION_TAU_S = 0.8;
+/**
+ * Tasa máxima de la corrección (m/s): un fix que revela 15 m de error se
+ * absorbe en ~4 s en vez de con un tirón de 15 m en un cuadro. Por debajo del
+ * paso normal de avance, así que no rompe la uniformidad por cuadro.
+ */
+export const FIX_CORRECTION_MAX_MPS = 4;
+/** Sin movimiento, solo se corrige un error mayor que esto (m). */
+export const REST_CORRECTION_MIN_M = 2.5;
+export const REST_CORRECTION_TAU_S = 1.5;
+export const REST_CORRECTION_MAX_MPS = 1.5;
+/** Por debajo de esta velocidad el vehículo no avanza (m/s). */
+export const MIN_MOVING_SPEED_MPS = 0.5;
+/** Distancia lateral máxima para considerar que el vehículo está SOBRE la ruta (m). */
+export const ON_ROUTE_LATERAL_M = 25;
+/** Delta de tiempo máximo aceptado por cuadro (s): evita saltos tras un stall. */
+export const MAX_FRAME_DT_S = 0.2;
 /** Velocidad que alcanza el zoom lejano (≈65 km/h). */
 export const NAV_SPEED_REF_MPS = 18;
 export const TURN_AWARENESS_METERS = 220;
@@ -85,6 +115,17 @@ export type FollowCameraState = {
   cameraHeading: number | null;
   cameraHeadingTs: number | null;
   zoomTarget: number | null;
+  /**
+   * Fase 5-A: estado de la estima entre fixes. Opcionales para no romper a los
+   * consumidores que construyen el estado a mano: el primer cuadro los
+   * inicializa (dt = frameScale, sin corrección pendiente).
+   */
+  frameTs?: number | null;
+  /** `now` del último fix YA integrado (mismo reloj que `now`). */
+  fixTs?: number | null;
+  /** Corrección pendiente (metros y rumbo) hacia el último fix. */
+  correctionMeters?: number;
+  correctionBearing?: number | null;
 };
 
 export type FollowRouteInput = {
@@ -116,6 +157,12 @@ export type FollowFrameInput = {
    */
   firstGoodFixSeen: boolean;
   /**
+   * Fase 4-B: hay una posición de navegación utilizable (fix ≤20 m). Sin ella
+   * no se dispara el zoom por maniobra ni se proyecta progreso: la posición
+   * inicial puede ser una semilla ≤50 m o el centro por defecto.
+   */
+  navigationReady: boolean;
+  /**
    * Y del ancla (px desde el borde superior del contenedor) dentro del área
    * visible: 70–75 %. Se aplica con `padding` y NO con `offset`, porque
    * `jumpTo` ignora `offset` en mapbox-gl 3.33 (ver camera-controller.ts).
@@ -127,6 +174,11 @@ export type FollowFrameInput = {
   pendingZoom: number | null;
   /** Precisión GPS conocida (m) o null: >20 m = calentamiento. */
   accuracy: number | null;
+  /**
+   * Fase 5-A: `now` (mismo reloj) del último fix GPS aceptado. Sin él no hay
+   * extrapolación: la estima no inventa movimiento.
+   */
+  fixTs?: number | null;
 };
 
 export type FollowFrameResult = {
@@ -173,40 +225,141 @@ export function computeFollowFrame(
   // 175° en 1.2 s porque el frame inventaba norte).
   const heading = visualHeading ?? targetHeading;
 
-  // ── 2) Posición del vehículo: interpolación exponencial con tope de px ──
+  // ── 2) Posición del vehículo: ESTIMA CONTINUA entre fixes (Fase 5-A) ──
+  //
+  // Antes: la posición perseguía el último fix con un suavizado exponencial y
+  // un paso mínimo de 1.5 m por cuadro. Como el objetivo solo cambiaba al
+  // llegar un fix (1 Hz), la posición se quedaba quieta y luego corría para
+  // «alcanzarlo»: ráfagas de ~0.25 s cada 1 s (87 % de cuadros sin movimiento
+  // en el video). Ahora:
+  //   1. el vehículo avanza en cada cuadro `v·dt` a lo largo de la ruta (si
+  //      está sobre ella, lateral ≤25 m) o del rumbo resuelto;
+  //   2. la extrapolación se corta a 1.5 s del último fix y se apaga en 0.9 s;
+  //   3. cada fix nuevo corrige el error acumulado con constante ~0.8 s, sin
+  //      reiniciar la velocidad;
+  //   4. sin velocidad válida (<0.5 m/s) o sin fix con hora, no se avanza.
   const zoomNow =
     typeof input.mapZoom === "number" ? input.mapZoom : NAV_ZOOM_BASE;
   const cur = state.vehiclePos;
-  const dist = haversineMeters(cur, target);
   let vehiclePos = cur;
   const mpp = Math.max(0.01, metersPerPixelAt(zoomNow, cur.lat));
   // Fase 3-B — arranque: sin ningún fix bueno todavía, un fix pobre no mueve
   // el vehículo visual (T4: accuracy 79/52 m ⇒ 50.2 m de salto en 1.6 s).
   const poorStart =
     !input.firstGoodFixSeen && input.accuracy != null && input.accuracy > 20;
-  // Reubicación: un salto mayor que 50 m y mayor que lo que la velocidad
-  // permite es una re-adquisición del GPS, no desplazamiento → snap.
   const speedMps = Math.max(0, input.speedMps);
-  if (poorStart) {
-    vehiclePos = cur;
-  } else if (dist > Math.max(50, 3 * speedMps)) {
-    vehiclePos = target;
-  } else if (dist < 0.5) {
-    vehiclePos = target;
-  } else {
-    // Calentamiento (accuracy > 20 m): amortiguar la corrección (~1 s ya de
-    // por sí con POSITION_SMOOTH_FACTOR) y nunca superar 15 px por frame.
-    const smooth = input.accuracy != null && input.accuracy > 20
-      ? POSITION_SMOOTH_FACTOR * 0.6
-      : POSITION_SMOOTH_FACTOR;
-    const smoothFactor = 1 - Math.pow(1 - smooth, frameScale);
-    let stepMeters = Math.max(
-      POSITION_MIN_STEP_METERS,
-      Math.min(dist, dist * smoothFactor)
-    );
-    stepMeters = Math.min(stepMeters, MAX_VEHICLE_STEP_PX * mpp);
-    const brg = bearingBetween(cur, target);
-    vehiclePos = brg == null ? cur : movePointAlong(cur, brg, stepMeters);
+  // dt real desde el cuadro anterior de cámara (el primero usa `frameScale`).
+  const prevFrameTs = state.frameTs ?? null;
+  const dtSec =
+    prevFrameTs == null
+      ? Math.min(MAX_FRAME_DT_S, 0.033 * Math.max(0.5, frameScale))
+      : Math.min(
+          MAX_FRAME_DT_S,
+          Math.max(0, (now - prevFrameTs) / 1000)
+        );
+  const fixTs = input.fixTs ?? null;
+  const fixAgeMs = fixTs != null ? Math.max(0, now - fixTs) : Infinity;
+  // Extrapolación plena hasta 1.5 s; se apaga suavemente en 0.9 s más.
+  let extrapolation = 0;
+  if (fixAgeMs <= DEAD_RECKON_MAX_FIX_AGE_MS) {
+    extrapolation = 1;
+  } else if (fixAgeMs <= DEAD_RECKON_MAX_FIX_AGE_MS + DEAD_RECKON_STOP_FADE_MS) {
+    extrapolation =
+      1 - (fixAgeMs - DEAD_RECKON_MAX_FIX_AGE_MS) / DEAD_RECKON_STOP_FADE_MS;
+  }
+  if (speedMps < MIN_MOVING_SPEED_MPS || fixTs == null) extrapolation = 0;
+
+  // Proyección única sobre la ruta: sirve al avance y al zoom por maniobra.
+  const routePath =
+    input.route?.path && input.route.path.length >= 2 ? input.route.path : null;
+  const projection = routePath
+    ? projectOntoPathDetailed(routePath, cur)
+    : null;
+  const onRoute =
+    projection != null &&
+    projection.distance <= ON_ROUTE_LATERAL_M &&
+    routePath != null;
+
+  if (!poorStart && extrapolation > 0) {
+    const stepMeters = speedMps * dtSec * extrapolation;
+    let along: number | null = null;
+    if (onRoute && routePath) {
+      // Sobre la ruta: avanzar siguiendo la polilínea (tangente del tramo).
+      along = headingAlongPath(
+        routePath,
+        projection.meters + Math.max(1, stepMeters)
+      );
+    }
+    if (along == null) {
+      // Fuera de la ruta: avanzar por el rumbo resuelto (no por la geometría
+      // vieja que el vehículo ya abandonó).
+      along = input.simHeading ?? input.targetHeading ?? heading;
+    }
+    if (stepMeters > 0 && along != null) {
+      vehiclePos = movePointAlong(vehiclePos, along, stepMeters);
+    }
+  }
+
+  // Corrección por fix nuevo: mezcla suave, sin reiniciar velocidad. Un salto
+  // mayor que max(50 m, 3·v) es una re-adquisición del GPS, no desplazamiento
+  // → snap (se conserva el comportamiento confirmado en dispositivo).
+  let correctionMeters = state.correctionMeters ?? 0;
+  let correctionBearing = state.correctionBearing ?? null;
+  const fixIsNew = fixTs != null && fixTs !== (state.fixTs ?? null);
+  if (fixTs == null) {
+    // Consumidores sin hora de fix (llamadas de una sola vez, pruebas viejas):
+    // se conserva la reubicación por salto grande, sin estima ni corrección.
+    if (
+      !poorStart &&
+      haversineMeters(vehiclePos, target) > Math.max(50, 3 * speedMps)
+    ) {
+      vehiclePos = target;
+    }
+  } else if (fixIsNew && !poorStart) {
+    const errMeters = haversineMeters(vehiclePos, target);
+    if (errMeters > Math.max(50, 3 * speedMps)) {
+      vehiclePos = target;
+      correctionMeters = 0;
+      correctionBearing = null;
+    } else if (errMeters > 0.05) {
+      correctionMeters = errMeters;
+      correctionBearing = bearingBetween(vehiclePos, target);
+    } else {
+      correctionMeters = 0;
+      correctionBearing = null;
+    }
+  }
+  if (correctionMeters > 0 && correctionBearing != null) {
+    const moving = speedMps >= MIN_MOVING_SPEED_MPS;
+    // Parado: un temblor de GPS de 1–2 m no debe mover el puck; un error
+    // real (p. ej. el exceso de la extrapolación al frenar) sí se absorbe.
+    if (!moving && correctionMeters <= REST_CORRECTION_MIN_M) {
+      correctionMeters = 0;
+      correctionBearing = null;
+    } else {
+      const tau = moving ? FIX_CORRECTION_TAU_S : REST_CORRECTION_TAU_S;
+      // La corrección NUNCA puede duplicar el paso del cuadro: se limita a
+      // 0.5·v además del tope absoluto. Así el desplazamiento por cuadro queda
+      // ≤1.5·v·dt (criterio 5-B: paso máximo ≤2× el esperado) incluso cuando
+      // el GPS va retrasado y la corrección empuja en el mismo sentido.
+      const maxMps = moving
+        ? Math.min(FIX_CORRECTION_MAX_MPS, Math.max(0.5, speedMps * 0.5))
+        : REST_CORRECTION_MAX_MPS;
+      const blend = 1 - Math.exp(-dtSec / tau);
+      const applyMeters = Math.min(
+        correctionMeters,
+        correctionMeters * blend,
+        maxMps * dtSec
+      );
+      if (applyMeters > 0) {
+        vehiclePos = movePointAlong(vehiclePos, correctionBearing, applyMeters);
+        correctionMeters = Math.max(0, correctionMeters - applyMeters);
+      }
+      if (correctionMeters <= 0.02) {
+        correctionMeters = 0;
+        correctionBearing = null;
+      }
+    }
   }
   const vehicleStepPx = haversineMeters(cur, vehiclePos) / mpp;
 
@@ -259,12 +412,19 @@ export function computeFollowFrame(
       (input.speedMps / NAV_SPEED_REF_MPS) * (NAV_ZOOM_SLOW - NAV_ZOOM_FAST);
     targetZoom = Math.max(NAV_ZOOM_MIN, Math.min(NAV_ZOOM_MAX, targetZoom));
     const route = input.route;
-    if (route?.path && route.path.length >= 2 && route.steps.length > 0) {
+    if (
+      input.navigationReady &&
+      route?.path &&
+      route.path.length >= 2 &&
+      route.steps.length > 0
+    ) {
       const total = pathLengthMeters(route.path);
-      const done = Math.min(
-        Math.max(projectOntoPath(route.path, vehiclePos), 0),
-        total
-      );
+      // Reutiliza la proyección del avance si la ruta es la misma.
+      const offsetNow =
+        routePath === route.path && projection != null
+          ? projection.meters
+          : projectOntoPathDetailed(route.path, vehiclePos).meters;
+      const done = Math.min(Math.max(offsetNow, 0), total);
       let accEnd = 0;
       let idx = route.steps.length - 1;
       for (let i = 0; i < route.steps.length; i++) {
@@ -351,6 +511,10 @@ export function computeFollowFrame(
       cameraHeading,
       cameraHeadingTs,
       zoomTarget,
+      frameTs: now,
+      fixTs: fixTs ?? state.fixTs ?? null,
+      correctionMeters,
+      correctionBearing,
     },
     command,
     headingChanged,

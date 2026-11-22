@@ -173,11 +173,24 @@ export function evaluateGpsFix(state: FixGateState, fix: FixGateFix): FixGateDec
     };
   };
 
+  // Fase 4-B: SEMILLA inicial. Sin ninguna posición aceptada todavía, se usa
+  // el primer fix ≤50 m como posición de arranque (T6: el primer fix tenía
+  // 38.8 m y la app se quedaba en DEFAULT_CENTER a 398 m hasta el primer
+  // ≤20 m). La guía no calcula progreso hasta el fix ≤20; la cámara puede
+  // mostrar esta semilla y refinarla después. La regla de «no mover con fix
+  // pobre» sigue aplicando en cuanto exista una posición aceptada.
+  if (
+    state.lastAccepted == null &&
+    fix.accuracy != null &&
+    fix.accuracy <= ESCAPE_MAX_ACCURACY_M
+  ) {
+    return acceptCurrent();
+  }
+
   if (fix.accuracy != null && fix.accuracy > POOR_FIX_ACCURACY_M) {
-    if (goodFresh) {
-      return { accepted: false, reason: "accuracy" };
-    }
-    // F: sin fix bueno durante 10 s, usar el mejor disponible ≤ 50 m.
+    // F: sin fix bueno durante 10 s, usar el mejor disponible ≤ 50 m. Se
+    // evalúa ANTES de `goodFresh` para que el escape ocurra justo al cumplir
+    // la ventana (a los 10 s el fix bueno ya está en el límite).
     const sinceLastGoodMs = now - (state.lastGoodAt ?? state.startedAt ?? now);
     if (sinceLastGoodMs >= NO_GOOD_FIX_ESCAPE_MS) {
       const currentUsable =
@@ -224,6 +237,11 @@ export function evaluateGpsFix(state: FixGateState, fix: FixGateFix): FixGateDec
         };
       }
     }
+    // Mientras haya un fix bueno fresco, el pobre no mueve la posición…
+    if (goodFresh) {
+      return { accepted: false, reason: "accuracy" };
+    }
+    // …pero queda como candidato para el escape de 10 s.
     return { accepted: false, reason: "accuracy" };
   }
 

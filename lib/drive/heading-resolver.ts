@@ -32,6 +32,7 @@ import {
   projectOntoPath,
   type RoutePoint,
 } from "@/lib/dispatch/routing";
+import { COURSE_EXPIRY_MS, MIN_HEADING_SPEED_MPS } from "@/lib/drive/speed-heading";
 
 function normalizeDeg(deg: number): number {
   return ((deg % 360) + 360) % 360;
@@ -86,7 +87,8 @@ const HEADING_DEVIATION_MIN_SAMPLES = 3;
 // diferencia de rumbo entre una señal vieja y el segmento). En la traza T1
 // el puck iba SOBRE la ruta pero el rumbo viejo (180-199°) difería del
 // segmento (97-126°) de forma sostenida → DEVIATING permanente.
-const ROUTE_ON_PATH_LATERAL_M = 30;
+// Fase 4-A: se considera «sobre la ruta» solo con ≤25 m laterales (antes 30).
+const ROUTE_ON_PATH_LATERAL_M = 25;
 const ROUTE_DEVIATION_LATERAL_M = 40;
 // Límite de velocidad angular del rumbo aceptado (deg/s) y confirmación de
 // vuelta en U con dos fuentes independientes (gpsHeading + bearing entre
@@ -102,9 +104,15 @@ const UTURN_CONFIRM_TOLERANCE_DEG = 25;
 // GPS con 26 m de precisión a pocos metros: el vector ruido→punto se congeló
 // y el "movimiento" era la interpolación, no el vehículo.
 const TICK_BEARING_MAX_AGE_MS = 4_000;
-// Velocidad mínima para creerle el rumbo al SO: 0.22 m/s de "marcha" es ruido
-// de un teléfono quieto (T3 arrancó en 314° con el repartidor parado).
-const MIN_MOTION_FOR_HEADING_MPS = 0.4;
+// Velocidad mínima para creerle el rumbo al SO: por debajo de 0.5 m/s el
+// heading de iOS es ruido o un valor pegado (T3 arrancó en 314° parado).
+const MIN_MOTION_FOR_HEADING_MPS = MIN_HEADING_SPEED_MPS;
+/** Un curso que contradice al GPS >45° durante >3 s deja de ser fuente. */
+const COURSE_GPS_DISAGREEMENT_DEG = 45;
+const COURSE_GPS_DISAGREEMENT_MS = 3_000;
+/** Envolvente de la velocidad entre ticks (misma regla que el curso). */
+const TICK_ENVELOPE_FACTOR = 3;
+const TICK_ENVELOPE_SLACK_MPS = 3;
 
 export type DriveHeadingSource =
   | "NONE"
@@ -132,6 +140,16 @@ export type DriveHeadingResolverOptions = {
   getGpsHeading: () => number | null;
   getSpeedMps: () => number;
   getMovementHeading: () => number | null;
+  /**
+   * Fase 4-A: curso con su edad efectiva respecto al último movimiento
+   * confirmado. `heading` puede venir caducado; el resolvedor decide si aún
+   * sirve o si baja por debajo del segmento de ruta.
+   */
+  getCourseHeading?: () => { heading: number | null; ageMs: number | null };
+  /** Velocidad por desplazamientos plausibles (no `coords.speed` pegajoso). */
+  getMovementSpeedMps?: () => number;
+  /** `coords.speed` del fix vigente (para la envolvente de los ticks). */
+  getCoordsSpeedMps?: () => number | null;
   getDeviceHeading: () => { heading: number; available: string; permission: string };
   getRouteGeometry: () => {
     path: RoutePoint[] | null;
@@ -174,6 +192,10 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
     routePathRef: RoutePoint[] | null;
     /** Longitudes acumuladas del path (índice para la ventana de progreso). */
     routeCum: number[] | null;
+    /** Desde cuándo el curso contradice al GPS (>45°). */
+    courseGpsDisagreementSince: number | null;
+    /** Último valor de curso observado (reinicia la sospecha al cambiar). */
+    lastCourseSeen: number | null;
     debug: DriveHeadingDebugInfo | null;
   };
   const state: ResolverState = {
@@ -193,6 +215,8 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
     routeProgressM: null,
     routePathRef: null,
     routeCum: null,
+    courseGpsDisagreementSince: null,
+    lastCourseSeen: null,
     debug: null,
   };
 
@@ -207,6 +231,14 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
     const reportedSpeedMps = options.getSpeedMps();
     const gpsHeadingRaw = options.getGpsHeading();
     const movementHeading = options.getMovementHeading();
+    const courseInfo =
+      options.getCourseHeading?.() ?? {
+        heading: movementHeading,
+        ageMs: movementHeading != null ? 0 : null,
+      };
+    const movementSpeedMps =
+      options.getMovementSpeedMps?.() ?? reportedSpeedMps;
+    const coordsSpeedMps = options.getCoordsSpeedMps?.() ?? null;
     const { path, vehiclePos } = options.getRouteGeometry();
 
     // ── Simulador: prioridad absoluta, sin máquina de estados ──
@@ -295,7 +327,18 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
     }
 
     // Velocidad efectiva: la reportada puede ir con retardo (se deriva de
-    // ticks con histéresis); la velocidad entre ticks es más fresca.
+    // ticks con histéresis); la velocidad entre ticks es más fresca. Fase 4-A:
+    // el tick también respeta la envolvente 3·coords.speed+3 (T7: 8.7 m en
+    // 1.1 s con coords.speed 1.2 daba 7.9 m/s y alimentaba el rumbo).
+    const tickLimitMps =
+      coordsSpeedMps != null
+        ? TICK_ENVELOPE_FACTOR * coordsSpeedMps + TICK_ENVELOPE_SLACK_MPS
+        : 35;
+    if (state.tickSpeedMps != null && state.tickSpeedMps > tickLimitMps) {
+      state.tickSpeedMps = null;
+      state.gpsTickBearing = null;
+      state.gpsTickBearingTs = null;
+    }
     const speedMps = Math.max(reportedSpeedMps, state.tickSpeedMps ?? 0);
     // Bearing entre ticks FRESCO (ver TICK_BEARING_MAX_AGE_MS): un bearing
     // viejo no puede sostener la cámara ni corroborar un giro.
@@ -337,13 +380,49 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
         : null;
     const onPath = lateralMeters != null && lateralMeters <= ROUTE_ON_PATH_LATERAL_M;
 
+    // ── Fase 4-A: frescura del curso y contradicción sostenida con el GPS ──
+    // El curso caduca como fuente tras 3 s sin movimiento confirmado. Además,
+    // si contradice al coords.heading >45° durante >3 s con marcha confirmada,
+    // deja de ser fuente aunque su valor siga "fresco" (T6: 187° fijado por
+    // jitter mientras el rumbo real era ~105–110°).
+    const gpsHeadingUsable =
+      gpsHeading != null && movementSpeedMps >= MIN_HEADING_SPEED_MPS
+        ? gpsHeading
+        : null;
+    let courseFresh =
+      courseInfo.heading != null &&
+      courseInfo.ageMs != null &&
+      courseInfo.ageMs <= COURSE_EXPIRY_MS;
+    const expiredCourse =
+      courseInfo.heading != null && !courseFresh ? courseInfo.heading : null;
+    if (courseFresh && gpsHeadingUsable != null) {
+      const diff = Math.abs(
+        shortestAngleDelta(gpsHeadingUsable, courseInfo.heading as number)
+      );
+      if (state.lastCourseSeen !== courseInfo.heading) {
+        state.courseGpsDisagreementSince = diff > COURSE_GPS_DISAGREEMENT_DEG ? now : null;
+      } else if (diff > COURSE_GPS_DISAGREEMENT_DEG) {
+        if (state.courseGpsDisagreementSince == null) {
+          state.courseGpsDisagreementSince = now;
+        }
+        if (now - state.courseGpsDisagreementSince > COURSE_GPS_DISAGREEMENT_MS) {
+          courseFresh = false;
+        }
+      } else {
+        state.courseGpsDisagreementSince = null;
+      }
+    } else {
+      state.courseGpsDisagreementSince = null;
+    }
+    state.lastCourseSeen = courseInfo.heading;
+
     // ── Coincidencia GPS vs ruta (histéresis CON distancia lateral) ──
     // Fase 1: DEVIATING solo si hay evidencia de desvío en AMBOS dominios:
     // rumbo que difiere > 25° SOSTENIDO y el vehículo físicamente fuera de
     // la ruta (> 40 m lateral). Una señal de rumbo vieja (p. ej. el curso
     // por posiciones pegado a 180-199° en la traza T1) no basta: estando
     // sobre la ruta, el rumbo se orienta al segmento (bucle de abajo).
-    const gpsRef = gpsHeading ?? movementHeading;
+    const gpsRef = gpsHeading ?? (courseFresh ? courseInfo.heading : null);
     const gpsVsRouteDeltaDeg =
       gpsRef != null && routeHeading != null
         ? Math.abs(shortestAngleDelta(routeHeading, gpsRef))
@@ -428,73 +507,63 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
       return { h, viaRoute: false };
     };
 
-    // ── ORDEN DE FUENTES (Fase 1-C) ──
-    // 1) curso por POSICIONES (medido, filtrado por consistencia y velocidad);
-    // 2) coords.heading, solo mientras hay marcha (iOS lo deja pegado parado)
-    //    y solo si CONCUERDA con el curso medido — si discrepan > 20° manda el
-    //    curso, porque el `heading` del SO se queda obsoleto (T1: 108.149°
-    //    pegado con el vehículo girando).
-    // 3) rumbo del segmento de ruta proyectado (estabiliza cuando hay ruta);
-    // 4) último rumbo confiable (HELD).
-    // En adquisición inicial, y solo sin ruta activa (F/1-F), la brújula
-    // puede fijar el primer rumbo; nunca sobreescribe uno ya adquirido.
-    const course = movementHeading; // ya validado por lib/drive/speed-heading
+    // ── ORDEN DE FUENTES (Fase 4-A) ──
+    // 1) curso FRESCO por posiciones (movimiento confirmado en los últimos 3 s);
+    // 2) coords.heading fresco, solo con velocidad ≥0.5 m/s;
+    // 3) segmento de ruta proyectado cuando el vehículo está SOBRE ella
+    //    (lateral ≤25 m), sin señales de movimiento;
+    // 4) curso caducado (respaldo, etiquetado HELD);
+    // 5) último rumbo confiable (HELD).
+    // La brújula solo puede adquirir el primer rumbo sin ruta activa; nunca
+    // sobreescribe uno ya adquirido.
+    const course = courseFresh ? courseInfo.heading : null;
     const courseAgreesWithGps =
       course != null &&
-      gpsHeading != null &&
-      Math.abs(shortestAngleDelta(gpsHeading, course)) <= 20;
+      gpsHeadingUsable != null &&
+      Math.abs(shortestAngleDelta(gpsHeadingUsable, course)) <= 20;
     const motionHeading: number | null = course != null
       ? courseAgreesWithGps
-        ? normalizeDeg(course + shortestAngleDelta(gpsHeading as number, course) * 0.4)
+        ? normalizeDeg(
+            course + shortestAngleDelta(gpsHeadingUsable as number, course) * 0.4
+          )
         : course
-      : (gpsHeading ?? freshTickBearing);
+      : (gpsHeadingUsable ?? freshTickBearing);
 
     // ── Fase 2-B: adquisición inicial desde el SEGMENTO de ruta ──
-    // Con ruta activa y SIN curso medido (primeros segundos, vehículo aún
-    // parado, GPS en calentamiento) el rumbo se inicializa con el segmento
-    // proyectado y se mantiene. Antes se tomaba el bearing entre ticks hacia
-    // un GPS impreciso a pocos metros → 268° durante 27 s y un giro de 108° de
-    // golpe al llegar datos reales.
+    // Con ruta activa y SIN ninguna señal de movimiento fresca (primeros
+    // segundos, vehículo aún parado, GPS en calentamiento) el rumbo se
+    // inicializa con el segmento proyectado y se mantiene. Antes se tomaba el
+    // bearing entre ticks hacia un GPS impreciso a pocos metros → 268° durante
+    // 27 s y un giro de 108° de golpe al llegar datos reales.
     const routeInit =
       hasRoute &&
       routeHeading != null &&
       course == null &&
+      gpsHeadingUsable == null &&
+      freshTickBearing == null &&
       !state.deviating &&
       onPath;
     if (routeInit) {
       heading = routeHeading;
       source = "FOLLOWING_ROUTE";
-    } else if ((speedMps > MIN_MOTION_FOR_HEADING_MPS || freshTickBearing != null) && motionHeading != null) {
+    } else if ((movementSpeedMps >= MIN_MOTION_FOR_HEADING_MPS || freshTickBearing != null) && motionHeading != null) {
       const biased = applyRouteBias(motionHeading);
       heading = biased.h;
       source = biased.viaRoute
         ? "FOLLOWING_ROUTE"
         : state.deviating
           ? "DEVIATING"
-          : course != null
-            ? "GPS"
-            : "GPS";
-      if (biased.viaRoute) {
-        // Ruta presente y coherente: queda estabilizado por el segmento.
-      } else if (routeHeading != null && !state.deviating) {
-        source = "GPS";
-      }
+          : "GPS";
+    } else if (expiredCourse != null) {
+      // Curso caducado: por debajo de la ruta (si estuviera sobre ella, la
+      // rama routeInit ya lo habría sustituido). No se usa si no hay marcha.
+      heading = expiredCourse;
+      source = "HELD";
     } else if (heldHeading != null) {
       // Sin señal de movimiento fresca: mantener el último rumbo confiable
       // (no dar la cámara a la brújula en pleno desplazamiento).
       heading = heldHeading;
       source = "HELD";
-    } else if (
-      freshTickBearing != null ||
-      (gpsHeading != null && speedMps > MIN_MOTION_FOR_HEADING_MPS)
-    ) {
-      // Sin ruta (o fuera de ella): última señal de movimiento disponible.
-      // Un vehículo PARADO no adquiere rumbo del `heading` del SO (iOS lo deja
-      // pegado: 314° en T3): eso arrancaba la cámara girada y la hacía barrer
-      // 119° en 1 s hasta el segmento de ruta. El tick bearing exige 8 m de
-      // desplazamiento real, así que solo él prueba marcha con vehículo lento.
-      heading = freshTickBearing ?? gpsHeading;
-      source = "GPS";
     } else if (compassOk) {
       heading = compassHeading;
       source = "COMPASS_FALLBACK";

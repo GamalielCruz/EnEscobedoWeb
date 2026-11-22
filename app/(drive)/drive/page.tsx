@@ -54,7 +54,9 @@ import { useDeviceOrientation } from "@/hooks/useDeviceOrientation";
 import { TraceRecorder } from "@/lib/drive/trace-recorder";
 import {
   applyGpsFix,
+  courseAgeMs,
   effectiveCourseHeading,
+  effectiveMovementSpeedMps,
   effectiveSpeedMps,
   hasValidSpeed,
   initialSpeedHeadingState,
@@ -72,6 +74,7 @@ import {
 } from "@/lib/drive/camera-controller";
 import {
   computeFollowFrame,
+  metersPerPixelAt,
   NAV_HEADING_SKIP_DEG,
   NAV_ZOOM_BASE,
 } from "@/lib/drive/follow-frame";
@@ -113,6 +116,28 @@ import {
 // El estilo del mapa vive en lib/drive/map-styles.ts (estilo de Mapbox, con
 // rotación heading-up y tilt nativos: no hace falta Map ID ni mapa vectorial).
 const DEFAULT_CENTER = { lat: 20.502, lng: -100.145 };
+
+/**
+ * Marcas de arranque (Fase 4-C): se exportan en la traza como medidas de
+ * `performance`. No cambian lógica; sirven para saber qué ocupa el primer
+ * segundo (montaje, estilo de Mapbox, ruta, primer render, primer fix bueno).
+ */
+function markDrive(name: string): void {
+  if (typeof performance === "undefined" || typeof performance.mark !== "function") return;
+  try {
+    performance.mark(`drive:${name}`);
+  } catch {
+    /* performance no disponible */
+  }
+}
+function measureDrive(name: string, start: string, end: string): void {
+  if (typeof performance === "undefined" || typeof performance.measure !== "function") return;
+  try {
+    performance.measure(`drive:${name}`, `drive:${start}`, `drive:${end}`);
+  } catch {
+    /* faltan marcas */
+  }
+}
 
 // ── Camera (navegación tipo GPS) ───────────────────────────────────
 // Aire alrededor del trayecto al encuadrar (fracción del tamaño del encuadre).
@@ -725,6 +750,11 @@ function formatMetersShort(meters: number): string {
 
 export default function DrivePage() {
   const { isSignedIn } = useAuth();
+  const mountMarkedRef = useRef(false);
+  if (!mountMarkedRef.current) {
+    mountMarkedRef.current = true;
+    markDrive("mount");
+  }
 
   // El sondeo solo arranca cuando Clerk confirma la sesión: sin sesión no se
   // llama /api/driver/state (evita los 401 repetidos en la subdominio Drive).
@@ -755,6 +785,13 @@ export default function DrivePage() {
   // pobre no mueve la posición visual.
   const firstGoodFixSeenRef = useRef(false);
   if (gpsAccuracy != null && gpsAccuracy <= 20) firstGoodFixSeenRef.current = true;
+  // Fase 4-B: la primera posición visual que NO vino de GPS se reemplaza por
+  // el primer fix ≤50 m (snap) y se refina al primer ≤20 m. La guía no calcula
+  // progreso hasta ese fix bueno; cámara y resolvedor comparten la posición
+  // visual (no dos posiciones distintas en el arranque).
+  const gpsSeedRef = useRef(false);
+  const navigationPositionReadyRef = useRef(false);
+  const [navigationPositionReady, setNavigationPositionReady] = useState(false);
 
   // Brújula física del dispositivo (DeviceOrientationEvent). NO pide permiso
   // automáticamente: se activa solo cuando el repartidor comienza navegación
@@ -785,6 +822,12 @@ export default function DrivePage() {
   // Fase 1-H: el panel de diagnóstico arranca COLAPSADO (antes tapaba ~1/3
   // del mapa). Se abre con su botón; solo existe en staging.
   const [sensorPanelOpen, setSensorPanelOpen] = useState(false);
+  // Fase 4-D: límite de aplicación de cámara configurable SOLO en staging
+  // (33 ms por defecto; 16 ms para la prueba A/B de 60 Hz). El valor activo
+  // queda registrado en cada bucket de `perf` de la traza.
+  const [cameraIntervalMs, setCameraIntervalMs] = useState<16 | 33>(33);
+  const cameraIntervalRef = useRef<16 | 33>(33);
+  cameraIntervalRef.current = cameraIntervalMs;
   // CIERRE DEL PANEL DE PEDIDO: al tocar el mapa la página incrementa este
   // token y el panel colapsa de inmediato (sin capa alguna sobre el mapa).
   const [tripSheetCollapseToken, setTripSheetCollapseToken] = useState(0);
@@ -821,8 +864,11 @@ export default function DrivePage() {
 
   useEffect(() => {
     let cancelled = false;
+    markDrive("style-request");
     loadDriveMapStyle().then((style) => {
       if (cancelled) return;
+      markDrive("style-ready");
+      measureDrive("style", "style-request", "style-ready");
       setDriveStyle(style);
       setDriveStyleReady(true);
     });
@@ -1143,8 +1189,13 @@ export default function DrivePage() {
 
     if (!driverHasLocation) return;
     let cancelled = false;
+    markDrive("route-request");
     getRoadRoute(currentLocation, navTarget).then((route) => {
-      if (!cancelled) setRoadRoute(route);
+      if (!cancelled) {
+        markDrive("route-ready");
+        measureDrive("route", "route-request", "route-ready");
+        setRoadRoute(route);
+      }
     });
     return () => {
       cancelled = true;
@@ -1227,6 +1278,10 @@ export default function DrivePage() {
   // en los steps de Directions (no se hace ninguna llamada extra a Google).
   const guidance = useMemo(() => {
     if (!roadRoute?.path || roadRoute.path.length < 2) return null;
+    // Fase 4-B: sin un fix ≤20 m no hay progreso ni distancia de maniobra. La
+    // tarjeta muestra «Dirígete…» (o «Comienza tu viaje») y el zoom por
+    // maniobra queda inhibido; antes se proyectaba DEFAULT_CENTER a 398 m.
+    if (!sim.active && !navigationPositionReady) return null;
     const total = pathLengthMeters(roadRoute.path);
     if (total <= 0) return null;
     // POSICIÓN ÚNICA DE NAVEGACIÓN: la guidance se calcula sobre la posición
@@ -1281,7 +1336,7 @@ export default function DrivePage() {
       stepIndex: g.stepIndex,
       fractionCompleted: g.fractionCompleted,
     };
-  }, [roadRoute, currentLocation]);
+  }, [roadRoute, currentLocation, gpsAccuracy, sim.active, navigationPositionReady]);
 
   // Fase 4 — "llegando" SOLO con ruta del tramo vigente. Al voltear de tramo
   // (recolección → entrega), la guidance del tramo anterior (~30 m restantes)
@@ -1310,6 +1365,8 @@ export default function DrivePage() {
   // el usuario arrastra o hace zoom (interacción manual) salimos del modo; los
   // cambios internos de zoom usan un guard para no confundirse con el usuario.
   const mapRef = useRef<MapboxMapInstance | null>(null);
+  const firstMapRenderMarkedRef = useRef(false);
+  const firstFollowFrameMarkedRef = useRef(false);
   // El handle permite además acceder a los marcadores por id (rotación del
   // conductor sin re-renderizar).
   const mapHandleRef = useRef<MapboxMapHandle | null>(null);
@@ -1405,6 +1462,75 @@ export default function DrivePage() {
     centerOnDriver({ duration: 0, zoom: DEFAULT_ZOOM });
   }, [mapReady, driverHasLocation, centerOnDriver]);
   const followTargetRef = useRef<RoutePoint | null>(null);
+  // Fase 5-A: hora del último fix que movió el objetivo. La estima entre
+  // fixes la usa para extrapolar solo mientras el fix es reciente (≤1.5 s).
+  const followTargetTsRef = useRef<number | null>(null);
+  const setFollowTargetNow = useCallback((point: RoutePoint | null) => {
+    const prev = followTargetRef.current;
+    // Solo una POSICIÓN NUEVA renueva la hora del fix: este efecto también se
+    // reejecuta por cambios de rumbo/ruta, y no debe prolongar la extrapolación
+    // cuando el GPS lleva rato sin entregar un fix.
+    if (
+      point == null ||
+      prev == null ||
+      prev.lat !== point.lat ||
+      prev.lng !== point.lng
+    ) {
+      followTargetTsRef.current = point ? performance.now() : null;
+    }
+    followTargetRef.current = point;
+  }, []);
+  // Fase 5-A: memoria del frame (dt real, fix ya integrado y corrección
+  // pendiente). Vive en refs porque el loop rAF no re-renderiza.
+  const followFrameTsRef = useRef<number | null>(null);
+  const followFrameFixTsRef = useRef<number | null>(null);
+  const followCorrectionRef = useRef<{ meters: number; bearing: number | null }>({
+    meters: 0,
+    bearing: null,
+  });
+
+  // Fase 4-B: una sola posición de arranque para guía, resolvedor y cámara.
+  // El gate acepta como SEMILLA el primer fix ≤50 m cuando aún no hay ninguno
+  // aceptado; aquí se hace el snap visual (antes la semilla era DEFAULT_CENTER
+  // a 398 m y el puck saltaba al llegar el primer fix ≤20 m en T6).
+  useEffect(() => {
+    if (sim.active || !realLocation) return;
+    const acc = gpsAccuracy;
+    if (
+      !gpsSeedRef.current &&
+      acc != null &&
+      acc <= 50
+    ) {
+      // Solo un fix ≤50 m cuenta como semilla; un fix peor no reemplaza el
+      // DEFAULT_CENTER ni bloquea el snap del primer fix aceptado.
+      gpsSeedRef.current = true;
+      markDrive("gps-seed");
+      visualPosRef.current = realLocation;
+      setFollowTargetNow(realLocation);
+      lastFollowPosRef.current = realLocation;
+      setDriverMarkerPosition(driverMarkerRef.current, realLocation);
+    }
+    if (
+      !navigationPositionReadyRef.current &&
+      acc != null &&
+      acc <= 20
+    ) {
+      navigationPositionReadyRef.current = true;
+      setNavigationPositionReady(true);
+      markDrive("first-good-fix");
+      measureDrive("first-good-fix", "mount", "first-good-fix");
+      // Refinamiento inicial: el primer fix ≤20 m sustituye la semilla.
+      visualPosRef.current = realLocation;
+      setFollowTargetNow(realLocation);
+      lastFollowPosRef.current = realLocation;
+      setDriverMarkerPosition(driverMarkerRef.current, realLocation);
+    }
+  }, [realLocation, gpsAccuracy, sim.active]);
+
+  useEffect(() => {
+    traceRecorderRef.current?.setCameraInterval(cameraIntervalMs);
+  }, [cameraIntervalMs]);
+
   const followRafRef = useRef<number | null>(null);
   const lastZoomRef = useRef<number | null>(null);
   // Objetivo de zoom vigente (histéresis): el loop persigue este valor de
@@ -1467,6 +1593,8 @@ export default function DrivePage() {
   // sola vez) siempre vea el estado actual sin recrearse ni recrear el loop.
   const gpsHeadingRef = useRef<number | null>(gpsHeading);
   gpsHeadingRef.current = gpsHeading;
+  const gpsSpeedRef = useRef<number | null>(gpsSpeed);
+  gpsSpeedRef.current = gpsSpeed;
   const deviceStateRef = useRef(deviceOrientation.state);
   deviceStateRef.current = deviceOrientation.state;
 
@@ -1485,13 +1613,23 @@ export default function DrivePage() {
           ? SIM_BASE_METERS_PER_SECOND * simRef.current.speed
           : (movementSpeedRef.current ?? 0),
       getMovementHeading: () => movementHeadingRef.current,
+      // Fase 4-A: curso con su edad real. El resolvedor lo usa fresco (≤3 s
+      // de movimiento confirmado), como caducado o lo sustituye por el
+      // segmento de ruta / coords.heading fresco.
+      getCourseHeading: () => {
+        const st = speedHeadingRef.current;
+        return { heading: st.courseHeading, ageMs: courseAgeMs(st, Date.now()) };
+      },
+      getMovementSpeedMps: () =>
+        effectiveMovementSpeedMps(speedHeadingRef.current, Date.now()),
+      getCoordsSpeedMps: () => gpsSpeedRef.current,
       getDeviceHeading: () => deviceStateRef.current,
       getRouteGeometry: () => ({
         path: roadRouteRef.current?.path ?? null,
-        // Fase 2-B: posición GPS REAL, no la visual interpolada. Con la visual
-        // el "bearing entre ticks" medía la interpolación hacia un fix
-        // impreciso a pocos metros y se congelaba en 268° (T2).
-        vehiclePos: currentLocationRef.current,
+        // Fase 4-B: la MISMA posición que dibuja el puck y proyecta la guía.
+        // Antes el resolvedor usaba el GPS crudo y la cámara la visual, así
+        // que en el arranque podían discrepar cientos de metros.
+        vehiclePos: visualPosRef.current,
       }),
       // Fase 2-B: 8 m / 1000 ms para el bearing entre ticks (antes 5 m /
       // 500 ms: con GPS de 26 m de precisión eso era ruido, no movimiento).
@@ -1793,6 +1931,10 @@ export default function DrivePage() {
       cancelAnimationFrame(followRafRef.current);
       followRafRef.current = null;
     }
+    // Fase 5-A: al reanudar no debe aplicarse un dt enorme del parón (la
+    // estima avanzaría varios metros en un cuadro). El primer cuadro nuevo usa
+    // `frameScale`.
+    followFrameTsRef.current = null;
   }, []);
 
   /**
@@ -1841,6 +1983,11 @@ export default function DrivePage() {
       }
     };
     const stepBody = (ts: number) => {
+      if (!firstFollowFrameMarkedRef.current) {
+        firstFollowFrameMarkedRef.current = true;
+        markDrive("follow-first-frame");
+        measureDrive("first-follow-frame", "mount", "follow-first-frame");
+      }
       // Fase 3-C: intervalo real entre cuadros del loop (p50/p95/máx por
       // segundo en la traza). Se mide el rAF, no el trabajo: si el hilo está
       // saturado el intervalo sube aunque el loop haga lo mismo.
@@ -1852,18 +1999,32 @@ export default function DrivePage() {
       const target = followTargetRef.current;
       // Sin mapa/target todavía: el loop sigue vivo y espera.
       if (!map || !target) return;
-      if (ts - lastCameraUpdateTs < 33) return;
-      const frameDtMs = lastCameraUpdateTs === 0 ? 33 : ts - lastCameraUpdateTs;
-      const frameScale = Math.min(4, Math.max(0.5, frameDtMs / 33));
+      if (ts - lastCameraUpdateTs < cameraIntervalRef.current) return;
+      const frameDtMs =
+        lastCameraUpdateTs === 0
+          ? cameraIntervalRef.current
+          : ts - lastCameraUpdateTs;
+      const frameScale = Math.min(
+        4,
+        Math.max(0.5, frameDtMs / cameraIntervalRef.current)
+      );
       lastCameraUpdateTs = ts;
+      const speedForFrame = simRef.current.active
+        ? SIM_BASE_METERS_PER_SECOND * simRef.current.speed
+        : (movementSpeedLoopRef.current ?? 0);
+      const prevPos = visualPosRef.current;
 
       const frame = computeFollowFrame(
         {
-          vehiclePos: visualPosRef.current,
+          vehiclePos: prevPos,
           visualHeading: visualHeadingRef.current,
           cameraHeading: visualCameraHeadingRef.current.current,
           cameraHeadingTs: visualCameraHeadingRef.current.lastTs ?? null,
           zoomTarget: targetZoomRef.current?.target ?? null,
+          frameTs: followFrameTsRef.current,
+          fixTs: followFrameFixTsRef.current,
+          correctionMeters: followCorrectionRef.current.meters,
+          correctionBearing: followCorrectionRef.current.bearing,
         },
         {
           now: performance.now(),
@@ -1875,9 +2036,7 @@ export default function DrivePage() {
             simRef.current.active && simRef.current.simHeading != null
               ? simRef.current.simHeading
               : null,
-          speedMps: simRef.current.active
-            ? SIM_BASE_METERS_PER_SECOND * simRef.current.speed
-            : (movementSpeedLoopRef.current ?? 0),
+          speedMps: speedForFrame,
           route: roadRouteRef.current
             ? {
                 path: roadRouteRef.current.path,
@@ -1889,10 +2048,18 @@ export default function DrivePage() {
           pendingZoom: pendingZoomRef.current,
           accuracy: gpsAccuracyRef.current,
           firstGoodFixSeen: firstGoodFixSeenRef.current,
+          navigationReady: sim.active || navigationPositionReadyRef.current,
           mapBearing: map.getBearing?.() ?? 0,
+          fixTs: followTargetTsRef.current,
         }
       );
 
+      followFrameTsRef.current = frame.state.frameTs ?? null;
+      followFrameFixTsRef.current = frame.state.fixTs ?? null;
+      followCorrectionRef.current = {
+        meters: frame.state.correctionMeters ?? 0,
+        bearing: frame.state.correctionBearing ?? null,
+      };
       visualPosRef.current = frame.state.vehiclePos;
       visualHeadingRef.current = frame.state.visualHeading;
       visualCameraHeadingRef.current.current = frame.state.cameraHeading;
@@ -1922,8 +2089,23 @@ export default function DrivePage() {
         );
       }
 
+      // Fase 5-B: uniformidad por cuadrado — píxeles desplazados en esta
+      // aplicación de cámara y cuánto se esperaba (v·dt). El muestreo a 5 Hz
+      // no lo detectaba: mide el centro cada 200 ms y una ráfaga de 250 ms
+      // cae dentro de una muestra.
+      if (TRACE_REC_ENABLED) {
+        const movedM = haversineMeters(prevPos, frame.state.vehiclePos);
+        const mpp = Math.max(
+          0.01,
+          metersPerPixelAt(map.getZoom(), prevPos.lat)
+        );
+        traceRecorderRef.current?.recordCameraApply({
+          movedPx: movedM / mpp,
+          speedMps: speedForFrame,
+          expectedStepPx: (speedForFrame * frameDtMs) / 1000 / mpp,
+        });
+      }
       // ÚNICO camino de escritura de cámara del seguimiento.
-      if (TRACE_REC_ENABLED) traceRecorderRef.current?.recordCameraApply();
       applyCameraCommand(createDriveCameraSink(map), {
         center: frame.command.center,
         heading: frame.command.bearing,
@@ -1955,6 +2137,7 @@ export default function DrivePage() {
   const handleMapLoad = useCallback(
     (map: MapboxMapInstance) => {
       mapRef.current = map;
+      markDrive("map-load");
       // Mapa nuevo ⇒ padding nuevo (el mapa anterior pudo tenerlo aplicado).
       lastAppliedPadding = null;
       setMapReady(true);
@@ -2026,7 +2209,14 @@ export default function DrivePage() {
       // Fase 3-C: `render` de Mapbox por segundo (se agrega, no se guarda uno
       // por evento: son ~60/s). Explica si la fluidez la limita el loop o el
       // propio render del mapa.
-      const onRender = () => traceRecorderRef.current?.recordMapRender();
+      const onRender = () => {
+        traceRecorderRef.current?.recordMapRender();
+        if (!firstMapRenderMarkedRef.current) {
+          firstMapRenderMarkedRef.current = true;
+          markDrive("map-first-render");
+          measureDrive("first-render", "mount", "map-first-render");
+        }
+      };
       if (TRACE_REC_ENABLED) recMap.on("render", onRender);
       const recHandlers = TRACE_REC_ENABLED
         ? recTypes.map((type) => {
@@ -2116,7 +2306,9 @@ export default function DrivePage() {
     );
     const state = speedHeadingRef.current;
     movementSpeedRef.current = effectiveSpeedMps(state, now);
-    const course = effectiveCourseHeading(state);
+    // Fase 4-A: solo un curso FRESCO (movimiento confirmado ≤3 s) actualiza el
+    // rumbo de movimiento; el valor caducado queda como respaldo del resolvedor.
+    const course = effectiveCourseHeading(state, now);
     if (course != null) movementHeadingRef.current = course;
   }, [currentLocation, gpsSpeed, gpsAccuracy, gpsHeading, sim.active]);
 
@@ -2222,8 +2414,8 @@ export default function DrivePage() {
       return;
     }
 
-    // Seguimiento fluido: el loop rAF interpola vehículo y cámara (sin saltos).
-    followTargetRef.current = currentLocation;
+    // Seguimiento fluido: el loop rAF estima vehículo y cámara entre fixes.
+    setFollowTargetNow(currentLocation);
     ensureFollowLoop();
 
     // Iniciar tweens de rotación cuando el heading fused cambia significativamente.
@@ -2336,7 +2528,7 @@ export default function DrivePage() {
     lastFollowPosRef.current = currentLocation;
     visualPosRef.current = currentLocation;
     setDriverMarkerPosition(driverMarkerRef.current, currentLocation);
-    followTargetRef.current = currentLocation;
+    setFollowTargetNow(currentLocation);
     lastZoomRef.current = null;
     markInternalZoom();
     moveMapCamera(map, { zoom: NAV_ZOOM_BASE });
@@ -2454,7 +2646,7 @@ export default function DrivePage() {
         setFollowDriver(true);
         // Reanudar el seguimiento DESDE la posición ACTUAL del repartidor:
         // el loop interpola la cámara de vuelta sin salto brusco.
-        followTargetRef.current = current;
+        setFollowTargetNow(current);
         visualPosRef.current = current;
         setDriverMarkerPosition(driverMarkerRef.current, current);
         markInternalZoom();
@@ -2672,7 +2864,7 @@ export default function DrivePage() {
     // el anclaje (conductor abajo) con transición fluida.
     visualPosRef.current = currentLocation;
     setDriverMarkerPosition(driverMarkerRef.current, currentLocation);
-    followTargetRef.current = currentLocation;
+    setFollowTargetNow(currentLocation);
     if (withRoute) {
       ensureFollowLoop();
       // NO se fuerza el zoom aquí: el objetivo de zoom de navegación se
@@ -3551,6 +3743,28 @@ export default function DrivePage() {
             <span className="font-mono text-white/90">
               {TraceRecorder.buildCommit().slice(0, 8)}
             </span>
+          </div>
+          <div className="mt-1.5 flex items-center gap-2">
+            {/* Fase 4-D: prueba A/B del límite de cámara (solo staging). */}
+            <span className="text-white/60">Cámara:</span>
+            {([33, 16] as const).map((ms) => (
+              <button
+                key={ms}
+                type="button"
+                aria-pressed={cameraIntervalMs === ms}
+                className={
+                  cameraIntervalMs === ms
+                    ? "rounded bg-white/80 px-2 py-0.5 text-[10px] font-semibold text-black"
+                    : "rounded bg-white/15 px-2 py-0.5 text-[10px] font-semibold text-white"
+                }
+                onClick={() => {
+                  setCameraIntervalMs(ms);
+                  markDrive(`camera-interval-${ms}`);
+                }}
+              >
+                {ms} ms
+              </button>
+            ))}
           </div>
           <div className="mt-1.5 flex items-center gap-2">
             <span className="text-white/60">Traza:</span>

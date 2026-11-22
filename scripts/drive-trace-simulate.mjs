@@ -154,6 +154,12 @@ let cameraHeading = null;
 let cameraHeadingTs = null;
 let zoomTarget = null;
 let pendingZoom = null;
+// Fase 5-A: memoria del frame y hora del último fix (misma semántica que la página).
+let frameTs = null;
+let integratedFixTs = null;
+let correctionMeters = 0;
+let correctionBearing = null;
+let lastFixTs = null;
 let nowOffset = 0;
 // El resolvedor mide el tiempo con Date.now(): si corre en tiempo real mientras
 // el bucle avanza 57 s simulados en milisegundos, el límite angular por
@@ -185,8 +191,9 @@ for (let t = 0; t <= 57_000; t += FRAME_MS) {
       { pos: { lat: g.lat, lng: g.lng }, ts: g.t, coordsSpeed: g.speed, accuracy: g.accuracy },
       g.heading
     );
-    const course = effectiveCourseHeading(speedState);
+    const course = effectiveCourseHeading(speedState, T0 + t);
     if (course != null) movementHeading = course;
+    lastFixTs = t;
     followState = followState === "FOLLOWING" ? "FOLLOWING" : followState;
   }
 
@@ -196,7 +203,17 @@ for (let t = 0; t <= 57_000; t += FRAME_MS) {
   })();
 
   const frame = computeFollowFrame(
-    { vehiclePos, visualHeading, cameraHeading, cameraHeadingTs, zoomTarget },
+    {
+      vehiclePos,
+      visualHeading,
+      cameraHeading,
+      cameraHeadingTs,
+      zoomTarget,
+      frameTs,
+      fixTs: integratedFixTs,
+      correctionMeters,
+      correctionBearing,
+    },
     {
       now: t,
       frameScale: 1,
@@ -206,12 +223,18 @@ for (let t = 0; t <= 57_000; t += FRAME_MS) {
       simHeading: null,
       speedMps: effectiveSpeedMps(speedState, T0 + t),
       route: null,
+      navigationReady: true,
       anchorY,
       containerHeightPx: H,
       pendingZoom,
       accuracy: gps[Math.max(0, fixIdx - 1)]?.accuracy ?? null,
+      fixTs: lastFixTs,
     }
   );
+  frameTs = frame.state.frameTs ?? null;
+  integratedFixTs = frame.state.fixTs ?? null;
+  correctionMeters = frame.state.correctionMeters ?? 0;
+  correctionBearing = frame.state.correctionBearing ?? null;
   vehiclePos = frame.state.vehiclePos;
   visualHeading = frame.state.visualHeading;
   cameraHeading = frame.state.cameraHeading;
