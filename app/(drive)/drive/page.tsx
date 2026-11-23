@@ -51,7 +51,11 @@ import { useDriverState, type DriverOrder, type DriverOffer } from "@/hooks/useD
 import { useDriverLocation } from "@/hooks/useDriverLocation";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { useDeviceOrientation } from "@/hooks/useDeviceOrientation";
-import { TraceRecorder, nearestPointOnPath } from "@/lib/drive/trace-recorder";
+import {
+  TraceRecorder,
+  nearestPointOnPath,
+  nearestPointOnPathByProgress,
+} from "@/lib/drive/trace-recorder";
 import { stageActionFor } from "@/lib/drive/stage-action";
 import {
   applyGpsFix,
@@ -871,6 +875,9 @@ export default function DrivePage() {
   const [rawPuckDebug, setRawPuckDebug] = useState(false);
   const rawPuckDebugRef = useRef(false);
   rawPuckDebugRef.current = rawPuckDebug;
+  // Fase 6-A4: último tramo de la polilínea donde cayó el puck, para buscar
+  // el punto más cercano POR PROGRESO (no globalmente, que salta de eje).
+  const routeProgressSegRef = useRef<number | null>(null);
   // CIERRE DEL PANEL DE PEDIDO: al tocar el mapa la página incrementa este
   // token y el panel colapsa de inmediato (sin capa alguna sobre el mapa).
   const [tripSheetCollapseToken, setTripSheetCollapseToken] = useState(0);
@@ -1716,8 +1723,11 @@ export default function DrivePage() {
     if (!rec) return;
     if (!roadRoute || roadRoute.path.length < 2) {
       rec.setRoute(null);
+      routeProgressSegRef.current = null;
       return;
     }
+    // Ruta nueva ⇒ el progreso anterior no sirve como ventana de búsqueda.
+    routeProgressSegRef.current = null;
     rec.setRoute({
       destination: roadRoute.destination,
       distanceMeters: roadRoute.distanceMeters,
@@ -1841,6 +1851,28 @@ export default function DrivePage() {
       const nearest = routePath
         ? nearestPointOnPath(routePath, vehicle.lat, vehicle.lng)
         : null;
+      // Fase 6-A4: la misma distancia buscando SOLO por progreso.
+      const progressHit = routePath
+        ? nearestPointOnPathByProgress(
+            routePath,
+            vehicle.lat,
+            vehicle.lng,
+            routeProgressSegRef.current
+          )
+        : null;
+      if (progressHit) routeProgressSegRef.current = progressHit.segmentIndex;
+      // Escala REAL de pantalla (px/m): 10 m al norte proyectados junto al
+      // puck. No depende de la fórmula de tiles (256 vs 512) ni del pitch
+      // (que se registra aparte): convierte el desfase de px a metros.
+      let screenPxPerMeter: number | null = null;
+      try {
+        const a = map.project([vehicle.lng, vehicle.lat]);
+        const b = map.project([vehicle.lng, vehicle.lat + 10 / 110_540]);
+        const px = Math.hypot(a.x - b.x, a.y - b.y);
+        if (px > 0) screenPxPerMeter = px / 10;
+      } catch {
+        screenPxPerMeter = null;
+      }
       // Banda visible: el requisito es 70–75 % del ÁREA VISIBLE (no de la
       // altura total del contenedor). Se registra para medirlo en el arnés.
       const band = readDriveVisibleBand(map);
@@ -1905,6 +1937,22 @@ export default function DrivePage() {
         routeNearestLat: nearest?.lat ?? null,
         routeNearestLng: nearest?.lng ?? null,
         routeOffsetMeters: nearest?.distanceMeters ?? null,
+        pitch: map.getPitch(),
+        screenPxPerMeter,
+        arrowOffsetMeters:
+          visualMeasure?.offsetPx != null && screenPxPerMeter
+            ? visualMeasure.offsetPx / screenPxPerMeter
+            : null,
+        routeOffsetProgressMeters: progressHit?.distanceMeters ?? null,
+        routeNearestSegmentIndex: progressHit?.segmentIndex ?? null,
+        // Solo cuenta como salto de eje si la global encontró otra línea
+        // >1 m más cercana MIENTRAS el seguimiento por progreso sigue a nivel
+        // de carril (≤8 m): una re-adquisición del GPS no es un salto de eje.
+        routeNearestAxisJump:
+          nearest != null && progressHit != null
+            ? progressHit.distanceMeters <= 8 &&
+              nearest.distanceMeters + 1 < progressHit.distanceMeters
+            : null,
         containerHeight: band.containerHeight,
         visibleTopPx: band.top,
         visibleBottomPx: band.bottom,

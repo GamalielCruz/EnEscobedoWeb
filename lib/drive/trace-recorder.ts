@@ -88,6 +88,27 @@ export type TraceCameraSample = {
   routeNearestLng?: number | null;
   /** Distancia puck → ruta en metros (desfase real sobre la calle). */
   routeOffsetMeters?: number | null;
+  /** Fase 6-A4: pitch real de la cámara (0 en seguimiento; >0 tras gesto). */
+  pitch?: number | null;
+  /**
+   * Fase 6-A4: escala REAL de pantalla en px por metro, medida con
+   * `map.project` de dos puntos separados 10 m junto al puck. No depende de
+   * la fórmula de tiles (256 vs 512) ni del pitch: es la referencia para
+   * convertir el desfase de píxeles a metros.
+   */
+  screenPxPerMeter?: number | null;
+  /** Fase 6-A4: desfase punta → polilínea en METROS con la escala medida. */
+  arrowOffsetMeters?: number | null;
+  /**
+   * Fase 6-A4: misma distancia puck → ruta buscando SOLO por progreso (tramos
+   * vecinos al último índice). Si discrepa de `routeOffsetMeters`, la búsqueda
+   * global saltó a otro eje de la misma vía.
+   */
+  routeOffsetProgressMeters?: number | null;
+  /** Fase 6-A4: tramo de la polilínea que da el punto más cercano por progreso. */
+  routeNearestSegmentIndex?: number | null;
+  /** Fase 6-A4: global y progreso discrepan >1 m en esta muestra. */
+  routeNearestAxisJump?: boolean | null;
   containerHeight: number | null;
   /** Banda visible del mapa (px): borde inferior de la barra superior. */
   visibleTopPx?: number | null;
@@ -294,18 +315,46 @@ function decimatePath(path: Array<{ lat: number; lng: number }>) {
  * Punto más cercano de una polilínea a (lat, lng), en metros de distancia.
  * Proyección local equirectangular: exacta a la escala de una ruta urbana.
  */
+type PathPoint = { lat: number; lng: number };
+
+/** Proyector local equirectangular centrado en (lat, lng), en metros. */
+function localProjector(lat: number, lng: number) {
+  const kLng = Math.cos((lat * Math.PI) / 180) * 111_320;
+  const kLat = 110_540;
+  return (p: PathPoint) => ({
+    x: (p.lng - lng) * kLng,
+    y: (p.lat - lat) * kLat,
+  });
+}
+
+/** Proyección del origen sobre el tramo `i` (path[i] → path[i+1]). */
+function projectOnSegment(
+  path: ReadonlyArray<PathPoint>,
+  i: number,
+  toXY: (p: PathPoint) => { x: number; y: number }
+) {
+  const a = toXY(path[i]);
+  const b = toXY(path[i + 1]);
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  const t = len2 === 0 ? 0 : Math.min(1, Math.max(0, -(a.x * dx + a.y * dy) / len2));
+  const x = a.x + dx * t;
+  const y = a.y + dy * t;
+  return {
+    d2: x * x + y * y,
+    lat: path[i].lat + (path[i + 1].lat - path[i].lat) * t,
+    lng: path[i].lng + (path[i + 1].lng - path[i].lng) * t,
+  };
+}
+
 export function nearestPointOnPath(
-  path: ReadonlyArray<{ lat: number; lng: number }>,
+  path: ReadonlyArray<PathPoint>,
   lat: number,
   lng: number
 ): { lat: number; lng: number; distanceMeters: number } | null {
   if (path.length === 0) return null;
-  const kLng = Math.cos((lat * Math.PI) / 180) * 111_320;
-  const kLat = 110_540;
-  const toXY = (p: { lat: number; lng: number }) => ({
-    x: (p.lng - lng) * kLng,
-    y: (p.lat - lat) * kLat,
-  });
+  const toXY = localProjector(lat, lng);
   if (path.length === 1) {
     const a = toXY(path[0]);
     return {
@@ -317,21 +366,73 @@ export function nearestPointOnPath(
   let best: { lat: number; lng: number; distanceMeters: number } | null = null;
   let bestD2 = Infinity;
   for (let i = 0; i < path.length - 1; i++) {
-    const a = toXY(path[i]);
-    const b = toXY(path[i + 1]);
-    const dx = b.x - a.x;
-    const dy = b.y - a.y;
-    const len2 = dx * dx + dy * dy;
-    const t = len2 === 0 ? 0 : Math.min(1, Math.max(0, -(a.x * dx + a.y * dy) / len2));
-    const x = a.x + dx * t;
-    const y = a.y + dy * t;
-    const d2 = x * x + y * y;
-    if (best == null || d2 < bestD2) {
-      bestD2 = d2;
+    const p = projectOnSegment(path, i, toXY);
+    if (best == null || p.d2 < bestD2) {
+      bestD2 = p.d2;
       best = {
-        lat: path[i].lat + (path[i + 1].lat - path[i].lat) * t,
-        lng: path[i].lng + (path[i + 1].lng - path[i].lng) * t,
-        distanceMeters: Math.sqrt(d2),
+        lat: p.lat,
+        lng: p.lng,
+        distanceMeters: Math.sqrt(p.d2),
+      };
+    }
+  }
+  return best;
+}
+
+export type PathProgressHit = PathPoint & {
+  distanceMeters: number;
+  /** Índice del tramo (path[i] → path[i+1]) que contiene el punto. */
+  segmentIndex: number;
+};
+
+/**
+ * Punto más cercano de la polilínea buscando SOLO por progreso.
+ *
+ * `nearestPointOnPath` recorre TODA la ruta: cuando la vía tiene dos ejes
+ * (ida y vuelta) a ~12 m, el mínimo global puede caer en el eje contrario y
+ * la distancia salta de 9.5 m a 2.8 m sin que el vehículo se mueva (traza del
+ * 23-11, t=125.4 s). Esta búsqueda se limita a los tramos vecinos al último
+ * índice conocido, que es el criterio del avance real sobre la ruta.
+ *
+ * Con `prevSegmentIndex == null` explora toda la ruta (primera muestra).
+ */
+export function nearestPointOnPathByProgress(
+  path: ReadonlyArray<PathPoint>,
+  lat: number,
+  lng: number,
+  prevSegmentIndex: number | null,
+  behindSegments = 8,
+  aheadSegments = 16
+): PathProgressHit | null {
+  if (path.length === 0) return null;
+  const toXY = localProjector(lat, lng);
+  if (path.length === 1) {
+    const a = toXY(path[0]);
+    return {
+      lat: path[0].lat,
+      lng: path[0].lng,
+      distanceMeters: Math.sqrt(a.x * a.x + a.y * a.y),
+      segmentIndex: 0,
+    };
+  }
+  const lastSegment = path.length - 2;
+  const from =
+    prevSegmentIndex == null ? 0 : Math.max(0, prevSegmentIndex - Math.max(0, behindSegments));
+  const to =
+    prevSegmentIndex == null
+      ? lastSegment
+      : Math.min(lastSegment, prevSegmentIndex + Math.max(0, aheadSegments));
+  let best: PathProgressHit | null = null;
+  let bestD2 = Infinity;
+  for (let i = from; i <= to; i++) {
+    const p = projectOnSegment(path, i, toXY);
+    if (best == null || p.d2 < bestD2) {
+      bestD2 = p.d2;
+      best = {
+        lat: p.lat,
+        lng: p.lng,
+        distanceMeters: Math.sqrt(p.d2),
+        segmentIndex: i,
       };
     }
   }

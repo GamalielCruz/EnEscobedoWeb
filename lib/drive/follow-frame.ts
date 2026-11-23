@@ -104,9 +104,17 @@ function shortestAngleDelta(to: number, from: number): number {
   return ((to - from + 540) % 360) - 180;
 }
 
-/** Metros por píxel a un zoom/latitud dados (Web Mercator). */
+/**
+ * Metros por píxel CSS a un zoom/latitud dados, para el mapa de Mapbox GL.
+ *
+ * Mapbox GL usa tiles de 512 px (worldSize = 512·2^zoom), NO la rejilla
+ * slippy de 256: metersPerPixel = 40075016.686·cos(lat) / (512·2^zoom).
+ * Con 156543 (tiles de 256) el resultado es el DOBLE de metros por píxel —
+ * la mitad de píxeles por metro — y fue el origen de la duda de escala de la
+ * traza del 23-11 (2.31 px/m teóricos frente a 4.6 medidos).
+ */
 export function metersPerPixelAt(zoom: number, lat: number): number {
-  return (156543.03392 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
+  return (78271.516964 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom);
 }
 
 export type FollowCameraState = {

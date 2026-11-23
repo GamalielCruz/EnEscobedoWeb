@@ -205,6 +205,72 @@ if (cam.length >= 2) {
   console.log(`  loopAlive=true en ${alive}/${cam.length} muestras`);
 }
 
+// ── 2b · Escala de pantalla y desfase flecha ↔ ruta (Fase 6-A4) ───────────
+{
+  // Mapbox GL JS usa tiles de 512 px: worldSize = 512·2^zoom. La fórmula
+  // slippy de 256 (156543) da la MITAD de píxeles por metro; con ella la
+  // flecha parecía a 5.6 m en vez de 2.8 m.
+  const boxPxPerM = (zoom, lat) =>
+    (512 * Math.pow(2, zoom)) /
+    (40075016.686 * Math.cos((lat * rad)));
+  const conDesfase = cam.filter(
+    (c) => c.arrowOffsetPx != null && c.routeOffsetMeters != null && c.routeOffsetMeters > 0.2
+  );
+  const ratios = conDesfase.map((c) => c.arrowOffsetPx / c.routeOffsetMeters);
+  const zooms = cam.map((c) => c.zoom).filter((z) => z != null);
+  const lats = cam.map((c) => c.centerLat).filter((v) => v != null);
+  const pitches = cam.map((c) => c.pitch).filter((v) => v != null);
+  const medZoom = pct(zooms, 0.5);
+  const medLat = pct(lats, 0.5);
+  console.log("\n── Escala y desfase flecha ↔ ruta (Fase 6-A4) ────────────────");
+  if (conDesfase.length) {
+    const medRatio = pct(ratios, 0.5);
+    console.log(`  px de flecha por metro de desfase (medido): ${medRatio.toFixed(2)} en ${conDesfase.length} muestras`);
+    if (medZoom != null && medLat != null) {
+      const teorico = boxPxPerM(medZoom, medLat);
+      console.log(`  escala teórica Mapbox (512): ${teorico.toFixed(2)} px/m · slippy 256: ${(teorico / 2).toFixed(2)} px/m · zoom p50 ${medZoom.toFixed(2)} @ ${medLat.toFixed(5)}`);
+      console.log(`  medido / Mapbox: ${((medRatio / teorico) * 100).toFixed(1)} % · medido / 256: ${((medRatio / (teorico / 2)) * 100).toFixed(0)} %`);
+      const metros = conDesfase.map((c) => c.arrowOffsetPx / teorico);
+      console.log(`  desfase en METROS (escala Mapbox): p50 ${pct(metros, 0.5).toFixed(2)} m · p95 ${pct(metros, 0.95).toFixed(2)} m · máx ${Math.max(...metros).toFixed(2)} m`);
+    }
+  } else {
+    console.log("  sin muestras de desfase flecha↔ruta (build previo a 6-A1)");
+  }
+  console.log(pitches.length
+    ? `  pitch: p50 ${pct(pitches, 0.5).toFixed(1)}° · máx ${Math.max(...pitches).toFixed(1)}°`
+    : "  pitch: la traza no lo registra (build previo a 6-A4)");
+  const escalas = cam.map((c) => c.screenPxPerMeter).filter((v) => v != null);
+  if (escalas.length) {
+    console.log(`  escala MEDIDA en pantalla: p50 ${pct(escalas, 0.5).toFixed(2)} px/m · p95 ${pct(escalas, 0.95).toFixed(2)} · máx ${Math.max(...escalas).toFixed(2)}`);
+  }
+  const metrosMedidos = cam.map((c) => c.arrowOffsetMeters).filter((v) => v != null);
+  if (metrosMedidos.length) {
+    console.log(`  desfase en metros (escala medida): p50 ${pct(metrosMedidos, 0.5).toFixed(2)} m · p95 ${pct(metrosMedidos, 0.95).toFixed(2)} m`);
+  }
+  // Saltos de eje: la distancia de la búsqueda GLOBAL cambia >5 m en 200 ms.
+  let saltosGlobal = 0;
+  for (let i = 1; i < cam.length; i++) {
+    const a = cam[i - 1];
+    const b = cam[i];
+    if (a.routeOffsetMeters == null || b.routeOffsetMeters == null) continue;
+    if (Math.abs(b.routeOffsetMeters - a.routeOffsetMeters) > 5) saltosGlobal++;
+  }
+  let marcados = 0;
+  let discrepan = 0;
+  for (const c of cam) {
+    if (c.routeNearestAxisJump === true) marcados++;
+    if (
+      c.routeOffsetMeters != null &&
+      c.routeOffsetProgressMeters != null &&
+      Math.abs(c.routeOffsetMeters - c.routeOffsetProgressMeters) > 5
+    ) discrepan++;
+  }
+  console.log(`  saltos de la búsqueda GLOBAL (>5 m entre muestras): ${saltosGlobal}`);
+  console.log(marcados || discrepan
+    ? `  búsqueda por progreso: ${marcados} saltos de eje confirmados · ${discrepan} muestras con global y progreso >5 m aparte`
+    : "  búsqueda por progreso: la traza no la incluye (build previo a 6-A4)");
+}
+
 // ── 3 · Rumbo vs trayectoria + re-ejecución del resolvedor ────────────────
 function truthBearings(list, halfWindow = 2) {
   const out = new Array(list.length).fill(null);
