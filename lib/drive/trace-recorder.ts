@@ -65,6 +65,24 @@ export type TraceCameraSample = {
   puckPxY: number | null;
   /** Posición del puck en px desde la izquierda del contenedor. */
   puckPxX?: number | null;
+  /**
+   * Fase 6-A2: qué posición se DIBUJÓ en esta muestra. `raw` solo con el A/B
+   * «puck GPS crudo» activo; sirve para separar el desfase de POSICIÓN
+   * (interpolación) del de RUMBO/render.
+   */
+  puckSource?: "visual" | "raw" | null;
+  /** Fase 6-A1: punta de la flecha (px) calculada desde la posición VISUAL. */
+  arrowTipPxX?: number | null;
+  arrowTipPxY?: number | null;
+  /** Fase 6-A1: punto más cercano de la polilínea a la PUNTA, en pantalla. */
+  routeNearestPxX?: number | null;
+  routeNearestPxY?: number | null;
+  /** Fase 6-A1: desfase en PÍXELES punta de la flecha → polilínea (visual). */
+  arrowOffsetPx?: number | null;
+  /** Fase 6-A2: misma medición con el GPS CRUDO (sin interpolación). */
+  rawPuckPxX?: number | null;
+  rawPuckPxY?: number | null;
+  rawArrowOffsetPx?: number | null;
   /** Punto más cercano de la ruta activa al puck (null sin ruta). */
   routeNearestLat?: number | null;
   routeNearestLng?: number | null;
@@ -142,6 +160,15 @@ export type TracePhaseEvent = {
   maneuverType: string | null;
   /** Instrucción visible en la tarjeta superior. */
   instruction: string | null;
+  /**
+   * Fase 6-A3: ¿hubo un fix con accuracy ≤ 20 m en los últimos 5 s? Sin ese
+   * fix la posición visual (y por tanto la guía) no avanza.
+   */
+  fixWithin20mRecent?: boolean | null;
+  /** Fase 6-A3: ms desde el último fix ≤20 m (null si aún no hubo). */
+  msSinceFix20m?: number | null;
+  /** Fase 6-A3: la recolección ya se confirmó desde la UI (deslizador). */
+  pickupConfirmed?: boolean | null;
 };
 
 /**
@@ -590,6 +617,9 @@ export class TraceRecorder {
       stepIndex?: number | null;
       maneuverType?: string | null;
       instruction?: string | null;
+      fixWithin20mRecent?: boolean | null;
+      msSinceFix20m?: number | null;
+      pickupConfirmed?: boolean | null;
     }
   ): void {
     this.events.push({
@@ -600,6 +630,9 @@ export class TraceRecorder {
       stepIndex: context?.stepIndex ?? null,
       maneuverType: context?.maneuverType ?? null,
       instruction: context?.instruction ?? null,
+      fixWithin20mRecent: context?.fixWithin20mRecent ?? null,
+      msSinceFix20m: context?.msSinceFix20m ?? null,
+      pickupConfirmed: context?.pickupConfirmed ?? null,
     });
     if (this.events.length > MAX_EVENTS)
       this.events.splice(0, this.events.length - MAX_EVENTS);

@@ -52,6 +52,7 @@ import { useDriverLocation } from "@/hooks/useDriverLocation";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { useDeviceOrientation } from "@/hooks/useDeviceOrientation";
 import { TraceRecorder, nearestPointOnPath } from "@/lib/drive/trace-recorder";
+import { stageActionFor } from "@/lib/drive/stage-action";
 import {
   applyGpsFix,
   courseAgeMs,
@@ -317,6 +318,37 @@ function setDriverMarkerPosition(marker: MapboxMarker | null, position: RoutePoi
 /** Marca el bucket como desconocido (remount del marcador / reset). */
 function resetDriverMarkerIconBucket(): void {
   lastDriverIconBucket = null;
+}
+
+/**
+ * Fase 6-A1: distancia del centro del puck a la PUNTA de la flecha, en px.
+ * El SVG mide 44 px con la flecha de (0,-8.5) en su viewBox centrado; se
+ * dibuja a 44 px, así que 8.5 px de viewBox = 8.5 px de pantalla.
+ */
+const ARROW_TIP_PX = 8.5;
+
+/**
+ * Punta de la flecha en px del contenedor, con la MISMA cuantización de 10°
+ * que `applyDriverMarkerIcon` aplica al marcador: la medición corresponde a
+ * lo que está pintado, no a un rumbo ideal.
+ */
+function driverArrowTipPx(
+  puckPx: { x: number; y: number },
+  driverHeadingDeg: number | null,
+  mapBearingDeg: number | null
+): { x: number; y: number } | null {
+  if (driverHeadingDeg == null || !Number.isFinite(driverHeadingDeg)) return null;
+  const relative =
+    mapBearingDeg == null
+      ? normalizeDeg(driverHeadingDeg)
+      : shortestAngleDelta(driverHeadingDeg, mapBearingDeg);
+  const bucket =
+    Math.round(normalizeDeg(relative) / ICON_BUCKET_DEG) % ICON_BUCKET_COUNT;
+  const theta = (bucket * ICON_BUCKET_DEG) * (Math.PI / 180);
+  return {
+    x: puckPx.x + ARROW_TIP_PX * Math.sin(theta),
+    y: puckPx.y - ARROW_TIP_PX * Math.cos(theta),
+  };
 }
 
 // Pines de destino (store/entrega) movidos a DriveDestinationPins (Fase 4):
@@ -785,6 +817,10 @@ export default function DrivePage() {
   // pobre no mueve la posición visual.
   const firstGoodFixSeenRef = useRef(false);
   if (gpsAccuracy != null && gpsAccuracy <= 20) firstGoodFixSeenRef.current = true;
+  // Fase 6-A3: instante del último fix ≤20 m (se marca al RECIBIR el fix) y de
+  // la confirmación de recolección desde la UI. Solo diagnóstico de traza.
+  const lastGoodFixAtRef = useRef<number | null>(null);
+  const pickupConfirmedAtRef = useRef<number | null>(null);
   // Fase 4-B: la primera posición visual que NO vino de GPS se reemplaza por
   // el primer fix ≤50 m (snap) y se refina al primer ≤20 m. La guía no calcula
   // progreso hasta ese fix bueno; cámara y resolvedor comparten la posición
@@ -828,6 +864,13 @@ export default function DrivePage() {
   const [cameraIntervalMs, setCameraIntervalMs] = useState<16 | 33>(33);
   const cameraIntervalRef = useRef<16 | 33>(33);
   cameraIntervalRef.current = cameraIntervalMs;
+  // Fase 6-A2 (solo staging): con el A/B activo el puck se dibuja en el GPS
+  // CRUDO (sin interpolación) para separar el desfase de POSICIÓN del de
+  // rumbo/render. No cambia la navegación: la cámara y la guía siguen usando
+  // la posición visual.
+  const [rawPuckDebug, setRawPuckDebug] = useState(false);
+  const rawPuckDebugRef = useRef(false);
+  rawPuckDebugRef.current = rawPuckDebug;
   // CIERRE DEL PANEL DE PEDIDO: al tocar el mapa la página incrementa este
   // token y el panel colapsa de inmediato (sin capa alguna sobre el mapa).
   const [tripSheetCollapseToken, setTripSheetCollapseToken] = useState(0);
@@ -1527,6 +1570,12 @@ export default function DrivePage() {
     }
   }, [realLocation, gpsAccuracy, sim.active]);
 
+  // Fase 6-A3: sello del último fix ≤20 m (el que habilita la guía).
+  useEffect(() => {
+    if (sim.active || gpsAccuracy == null || gpsAccuracy > 20) return;
+    lastGoodFixAtRef.current = Date.now();
+  }, [realLocation, gpsAccuracy, sim.active]);
+
   useEffect(() => {
     traceRecorderRef.current?.setCameraInterval(cameraIntervalMs);
   }, [cameraIntervalMs]);
@@ -1701,6 +1750,13 @@ export default function DrivePage() {
         stepIndex: guidance?.stepIndex ?? null,
         maneuverType: guidance?.maneuver ?? null,
         instruction: guidance?.instruction ?? null,
+        // Fase 6-A3: sin fix ≤20 m reciente la posición visual (y la guía)
+        // se congelan; y la confirmación de recolección cambia la etapa.
+        fixWithin20mRecent:
+          lastGoodFixAtRef.current != null && Date.now() - lastGoodFixAtRef.current <= 5_000,
+        msSinceFix20m:
+          lastGoodFixAtRef.current != null ? Date.now() - lastGoodFixAtRef.current : null,
+        pickupConfirmed: pickupConfirmedAtRef.current != null,
       }
     );
   }, [
@@ -1720,19 +1776,68 @@ export default function DrivePage() {
       if (!map || !rec) return;
       const center = map.getCenter();
       const vehicle = visualPosRef.current;
+      const mapBearing = map.getBearing();
       const resolverState = driveHeadingResolverRef.current?.state ?? null;
       const dbg = resolverState?.debug ?? null;
-      let puckPxY: number | null = null;
-      let puckPxX: number | null = null;
-      try {
-        const puckPx = map.project([vehicle.lng, vehicle.lat]);
-        puckPxX = puckPx.x;
-        puckPxY = puckPx.y;
-      } catch {
-        puckPxY = null;
-        puckPxX = null;
-      }
+      const driverHeading = visualHeadingRef.current;
       const routePath = roadRouteRef.current?.path ?? null;
+
+      // ── Fase 6-A1: desfase flecha ↔ ruta en PÍXELES ──
+      // Se mide desde la PUNTA de la flecha (no desde el centro del puck) y
+      // se busca la ruta desde ahí: en recta el valor es ≈0 y el número mide
+      // desviación lateral, no el avance propio de la punta.
+      const measureArrow = (pos: RoutePoint) => {
+        const puck = map.project([pos.lng, pos.lat]);
+        const tip = driverArrowTipPx(puck, driverHeading, mapBearing);
+        if (!tip || !routePath) {
+          return {
+            puck,
+            tip,
+            nearestPx: null as { x: number; y: number } | null,
+            offsetPx: null as number | null,
+          };
+        }
+        const tipPos = map.unproject([tip.x, tip.y]);
+        const near = nearestPointOnPath(routePath, tipPos.lat, tipPos.lng);
+        if (!near) return { puck, tip, nearestPx: null as { x: number; y: number } | null, offsetPx: null as number | null };
+        const nearestPx = map.project([near.lng, near.lat]);
+        return {
+          puck,
+          tip,
+          nearestPx,
+          offsetPx: Math.hypot(tip.x - nearestPx.x, tip.y - nearestPx.y),
+        };
+      };
+      type ArrowMeasure = ReturnType<typeof measureArrow>;
+
+      // Fase 6-A2: qué posición se DIBUJA (visual normal / GPS crudo en A/B).
+      // La medición se guarda SIEMPRE de las dos, para poder comparar aunque
+      // el A/B esté apagado.
+      const rawTarget = followTargetRef.current;
+      const drawnRaw = rawPuckDebugRef.current && rawTarget != null;
+      const drawn = drawnRaw ? rawTarget : vehicle;
+      let puckPx: { x: number; y: number } | null = null;
+      let rawPuckPx: { x: number; y: number } | null = null;
+      let visualMeasure: ArrowMeasure | null = null;
+      let rawMeasure: ArrowMeasure | null = null;
+      try {
+        puckPx = map.project([drawn.lng, drawn.lat]);
+        visualMeasure = measureArrow(vehicle);
+        if (rawTarget) {
+          rawPuckPx = map.project([rawTarget.lng, rawTarget.lat]);
+          rawMeasure = measureArrow(rawTarget);
+        }
+      } catch {
+        puckPx = null;
+        rawPuckPx = null;
+        visualMeasure = null;
+        rawMeasure = null;
+      }
+      const puckPxX = puckPx?.x ?? null;
+      const puckPxY = puckPx?.y ?? null;
+      // La guarda de anclaje mide SIEMPRE el puck visual (el ancla pertenece
+      // a la cámara de seguimiento, no al A/B de dibujo).
+      const anchorPuckY = visualMeasure?.puck.y ?? null;
       const nearest = routePath
         ? nearestPointOnPath(routePath, vehicle.lat, vehicle.lng)
         : null;
@@ -1743,8 +1848,8 @@ export default function DrivePage() {
       // Si el puck MEDIDO (map.project) se desvía >5 % de la altura del
       // ancla durante >2 s, se registra un evento en la traza: el anclaje
       // dejó de aplicarse (p. ej. si Mapbox ignora el padding en un build).
-      if (puckPxY != null && band.containerHeight > 0) {
-        const deviation = Math.abs(puckPxY - band.anchorY) / band.containerHeight;
+      if (anchorPuckY != null && band.containerHeight > 0) {
+        const deviation = Math.abs(anchorPuckY - band.anchorY) / band.containerHeight;
         if (deviation > 0.05) {
           if (anchorMismatchSinceRef.current == null) {
             anchorMismatchSinceRef.current = Date.now();
@@ -1753,7 +1858,7 @@ export default function DrivePage() {
           if (lastsForMs > 2_000 && !anchorMismatchLoggedRef.current) {
             anchorMismatchLoggedRef.current = true;
             rec.recordAnchorMismatch({
-              puckPxY,
+              puckPxY: anchorPuckY,
               anchorPxY: band.anchorY,
               deviationFraction: deviation,
               lastsForMs,
@@ -1788,6 +1893,15 @@ export default function DrivePage() {
         compassAvailable: deviceStateRef.current.available,
         puckPxY,
         puckPxX,
+        puckSource: drawnRaw ? "raw" : "visual",
+        arrowTipPxX: visualMeasure?.tip?.x ?? null,
+        arrowTipPxY: visualMeasure?.tip?.y ?? null,
+        routeNearestPxX: visualMeasure?.nearestPx?.x ?? null,
+        routeNearestPxY: visualMeasure?.nearestPx?.y ?? null,
+        arrowOffsetPx: visualMeasure?.offsetPx ?? null,
+        rawPuckPxX: rawPuckPx?.x ?? null,
+        rawPuckPxY: rawPuckPx?.y ?? null,
+        rawArrowOffsetPx: rawMeasure?.offsetPx ?? null,
         routeNearestLat: nearest?.lat ?? null,
         routeNearestLng: nearest?.lng ?? null,
         routeOffsetMeters: nearest?.distanceMeters ?? null,
@@ -2090,7 +2204,15 @@ export default function DrivePage() {
         // interpretaría como gesto del usuario.
         markInternalZoom();
       }
-      setDriverMarkerPosition(driverMarkerRef.current, frame.state.vehiclePos);
+      // Fase 6-A2 (solo staging): con el A/B activo el puck se dibuja en el
+      // GPS CRUDO. La cámara y la guía siguen usando la posición visual.
+      const rawTargetForPuck = followTargetRef.current;
+      setDriverMarkerPosition(
+        driverMarkerRef.current,
+        rawPuckDebugRef.current && rawTargetForPuck != null
+          ? rawTargetForPuck
+          : frame.state.vehiclePos
+      );
       if (frame.headingChanged && frame.state.visualHeading != null) {
         // Flecha relativa al rumbo de la CÁMARA (que ahora sigue el rumbo
         // real de navegación): la desviación puck↔ruta desaparece.
@@ -3272,14 +3394,19 @@ export default function DrivePage() {
       setStageActionError("Desactiva el simulador para confirmar la acción real.");
       return false;
     }
-    if (!activeOrder || !orderAction) return false;
-    const stageActions = new Set(["picked_up", "delivered"]);
-    if (!stageActions.has(orderAction.action)) return false;
+    if (!activeOrder) return false;
+    // Fase 6-B: la etapa que el repartidor VE manda. Dentro de la geocerca
+    // navPhase ya es at_pickup/at_delivery, pero `orderAction` solo cambia con
+    // el siguiente sondeo (≤10 s): exigir orderAction.action dejaba el
+    // deslizador sin efecto durante esa ventana. Se usa la MISMA transición
+    // de servidor (picked_up/delivered), sin botones nuevos.
+    const stageAction = stageActionFor(navPhase, orderAction?.action, activeOrder.serviceKind);
+    if (!stageAction) return false;
 
     setActionLoading(activeOrder.orderNumber);
     setStageActionError(null);
     try {
-      let result = await postDriverAction(orderAction.action, activeOrder.orderNumber);
+      let result = await postDriverAction(stageAction, activeOrder.orderNumber);
       // Auto-recuperación: si el deslizaje ganó la carrera a la geocerca y
       // la llegada aún no estaba marcada (guarda "Acción no válida en estado
       // …"), marca la llegada y reintenta UNA vez la confirmación. Las demás
@@ -3289,17 +3416,21 @@ export default function DrivePage() {
         result.error?.includes("Acción no válida en estado")
       ) {
         const arriveAction =
-          orderAction.action === "picked_up" ? "pickup_arrival" : "destination_arrival";
+          stageAction === "picked_up" ? "pickup_arrival" : "destination_arrival";
         const arrival = await postDriverAction(arriveAction, activeOrder.orderNumber);
         if (arrival.ok) {
-          result = await postDriverAction(orderAction.action, activeOrder.orderNumber);
+          result = await postDriverAction(stageAction, activeOrder.orderNumber);
         }
       }
       if (!result.ok) {
         setStageActionError(result.error ?? "No se pudo completar la acción.");
         return false;
       }
-      if (orderAction.action === "delivered") {
+      if (stageAction === "picked_up") {
+        // Fase 6-A3: sello de la confirmación que se ve en la traza.
+        pickupConfirmedAtRef.current = Date.now();
+      }
+      if (stageAction === "delivered") {
         // Snapshot ANTES del refetch: con la entrega confirmada la orden
         // deja de aparecer en /api/driver/state.
         setLastDelivered({ order: activeOrder, at: Date.now() });
@@ -3309,7 +3440,7 @@ export default function DrivePage() {
     } finally {
       setActionLoading(null);
     }
-  }, [activeOrder, orderAction, postDriverAction, refetch, sim.active, simCommitOrders]);
+  }, [activeOrder, orderAction, navPhase, postDriverAction, refetch, sim.active, simCommitOrders]);
 
   /**
    * Entrega con NIP (Entrega segura): valida server-side con el mismo gate
@@ -3821,6 +3952,22 @@ export default function DrivePage() {
                 {ms} ms
               </button>
             ))}
+          </div>
+          <div className="mt-1.5 flex items-center gap-2">
+            {/* Fase 6-A2: A/B del desfase — puck en GPS crudo vs visual. */}
+            <span className="text-white/60">Puck:</span>
+            <button
+              type="button"
+              aria-pressed={rawPuckDebug}
+              className={
+                rawPuckDebug
+                  ? "rounded bg-amber-300 px-2 py-0.5 text-[10px] font-semibold text-black"
+                  : "rounded bg-white/15 px-2 py-0.5 text-[10px] font-semibold text-white"
+              }
+              onClick={() => setRawPuckDebug((v) => !v)}
+            >
+              {rawPuckDebug ? "GPS crudo" : "visual"}
+            </button>
           </div>
           <div className="mt-1.5 flex items-center gap-2">
             <span className="text-white/60">Traza:</span>
