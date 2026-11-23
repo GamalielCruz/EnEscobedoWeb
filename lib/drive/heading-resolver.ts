@@ -33,6 +33,7 @@ import {
   type RoutePoint,
 } from "@/lib/dispatch/routing";
 import { COURSE_EXPIRY_MS, MIN_HEADING_SPEED_MPS } from "@/lib/drive/speed-heading";
+import { projectRouteByDirection, ROUTE_DIRECTION_MATCH_DEG } from "@/lib/drive/route-direction";
 
 function normalizeDeg(deg: number): number {
   return ((deg % 360) + 360) % 360;
@@ -45,15 +46,22 @@ function normalizeDeg(deg: number): number {
  * se vuelve por la misma calle): la proyección "más cercana" puede caer en el
  * tramo anterior y devolver el rumbo contrario. Buscando en una ventana hacia
  * ADELANTE desde el último progreso conocido, el rumbo sigue la maniobra.
+ *
+ * Fase 7-A: dentro de la ventana se PREFIEREN los tramos que van en el sentido
+ * del rumbo resuelto (`headingDeg`): en una vía con camellón el eje del otro
+ * sentido también cae en la ventana (a ~12 m) y su bearing es el contrario.
+ * Si ningún tramo coincide por rumbo, se usa el más cercano (fallback).
  */
 function progressInWindow(
   path: RoutePoint[],
   cum: number[],
   point: RoutePoint,
   lo: number,
-  hi: number
+  hi: number,
+  headingDeg: number | null = null
 ): number | null {
   let best: { progress: number; dist: number } | null = null;
+  let bestAligned: { progress: number; dist: number } | null = null;
   for (let i = 1; i < path.length; i++) {
     if (cum[i] < lo || cum[i - 1] > hi) continue;
     const a = path[i - 1];
@@ -70,8 +78,20 @@ function progressInWindow(
     const progress = cum[i - 1] + t * (cum[i] - cum[i - 1]);
     if (progress < lo || progress > hi) continue;
     if (!best || dist < best.dist) best = { progress, dist };
+    if (headingDeg != null) {
+      const segBearing = bearingBetween(a, b);
+      if (
+        segBearing != null &&
+        Math.abs(shortestAngleDelta(segBearing, headingDeg)) <=
+          ROUTE_DIRECTION_MATCH_DEG &&
+        (!bestAligned || dist < bestAligned.dist)
+      ) {
+        bestAligned = { progress, dist };
+      }
+    }
   }
-  return best ? best.progress : null;
+  const chosen = bestAligned ?? best;
+  return chosen ? chosen.progress : null;
 }
 
 /** Diferencia dirigida y mínima entre dos ángulos: 350° → 5° = +15°. */
@@ -90,6 +110,13 @@ const HEADING_DEVIATION_MIN_SAMPLES = 3;
 // Fase 4-A: se considera «sobre la ruta» solo con ≤25 m laterales (antes 30).
 const ROUTE_ON_PATH_LATERAL_M = 25;
 const ROUTE_DEVIATION_LATERAL_M = 40;
+/**
+ * Fase 7-C: con ≥40 m laterales sostenidos este tiempo, el desvío se confirma
+ * aunque el rumbo vaya paralelo a la ruta (otro camino con la misma dirección).
+ * En una vía con camellón el eje contrario está a 10–15 m: queda muy por debajo
+ * del umbral y NUNCA debe marcar DEVIATING.
+ */
+const DEVIATION_LATERAL_CONFIRM_MS = 5_000;
 // Límite de velocidad angular del rumbo aceptado (deg/s) y confirmación de
 // vuelta en U con dos fuentes independientes (gpsHeading + bearing entre
 // ticks dentro de 25°).
@@ -175,6 +202,8 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
     deviating: boolean;
     deviationStartedAt: number | null;
     deviationStreak: number;
+    /** Desde cuándo el vehículo está ≥40 m fuera de la ruta (Fase 7-C). */
+    lateralOffSince: number | null;
     gpsHeadingSpikeStreak: number;
     lastGpsTickPos: RoutePoint | null;
     lastGpsTickTs: number | null;
@@ -202,6 +231,7 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
     deviating: false,
     deviationStartedAt: null,
     deviationStreak: 0,
+    lateralOffSince: null,
     gpsHeadingSpikeStreak: 0,
     lastGpsTickPos: null,
     lastGpsTickTs: null,
@@ -286,10 +316,22 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
         const lo = Math.max(0, prevProgress - 20);
         const hi = Math.min(total, prevProgress + 80);
         driven =
-          progressInWindow(path, state.routeCum, vehiclePos, lo, hi) ??
-          Math.min(Math.max(projectOntoPath(path, vehiclePos), lo), hi);
+          progressInWindow(
+            path,
+            state.routeCum,
+            vehiclePos,
+            lo,
+            hi,
+            state.acceptedHeading
+          ) ?? Math.min(Math.max(projectOntoPath(path, vehiclePos), lo), hi);
       } else {
-        driven = Math.min(Math.max(projectOntoPath(path, vehiclePos), 0), total);
+        // Entrada a la ruta (o recálculo): sin progreso previo, la búsqueda es
+        // global pero filtrada por el rumbo ya adquirido (Fase 7-A).
+        const initial = projectRouteByDirection(path, vehiclePos, state.acceptedHeading);
+        driven = Math.min(
+          Math.max(initial?.meters ?? projectOntoPath(path, vehiclePos), 0),
+          total
+        );
       }
       state.routeProgressM = driven;
       routeHeading = headingAlongPath(path, driven);
@@ -429,9 +471,24 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
         : null;
 
     if (gpsVsRouteDeltaDeg != null && lateralMeters != null) {
-      const laterallyOff = lateralMeters > ROUTE_DEVIATION_LATERAL_M;
+      // Fase 7-C: «fuera de la ruta» = ≥40 m laterales. Los carriles de una vía
+      // doble están a 10–15 m del eje contrario: estar a 12 m con el rumbo
+      // alineado al sentido de la ruta NO es un desvío.
+      const laterallyOff = lateralMeters >= ROUTE_DEVIATION_LATERAL_M;
+      if (laterallyOff) {
+        if (state.lateralOffSince == null) state.lateralOffSince = now;
+      } else {
+        state.lateralOffSince = null;
+      }
+      const lateralOffForMs =
+        state.lateralOffSince != null ? now - state.lateralOffSince : 0;
+      // Evidencia = rumbo que contradice al segmento (>25°) O permanencia
+      // lateral fuera de la ruta (≥5 s) aunque el rumbo vaya paralelo.
+      const deviatingEvidence =
+        gpsVsRouteDeltaDeg > HEADING_DEVIATION_START_DEG ||
+        lateralOffForMs >= DEVIATION_LATERAL_CONFIRM_MS;
       if (!state.deviating) {
-        if (laterallyOff && gpsVsRouteDeltaDeg > HEADING_DEVIATION_START_DEG) {
+        if (laterallyOff && deviatingEvidence) {
           state.deviationStreak += 1;
           if (
             state.deviationStartedAt == null &&
@@ -451,10 +508,11 @@ export function createDriveHeadingResolver(options: DriveHeadingResolverOptions)
           state.deviationStartedAt = null;
         }
       } else {
-        if (
-          gpsVsRouteDeltaDeg < ROUTE_ALIGN_TOLERANCE_DEG ||
-          lateralMeters <= ROUTE_ON_PATH_LATERAL_M
-        ) {
+        // Fase 7-C: se sale del desvío cuando el vehículo vuelve a estar SOBRE
+        // la ruta (≤25 m laterales). Antes bastaba con que el rumbo concordara,
+        // y un desvío confirmado por permanencia lateral (40 m paralelos) se
+        // cancelaba en la muestra siguiente.
+        if (lateralMeters <= ROUTE_ON_PATH_LATERAL_M) {
           state.deviating = false;
           state.deviationStreak = 0;
           state.deviationStartedAt = null;

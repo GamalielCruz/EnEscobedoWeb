@@ -271,6 +271,64 @@ if (cam.length >= 2) {
     : "  búsqueda por progreso: la traza no la incluye (build previo a 6-A4)");
 }
 
+// ── 2c · Sentido de marcha en la proyección de ruta (Fase 7) ──────────────
+{
+  const conSentido = cam.filter((c) => c.routeSameDirection != null);
+  console.log("\n── Sentido de marcha en la ruta (Fase 7) ─────────────────────");
+  if (!conSentido.length) {
+    console.log("  la traza no registra routeSameDirection (build previo a la Fase 7)");
+  } else {
+    const mismo = conSentido.filter((c) => c.routeSameDirection === true).length;
+    const offs = conSentido.map((c) => c.routeOffsetMeters).filter((v) => v != null);
+    const pucks = cam.map((c) => c.puckRouteOffsetMeters).filter((v) => v != null);
+    const deltas = conSentido
+      .map((c) => Math.abs(c.routeHeadingDeltaDeg))
+      .filter((v) => v != null);
+    const snapped = cam.filter((c) => c.puckRouteSnapped === true).length;
+    const maxSwitches = Math.max(0, ...cam.map((c) => c.routeOppositeSwitchCount ?? 0));
+    console.log(
+      `  tramo en el sentido de marcha: ${mismo}/${conSentido.length} (${((mismo / conSentido.length) * 100).toFixed(1)} %)`
+    );
+    if (deltas.length) {
+      console.log(
+        `  |rumbo del tramo − rumbo resuelto|: p50 ${pct(deltas, 0.5).toFixed(1)}° · p95 ${pct(deltas, 0.95).toFixed(1)}°`
+      );
+    }
+    if (offs.length) {
+      const bajo4 = offs.filter((v) => v <= 4).length;
+      console.log(
+        `  GPS → carril del sentido: p50 ${pct(offs, 0.5).toFixed(2)} m · p95 ${pct(offs, 0.95).toFixed(2)} m · máx ${Math.max(...offs).toFixed(2)} m`
+      );
+      console.log(
+        `  GPS → carril ≤4 m: ${bajo4}/${offs.length} (${((bajo4 / offs.length) * 100).toFixed(1)} %) — criterio ≥90 %`
+      );
+    }
+    if (pucks.length) {
+      console.log(
+        `  puck dibujado → carril: p50 ${pct(pucks, 0.5).toFixed(2)} m · p95 ${pct(pucks, 0.95).toFixed(2)} m · máx ${Math.max(...pucks).toFixed(2)} m`
+      );
+    }
+    console.log(`  puck dibujado SOBRE la ruta: ${snapped}/${cam.length} muestras`);
+    console.log(`  cambios a sentido contrario rechazados: ${maxSwitches}`);
+    let maxJump = 0;
+    for (let i = 1; i < cam.length; i++) {
+      const a = cam[i - 1];
+      const b = cam[i];
+      if (a.vehicleLat == null || b.vehicleLat == null) continue;
+      maxJump = Math.max(
+        maxJump,
+        hav(
+          { lat: a.vehicleLat, lng: a.vehicleLng },
+          { lat: b.vehicleLat, lng: b.vehicleLng }
+        )
+      );
+    }
+    console.log(
+      `  desplazamiento del puck entre muestras (200 ms): máx ${maxJump.toFixed(2)} m`
+    );
+  }
+}
+
 // ── 3 · Rumbo vs trayectoria + re-ejecución del resolvedor ────────────────
 function truthBearings(list, halfWindow = 2) {
   const out = new Array(list.length).fill(null);

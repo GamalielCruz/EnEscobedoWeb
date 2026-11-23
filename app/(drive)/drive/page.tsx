@@ -57,6 +57,7 @@ import {
   nearestPointOnPathByProgress,
 } from "@/lib/drive/trace-recorder";
 import { stageActionFor } from "@/lib/drive/stage-action";
+import { createRouteDirectionTracker } from "@/lib/drive/route-direction";
 import {
   applyGpsFix,
   courseAgeMs,
@@ -878,6 +879,13 @@ export default function DrivePage() {
   // Fase 6-A4: último tramo de la polilínea donde cayó el puck, para buscar
   // el punto más cercano POR PROGRESO (no globalmente, que salta de eje).
   const routeProgressSegRef = useRef<number | null>(null);
+  // Fase 7: proyector POSICIÓN + RUMBO. El del loop decide qué punto se dibuja
+  // y a qué punto se ancla la cámara; el otro mide la traza, con estado
+  // independiente para que el muestreo a 5 Hz no mueva la referencia del loop.
+  const routeDirectionRef = useRef(createRouteDirectionTracker());
+  const traceRouteDirectionRef = useRef(createRouteDirectionTracker());
+  /** Fase 7-D: el frame más reciente dibujó el puck sobre la ruta. */
+  const puckRouteSnappedRef = useRef(false);
   // CIERRE DEL PANEL DE PEDIDO: al tocar el mapa la página incrementa este
   // token y el panel colapsa de inmediato (sin capa alguna sobre el mapa).
   const [tripSheetCollapseToken, setTripSheetCollapseToken] = useState(0);
@@ -1724,10 +1732,14 @@ export default function DrivePage() {
     if (!roadRoute || roadRoute.path.length < 2) {
       rec.setRoute(null);
       routeProgressSegRef.current = null;
+      routeDirectionRef.current.reset();
+      traceRouteDirectionRef.current.reset();
       return;
     }
     // Ruta nueva ⇒ el progreso anterior no sirve como ventana de búsqueda.
     routeProgressSegRef.current = null;
+    routeDirectionRef.current.reset();
+    traceRouteDirectionRef.current.reset();
     rec.setRoute({
       destination: roadRoute.destination,
       distanceMeters: roadRoute.distanceMeters,
@@ -1848,7 +1860,33 @@ export default function DrivePage() {
       // La guarda de anclaje mide SIEMPRE el puck visual (el ancla pertenece
       // a la cámara de seguimiento, no al A/B de dibujo).
       const anchorPuckY = visualMeasure?.puck.y ?? null;
-      const nearest = routePath
+      // Fase 7-D: referencia de ruta del SENTIDO DE MARCHA (posición + rumbo)
+      // medida dos veces: sobre el GPS crudo (error de carril real) y sobre el
+      // puck dibujado (corrección aplicada). El tracker de la traza es propio
+      // para no alterar la ventana de progreso del loop de seguimiento.
+      const traceHeading = resolverState?.acceptedHeading ?? null;
+      const traceNow = Date.now();
+      const rawFix = followTargetRef.current ?? vehicle;
+      const gpsHit = routePath
+        ? traceRouteDirectionRef.current.project(
+            routePath,
+            rawFix,
+            traceHeading,
+            traceNow
+          )
+        : null;
+      const puckHit = routePath
+        ? traceRouteDirectionRef.current.project(
+            routePath,
+            vehicle,
+            traceHeading,
+            traceNow
+          )
+        : null;
+      const nearest = gpsHit;
+      // Medición GLOBAL (sin filtro de rumbo): sigue siendo la referencia para
+      // detectar que la búsqueda global saltaría de eje.
+      const globalNearest = routePath
         ? nearestPointOnPath(routePath, vehicle.lat, vehicle.lng)
         : null;
       // Fase 6-A4: la misma distancia buscando SOLO por progreso.
@@ -1937,6 +1975,12 @@ export default function DrivePage() {
         routeNearestLat: nearest?.lat ?? null,
         routeNearestLng: nearest?.lng ?? null,
         routeOffsetMeters: nearest?.distanceMeters ?? null,
+        routeSegmentBearingDeg: nearest?.bearingDeg ?? null,
+        routeHeadingDeltaDeg: nearest?.headingDeltaDeg ?? null,
+        routeSameDirection: nearest?.sameDirection ?? null,
+        puckRouteSnapped: puckRouteSnappedRef.current,
+        puckRouteOffsetMeters: puckHit?.distanceMeters ?? null,
+        routeOppositeSwitchCount: traceRouteDirectionRef.current.rejections,
         pitch: map.getPitch(),
         screenPxPerMeter,
         arrowOffsetMeters:
@@ -1944,14 +1988,15 @@ export default function DrivePage() {
             ? visualMeasure.offsetPx / screenPxPerMeter
             : null,
         routeOffsetProgressMeters: progressHit?.distanceMeters ?? null,
-        routeNearestSegmentIndex: progressHit?.segmentIndex ?? null,
+        routeNearestSegmentIndex:
+          nearest?.segmentIndex ?? progressHit?.segmentIndex ?? null,
         // Solo cuenta como salto de eje si la global encontró otra línea
         // >1 m más cercana MIENTRAS el seguimiento por progreso sigue a nivel
         // de carril (≤8 m): una re-adquisición del GPS no es un salto de eje.
         routeNearestAxisJump:
-          nearest != null && progressHit != null
+          globalNearest != null && progressHit != null
             ? progressHit.distanceMeters <= 8 &&
-              nearest.distanceMeters + 1 < progressHit.distanceMeters
+              globalNearest.distanceMeters + 1 < progressHit.distanceMeters
             : null,
         containerHeight: band.containerHeight,
         visibleTopPx: band.top,
@@ -2225,6 +2270,8 @@ export default function DrivePage() {
           navigationReady: sim.active || navigationPositionReadyRef.current,
           mapBearing: map.getBearing?.() ?? 0,
           fixTs: followTargetTsRef.current,
+          // Fase 7-B: el target se proyecta al carril del sentido de marcha.
+          routeDirection: routeDirectionRef.current,
         }
       );
 
@@ -2235,6 +2282,7 @@ export default function DrivePage() {
         bearing: frame.state.correctionBearing ?? null,
       };
       visualPosRef.current = frame.state.vehiclePos;
+      puckRouteSnappedRef.current = frame.routeSnapped;
       visualHeadingRef.current = frame.state.visualHeading;
       visualCameraHeadingRef.current.current = frame.state.cameraHeading;
       visualCameraHeadingRef.current.lastTs =

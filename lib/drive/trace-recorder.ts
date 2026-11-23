@@ -86,7 +86,14 @@ export type TraceCameraSample = {
   /** Punto más cercano de la ruta activa al puck (null sin ruta). */
   routeNearestLat?: number | null;
   routeNearestLng?: number | null;
-  /** Distancia puck → ruta en metros (desfase real sobre la calle). */
+  /**
+   * Distancia del GPS CRUDO al punto de ruta DEL SENTIDO DE MARCHA (m).
+   *
+   * Fase 7-D: antes se buscaba en toda la ruta y en una vía con camellón el
+   * eje del sentido contrario (a ~12 m) ganaba la búsqueda: el valor medía la
+   * separación entre carriles, no el error de posición. Con el filtro de rumbo
+   * mide el error real de carril (criterio en dispositivo: ≤4 m).
+   */
   routeOffsetMeters?: number | null;
   /** Fase 6-A4: pitch real de la cámara (0 en seguimiento; >0 tras gesto). */
   pitch?: number | null;
@@ -107,6 +114,22 @@ export type TraceCameraSample = {
   routeOffsetProgressMeters?: number | null;
   /** Fase 6-A4: tramo de la polilínea que da el punto más cercano por progreso. */
   routeNearestSegmentIndex?: number | null;
+  /** Fase 7-D: rumbo del tramo de ruta usado como referencia (deg). */
+  routeSegmentBearingDeg?: number | null;
+  /** Fase 7-D: rumbo del tramo − rumbo resuelto (deg, con signo). */
+  routeHeadingDeltaDeg?: number | null;
+  /** Fase 7-D: el tramo de referencia va en el sentido de marcha (≤45°). */
+  routeSameDirection?: boolean | null;
+  /** Fase 7-D: el puck se DIBUJÓ sobre la ruta del sentido (no sobre el GPS). */
+  puckRouteSnapped?: boolean | null;
+  /** Fase 7-D: distancia del puck DIBUJADO a la ruta del sentido (m). */
+  puckRouteOffsetMeters?: number | null;
+  /**
+   * Fase 7-D: cambios de tramo hacia el sentido contrario RECHAZADOS por el
+   * guardián (acumulado en la sesión). Cualquier valor >0 en un tramo recto de
+   * vía doble indica que el rumbo y la geometría se contradicen.
+   */
+  routeOppositeSwitchCount?: number;
   /** Fase 6-A4: global y progreso discrepan >1 m en esta muestra. */
   routeNearestAxisJump?: boolean | null;
   containerHeight: number | null;

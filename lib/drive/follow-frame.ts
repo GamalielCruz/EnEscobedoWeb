@@ -33,6 +33,11 @@ import {
   type RouteStep,
 } from "@/lib/dispatch/routing";
 import { computeAnchorPadding, type AnchorPadding } from "@/lib/drive/camera-controller";
+import {
+  ROUTE_SNAP_MAX_LATERAL_M,
+  type RouteDirectionHit,
+  type RouteDirectionTracker,
+} from "@/lib/drive/route-direction";
 
 export const NAV_ZOOM_BASE = 18.6;
 export const NAV_ZOOM_MAX = 19;
@@ -82,6 +87,12 @@ export const REST_CORRECTION_MAX_MPS = 1.5;
 export const MIN_MOVING_SPEED_MPS = 0.5;
 /** Distancia lateral máxima para considerar que el vehículo está SOBRE la ruta (m). */
 export const ON_ROUTE_LATERAL_M = 25;
+/**
+ * Fase 7-B: distancia lateral máxima (m) para dibujar el puck (y poner la
+ * cámara) sobre el punto de la ruta DEL SENTIDO DE MARCHA. Más allá de esto el
+ * GPS manda: no se arrastra el puck a una calle que no es la que se conduce.
+ */
+export const ROUTE_PUCK_SNAP_MAX_M = ROUTE_SNAP_MAX_LATERAL_M;
 /** Delta de tiempo máximo aceptado por cuadro (s): evita saltos tras un stall. */
 export const MAX_FRAME_DT_S = 0.2;
 /** Velocidad que alcanza el zoom lejano (≈65 km/h). */
@@ -187,6 +198,11 @@ export type FollowFrameInput = {
    * extrapolación: la estima no inventa movimiento.
    */
   fixTs?: number | null;
+  /**
+   * Fase 7-B: proyector con estado (ventana de progreso + sentido de marcha).
+   * Si falta, el frame se comporta como antes (el target es el GPS).
+   */
+  routeDirection?: RouteDirectionTracker | null;
 };
 
 export type FollowFrameResult = {
@@ -204,6 +220,14 @@ export type FollowFrameResult = {
   vehicleStepPx: number;
   /** El zoom objetivo o el pendiente cambió en este frame. */
   pendingZoom: number | null;
+  /** Fase 7-B: la referencia dibujada/cámara es el punto de ruta del carril. */
+  routeSnapped: boolean;
+  /** Distancia GPS → punto de ruta del sentido de marcha (m). */
+  routeSnapMeters: number | null;
+  /** Tramo de la ruta usado como referencia (path[i-1] → path[i]). */
+  routeSnapSegmentIndex: number | null;
+  /** El tramo de referencia va en el sentido de marcha (≤45° del rumbo). */
+  routeSameDirection: boolean | null;
 };
 
 export function computeFollowFrame(
@@ -280,6 +304,31 @@ export function computeFollowFrame(
   // Proyección única sobre la ruta: sirve al avance y al zoom por maniobra.
   const routePath =
     input.route?.path && input.route.path.length >= 2 ? input.route.path : null;
+
+  // ── 2b) Fase 7-B: referencia de posición en el CARRIL del sentido de marcha ──
+  //
+  // El punto más cercano de la ruta se busca con posición Y rumbo (y con la
+  // ventana de progreso): en una vía con camellón el eje del sentido contrario
+  // está a ~12 m y ganaba la búsqueda global, así que el puck y la cámara se
+  // referenciaban al carril de vuelta (offset 13 m en la traza del 23-11).
+  //
+  // El GPS se proyecta al punto del carril y ESE es el objetivo que persigue
+  // la posición visual (y por tanto la cámara: misma referencia). La corrección
+  // ya existente la absorbe a ≤0.5·v m/s, así que no hay saltos de cuadro.
+  const routeHeadingRef = input.simHeading ?? input.targetHeading ?? null;
+  let navTarget = target;
+  let routeHit: RouteDirectionHit | null = null;
+  if (routePath && routeHeadingRef != null && input.routeDirection) {
+    routeHit = input.routeDirection.project(routePath, target, routeHeadingRef, now);
+  }
+  const routeSnapped =
+    routeHit != null &&
+    routeHit.sameDirection &&
+    routeHit.distanceMeters <= ROUTE_PUCK_SNAP_MAX_M;
+  if (routeSnapped && routeHit) {
+    navTarget = { lat: routeHit.lat, lng: routeHit.lng };
+  }
+
   const projection = routePath
     ? projectOntoPathDetailed(routePath, cur)
     : null;
@@ -319,19 +368,19 @@ export function computeFollowFrame(
     // se conserva la reubicación por salto grande, sin estima ni corrección.
     if (
       !poorStart &&
-      haversineMeters(vehiclePos, target) > Math.max(50, 3 * speedMps)
+      haversineMeters(vehiclePos, navTarget) > Math.max(50, 3 * speedMps)
     ) {
-      vehiclePos = target;
+      vehiclePos = navTarget;
     }
   } else if (fixIsNew && !poorStart) {
-    const errMeters = haversineMeters(vehiclePos, target);
+    const errMeters = haversineMeters(vehiclePos, navTarget);
     if (errMeters > Math.max(50, 3 * speedMps)) {
-      vehiclePos = target;
+      vehiclePos = navTarget;
       correctionMeters = 0;
       correctionBearing = null;
     } else if (errMeters > 0.05) {
       correctionMeters = errMeters;
-      correctionBearing = bearingBetween(vehiclePos, target);
+      correctionBearing = bearingBetween(vehiclePos, navTarget);
     } else {
       correctionMeters = 0;
       correctionBearing = null;
@@ -528,5 +577,9 @@ export function computeFollowFrame(
     headingChanged,
     vehicleStepPx,
     pendingZoom,
+    routeSnapped,
+    routeSnapMeters: routeHit?.distanceMeters ?? null,
+    routeSnapSegmentIndex: routeHit?.segmentIndex ?? null,
+    routeSameDirection: routeHit?.sameDirection ?? null,
   };
 }
