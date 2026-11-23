@@ -59,6 +59,13 @@ import {
 import { stageActionFor } from "@/lib/drive/stage-action";
 import { createRouteDirectionTracker } from "@/lib/drive/route-direction";
 import {
+  ROUTE_CLEAR_GRACE_MS,
+  ROUTE_FORCE_RETRY_MS,
+  shouldApplyRouteRefresh,
+  shouldClearRouteOnTargetChange,
+  shouldForceRouteRetry,
+} from "@/lib/drive/route-refresh";
+import {
   applyGpsFix,
   courseAgeMs,
   effectiveCourseHeading,
@@ -1114,6 +1121,10 @@ export default function DrivePage() {
   // dibuja ninguna línea (nunca una línea recta entre los dos puntos).
   const [roadRoute, setRoadRoute] = useState<RoadRoute | null>(null);
   const prevNavKeyRef = useRef<string | null>(null);
+  /** Descartar la ruta tras la gracia si el objetivo sigue ausente. */
+  const routeClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Antes de este instante no se fuerza otro reintento de ruta. */
+  const routeForceRetryAtRef = useRef(0);
   /** Último destino para el que el SIMULADOR ya pidió la ruta (ver más abajo). */
   const simRouteKeyRef = useRef<string | null>(null);
   /** Antes de este instante no se reintenta la ruta de la simulación. */
@@ -1207,12 +1218,30 @@ export default function DrivePage() {
 
   useEffect(() => {
     const navKey = navTarget ? `${navTarget.lat},${navTarget.lng}` : null;
-    if (prevNavKeyRef.current !== navKey) {
+    if (shouldClearRouteOnTargetChange(prevNavKeyRef.current, navKey)) {
       // Cambió el tramo (recolección → entrega o viceversa): descartar la
       // ruta anterior para no dibujarla durante el tramo equivocado.
       setRoadRoute(null);
-      prevNavKeyRef.current = navKey;
-      simRouteKeyRef.current = null;
+    }
+    if (navKey) {
+      if (prevNavKeyRef.current !== navKey) {
+        prevNavKeyRef.current = navKey;
+        simRouteKeyRef.current = null;
+      }
+      if (routeClearTimerRef.current != null) {
+        clearTimeout(routeClearTimerRef.current);
+        routeClearTimerRef.current = null;
+      }
+    } else if (prevNavKeyRef.current != null && routeClearTimerRef.current == null) {
+      // El sondeo puede devolver el pedido un instante sin etapa navegable
+      // (traza 23-11: `t=45.377 s`). Ese parpadeo NO borra la ruta viva: si el
+      // objetivo sigue ausente al vencer la gracia, ahí sí se descarta.
+      routeClearTimerRef.current = setTimeout(() => {
+        routeClearTimerRef.current = null;
+        prevNavKeyRef.current = null;
+        simRouteKeyRef.current = null;
+        setRoadRoute(null);
+      }, ROUTE_CLEAR_GRACE_MS);
     }
     if (!navTarget || !mapsLoaded) {
       return;
@@ -1249,10 +1278,23 @@ export default function DrivePage() {
     let cancelled = false;
     markDrive("route-request");
     getRoadRoute(currentLocation, navTarget).then((route) => {
-      if (!cancelled) {
-        markDrive("route-ready");
-        measureDrive("route", "route-request", "route-ready");
+      if (cancelled) return;
+      markDrive("route-ready");
+      measureDrive("route", "route-request", "route-ready");
+      if (shouldApplyRouteRefresh(route)) {
         setRoadRoute(route);
+        return;
+      }
+      // Fallo transitorio (timeout/red): la ruta viva NO se borra; la línea y
+      // la guía siguen con la geometría anterior. Sin ninguna ruta que
+      // conservar se fuerza un reintento acotado, porque `getRoadRoute`
+      // recuerda el fallo 60 s y el repartidor vería la pantalla vacía.
+      if (shouldForceRouteRetry(!roadRoute, Date.now(), routeForceRetryAtRef.current)) {
+        routeForceRetryAtRef.current = Date.now() + ROUTE_FORCE_RETRY_MS;
+        getRoadRoute(currentLocation, navTarget, true).then((retry) => {
+          // Solo si el tramo sigue siendo el mismo que pidió el reintento.
+          if (retry && prevNavKeyRef.current === navKey) setRoadRoute(retry);
+        });
       }
     });
     return () => {
@@ -1268,6 +1310,17 @@ export default function DrivePage() {
     sim.simLocation,
     roadRoute,
   ]);
+
+  // La gracia de descarte no debe sobrevivir al desmontaje de la página.
+  useEffect(
+    () => () => {
+      if (routeClearTimerRef.current != null) {
+        clearTimeout(routeClearTimerRef.current);
+        routeClearTimerRef.current = null;
+      }
+    },
+    []
+  );
 
   // Al detener el simulador se permite volver a pedir la ruta en el próximo
   // intento (la marca por destino se limpia).
