@@ -80,6 +80,15 @@ export const storeUpdateRequest = defineType({
               defineField({ name: "country", title: "País", type: "string" }),
             ],
           }),
+        defineField({
+          name: "coordinates",
+          title: "Coordenadas",
+          type: "object",
+          fields: [
+            defineField({ name: "latitude", title: "Latitud", type: "number" }),
+            defineField({ name: "longitude", title: "Longitud", type: "number" }),
+          ],
+        }),
       ],
     }),
     defineField({

@@ -12,6 +12,7 @@ const ALLOWED_CHANGE_FIELDS = new Set([
   "highDemandMode",
   "contact",
   "address",
+  "coordinates",
   "operatingHours",
   "serviceTypes",
   "hasOwnDelivery",
@@ -102,6 +103,18 @@ export async function POST(request: NextRequest) {
     const safeChanges = Object.fromEntries(
       Object.entries(changes).filter(([key]) => ALLOWED_CHANGE_FIELDS.has(key))
     );
+    if ("coordinates" in safeChanges) {
+      const coordinates = safeChanges.coordinates as { latitude?: unknown; longitude?: unknown } | null;
+      if (
+        !coordinates ||
+        typeof coordinates.latitude !== "number" || !Number.isFinite(coordinates.latitude) ||
+        coordinates.latitude < -90 || coordinates.latitude > 90 ||
+        typeof coordinates.longitude !== "number" || !Number.isFinite(coordinates.longitude) ||
+        coordinates.longitude < -180 || coordinates.longitude > 180
+      ) {
+        return NextResponse.json({ error: "Las coordenadas de la tienda no son válidas", requestId }, { status: 400 });
+      }
+    }
     if (Object.keys(safeChanges).length === 0) {
       return NextResponse.json({ error: "No hay cambios permitidos" }, { status: 400 });
     }

@@ -11,6 +11,7 @@ const ALLOWED_CHANGE_FIELDS = new Set([
   "highDemandMode",
   "contact",
   "address",
+  "coordinates",
   "operatingHours",
   "serviceTypes",
   "hasOwnDelivery",

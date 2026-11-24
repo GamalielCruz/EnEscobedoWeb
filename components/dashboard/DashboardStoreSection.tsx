@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { GoogleMap, Marker, useJsApiLoader } from "@react-google-maps/api";
 
 import DeliveryZonesAdmin from "@/components/DeliveryZonesAdmin";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,20 @@ export function DashboardStoreSection({
     buildStoreSettingsDraft(storeConfig)
   );
   const [message, setMessage] = React.useState<string | null>(null);
+  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
+  const { isLoaded: isStoreMapLoaded } = useJsApiLoader({
+    id: "delivery-zones-map",
+    googleMapsApiKey: apiKey,
+  });
+  const latitude = Number(draft.coordinates.latitude);
+  const longitude = Number(draft.coordinates.longitude);
+  const hasValidCoordinates =
+    draft.coordinates.latitude.trim() !== "" && draft.coordinates.longitude.trim() !== "" &&
+    Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 &&
+    Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
+  const mapCenter = hasValidCoordinates
+    ? { lat: latitude, lng: longitude }
+    : { lat: 20.5888, lng: -100.3899 };
   const pendingOwnDeliveryRequest = storeRequests.some(
     (request) => request.status === "pending" && typeof request.changes?.hasOwnDelivery === "boolean"
   );
@@ -58,6 +73,15 @@ export function DashboardStoreSection({
   }));
 
   const handleSubmit = async () => {
+    const originalCoordinates = buildStoreSettingsDraft(storeConfig).coordinates;
+    const coordinatesChanged =
+      originalCoordinates.latitude !== draft.coordinates.latitude ||
+      originalCoordinates.longitude !== draft.coordinates.longitude;
+    if (coordinatesChanged && !hasValidCoordinates) {
+      setMessage("Ingresa una latitud entre -90 y 90 y una longitud entre -180 y 180.");
+      return;
+    }
+
     const changes = buildStoreChangesPayload(storeConfig, draft);
     if (Object.keys(changes).length === 0) {
       setMessage("No hay cambios para enviar.");
@@ -233,6 +257,111 @@ export function DashboardStoreSection({
                   }
                 />
               </div>
+            </div>
+
+            <div className="space-y-3 border-t border-black/6 pt-4">
+              <div>
+                <p className="text-sm font-medium text-gray-900">Ubicacion de la tienda</p>
+                <p className="mt-1 text-xs text-gray-500">
+                  Arrastra el marcador o selecciona un punto del mapa para ajustar la ubicacion exacta.
+                </p>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="store-latitude" className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                    Latitud
+                  </Label>
+                  <Input
+                    id="store-latitude"
+                    className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
+                    type="number"
+                    min={-90}
+                    max={90}
+                    step="any"
+                    placeholder="Ej. 20.5888"
+                    value={draft.coordinates.latitude}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        coordinates: { ...current.coordinates, latitude: event.target.value },
+                      }))
+                    }
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="store-longitude" className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                    Longitud
+                  </Label>
+                  <Input
+                    id="store-longitude"
+                    className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
+                    type="number"
+                    min={-180}
+                    max={180}
+                    step="any"
+                    placeholder="Ej. -100.3899"
+                    value={draft.coordinates.longitude}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        coordinates: { ...current.coordinates, longitude: event.target.value },
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+              {apiKey ? (
+                isStoreMapLoaded ? (
+                  <div className="overflow-hidden rounded-xl border border-black/8">
+                    <GoogleMap
+                      mapContainerStyle={{ width: "100%", height: "280px" }}
+                      center={mapCenter}
+                      zoom={hasValidCoordinates ? 16 : 12}
+                      onClick={(event) => {
+                        if (!event.latLng) return;
+                        setDraft((current) => ({
+                          ...current,
+                          coordinates: {
+                            latitude: event.latLng!.lat().toFixed(6),
+                            longitude: event.latLng!.lng().toFixed(6),
+                          },
+                        }));
+                      }}
+                      options={{ streetViewControl: false, mapTypeControl: false, fullscreenControl: false }}
+                    >
+                      {hasValidCoordinates ? (
+                        <Marker
+                          position={mapCenter}
+                          draggable
+                          onDragEnd={(event) => {
+                            if (!event.latLng) return;
+                            setDraft((current) => ({
+                              ...current,
+                              coordinates: {
+                                latitude: event.latLng!.lat().toFixed(6),
+                                longitude: event.latLng!.lng().toFixed(6),
+                              },
+                            }));
+                          }}
+                        />
+                      ) : null}
+                    </GoogleMap>
+                  </div>
+                ) : (
+                  <div className="flex h-[280px] items-center justify-center rounded-xl border border-black/8 bg-gray-50 text-sm text-gray-500">
+                    Cargando mapa...
+                  </div>
+                )
+              ) : (
+                <p className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-600">
+                  Configura NEXT_PUBLIC_GOOGLE_MAPS_API_KEY para mostrar el mapa. Puedes ingresar las coordenadas manualmente.
+                </p>
+              )}
+              {hasValidCoordinates ? (
+                <p className="text-xs text-gray-500">
+                  Coordenadas: {latitude.toFixed(6)}, {longitude.toFixed(6)}
+                </p>
+              ) : null}
             </div>
           </DashboardPanelBody>
         </DashboardPanel>
