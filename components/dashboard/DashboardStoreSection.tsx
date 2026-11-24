@@ -1,13 +1,15 @@
 "use client";
 
 import * as React from "react";
-import { GoogleMap, Marker, useJsApiLoader } from "@react-google-maps/api";
+import { Navigation } from "lucide-react";
 
 import DeliveryZonesAdmin from "@/components/DeliveryZonesAdmin";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MapboxMap, type MapboxMapMarker } from "@/components/map/MapboxMap";
+import { MAPBOX_DEFAULT_CENTER, mapboxReverseGeocode, type MapboxPoint } from "@/lib/mapbox";
 
 import {
   DashboardDescription,
@@ -40,20 +42,83 @@ export function DashboardStoreSection({
     buildStoreSettingsDraft(storeConfig)
   );
   const [message, setMessage] = React.useState<string | null>(null);
-  const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY ?? "";
-  const { isLoaded: isStoreMapLoaded } = useJsApiLoader({
-    id: "delivery-zones-map",
-    googleMapsApiKey: apiKey,
-  });
+  const [isLocating, setIsLocating] = React.useState(false);
   const latitude = Number(draft.coordinates.latitude);
   const longitude = Number(draft.coordinates.longitude);
   const hasValidCoordinates =
     draft.coordinates.latitude.trim() !== "" && draft.coordinates.longitude.trim() !== "" &&
     Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 &&
     Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
-  const mapCenter = hasValidCoordinates
+  const mapCenter: MapboxPoint = hasValidCoordinates
     ? { lat: latitude, lng: longitude }
-    : { lat: 20.5888, lng: -100.3899 };
+    : MAPBOX_DEFAULT_CENTER;
+  const setCoordinatesFromPoint = React.useCallback((point: MapboxPoint) => {
+    setDraft((current) => ({
+      ...current,
+      coordinates: {
+        latitude: point.lat.toFixed(6),
+        longitude: point.lng.toFixed(6),
+      },
+    }));
+  }, []);
+  const locationMarkers = React.useMemo<MapboxMapMarker[]>(
+    () => hasValidCoordinates
+      ? [{
+          id: "store-location",
+          lat: latitude,
+          lng: longitude,
+          variant: "pin",
+          color: "#20096F",
+          draggable: true,
+          onDragEnd: setCoordinatesFromPoint,
+        }]
+      : [],
+    [hasValidCoordinates, latitude, longitude, setCoordinatesFromPoint]
+  );
+  const useCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      setMessage("Este navegador no permite acceder a la ubicación.");
+      return;
+    }
+
+    setIsLocating(true);
+    setMessage(null);
+    navigator.geolocation.getCurrentPosition(
+      async ({ coords }) => {
+        const point = { lat: coords.latitude, lng: coords.longitude };
+        setCoordinatesFromPoint(point);
+        const address = await mapboxReverseGeocode(point.lat, point.lng, { language: "es" });
+        if (address) {
+          setDraft((current) => ({
+            ...current,
+            address: {
+              ...current.address,
+              street: address.street || current.address.street,
+              city: address.city || current.address.city,
+              state: address.state || current.address.state,
+              postalCode: address.postalCode || current.address.postalCode,
+              country: address.country || current.address.country,
+            },
+          }));
+          setMessage("Ubicación encontrada con Mapbox. Envía los cambios para solicitar su actualización.");
+        } else {
+          setMessage("Coordenadas actuales listas; Mapbox no pudo resolver la dirección. Puedes enviar las coordenadas manualmente.");
+        }
+        setIsLocating(false);
+      },
+      (error) => {
+        setIsLocating(false);
+        setMessage(
+          error.code === error.PERMISSION_DENIED
+            ? "Permite el acceso a tu ubicación en el navegador e inténtalo de nuevo."
+            : error.code === error.TIMEOUT
+              ? "La búsqueda de ubicación tardó demasiado. Inténtalo de nuevo."
+              : "No se pudo obtener tu ubicación actual. Verifica el GPS e inténtalo de nuevo."
+        );
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
   const pendingOwnDeliveryRequest = storeRequests.some(
     (request) => request.status === "pending" && typeof request.changes?.hasOwnDelivery === "boolean"
   );
@@ -264,11 +329,17 @@ export function DashboardStoreSection({
             </div>
 
             <div className="space-y-3 border-t border-black/6 pt-4">
-              <div>
-                <p className="text-sm font-medium text-gray-900">Ubicacion de la tienda</p>
-                <p className="mt-1 text-xs text-gray-500">
-                  Arrastra el marcador o selecciona un punto del mapa para ajustar la ubicacion exacta.
-                </p>
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Ubicacion de la tienda</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Arrastra el marcador o selecciona un punto del mapa para ajustar la ubicacion exacta.
+                  </p>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={useCurrentLocation} disabled={isLocating}>
+                  <Navigation className="size-4" />
+                  {isLocating ? "Buscando ubicación..." : "Usar mi ubicación actual"}
+                </Button>
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
@@ -314,53 +385,15 @@ export function DashboardStoreSection({
                   />
                 </div>
               </div>
-              {apiKey ? (
-                isStoreMapLoaded ? (
-                  <div className="overflow-hidden rounded-xl border border-black/8">
-                    <GoogleMap
-                      mapContainerStyle={{ width: "100%", height: "280px" }}
-                      center={mapCenter}
-                      zoom={hasValidCoordinates ? 16 : 12}
-                      onClick={(event) => {
-                        if (!event.latLng) return;
-                        setDraft((current) => ({
-                          ...current,
-                          coordinates: {
-                            latitude: event.latLng!.lat().toFixed(6),
-                            longitude: event.latLng!.lng().toFixed(6),
-                          },
-                        }));
-                      }}
-                      options={{ streetViewControl: false, mapTypeControl: false, fullscreenControl: false }}
-                    >
-                      {hasValidCoordinates ? (
-                        <Marker
-                          position={mapCenter}
-                          draggable
-                          onDragEnd={(event) => {
-                            if (!event.latLng) return;
-                            setDraft((current) => ({
-                              ...current,
-                              coordinates: {
-                                latitude: event.latLng!.lat().toFixed(6),
-                                longitude: event.latLng!.lng().toFixed(6),
-                              },
-                            }));
-                          }}
-                        />
-                      ) : null}
-                    </GoogleMap>
-                  </div>
-                ) : (
-                  <div className="flex h-[280px] items-center justify-center rounded-xl border border-black/8 bg-gray-50 text-sm text-gray-500">
-                    Cargando mapa...
-                  </div>
-                )
-              ) : (
-                <p className="rounded-lg bg-gray-50 px-3 py-2 text-sm text-gray-600">
-                  Configura NEXT_PUBLIC_GOOGLE_MAPS_API_KEY para mostrar el mapa. Puedes ingresar las coordenadas manualmente.
-                </p>
-              )}
+              <div className="overflow-hidden rounded-xl border border-black/8">
+                <MapboxMap
+                  className="h-[280px] w-full"
+                  center={mapCenter}
+                  zoom={hasValidCoordinates ? 16 : 12}
+                  markers={locationMarkers}
+                  onClick={setCoordinatesFromPoint}
+                />
+              </div>
               {hasValidCoordinates ? (
                 <p className="text-xs text-gray-500">
                   Coordenadas: {latitude.toFixed(6)}, {longitude.toFixed(6)}
