@@ -3854,11 +3854,21 @@ export default function DrivePage() {
         !result.ok &&
         result.error?.includes("Acción no válida en estado")
       ) {
+        // `pickup_arrival` es exclusivo de MANDADOS: en un restaurante la
+        // llegada a la recolección no tiene acción de servidor, así que no hay
+        // nada que reparar (el refetch corrige la etapa). En la entrega sí se
+        // marca la llegada en segundo plano y se reintenta UNA vez.
         const arriveAction =
-          stageAction === "picked_up" ? "pickup_arrival" : "destination_arrival";
-        const arrival = await postDriverAction(arriveAction, activeOrder.orderNumber);
-        if (arrival.ok) {
-          result = await postDriverAction(stageAction, activeOrder.orderNumber);
+          stageAction === "picked_up"
+            ? activeOrder.serviceKind === "mandado"
+              ? "pickup_arrival"
+              : null
+            : "destination_arrival";
+        if (arriveAction) {
+          const arrival = await postDriverAction(arriveAction, activeOrder.orderNumber);
+          if (arrival.ok) {
+            result = await postDriverAction(stageAction, activeOrder.orderNumber);
+          }
         }
       }
       if (!result.ok) {
