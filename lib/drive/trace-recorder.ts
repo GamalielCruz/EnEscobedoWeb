@@ -25,6 +25,7 @@
  */
 
 import { BUILD_COMMIT } from "@/lib/drive/build-commit";
+import type { SwipeTraceEntry } from "@/lib/drive/swipe-trace";
 
 export type TraceGpsSample = {
   /** Reloj del dispositivo en ms (epoch). */
@@ -213,6 +214,8 @@ export type TracePhaseEvent = {
   msSinceFix20m?: number | null;
   /** Fase 6-A3: la recolección ya se confirmó desde la UI (deslizador). */
   pickupConfirmed?: boolean | null;
+  /** Tipo de pedido de la etapa (auditoría del deslizador). */
+  serviceKind?: string | null;
 };
 
 /**
@@ -482,6 +485,11 @@ export type TraceExport = {
   programmaticEvents?: TraceProgrammaticCount[];
   /** Fluidez por segundo (rAF, cámaras aplicadas, renders de Mapbox). */
   perf?: TracePerfBucket[];
+  /**
+   * Deslizador "desliza para confirmar" (auditoría): montajes, puntero,
+   * cancelaciones, fin del gesto con % y resultado de la acción.
+   */
+  swipe?: SwipeTraceEntry[];
   /** Ruta activa (polilínea + steps) al exportar — Fase 3.1-E. */
   route?: TraceRouteSnapshot | null;
   /** Cronología de arranque (Fase 4-C). */
@@ -492,6 +500,8 @@ const MAX_GPS = 12_000;
 const MAX_CAMERA = 12_000;
 const MAX_EVENTS = 4_000;
 const MAX_PROGRAMMATIC = 2_000;
+/** Filas de la traza del deslizador (un gesto son ~10–40). */
+const MAX_SWIPE = 600;
 /** Intervalos de rAF guardados por segundo (60 fps sobra; acota la memoria). */
 const MAX_RAF_INTERVALS = 128;
 /** Desplazamientos por aplicación guardados por segundo (acota la memoria). */
@@ -510,6 +520,7 @@ export class TraceRecorder {
   private gps: TraceGpsSample[] = [];
   private camera: TraceCameraSample[] = [];
   private events: TraceEvent[] = [];
+  private swipeEntries: SwipeTraceEntry[] = [];
   private programmaticByKey = new Map<string, TraceProgrammaticCount>();
   /** Por segundo: conteos + intervalos de rAF (máx. 128 por segundo). */
   private perfBySecond = new Map<
@@ -728,6 +739,16 @@ export class TraceRecorder {
       this.events.splice(0, this.events.length - MAX_EVENTS);
   }
 
+  /**
+   * Deslizador de confirmación: un evento ya normalizado por
+   * `lib/drive/swipe-trace.ts`. Nunca cambia la lógica del control.
+   */
+  recordSwipe(entry: SwipeTraceEntry): void {
+    this.swipeEntries.push(entry);
+    if (this.swipeEntries.length > MAX_SWIPE)
+      this.swipeEntries.splice(0, this.swipeEntries.length - MAX_SWIPE);
+  }
+
   recordFollow(followDriver: boolean, navigatingWithRoute: boolean): void {
     this.events.push({ t: Date.now(), kind: "follow", followDriver, navigatingWithRoute });
     if (this.events.length > MAX_EVENTS)
@@ -744,6 +765,8 @@ export class TraceRecorder {
       fixWithin20mRecent?: boolean | null;
       msSinceFix20m?: number | null;
       pickupConfirmed?: boolean | null;
+      /** Tipo de pedido (la recolección de restaurante no tiene acción). */
+      serviceKind?: string | null;
     }
   ): void {
     this.events.push({
@@ -757,6 +780,7 @@ export class TraceRecorder {
       fixWithin20mRecent: context?.fixWithin20mRecent ?? null,
       msSinceFix20m: context?.msSinceFix20m ?? null,
       pickupConfirmed: context?.pickupConfirmed ?? null,
+      serviceKind: context?.serviceKind ?? null,
     });
     if (this.events.length > MAX_EVENTS)
       this.events.splice(0, this.events.length - MAX_EVENTS);
@@ -770,6 +794,7 @@ export class TraceRecorder {
     this.gps = [];
     this.camera = [];
     this.events = [];
+    this.swipeEntries = [];
     this.programmaticByKey.clear();
     this.perfBySecond.clear();
   }
@@ -864,6 +889,7 @@ export class TraceRecorder {
       events: this.events,
       programmaticEvents: [...this.programmaticByKey.values()].sort((a, b) => a.t - b.t),
       perf: this.perfBuckets(),
+      swipe: this.swipeEntries,
       route: this.routeSnapshot,
       timings: TraceRecorder.collectTimings(),
     };

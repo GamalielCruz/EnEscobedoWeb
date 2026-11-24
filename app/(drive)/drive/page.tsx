@@ -58,7 +58,8 @@ import {
   nearestPointOnPath,
   nearestPointOnPathByProgress,
 } from "@/lib/drive/trace-recorder";
-import { stageActionFor } from "@/lib/drive/stage-action";
+import { stageActionFor, stageActionGapMessage } from "@/lib/drive/stage-action";
+import { recordSwipeTrace, setSwipeTraceSink } from "@/lib/drive/swipe-trace";
 import { createRouteDirectionTracker } from "@/lib/drive/route-direction";
 import {
   ROUTE_CLEAR_GRACE_MS,
@@ -821,6 +822,16 @@ export default function DrivePage() {
   if (TRACE_REC_ENABLED && traceRecorderRef.current == null) {
     traceRecorderRef.current = new TraceRecorder();
   }
+
+  // Traza del deslizador "desliza para confirmar" (staging): el componente no
+  // conoce el grabador; publica sus eventos a un sumidero que aquí se conecta.
+  // Sin grabador (producción) el sumidero queda sin conectar y no se graba nada.
+  useEffect(() => {
+    if (!TRACE_REC_ENABLED) return;
+    const recorder = traceRecorderRef.current;
+    if (!recorder) return;
+    return setSwipeTraceSink((entry) => recorder.recordSwipe(entry));
+  }, [TRACE_REC_ENABLED]);
   const {
     state,
     loading,
@@ -1409,6 +1420,33 @@ export default function DrivePage() {
     }
     return phase;
   }, [sim.active, sim.stage, orderAction, currentLocation, pickupPoint, deliveryPoint]);
+
+  // ── Etapa sin acción de servidor (hoy: recolección de restaurante) ──
+  // El control no se pinta para no prometer una acción muda; la traza registra
+  // el caso UNA vez por pedido+etapa para no inundar el buffer.
+  const stageActionGap = stageActionGapMessage(navPhase, activeOrder?.serviceKind ?? null);
+  const stageActionGapKey = stageActionGap
+    ? `${activeOrder?.orderNumber ?? "-"}:${navPhase}`
+    : null;
+  const lastStageActionGapRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!TRACE_REC_ENABLED || !stageActionGapKey || !stageActionGap) return;
+    if (lastStageActionGapRef.current === stageActionGapKey) return;
+    lastStageActionGapRef.current = stageActionGapKey;
+    recordSwipeTrace({
+      type: "stage-action-gap",
+      stage: navPhase,
+      serviceKind: activeOrder?.serviceKind ?? null,
+      reason: "control-suppressed",
+      result: stageActionGap,
+    });
+  }, [
+    TRACE_REC_ENABLED,
+    stageActionGapKey,
+    stageActionGap,
+    navPhase,
+    activeOrder?.serviceKind,
+  ]);
 
   // ── Marcado de llegada en segundo plano (geocerca) ─────────────
   // Silencioso e idempotente: si falla, la confirmación manual sigue
@@ -2001,6 +2039,7 @@ export default function DrivePage() {
         msSinceFix20m:
           lastGoodFixAtRef.current != null ? Date.now() - lastGoodFixAtRef.current : null,
         pickupConfirmed: pickupConfirmedAtRef.current != null,
+        serviceKind: activeOrder?.serviceKind ?? null,
       }
     );
   }, [
@@ -3770,7 +3809,29 @@ export default function DrivePage() {
     // deslizador sin efecto durante esa ventana. Se usa la MISMA transición
     // de servidor (picked_up/delivered), sin botones nuevos.
     const stageAction = stageActionFor(navPhase, orderAction?.action, activeOrder.serviceKind);
-    if (!stageAction) return false;
+    if (!stageAction) {
+      // Antes: `return false` MUDO (el deslizador volvía solo, sin explicación).
+      // El control ya no se pinta para este caso; si aun así se llega aquí, el
+      // repartidor ve el motivo y la traza lo registra.
+      const gap = stageActionGapMessage(navPhase, activeOrder.serviceKind);
+      recordSwipeTrace({
+        type: "stage-action-gap",
+        stage: navPhase,
+        serviceKind: activeOrder.serviceKind ?? null,
+        reason: "attempted",
+        result: gap ? "message" : "silent",
+      });
+      if (gap) setStageActionError(gap);
+      return false;
+    }
+
+    recordSwipeTrace({
+      type: "stage-action",
+      stage: navPhase,
+      serviceKind: activeOrder.serviceKind ?? null,
+      reason: "request",
+      result: stageAction,
+    });
 
     setActionLoading(activeOrder.orderNumber);
     setStageActionError(null);
@@ -3792,6 +3853,13 @@ export default function DrivePage() {
         }
       }
       if (!result.ok) {
+        recordSwipeTrace({
+          type: "stage-action",
+          stage: navPhase,
+          serviceKind: activeOrder.serviceKind ?? null,
+          reason: "failed",
+          result: result.error ?? null,
+        });
         setStageActionError(result.error ?? "No se pudo completar la acción.");
         return false;
       }
@@ -3804,6 +3872,13 @@ export default function DrivePage() {
         // deja de aparecer en /api/driver/state.
         setLastDelivered({ order: activeOrder, at: Date.now() });
       }
+      recordSwipeTrace({
+        type: "stage-action",
+        stage: navPhase,
+        serviceKind: activeOrder.serviceKind ?? null,
+        reason: "ok",
+        result: stageAction,
+      });
       await refetch();
       return true;
     } finally {

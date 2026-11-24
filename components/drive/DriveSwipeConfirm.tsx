@@ -1,8 +1,15 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { animate, motion, useDragControls, useMotionValue, useTransform } from "framer-motion";
 import { ArrowRight, CheckCircle2, Loader2 } from "lucide-react";
+import {
+  classifySwipeEnd,
+  swipeFillPct,
+  swipeProgressPct,
+  swipeTravelPx,
+} from "@/lib/drive/swipe-gesture";
+import { recordSwipeTrace, type SwipeTraceEntryType } from "@/lib/drive/swipe-trace";
 
 /**
  * Control reutilizable de confirmación por DESLIZAMIENTO (swipe-to-confirm).
@@ -21,15 +28,26 @@ import { ArrowRight, CheckCircle2, Loader2 } from "lucide-react";
  * - dragMomentum={false} + dragElastic={0}: sin "fling" — solo el arrastre
  *   completo hasta el extremo confirma.
  * - dragConstraints (ref del track): el thumb nunca sale del carril.
- * - touchAction: pan-y: el scroll vertical del sheet sigue funcionando.
- * - Permite cancelar: si el dedo regresa antes del extremo, vuelve a idle.
+ * - touch-action: none (NO pan-y): el navegador no puede reclamar este gesto
+ *   como scroll vertical. Antes `pan-y` autorizaba a WebKit a quedarse el
+ *   toque como paneo del cuerpo del sheet, lo que dispara `pointercancel` a
+ *   mitad del deslizamiento y el control "volvía solo" sin confirmar. El
+ *   scroll del cuerpo del sheet y el arrastre de su cabecera no cambian; lo
+ *   único que se pierde es arrastrar el cuerpo empezando el dedo sobre la
+ *   barra (56 px de alto).
+ * - Cancelación: `pointercancel` / `touchcancel` NO son un release. Framer
+ *   entrega ambos por `onDragEnd` (PanSession registra `pointercancel` en el
+ *   mismo handler que `pointerup`), así que aquí una bandera propia
+ *   (`cancelledRef`) los distingue y el control vuelve a 0 SIN confirmar
+ *   aunque el thumb estuviera en el extremo: un gesto que el navegador se
+ *   quedó no es intención completa del repartidor.
+ * - Traza (staging): `mount`/`unmount`, pointer down/move/up/cancel,
+ *   touchcancel, lostpointercapture, fin del drag con % y motivo, y resultado
+ *   de la acción. Sin sumidero conectado no graba nada.
  *
  * Visual: rectángulo (esquinas rectas), color principal de ElMenu para el
  * progreso y la flecha; alto contraste y lectura inmediata.
  */
-
-const THUMB_WIDTH_PX = 48;
-const TRACK_INSET_PX = 4;
 
 type SwipeState = "idle" | "confirming" | "done";
 
@@ -47,6 +65,8 @@ export function DriveSwipeConfirm({
   onComplete,
   label = "Desliza para confirmar",
   successLabel = "Confirmado",
+  stage = null,
+  serviceKind = null,
 }: {
   /** Acción asíncrona; true = confirmada, false = regresar a idle. */
   onComplete: () => Promise<boolean>;
@@ -54,10 +74,23 @@ export function DriveSwipeConfirm({
   label?: string;
   /** Texto tras completar (mientras el padre avanza de etapa). */
   successLabel?: string;
+  /** Etapa del pedido al momento del gesto (solo traza). */
+  stage?: string | null;
+  /** Tipo de pedido: la recolección de restaurante no tiene acción de servidor. */
+  serviceKind?: "restaurant" | "mandado" | null;
 }) {
   const trackRef = useRef<HTMLDivElement | null>(null);
   const lastTickRef = useRef(0);
   const [state, setState] = useState<SwipeState>("idle");
+  /**
+   * true ⇔ el gesto murió por `pointercancel`/`touchcancel`. Se reinicia en
+   * cada `pointerdown`. Es la única forma de distinguir "el navegador se quedó
+   * el gesto" de "el repartidor soltó el dedo", porque framer los entrega por
+   * el mismo `onDragEnd`.
+   */
+  const cancelledRef = useRef(false);
+  /** Último progreso registrado (throttle de la traza de movimiento). */
+  const lastMoveTraceRef = useRef({ at: 0, pct: -1 });
 
   // El arrastre se inicia desde TODA la barra (no solo el thumb): el gesto
   // natural es deslizar sobre el control, no apuntar a los 48 px del thumb.
@@ -66,11 +99,37 @@ export function DriveSwipeConfirm({
   const x = useMotionValue(0);
 
   /** Recorrido máximo del thumb (ancho del track − ancho del thumb − inset). */
-  const maxSwipeX = (): number => {
-    const track = trackRef.current;
-    if (!track) return 1;
-    return Math.max(1, track.clientWidth - THUMB_WIDTH_PX - TRACK_INSET_PX * 2);
+  const maxSwipeX = (): number => swipeTravelPx(trackRef.current?.clientWidth ?? 0);
+
+  /** Ancho del track (solo para el % del relleno en la traza). */
+  const trackWidth = (): number => trackRef.current?.clientWidth ?? 0;
+
+  /** Traza: una sola puerta para no repetir etapa/tipo en cada llamada. */
+  const traceSwipe = (
+    type: SwipeTraceEntryType,
+    extra: {
+      x?: number | null;
+      max?: number | null;
+      pct?: number | null;
+      fillPct?: number | null;
+      reason?: string | null;
+      result?: string | null;
+      pointerType?: string | null;
+    } = {}
+  ): void => {
+    recordSwipeTrace({ type, stage, serviceKind, ...extra });
   };
+
+  // Remontaje vs cancelación: si el control desaparece a mitad del gesto, la
+  // traza lo muestra como unmount (Fase 10: la etapa viene del GPS).
+  useEffect(() => {
+    traceSwipe("mount", { result: `stage=${stage ?? "-"}` });
+    return () => {
+      traceSwipe("unmount");
+    };
+    // Solo montaje/desmontaje: no se re-registra cuando cambian las props.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Relleno del track y desvanecido del texto según el avance del thumb.
   const fillWidth = useTransform(x, (v) => {
@@ -85,13 +144,27 @@ export function DriveSwipeConfirm({
   const runConfirm = async () => {
     if (state !== "idle") return;
     setState("confirming");
+    traceSwipe("confirm", {
+      x: x.get(),
+      max: maxSwipeX(),
+      pct: swipeProgressPct(x.get(), maxSwipeX()),
+      fillPct: swipeFillPct(x.get(), trackWidth()),
+      reason: "start",
+    });
     buzz([15, 30, 15]);
     let ok = false;
     try {
       ok = await onComplete();
     } catch {
       ok = false;
+      traceSwipe("confirm", { reason: "throw" });
     }
+    traceSwipe("confirm", {
+      reason: "result",
+      result: ok ? "ok" : "false",
+      pct: swipeProgressPct(x.get(), maxSwipeX()),
+      fillPct: swipeFillPct(x.get(), trackWidth()),
+    });
     if (ok) {
       // El thumb queda al fondo a la derecha con check verde: feedback visual
       // de éxito mientras el padre avanza a la siguiente etapa.
@@ -110,10 +183,73 @@ export function DriveSwipeConfirm({
       onPointerDown={(event) => {
         // Sin dragListener en el thumb: el pointerdown de CUALQUIER punto de la
         // barra arranca el arrastre (comportamiento estándar de swipe-to-confirm).
+        cancelledRef.current = false;
+        traceSwipe("pointer-down", {
+          pointerType: event.pointerType,
+          reason: state === "idle" ? "drag-start" : `ignored:${state}`,
+        });
         if (state === "idle") dragControls.start(event);
       }}
+      onPointerMove={(event) => {
+        // Progreso para la traza (no una fila por frame: ≥100 ms y ≥3 puntos).
+        const maxX = maxSwipeX();
+        const pct = swipeProgressPct(x.get(), maxX);
+        const now = Date.now();
+        const last = lastMoveTraceRef.current;
+        if (now - last.at < 100 && Math.abs(pct - last.pct) < 3) return;
+        lastMoveTraceRef.current = { at: now, pct };
+        traceSwipe("pointer-move", {
+          x: x.get(),
+          max: maxX,
+          pct,
+          fillPct: swipeFillPct(x.get(), trackWidth()),
+          pointerType: event.pointerType,
+        });
+      }}
+      onPointerUp={(event) => {
+        // Mejor esfuerzo: en táctil el pointerup llega al track por captura
+        // implícita; el cierre autoritativo del gesto es `onDragEnd`.
+        const maxX = maxSwipeX();
+        traceSwipe("pointer-up", {
+          x: x.get(),
+          max: maxX,
+          pct: swipeProgressPct(x.get(), maxX),
+          fillPct: swipeFillPct(x.get(), trackWidth()),
+          pointerType: event.pointerType,
+        });
+      }}
+      onPointerCancel={(event) => {
+        cancelledRef.current = true;
+        const maxX = maxSwipeX();
+        traceSwipe("pointer-cancel", {
+          x: x.get(),
+          max: maxX,
+          pct: swipeProgressPct(x.get(), maxX),
+          fillPct: swipeFillPct(x.get(), trackWidth()),
+          pointerType: event.pointerType,
+          reason: "browser-took-gesture",
+        });
+      }}
+      onTouchCancel={() => {
+        cancelledRef.current = true;
+        const maxX = maxSwipeX();
+        traceSwipe("touch-cancel", {
+          x: x.get(),
+          max: maxX,
+          pct: swipeProgressPct(x.get(), maxX),
+          fillPct: swipeFillPct(x.get(), trackWidth()),
+          reason: "touch-cancelled",
+        });
+      }}
+      onLostPointerCapture={(event) => {
+        // Informativo: llega DESPUÉS del up/cancel (captura implícita del toque).
+        traceSwipe("lost-pointer-capture", {
+          pointerType: event.pointerType,
+          reason: cancelledRef.current ? "after-cancel" : "after-release",
+        });
+      }}
       className="relative h-14 cursor-grab select-none overflow-hidden bg-[#09193B] active:cursor-grabbing"
-      style={{ touchAction: "pan-y" }}
+      style={{ touchAction: "none" }}
     >
       {/* Relleno de progreso: color principal de ElMenu */}
       <motion.div
@@ -140,7 +276,7 @@ export function DriveSwipeConfirm({
         dragConstraints={trackRef}
         dragElastic={0}
         dragMomentum={false}
-        style={{ x, touchAction: "pan-y" }}
+        style={{ x, touchAction: "none" }}
         onDrag={() => {
           // Háptico corto al cruzar cada tercio (guía táctil sin mirar).
           const maxX = maxSwipeX();
@@ -152,10 +288,23 @@ export function DriveSwipeConfirm({
         }}
         onDragEnd={() => {
           lastTickRef.current = 0;
-          if (x.get() >= maxSwipeX() - 4) {
+          const maxX = maxSwipeX();
+          const value = x.get();
+          // Cancelado ≠ soltado: un gesto que el navegador se quedó vuelve a 0
+          // SIEMPRE (nunca confirma, ni siquiera con el thumb en el extremo).
+          const reason = classifySwipeEnd({ x: value, maxX, cancelled: cancelledRef.current });
+          traceSwipe("drag-end", {
+            x: value,
+            max: maxX,
+            pct: swipeProgressPct(value, maxX),
+            fillPct: swipeFillPct(value, trackWidth()),
+            reason,
+            result: reason === "threshold" ? "confirm" : "reset",
+          });
+          if (reason === "threshold") {
             void runConfirm();
           } else {
-            // Cancelación: el dedo regresó → el thumb vuelve al inicio.
+            // Release antes del umbral o cancelación: el thumb vuelve al inicio.
             animate(x, 0, { type: "spring", stiffness: 400, damping: 35 });
           }
         }}

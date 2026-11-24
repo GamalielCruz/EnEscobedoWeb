@@ -12,6 +12,7 @@ import {
 import type { DriveNavPhase } from "@/components/drive/DriveNavBar";
 import type { DriverOrder } from "@/hooks/useDriverState";
 import { DriveSwipeConfirm } from "@/components/drive/DriveSwipeConfirm";
+import { stageActionGapMessage } from "@/lib/drive/stage-action";
 import { shortOrderCode } from "@/lib/dispatch/dispatch-format";
 
 /**
@@ -183,6 +184,10 @@ export function DriveOrderDetails({
 
   const isPickupStage = stage === "to_pickup" || stage === "at_pickup";
   const showPinForm = stage === "at_delivery" && order.requiresDeliveryPin;
+  // Etapa SIN acción de servidor (hoy: recolección de restaurante): no se
+  // pinta un control que no puede confirmar nada — antes el deslizador volvía
+  // al inicio en silencio. Se explica en su lugar (ver stageActionGapMessage).
+  const pickupGap = stageActionGapMessage(stage, order.serviceKind ?? null);
 
   // Entidad protagonista de la etapa: punto de recogida antes, destinatario
   // después (SOLO con datos reales; si no hay nombre, la dirección es el
@@ -264,15 +269,22 @@ export function DriveOrderDetails({
 
           {/* Confirmación por deslizaje: SOLO EN el punto. La llegada se
               detecta sola (GPS); sin paso visual "Llegué al punto". */}
-          {stage === "at_pickup" && (
-            <div className="mt-3">
-              <DriveSwipeConfirm
-                onComplete={onPrimaryAction}
-                label="Desliza para confirmar recolección"
-                successLabel="Recolección confirmada"
-              />
-            </div>
-          )}
+          {stage === "at_pickup" &&
+            (pickupGap ? (
+              <p className="mt-3 border-l-4 border-amber-400 bg-amber-50 px-3 py-2 text-xs font-semibold leading-snug text-amber-900">
+                {pickupGap}
+              </p>
+            ) : (
+              <div className="mt-3">
+                <DriveSwipeConfirm
+                  onComplete={onPrimaryAction}
+                  label="Desliza para confirmar recolección"
+                  successLabel="Recolección confirmada"
+                  stage={stage}
+                  serviceKind={order.serviceKind ?? null}
+                />
+              </div>
+            ))}
           {error && (
             <p className="mt-2 text-xs font-medium text-red-500">{error}</p>
           )}
@@ -299,6 +311,8 @@ export function DriveOrderDetails({
                 onComplete={onPrimaryAction}
                 label="Desliza para confirmar entrega"
                 successLabel="Entrega confirmada"
+                stage={stage}
+                serviceKind={order.serviceKind ?? null}
               />
             </div>
           )}
