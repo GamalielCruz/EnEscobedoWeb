@@ -184,9 +184,10 @@ export function DriveOrderDetails({
 
   const isPickupStage = stage === "to_pickup" || stage === "at_pickup";
   const showPinForm = stage === "at_delivery" && order.requiresDeliveryPin;
-  // Etapa SIN acción de servidor (hoy: recolección de restaurante): no se
-  // pinta un control que no puede confirmar nada — antes el deslizador volvía
-  // al inicio en silencio. Se explica en su lugar (ver stageActionGapMessage).
+  // Etapa SIN acción de servidor: hoy no existe (la recolección de restaurante
+  // se cerró con restaurantPickedUpAt). Se conserva el camino genérico para
+  // una etapa futura: en ese caso se explica en lugar de pintar un control
+  // mudo (ver stageActionGapMessage).
   const pickupGap = stageActionGapMessage(stage, order.serviceKind ?? null);
 
   // Entidad protagonista de la etapa: punto de recogida antes, destinatario

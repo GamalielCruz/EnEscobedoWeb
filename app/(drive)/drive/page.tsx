@@ -399,7 +399,12 @@ function getMandadoAction(order: DriverOrder): { label: string; action: string; 
 function getRestaurantAction(order: DriverOrder): { label: string; action: string; icon: React.ReactNode } {
   switch (order.dispatchStatus) {
     case "accepted":
-      return { label: "RECOLECCIÓN", action: "navigate_pickup", icon: <MapPin className="h-4 w-4" /> };
+      // Recolección confirmada (restaurantPickedUpAt): el tramo vigente es la
+      // ENTREGA, con ruta y guía al cliente. Sin el sello se navega al
+      // restaurante. `dispatchStatus` sigue "accepted" en ambos casos.
+      return order.restaurantPickedUpAt
+        ? { label: "ENTREGA", action: "navigate_delivery", icon: <MapPin className="h-4 w-4" /> }
+        : { label: "RECOLECCIÓN", action: "navigate_pickup", icon: <MapPin className="h-4 w-4" /> };
     case "at_door":
       return { label: "CONFIRMAR ENTREGA", action: "delivered", icon: <CheckCircle className="h-4 w-4" /> };
     default:
@@ -422,8 +427,9 @@ function simActionPlanFor(order: DriverOrder, stage: "at_pickup" | "at_delivery"
   const mandadoState = order.mandadoState;
 
   if (stage === "at_pickup") {
-    // Restaurante: la recolección es navegación pura, sin acción de servidor.
-    if (!isMandado) return [];
+    // Restaurante: la recolección se confirma con el deslizador
+    // (restaurantPickedUpAt); ya recogido no queda nada que pedir.
+    if (!isMandado) return order.restaurantPickedUpAt ? [] : ["picked_up"];
     if (mandadoState === "assigned") return ["pickup_arrival", "picked_up"];
     if (mandadoState === "pickup_arrival") return ["picked_up"];
     return []; // Ya recogido (en_route o posterior): nada que hacer.
@@ -1167,6 +1173,9 @@ export default function DrivePage() {
 
   // Navigation target real, según la etapa del pedido: navigate_pickup →
   // recolección, navigate_delivery → entrega (coordenadas exactas del pedido).
+  // Un restaurante YA recogido también llega aquí como navigate_delivery
+  // (getRestaurantAction usa restaurantPickedUpAt), así que tiene ruta y guía
+  // hacia el cliente sin pasar por WhatsApp.
   const realNavTarget = useMemo(() => {
     if (!activeOrder) return null;
     const action = orderAction?.action;
