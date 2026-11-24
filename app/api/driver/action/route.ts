@@ -5,6 +5,7 @@ import {
   rejectDriverOffer,
   markPickupArrival,
   markMandadoEnRoute,
+  markPickedUp,
   markAtDoor,
   markDelivered,
   markDeliveredWithPin,
@@ -41,10 +42,16 @@ export async function POST(request: NextRequest) {
       result = await markPickupArrival(orderNumber, repartidor._id);
       break;
     case "picked_up":
-      result = await markMandadoEnRoute(orderNumber, repartidor._id);
+      // Ramificado por serviceKind: mandados conservan su transición (Ya
+      // recogí → mandadoEnRuta) y restaurantes sellan restaurantPickedUpAt.
+      result = await markPickedUp(orderNumber, repartidor._id);
       break;
     case "destination_arrival":
-      result = await markAtDoor(orderNumber, repartidor._id);
+      // Camino de la APP: en restaurantes a domicilio la llegada al cliente
+      // exige recolección confirmada (el webhook de WhatsApp NO pasa por aquí).
+      result = await markAtDoor(orderNumber, repartidor._id, {
+        requireRestaurantPickup: true,
+      });
       break;
     case "delivered":
       result = await markDelivered(orderNumber, repartidor._id);

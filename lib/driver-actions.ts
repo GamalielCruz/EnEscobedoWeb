@@ -22,6 +22,10 @@ import {
 } from "@/lib/order-cancellation";
 import { mandadoDriverState, type MandadoDriverState } from "@/lib/mandado-driver-flow";
 import {
+  decideRestaurantPickup,
+  restaurantDestinationArrivalError,
+} from "@/lib/drive/restaurant-pickup";
+import {
   releaseOrdersForDriver,
   redispatchOrders,
   dispatchWaitingOrdersForDriver,
@@ -79,6 +83,7 @@ const ORDER_BY_NUMBER_QUERY = `*[_type == "order" && orderNumber == $orderNumber
   offerShownAt,
   mandadoPickupAtDoor,
   mandadoEnRuta,
+  restaurantPickedUpAt,
   mandadoEntregaSegura,
   deliveryPinHash,
   deliveryPinCiphertext,
@@ -259,6 +264,8 @@ export type OrderDoc = {
   lastOfferStatus?: string;
   mandadoPickupAtDoor?: boolean;
   mandadoEnRuta?: boolean;
+  /** Restaurante: recolección confirmada por el repartidor (etapa derivada). */
+  restaurantPickedUpAt?: string;
   mandadoEntregaSegura?: boolean;
   deliveryPinHash?: string;
   deliveryPinCiphertext?: string;
@@ -1213,6 +1220,58 @@ export async function markMandadoEnRoute(
 }
 
 /**
+ * Recogí el pedido en un RESTAURANTE → sella `restaurantPickedUpAt`.
+ *
+ * No existe (ni se crea) un `dispatchStatus: "picked_up"`: `dispatchStatus`
+ * sigue `accepted` hasta `at_door` (puerta del CLIENTE) y la app deriva la
+ * etapa del timestamp. Tampoco se toca `orderStatus` (en click & collect
+ * `picked_up` significa que el cliente recogió).
+ *
+ * Idempotente: un segundo envío devuelve ok SIN evento, sin Baserow y sin
+ * mensajes. La persistencia pasa por transitionOrder (propiedad + CAS con
+ * ifRevisionId + evento) igual que el resto de transiciones del repartidor.
+ */
+export async function markRestaurantPickedUp(
+  orderNumber: string,
+  driverId: string
+): Promise<TransitionResult> {
+  const order = await fetchOrderByNumber(orderNumber);
+  const decision = decideRestaurantPickup(order, driverId);
+  if (!decision.apply) return { ok: false, error: decision.error };
+  if (decision.alreadyPickedUp) {
+    return {
+      ok: true,
+      newState: "picked_up",
+      dispatchStatus: order?.dispatchStatus ?? "",
+    };
+  }
+
+  const now = new Date().toISOString();
+  return transitionOrder(
+    orderNumber,
+    driverId,
+    (p) => p.set({ restaurantPickedUpAt: now, updatedAt: now }),
+    "picked_up"
+  );
+}
+
+/**
+ * `picked_up` del endpoint del repartidor, ramificado por `serviceKind`:
+ *  - mandado   → markMandadoEnRoute (Ya recogí → `mandadoEnRuta`), SIN cambios.
+ *  - restaurante → markRestaurantPickedUp (`restaurantPickedUpAt`).
+ */
+export async function markPickedUp(
+  orderNumber: string,
+  driverId: string
+): Promise<TransitionResult> {
+  const order = await fetchOrderByNumber(orderNumber);
+  if (!order) return { ok: false, error: "El pedido no existe." };
+  return String(order.serviceKind ?? "") === "mandado"
+    ? markMandadoEnRoute(orderNumber, driverId)
+    : markRestaurantPickedUp(orderNumber, driverId);
+}
+
+/**
  * EN PUERTA en destino (mandado en_route / restaurantes) → dispatchStatus="at_door"
  * Side effects: Baserow sync, event "at_door"
  *
@@ -1223,10 +1282,20 @@ export async function markMandadoEnRoute(
  */
 export async function markAtDoor(
   orderNumber: string,
-  driverId: string
+  driverId: string,
+  opts: { requireRestaurantPickup?: boolean } = {}
 ): Promise<TransitionResult> {
   const order = await fetchOrderByNumber(orderNumber);
   if (!order) return { ok: false, error: "El pedido no existe." };
+
+  // Camino de la APP (Drive): en un restaurante a domicilio la llegada al
+  // CLIENTE exige recolección confirmada. El webhook de WhatsApp llama a
+  // markAtDoor sin esta opción: ese camino NO cambia.
+  const pickupGate = restaurantDestinationArrivalError(
+    order,
+    opts.requireRestaurantPickup === true
+  );
+  if (pickupGate) return { ok: false, error: pickupGate };
 
   const isMandado = String(order.serviceKind ?? "") === "mandado";
   if (isMandado) {
