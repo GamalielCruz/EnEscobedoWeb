@@ -2111,7 +2111,7 @@ export default function DrivePage() {
         heading: frame.command.bearing,
         padding: frame.command.padding,
         ...(frame.command.zoom != null ? { zoom: frame.command.zoom } : {}),
-        pitch: 0,
+        pitch: frame.command.pitch,
         origin: "programmatic",
       });
     };

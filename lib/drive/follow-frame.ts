@@ -87,6 +87,14 @@ export const MAX_FRAME_DT_S = 0.2;
 /** Velocidad que alcanza el zoom lejano (≈65 km/h). */
 export const NAV_SPEED_REF_MPS = 18;
 export const TURN_AWARENESS_METERS = 220;
+/** Distancia de activación de la vista de anticipación para cruces. */
+export const TURN_CAMERA_AWARENESS_METERS = 1_000;
+/** Pitch máximo de la cámara al aproximarse a una maniobra real. */
+export const TURN_CAMERA_PITCH = 35;
+/** Zoom máximo de alejamiento adicional al aproximarse al cruce. */
+export const TURN_CAMERA_ZOOM_OUT = 0.7;
+/** Velocidad de interpolación del pitch por segundo. */
+export const NAV_PITCH_SMOOTH = 0.045;
 export const TURN_ZOOM_OUT = 0.9;
 export const TURN_ANGLE_SIGNIFICANT_DEG = 40;
 export const TURN_ANGLE_STRONG_DEG = 80;
@@ -115,6 +123,8 @@ export type FollowCameraState = {
   cameraHeading: number | null;
   cameraHeadingTs: number | null;
   zoomTarget: number | null;
+  /** Pitch interpolado actual de la cámara. */
+  pitch?: number | null;
   /**
    * Fase 5-A: estado de la estima entre fixes. Opcionales para no romper a los
    * consumidores que construyen el estado a mano: el primer cuadro los
@@ -186,7 +196,7 @@ export type FollowFrameResult = {
   command: {
     center: RoutePoint;
     bearing: number;
-    pitch: 0;
+    pitch: number;
     padding: AnchorPadding;
     zoom?: number;
   };
@@ -406,6 +416,8 @@ export function computeFollowFrame(
   // ── 5) Zoom adaptativo (velocidad + maniobra), persecución suave ──
   let zoomTarget = state.zoomTarget;
   let pendingZoom = input.pendingZoom;
+  let pitch = state.pitch ?? 0;
+  let turnApproachActive = false;
   {
     let targetZoom =
       NAV_ZOOM_SLOW -
@@ -438,6 +450,14 @@ export function computeFollowFrame(
       const distToTurn = Math.max(0, stepEnd - done);
       const curStep = route.steps[idx];
       const nextStep = route.steps[idx + 1];
+      const realManeuver =
+        nextStep != null && !["straight", "depart", "arrive", "unknown"].includes(nextStep.maneuver ?? "");
+      const pitchGoal =
+        input.navigationReady && realManeuver && distToTurn <= TURN_CAMERA_AWARENESS_METERS
+          ? TURN_CAMERA_PITCH
+          : 0;
+      pitch += (pitchGoal - pitch) * (1 - Math.pow(1 - NAV_PITCH_SMOOTH, frameScale));
+      if (Math.abs(pitch - pitchGoal) < 0.1) pitch = pitchGoal;
       const nextNextStep = route.steps[idx + 2];
       const turnOpenFactor = (
         fromStep: RouteStep | undefined,
@@ -460,7 +480,14 @@ export function computeFollowFrame(
           1 - Math.min(1, distanceToManeuver / TURN_AWARENESS_METERS);
         return strength * rampIn;
       };
-      let openFactor = turnOpenFactor(curStep, nextStep, distToTurn);
+      const approachFactor = realManeuver
+        ? TURN_CAMERA_ZOOM_OUT * (1 - Math.min(1, distToTurn / TURN_CAMERA_AWARENESS_METERS))
+        : 0;
+      turnApproachActive = approachFactor > 0;
+      let openFactor = Math.max(
+        turnOpenFactor(curStep, nextStep, distToTurn),
+        approachFactor
+      );
       if (nextStep != null && nextNextStep != null) {
         const nextStepEnd = stepEnd + nextStep.distanceMeters;
         const distToNextTurn = Math.max(0, nextStepEnd - done);
@@ -477,9 +504,18 @@ export function computeFollowFrame(
         targetZoom = Math.max(NAV_ZOOM_MIN - 0.4, targetZoom);
       }
     }
-    // Histéresis del objetivo: no recalcular para micro-variaciones.
+    // Si Directions está recalculando o no hay una geometría utilizable, vuelve
+    // también desde la inclinación anterior sin esperar a que llegue otra ruta.
+    if (!input.route?.path || input.route.path.length < 2 || input.route.steps.length === 0) {
+      pitch += (0 - pitch) * (1 - Math.pow(1 - NAV_PITCH_SMOOTH, frameScale));
+      if (pitch < 0.1) pitch = 0;
+    }
+    // Histéresis del objetivo: no recalcular para micro-variaciones. Durante la
+    // aproximación al cruce sí se siguen las variaciones del factor para que el
+    // zoom empiece a abrirse dentro de la ventana de 1 km.
     if (
       zoomTarget == null ||
+      turnApproachActive ||
       Math.abs(targetZoom - zoomTarget) >= NAV_ZOOM_HYSTERESIS
     ) {
       zoomTarget = targetZoom;
@@ -499,7 +535,7 @@ export function computeFollowFrame(
   const command: FollowFrameResult["command"] = {
     center: desiredCenter,
     bearing: cameraHeading ?? input.mapBearing,
-    pitch: 0,
+    pitch,
     padding: computeAnchorPadding(input.containerHeightPx, anchorY),
     ...(pendingZoom != null ? { zoom: pendingZoom } : {}),
   };
@@ -511,6 +547,7 @@ export function computeFollowFrame(
       cameraHeading,
       cameraHeadingTs,
       zoomTarget,
+      pitch,
       frameTs: now,
       fixTs: fixTs ?? state.fixTs ?? null,
       correctionMeters,
