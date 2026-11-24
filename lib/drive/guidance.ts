@@ -28,6 +28,51 @@ import type { RouteStep } from "@/lib/dispatch/routing";
 
 export const DEPART_ADVANCE_METERS = 40;
 
+/**
+ * Gracia de GPS débil (Fase 9, punto 5).
+ *
+ * Evidencia usada para el valor: el gate de fixes acepta uno bueno cada
+ * ~1 s y descarta los de accuracy >20 m (`GOOD_FIX_ACCURACY_M`), la edad
+ * máxima de un fix es 5 s (`MAX_FIX_AGE_MS`) y la estima entre fixes deja de
+ * avanzar a los 2,4 s (`DEAD_RECKON_MAX_FIX_AGE_MS` + `STOP_FADE`).
+ *
+ * 8 s cubre 2–3 fixes perdidos (un túnel corto, un cambio de celda) sin
+ * avisar, y sigue por debajo de los 10 s del escape de «sin fix bueno»
+ * (`NO_GOOD_FIX_ESCAPE_MS`): antes de que el gate cambie de política, la
+ * tarjeta ya avisa de que el GPS está degradado. Con este umbral la guía
+ * NUNCA cae a «Dirígete…» mientras la ruta siga viva: se conserva la última
+ * instrucción y solo se añade la marca «GPS débil».
+ */
+export const GPS_WEAK_GRACE_MS = 8_000;
+
+/**
+ * ¿Marcar «GPS débil»? Solo con una ruta viva y después de que la navegación
+ * ya tuviera una posición buena: al arrancar (sin primer fix) no es un
+ * problema de señal, es el estado normal de «Comienza tu viaje».
+ */
+export function isGpsWeak(input: {
+  routeAlive: boolean;
+  navigationReady: boolean;
+  msSinceGoodFix: number | null;
+  graceMs?: number;
+}): boolean {
+  if (!input.routeAlive || !input.navigationReady) return false;
+  if (input.msSinceGoodFix == null) return false;
+  return input.msSinceGoodFix > (input.graceMs ?? GPS_WEAK_GRACE_MS);
+}
+
+/**
+ * ¿La tarjeta debe conservar la última guía en lugar de volver al texto
+ * genérico? Sí mientras haya ruta viva y el cálculo actual no produzca guía
+ * (GPS degradado, arranque sin fix bueno, geometría degenerada).
+ */
+export function shouldHoldLastGuidance(input: {
+  routeAlive: boolean;
+  hasFreshGuidance: boolean;
+}): boolean {
+  return input.routeAlive && !input.hasFreshGuidance;
+}
+
 export type GuidanceState = {
   /** Clave de ruta (identidad del array de steps); al cambiar, se reinicia. */
   routeKey: unknown;

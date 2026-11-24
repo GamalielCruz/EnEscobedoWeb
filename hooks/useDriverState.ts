@@ -2,6 +2,20 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import {
+  browserOnline,
+  isNetworkDown,
+  resolveNetworkSignal,
+  type NetworkSignal,
+} from "@/lib/drive/connection";
+import {
+  browserStorage,
+  clearDriverStateSnapshot,
+  readDriverStateSnapshot,
+  shouldPersistDriverState,
+  writeDriverStateSnapshot,
+} from "@/lib/drive/driver-state-snapshot";
+
 type DriverOrder = {
   orderNumber: string;
   serviceKind: "restaurant" | "mandado";
@@ -97,6 +111,14 @@ export function useDriverState({ enabled = true }: { enabled?: boolean } = {}) {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
   const stateRef = useRef<DriverState | null>(null);
+  // Fase 9 (punto 3): señal de red = navigator.onLine + fallos consecutivos
+  // del sondeo. Un solo timeout no marca «sin señal».
+  const [navigatorOnline, setNavigatorOnline] = useState<boolean | null>(null);
+  const [consecutiveFailures, setConsecutiveFailures] = useState(0);
+  /** true ⇔ el estado visible viene del snapshot (aún sin confirmar por red). */
+  const [restoredFromSnapshot, setRestoredFromSnapshot] = useState(false);
+  /** El snapshot se restaura UNA vez por montaje (no al re-habilitar el sondeo). */
+  const snapshotRestoredRef = useRef(false);
   // `enabled` vive también en un ref para que `fetchState` (identidad estable)
   // y `rescheduleInterval` puedan cortar el sondeo sin recrearse.
   const enabledRef = useRef(enabled);
@@ -127,11 +149,23 @@ export function useDriverState({ enabled = true }: { enabled?: boolean } = {}) {
         stateRef.current = data;
         setError(null);
         setLoading(false);
+        setConsecutiveFailures(0);
+        setRestoredFromSnapshot(false);
+        // Fase 9 (punto 2): snapshot de NUESTRO backend para sobrevivir a una
+        // recarga sin red. Sin trabajo activo se borra: no debe resucitar un
+        // pedido ya cerrado.
+        const storage = browserStorage();
+        if (shouldPersistDriverState(data)) {
+          writeDriverStateSnapshot(storage, data, Date.now());
+        } else {
+          clearDriverStateSnapshot(storage);
+        }
       }
     } catch (err) {
       if (mountedRef.current) {
         setError(err instanceof Error ? err.message : "Error desconocido");
         setLoading(false);
+        setConsecutiveFailures((n) => n + 1);
       }
     }
   }, []);
@@ -144,6 +178,32 @@ export function useDriverState({ enabled = true }: { enabled?: boolean } = {}) {
     const ms = getPollInterval(stateRef.current);
     intervalRef.current = setInterval(fetchState, ms);
   }, [fetchState]);
+
+  // Fase 9 (punto 3): cortes reales del SO y reintento automático al volver
+  // la red. `fetchState` y `rescheduleInterval` son estables, así que los
+  // listeners no se recrean.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const sync = () => setNavigatorOnline(browserOnline());
+    sync();
+    const onOnline = () => {
+      setNavigatorOnline(browserOnline());
+      // Reintento inmediato: no esperar al siguiente ciclo del sondeo.
+      if (!enabledRef.current) return;
+      fetchState().then(() => {
+        if (mountedRef.current) rescheduleInterval();
+      });
+    };
+    const onOffline = () => {
+      setNavigatorOnline(browserOnline());
+    };
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
+    };
+  }, [fetchState, rescheduleInterval]);
 
   // Setup polling (solo cuando hay sesión).
   useEffect(() => {
@@ -160,6 +220,20 @@ export function useDriverState({ enabled = true }: { enabled?: boolean } = {}) {
         mountedRef.current = false;
         stop();
       };
+    }
+
+    // Fase 9 (punto 2): restaurar el último estado bueno ANTES de pedir red.
+    // Si Safari recargó la pestaña sin señal, el primer sondeo fallará; sin
+    // esto la página caía en la pantalla de error y se perdía el viaje.
+    if (!snapshotRestoredRef.current) {
+      snapshotRestoredRef.current = true;
+      const snapshot = readDriverStateSnapshot<DriverState>(browserStorage(), Date.now());
+      if (snapshot.status === "ok") {
+        setState(snapshot.payload);
+        stateRef.current = snapshot.payload;
+        setLoading(false);
+        setRestoredFromSnapshot(true);
+      }
     }
 
     fetchState().then(() => {
@@ -197,7 +271,22 @@ export function useDriverState({ enabled = true }: { enabled?: boolean } = {}) {
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, [fetchState, rescheduleInterval]);
 
-  return { state, loading, error, refetch: fetchState };
+  // Señal de red para la UI (indicador «Sin señal» y avisos de la tarjeta).
+  const networkSignal: NetworkSignal = resolveNetworkSignal(
+    navigatorOnline,
+    consecutiveFailures
+  );
+
+  return {
+    state,
+    loading,
+    error,
+    refetch: fetchState,
+    networkSignal,
+    networkDown: isNetworkDown(networkSignal),
+    consecutiveFailures,
+    restoredFromSnapshot,
+  };
 }
 
 export type { DriverState, DriverOrder, DriverOffer };

@@ -24,6 +24,8 @@ import {
   XCircle,
   LocateFixed,
   Home as HomeIcon,
+  WifiOff,
+  Satellite,
 } from "lucide-react";
 import { DriveNavBar, type DriveNavPhase } from "@/components/drive/DriveNavBar";
 import { DriveTripSheet } from "@/components/drive/DriveTripSheet";
@@ -120,9 +122,17 @@ import {
 import { createDriveHeadingResolver } from "@/lib/drive/heading-resolver";
 import {
   computeGuidance,
+  isGpsWeak,
   nextGuidanceState,
+  shouldHoldLastGuidance,
   type GuidanceState,
 } from "@/lib/drive/guidance";
+import {
+  OFFLINE_LABEL,
+  STYLE_RETRY_MS,
+  browserOnline,
+  routeRecalcNotice,
+} from "@/lib/drive/connection";
 
 // ── Map config ─────────────────────────────────────────────────────
 
@@ -810,7 +820,14 @@ export default function DrivePage() {
   if (TRACE_REC_ENABLED && traceRecorderRef.current == null) {
     traceRecorderRef.current = new TraceRecorder();
   }
-  const { state, loading, error: stateError, refetch } = useDriverState({
+  const {
+    state,
+    loading,
+    error: stateError,
+    refetch,
+    networkDown,
+    restoredFromSnapshot,
+  } = useDriverState({
     enabled: isSignedIn === true,
   });
   const {
@@ -926,21 +943,53 @@ export default function DrivePage() {
   // Mientras se resuelve se muestra el loader del mapa.
   const [driveStyle, setDriveStyle] = useState<StyleSpecification | null>(null);
   const [driveStyleReady, setDriveStyleReady] = useState(false);
+  // Fase 9 (punto 4): el estilo no se pudo traer y NO hay red. Antes se
+  // marcaba listo igual y el mapa caía al fallback `mapbox://`, que también
+  // necesita descargarse: quedaba un spinner infinito sobre un mapa vacío.
+  const [styleOffline, setStyleOffline] = useState(false);
+  const [styleAttempt, setStyleAttempt] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     markDrive("style-request");
     loadDriveMapStyle().then((style) => {
       if (cancelled) return;
-      markDrive("style-ready");
-      measureDrive("style", "style-request", "style-ready");
-      setDriveStyle(style);
+      if (style) {
+        markDrive("style-ready");
+        measureDrive("style", "style-request", "style-ready");
+        setDriveStyle(style);
+        setStyleOffline(false);
+        setDriveStyleReady(true);
+        return;
+      }
+      // Sin estilo: si hay red se mantiene el comportamiento de siempre (el
+      // fallback `mapbox://` sí puede descargarse). Sin red NO se marca listo:
+      // se muestra «Sin conexión, reintentando» y se reintenta al volver.
+      if (browserOnline() === false) {
+        setStyleOffline(true);
+        return;
+      }
+      setStyleOffline(false);
+      setDriveStyle(null);
       setDriveStyleReady(true);
     });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [styleAttempt]);
+
+  // Reintento del estilo sin red: al volver la conexión (inmediato) y por
+  // temporizador acotado mientras siga caído (iOS no siempre emite `online`).
+  useEffect(() => {
+    if (!styleOffline) return;
+    const retry = () => setStyleAttempt((n) => n + 1);
+    const timer = setInterval(retry, STYLE_RETRY_MS);
+    window.addEventListener("online", retry);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("online", retry);
+    };
+  }, [styleOffline]);
   // Alias histórico: antes indicaba que el script de Google Maps había
   // cargado. Con Mapbox el mapa se carga solo y expone `mapReady`.
   const mapsLoaded = mapReady;
@@ -1125,6 +1174,14 @@ export default function DrivePage() {
   const routeClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Antes de este instante no se fuerza otro reintento de ruta. */
   const routeForceRetryAtRef = useRef(0);
+  /**
+   * Fase 9 (punto 3): un desvío real no se pudo recalcular por falta de red.
+   * La línea vieja se conserva y la tarjeta avisa «Sin señal, recalculo al
+   * reconectar» en lugar de quedarse en un «Recalculando…» mudo.
+   */
+  const [recalcDeferred, setRecalcDeferred] = useState(false);
+  /** ¿Estaba caída la red en el render anterior? (transición → online). */
+  const wasNetworkDownRef = useRef(false);
   /** Último destino para el que el SIMULADOR ya pidió la ruta (ver más abajo). */
   const simRouteKeyRef = useRef<string | null>(null);
   /** Antes de este instante no se reintenta la ruta de la simulación. */
@@ -1283,6 +1340,7 @@ export default function DrivePage() {
       measureDrive("route", "route-request", "route-ready");
       if (shouldApplyRouteRefresh(route)) {
         setRoadRoute(route);
+        setRecalcDeferred(false);
         return;
       }
       // Fallo transitorio (timeout/red): la ruta viva NO se borra; la línea y
@@ -1366,7 +1424,11 @@ export default function DrivePage() {
     []
   );
   useEffect(() => {
-    if (sim.active || !activeOrder || !navPhase || !currentLocation) return;
+    // Fase 9 (punto 2): con el estado restaurado de un snapshot (aún sin
+    // confirmar por red) NO se disparan acciones automáticas de servidor: el
+    // snapshot es de solo lectura. El marcado de llegada se hará con el
+    // primer estado confirmado.
+    if (sim.active || restoredFromSnapshot || !activeOrder || !navPhase || !currentLocation) return;
     const action =
       navPhase === "at_pickup"
         ? "pickup_arrival"
@@ -1381,13 +1443,37 @@ export default function DrivePage() {
     if (arrivalMarkedRef.current === key) return;
     arrivalMarkedRef.current = key;
     void markArrival(activeOrder.orderNumber, action);
-  }, [navPhase, activeOrder, currentLocation, pickupPoint, deliveryPoint, sim.active, markArrival]);
+  }, [
+    navPhase,
+    activeOrder,
+    currentLocation,
+    pickupPoint,
+    deliveryPoint,
+    sim.active,
+    restoredFromSnapshot,
+    markArrival,
+  ]);
 
   // Fase 4 — "llegando" SOLO con ruta del tramo vigente (ver routeOnLeg).
 
   // Progreso + siguiente maniobra basados en la geometría REAL de la ruta y
   // en los steps de Directions (no se hace ninguna llamada extra a Google).
-  const guidance = useMemo(() => {
+  // Fase 9 (punto 5): forma explícita para poder conservar la ÚLTIMA guía
+  // cuando el cálculo no puede producir una nueva (`stale`).
+  type LegGuidance = {
+    total: number;
+    remaining: number;
+    remainingSeconds: number | null;
+    instruction: string | null;
+    maneuver: string | null;
+    street: string | null;
+    distanceToManeuver: number | null;
+    stepIndex: number | null;
+    fractionCompleted: number;
+    stale: boolean;
+  };
+  const [lastLegGuidance, setLastLegGuidance] = useState<LegGuidance | null>(null);
+  const guidance = useMemo<LegGuidance | null>(() => {
     if (!roadRoute?.path || roadRoute.path.length < 2) return null;
     // Fase 4-B: sin un fix ≤20 m no hay progreso ni distancia de maniobra. La
     // tarjeta muestra «Dirígete…» (o «Comienza tu viaje») y el zoom por
@@ -1446,8 +1532,72 @@ export default function DrivePage() {
       // Paso activo de la ruta (para registrar la etapa en la traza).
       stepIndex: g.stepIndex,
       fractionCompleted: g.fractionCompleted,
+      stale: false,
     };
   }, [roadRoute, currentLocation, gpsAccuracy, sim.active, navigationPositionReady]);
+
+  // ── Fase 9 (punto 5): la tarjeta no cae a «Dirígete…» con ruta viva ──
+  // Si el cálculo actual no produce guía (GPS degradado, arranque sin fix
+  // bueno, geometría degenerada) se conserva la última del MISMO tramo. La
+  // marca «GPS débil» (gracia de 8 s, ver `lib/drive/guidance.ts`) avisa de
+  // que la distancia mostrada puede estar congelada.
+  const routeAlive = Boolean(roadRoute?.path && roadRoute.path.length >= 2);
+  const guidanceLegKey = roadRoute?.destination
+    ? `${roadRoute.destination.lat.toFixed(5)},${roadRoute.destination.lng.toFixed(5)}`
+    : null;
+  const lastGuidanceLegRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (lastGuidanceLegRef.current !== guidanceLegKey) {
+      // Tramo nuevo (o sin ruta): la guía anterior no sirve.
+      lastGuidanceLegRef.current = guidanceLegKey;
+      setLastLegGuidance(guidance ?? null);
+      return;
+    }
+    if (!guidance) return;
+    // Sin setState si nada visible cambió: los fixes llegan a ~1 Hz y cada
+    // render re-renderiza un árbol grande.
+    setLastLegGuidance((prev) =>
+      prev &&
+      prev.instruction === guidance.instruction &&
+      prev.maneuver === guidance.maneuver &&
+      prev.distanceToManeuver === guidance.distanceToManeuver &&
+      prev.stepIndex === guidance.stepIndex &&
+      prev.fractionCompleted === guidance.fractionCompleted &&
+      prev.total === guidance.total
+        ? prev
+        : guidance
+    );
+  }, [guidance, guidanceLegKey]);
+
+  const holdLastGuidance = shouldHoldLastGuidance({
+    routeAlive,
+    hasFreshGuidance: guidance != null,
+  });
+  /** Guía que RENDERIZA la tarjeta (fresca, o la última del tramo). */
+  const navGuidance: LegGuidance | null = holdLastGuidance
+    ? (lastLegGuidance ?? guidance)
+    : guidance;
+
+  // «GPS débil»: solo se re-evalúa 1 vez por segundo y el setState únicamente
+  // ocurre al cambiar el booleano (nunca por frame).
+  const [gpsWeak, setGpsWeak] = useState(false);
+  useEffect(() => {
+    const evaluate = () => {
+      const last = lastGoodFixAtRef.current;
+      const next =
+        sim.active || !routeAlive
+          ? false
+          : isGpsWeak({
+              routeAlive,
+              navigationReady: navigationPositionReady,
+              msSinceGoodFix: last == null ? null : Date.now() - last,
+            });
+      setGpsWeak((prev) => (prev === next ? prev : next));
+    };
+    evaluate();
+    const id = setInterval(evaluate, 1_000);
+    return () => clearInterval(id);
+  }, [routeAlive, navigationPositionReady, sim.active]);
 
   // Fase 4 — "llegando" SOLO con ruta del tramo vigente. Al voltear de tramo
   // (recolección → entrega), la guidance del tramo anterior (~30 m restantes)
@@ -2782,11 +2932,46 @@ export default function DrivePage() {
       setIsRecalculating(true);
       // force=true: ruta NUEVA aunque el origen siga cerca del anterior.
       getRoadRoute(currentLocation, navTarget, true).then((route) => {
-        if (route) setRoadRoute(route);
+        if (route) {
+          setRoadRoute(route);
+          setRecalcDeferred(false);
+        } else if (networkDown || browserOnline() === false) {
+          // Fase 9 (punto 3): el fallo es de RED, no del proveedor. No se
+          // borra la línea vieja y se avisa de que se recalculará al volver.
+          setRecalcDeferred(true);
+        }
         setIsRecalculating(false);
       });
     }
-  }, [currentLocation, roadRoute, navTarget, mapsLoaded, driverHasLocation, sim.active]);
+  }, [
+    currentLocation,
+    roadRoute,
+    navTarget,
+    mapsLoaded,
+    driverHasLocation,
+    sim.active,
+    networkDown,
+  ]);
+
+  // ── Fase 9 (punto 3): al volver la red se reintenta lo pendiente ──
+  // El sondeo se reintenta en el hook (evento `online`); aquí se fuerza la
+  // ruta, porque la caché de fallos de `getRoadRoute` (60 s) podría dejar la
+  // geometría vieja aunque la red ya esté de vuelta. Solo en la transición
+  // offline → online.
+  useEffect(() => {
+    const wasDown = wasNetworkDownRef.current;
+    wasNetworkDownRef.current = networkDown;
+    if (!wasDown || networkDown) return;
+    if (!navTarget || !roadRoute?.path || sim.active) {
+      setRecalcDeferred(false);
+      return;
+    }
+    getRoadRoute(currentLocation, navTarget, true).then((route) => {
+      if (!shouldApplyRouteRefresh(route)) return;
+      setRoadRoute(route);
+      setRecalcDeferred(false);
+    });
+  }, [networkDown, navTarget, roadRoute, currentLocation, sim.active]);
 
   // ── Encuadre inicial AL ASIGNARSE un viaje ──
   // BUG corregido: antes se hacía un fitBounds de toda la ruta (vista
@@ -3226,20 +3411,22 @@ export default function DrivePage() {
     const arriving = arrivingActive;
     // Distancia RESTANTE calculada desde currentLocation sobre la geometría
     // real; la zona superior ya no muestra etapa ni tiempo de etapa.
+    // Fase 9 (punto 5): la tarjeta usa la guía conservada del tramo cuando el
+    // GPS está degradado; nunca vuelve a «Dirígete…» con ruta viva.
     const progress =
-      hasLegMetrics && guidance ? guidance.fractionCompleted : null;
+      hasLegMetrics && navGuidance ? navGuidance.fractionCompleted : null;
     const address =
       navPhase === "to_delivery" || navPhase === "at_delivery" || navPhase === "done"
         ? deliveryLabel
         : pickupLabel;
     const arrivalManeuver: string | null = arriving ? "arrive" : null;
-    const maneuver = arrivalManeuver ?? guidance?.maneuver ?? null;
+    const maneuver = arrivalManeuver ?? navGuidance?.maneuver ?? null;
     // Chip "en X m" solo para maniobras reales (giro/glorieta/llegada), no
     // para tramos rectos ni instrucciones genéricas.
     const isTurnLike =
       maneuver != null &&
       !["straight", "depart", "unknown", "arrive"].includes(maneuver);
-    const distToManeuver = guidance?.distanceToManeuver ?? null;
+    const distToManeuver = navGuidance?.distanceToManeuver ?? null;
     const maneuverDistance =
       isTurnLike &&
       distToManeuver != null &&
@@ -3251,7 +3438,7 @@ export default function DrivePage() {
     // Zapata") cuando existe. La dirección completa del destino vive SOLO en
     // el sheet (fila colapsada / detalles): ningún dato se repite en pantalla.
     const maneuverStreet =
-      !arriving && isTurnLike && guidance?.street ? guidance.street : null;
+      !arriving && isTurnLike && navGuidance?.street ? navGuidance.street : null;
     const sub = maneuverStreet;
 
     // Fase 4 — variante visual del panel: acción en el punto, llegada
@@ -3265,8 +3452,8 @@ export default function DrivePage() {
           : "maneuver";
     // Instrucción IMPERATIVA corta (la vialidad vive en `sub`); la instrucción
     // completa sigue disponible en el sheet expandido.
-    const shortMain = guidance?.instruction
-      ? shortInstructionInSpanish(guidance.instruction, guidance.maneuver)
+    const shortMain = navGuidance?.instruction
+      ? shortInstructionInSpanish(navGuidance.instruction, navGuidance.maneuver)
       : null;
     // Distancia glanceable removida: ahora el panel la calcula directo de
     // guidance (ver prop glanceDistance del DriveTripSheet).
@@ -3279,13 +3466,13 @@ export default function DrivePage() {
         return {
           main: arriving
             ? pickupLabel
-            : shortMain ?? guidance?.instruction ?? "Dirígete a la recolección",
+            : shortMain ?? navGuidance?.instruction ?? "Dirígete a la recolección",
           sub,
           progress,
           maneuver,
           maneuverDistance,
           recalculating: isRecalculating,
-          waiting: !guidance && sim.active,
+          waiting: !navGuidance && sim.active,
           variant,
         };
       case "at_pickup":
@@ -3303,13 +3490,13 @@ export default function DrivePage() {
         return {
           main: arriving
             ? deliveryLabel
-            : shortMain ?? guidance?.instruction ?? "Dirígete a la entrega",
+            : shortMain ?? navGuidance?.instruction ?? "Dirígete a la entrega",
           sub,
           progress,
           maneuver,
           maneuverDistance,
           recalculating: isRecalculating,
-          waiting: !guidance && sim.active,
+          waiting: !navGuidance && sim.active,
           variant,
         };
       case "at_delivery":
@@ -3337,7 +3524,7 @@ export default function DrivePage() {
       default:
         return null;
     }
-  }, [navPhase, activeOrder, guidance, sim.active, isRecalculating, arrivingActive]);
+  }, [navPhase, activeOrder, navGuidance, sim.active, isRecalculating, arrivingActive]);
 
   // Fase 3-D: lo que la tarjeta RENDERIZA (texto + «en X m»), no lo que
   // calcula guidance. En T4 veía «en 360 m» con el giro a ~60 m: sin esta
@@ -3416,6 +3603,10 @@ export default function DrivePage() {
           setStageActionError(data?.error ?? "No se pudo completar la acción.");
         }
         await refetch();
+      } catch {
+        // Fase 9: sin red el POST rechaza. Antes esta promesa quedaba sin
+        // capturar (unhandled rejection) y la acción no daba feedback.
+        setStageActionError("Sin conexión: la acción no se envió.");
       } finally {
         setActionLoading(null);
       }
@@ -4173,6 +4364,26 @@ export default function DrivePage() {
             if (tripSheetExpanded) setTripSheetCollapseToken((n) => n + 1);
           }}
         />
+        ) : styleOffline ? (
+          // Fase 9 (punto 4): sin estilo y sin red no se pinta un spinner
+          // infinito. Se dice qué pasa y se reintenta solo (temporizador +
+          // evento `online`), sin bloquear el flujo del repartidor.
+          <div className="flex h-full flex-col items-center justify-center gap-2 bg-[#0d1526] px-8 text-center">
+            <WifiOff className="h-6 w-6 text-amber-300/80" />
+            <p className="text-sm font-semibold text-white/85">
+              Sin conexión, reintentando
+            </p>
+            <p className="text-xs text-white/45">
+              El mapa se cargará al volver la señal.
+            </p>
+            <button
+              type="button"
+              onClick={() => setStyleAttempt((n) => n + 1)}
+              className="mt-1 rounded-full bg-white/10 px-3 py-1.5 text-[11px] font-semibold text-white/80 ring-1 ring-white/15"
+            >
+              Reintentar ahora
+            </button>
+          </div>
         ) : (
           <div className="flex h-full items-center justify-center bg-[#0d1526]">
             <Loader2 className="h-6 w-6 animate-spin text-white/40" />
@@ -4202,6 +4413,28 @@ export default function DrivePage() {
             waitingForRoute={navContent.waiting}
             variant={navContent.variant}
           />
+          {/* Fase 9 (puntos 3 y 5): indicadores discretos, NO bloqueantes y
+              FUERA del flujo del contenedor. `readDriveVisibleBand` mide el
+              rect de #drive-top-overlay: si estos avisos añadieran altura,
+              el anclaje del puck (70–75 %) se movería al aparecer la señal
+              —un salto de cámara justo cuando se cae la red—. Absolutos =
+              el rect del contenedor no cambia. */}
+          {(networkDown || gpsWeak) && (
+            <div className="pointer-events-none absolute right-0 top-[calc(100%+0.5rem)] flex flex-col items-end gap-1">
+              {networkDown && (
+                <span className="flex items-center gap-1.5 rounded-full bg-gray-950/85 px-2.5 py-1 text-[11px] font-semibold text-amber-300 ring-1 ring-white/10 backdrop-blur-md">
+                  <WifiOff className="h-3 w-3 shrink-0" />
+                  {routeRecalcNotice({ networkDown, recalcDeferred }) ?? OFFLINE_LABEL}
+                </span>
+              )}
+              {gpsWeak && (
+                <span className="flex items-center gap-1.5 rounded-full bg-gray-950/85 px-2.5 py-1 text-[11px] font-semibold text-white/55 ring-1 ring-white/10 backdrop-blur-md">
+                  <Satellite className="h-3 w-3 shrink-0" />
+                  GPS débil
+                </span>
+              )}
+            </div>
+          )}
         </div>
       )}
 
