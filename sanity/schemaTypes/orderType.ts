@@ -371,6 +371,13 @@ export const orderType = defineType({
     defineField({ name: "deliveryOfertaEnviada", title: "Delivery Offer Sent", type: "boolean", initialValue: false }),
     defineField({ name: "deliveryOfertaExpiresAt", title: "Delivery Offer Expires At", type: "datetime" }),
     defineField({ name: "dispatchStatus", title: "Dispatch Status", type: "string", initialValue: "waiting_for_driver", options: { list: [{ title: "Not Required", value: "not_required" }, { title: "Scheduled", value: "scheduled" }, { title: "Waiting for Driver", value: "waiting_for_driver" }, { title: "Offered", value: "offered" }, { title: "Accepted", value: "accepted" }, { title: "At Door", value: "at_door" }, { title: "Completed", value: "completed" }] } }),
+    // Recolección de RESTAURANTES (Fase A): sello de tiempo del repartidor al
+    // confirmar que recogió el pedido. NO es un dispatchStatus nuevo: la etapa
+    // se deriva en la app y dispatchStatus sigue accepted → at_door →
+    // completed (at_door = puerta del CLIENTE). Lo escribe el servidor
+    // (lib/driver-actions.ts markRestaurantPickedUp); en Studio es de solo
+    // lectura porque una edición manual desincronizaría la etapa del viaje.
+    defineField({ name: "restaurantPickedUpAt", title: "Restaurant Picked Up At", type: "datetime", readOnly: true, description: "Sello del repartidor al confirmar la recolección en el restaurante (lo escribe el servidor)." }),
     defineField({ name: "settlementStatus", title: "Settlement Status", type: "string", initialValue: "pending", options: { list: [{ title: "Pending", value: "pending" }, { title: "Ready", value: "ready" }, { title: "Settled", value: "settled" }, { title: "Cancelled", value: "cancelled" }, { title: "Refunded", value: "refunded" }] } }),
     defineField({
       name: "cashCollectedBy",

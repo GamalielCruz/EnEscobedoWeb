@@ -572,6 +572,7 @@ export type Order = {
     | "accepted"
     | "at_door"
     | "completed";
+  restaurantPickedUpAt?: string;
   settlementStatus?: "pending" | "ready" | "settled" | "cancelled" | "refunded";
   cashCollectedBy?:
     "store" | "community_driver" | "store_driver" | "admin" | "none";
@@ -1479,6 +1480,7 @@ export type MY_ORDERS_QUERY_RESULT = Array<{
     | "offered"
     | "scheduled"
     | "waiting_for_driver";
+  restaurantPickedUpAt?: string;
   settlementStatus?: "cancelled" | "pending" | "ready" | "refunded" | "settled";
   cashCollectedBy?:
     "admin" | "community_driver" | "none" | "store_driver" | "store";
