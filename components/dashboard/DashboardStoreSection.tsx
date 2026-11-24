@@ -1,12 +1,15 @@
 "use client";
 
 import * as React from "react";
+import { Navigation } from "lucide-react";
 
 import DeliveryZonesAdmin from "@/components/DeliveryZonesAdmin";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MapboxMap, type MapboxMapMarker } from "@/components/map/MapboxMap";
+import { MAPBOX_DEFAULT_CENTER, mapboxReverseGeocode, type MapboxPoint } from "@/lib/mapbox";
 
 import {
   DashboardDescription,
@@ -39,6 +42,83 @@ export function DashboardStoreSection({
     buildStoreSettingsDraft(storeConfig)
   );
   const [message, setMessage] = React.useState<string | null>(null);
+  const [isLocating, setIsLocating] = React.useState(false);
+  const latitude = Number(draft.coordinates.latitude);
+  const longitude = Number(draft.coordinates.longitude);
+  const hasValidCoordinates =
+    draft.coordinates.latitude.trim() !== "" && draft.coordinates.longitude.trim() !== "" &&
+    Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 &&
+    Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
+  const mapCenter: MapboxPoint = hasValidCoordinates
+    ? { lat: latitude, lng: longitude }
+    : MAPBOX_DEFAULT_CENTER;
+  const setCoordinatesFromPoint = React.useCallback((point: MapboxPoint) => {
+    setDraft((current) => ({
+      ...current,
+      coordinates: {
+        latitude: point.lat.toFixed(6),
+        longitude: point.lng.toFixed(6),
+      },
+    }));
+  }, []);
+  const locationMarkers = React.useMemo<MapboxMapMarker[]>(
+    () => hasValidCoordinates
+      ? [{
+          id: "store-location",
+          lat: latitude,
+          lng: longitude,
+          variant: "pin",
+          color: "#20096F",
+          draggable: true,
+          onDragEnd: setCoordinatesFromPoint,
+        }]
+      : [],
+    [hasValidCoordinates, latitude, longitude, setCoordinatesFromPoint]
+  );
+  const useCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      setMessage("Este navegador no permite acceder a la ubicación.");
+      return;
+    }
+
+    setIsLocating(true);
+    setMessage(null);
+    navigator.geolocation.getCurrentPosition(
+      async ({ coords }) => {
+        const point = { lat: coords.latitude, lng: coords.longitude };
+        setCoordinatesFromPoint(point);
+        const address = await mapboxReverseGeocode(point.lat, point.lng, { language: "es" });
+        if (address) {
+          setDraft((current) => ({
+            ...current,
+            address: {
+              ...current.address,
+              street: address.street || current.address.street,
+              city: address.city || current.address.city,
+              state: address.state || current.address.state,
+              postalCode: address.postalCode || current.address.postalCode,
+              country: address.country || current.address.country,
+            },
+          }));
+          setMessage("Ubicación encontrada con Mapbox. Envía los cambios para solicitar su actualización.");
+        } else {
+          setMessage("Coordenadas actuales listas; Mapbox no pudo resolver la dirección. Puedes enviar las coordenadas manualmente.");
+        }
+        setIsLocating(false);
+      },
+      (error) => {
+        setIsLocating(false);
+        setMessage(
+          error.code === error.PERMISSION_DENIED
+            ? "Permite el acceso a tu ubicación en el navegador e inténtalo de nuevo."
+            : error.code === error.TIMEOUT
+              ? "La búsqueda de ubicación tardó demasiado. Inténtalo de nuevo."
+              : "No se pudo obtener tu ubicación actual. Verifica el GPS e inténtalo de nuevo."
+        );
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
   const pendingOwnDeliveryRequest = storeRequests.some(
     (request) => request.status === "pending" && typeof request.changes?.hasOwnDelivery === "boolean"
   );
@@ -58,6 +138,15 @@ export function DashboardStoreSection({
   }));
 
   const handleSubmit = async () => {
+    const originalCoordinates = buildStoreSettingsDraft(storeConfig).coordinates;
+    const coordinatesChanged =
+      originalCoordinates.latitude !== draft.coordinates.latitude ||
+      originalCoordinates.longitude !== draft.coordinates.longitude;
+    if (coordinatesChanged && !hasValidCoordinates) {
+      setMessage("Ingresa una latitud entre -90 y 90 y una longitud entre -180 y 180.");
+      return;
+    }
+
     const changes = buildStoreChangesPayload(storeConfig, draft);
     if (Object.keys(changes).length === 0) {
       setMessage("No hay cambios para enviar.");
@@ -237,6 +326,79 @@ export function DashboardStoreSection({
                   }
                 />
               </div>
+            </div>
+
+            <div className="space-y-3 border-t border-black/6 pt-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Ubicacion de la tienda</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Arrastra el marcador o selecciona un punto del mapa para ajustar la ubicacion exacta.
+                  </p>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={useCurrentLocation} disabled={isLocating}>
+                  <Navigation className="size-4" />
+                  {isLocating ? "Buscando ubicación..." : "Usar mi ubicación actual"}
+                </Button>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="store-latitude" className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                    Latitud
+                  </Label>
+                  <Input
+                    id="store-latitude"
+                    className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
+                    type="number"
+                    min={-90}
+                    max={90}
+                    step="any"
+                    placeholder="Ej. 20.5888"
+                    value={draft.coordinates.latitude}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        coordinates: { ...current.coordinates, latitude: event.target.value },
+                      }))
+                    }
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="store-longitude" className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                    Longitud
+                  </Label>
+                  <Input
+                    id="store-longitude"
+                    className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
+                    type="number"
+                    min={-180}
+                    max={180}
+                    step="any"
+                    placeholder="Ej. -100.3899"
+                    value={draft.coordinates.longitude}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        coordinates: { ...current.coordinates, longitude: event.target.value },
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+              <div className="overflow-hidden rounded-xl border border-black/8">
+                <MapboxMap
+                  className="h-[280px] w-full"
+                  center={mapCenter}
+                  zoom={hasValidCoordinates ? 16 : 12}
+                  markers={locationMarkers}
+                  onClick={setCoordinatesFromPoint}
+                />
+              </div>
+              {hasValidCoordinates ? (
+                <p className="text-xs text-gray-500">
+                  Coordenadas: {latitude.toFixed(6)}, {longitude.toFixed(6)}
+                </p>
+              ) : null}
             </div>
           </DashboardPanelBody>
         </DashboardPanel>

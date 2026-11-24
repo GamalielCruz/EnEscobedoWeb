@@ -149,6 +149,7 @@ export type StoreSettingsDraft = {
   highDemandMode: boolean;
   contact: Required<StoreContact>;
   address: Required<StoreAddress>;
+  coordinates: { latitude: string; longitude: string };
   operatingHours: Required<StoreOperatingHours>;
   serviceTypes: Required<StoreServiceTypes>;
   scheduledOrdersEnabled: boolean;

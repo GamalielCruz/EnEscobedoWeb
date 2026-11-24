@@ -157,6 +157,10 @@ export function buildStoreSettingsDraft(storeConfig: StoreConfig | null): StoreS
       postalCode: storeConfig?.address?.postalCode || "",
       country: storeConfig?.address?.country || "",
     },
+    coordinates: {
+      latitude: storeConfig?.coordinates?.latitude != null ? String(storeConfig.coordinates.latitude) : "",
+      longitude: storeConfig?.coordinates?.longitude != null ? String(storeConfig.coordinates.longitude) : "",
+    },
     operatingHours: {
       monday: storeConfig?.operatingHours?.monday || "",
       tuesday: storeConfig?.operatingHours?.tuesday || "",
@@ -197,6 +201,15 @@ export function buildStoreChangesPayload(original: StoreConfig | null, draft: St
   }
   if (JSON.stringify(baseline.address) !== JSON.stringify(draft.address)) {
     changes.address = draft.address;
+  }
+  if (JSON.stringify(baseline.coordinates) !== JSON.stringify(draft.coordinates)) {
+    const latitude = Number(draft.coordinates.latitude);
+    const longitude = Number(draft.coordinates.longitude);
+    if (draft.coordinates.latitude.trim() !== "" && draft.coordinates.longitude.trim() !== "" &&
+      Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 &&
+      Number.isFinite(longitude) && longitude >= -180 && longitude <= 180) {
+      changes.coordinates = { latitude, longitude };
+    }
   }
   if (JSON.stringify(baseline.operatingHours) !== JSON.stringify(draft.operatingHours)) {
     changes.operatingHours = draft.operatingHours;
