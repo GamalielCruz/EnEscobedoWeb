@@ -140,6 +140,7 @@ const ASSIGNED_ORDERS_QUERY = `*[_type == "order" && repartidorAsignado._ref == 
   "repartidorAsignadoRef": repartidorAsignado._ref,
   mandadoPickupAtDoor,
   mandadoEnRuta,
+  restaurantPickedUpAt,
   mandadoEntregaSegura,
   deliveryVerificationMethod,
   deliveryVerificationStatus,

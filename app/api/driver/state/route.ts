@@ -26,6 +26,12 @@ type DriverOrderDTO = {
   routeKm: number | null;
   etaMinutes: number | null;
   dispatchStatus: string;
+  /**
+   * Restaurante: sello del repartidor al confirmar la recolección. La etapa se
+   * deriva en la app (con el sello → tramo de entrega). `null` si no aplica o
+   * aún no se confirmó. En mandados no se usa (manda `mandadoState`).
+   */
+  restaurantPickedUpAt: string | null;
   mandadoState: "assigned" | "pickup_arrival" | "en_route" | "destination_arrival" | "delivered" | null;
   mandadoOriginLabel: string | null;
   mandadoDestinationLabel: string | null;
@@ -142,6 +148,7 @@ function mapOrderDTO(order: OrderDoc): DriverOrderDTO {
     routeKm,
     etaMinutes: estimateEtaMinutes(routeKm),
     dispatchStatus: order.dispatchStatus ?? "",
+    restaurantPickedUpAt: order.restaurantPickedUpAt ?? null,
     mandadoState: mandadoDriverState(order as Parameters<typeof mandadoDriverState>[0]),
     mandadoOriginLabel: order.mandadoOriginLabel ?? null,
     mandadoDestinationLabel: order.mandadoDestinationLabel ?? null,

@@ -88,6 +88,9 @@ const ORDER_SNAPSHOT_FIELDS = [
   "routeKm",
   "etaMinutes",
   "dispatchStatus",
+  // Etapa derivada de un restaurante (sello del servidor): sin él, una recarga
+  // sin red volvería a pintar el tramo de recolección ya terminado.
+  "restaurantPickedUpAt",
   "mandadoState",
   "mandadoOriginLabel",
   "mandadoDestinationLabel",

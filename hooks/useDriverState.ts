@@ -28,6 +28,8 @@ type DriverOrder = {
   routeKm: number | null;
   etaMinutes: number | null;
   dispatchStatus: string;
+  /** Restaurante: sello de la recolección confirmada (etapa derivada). */
+  restaurantPickedUpAt: string | null;
   mandadoState: "assigned" | "pickup_arrival" | "en_route" | "destination_arrival" | "delivered" | null;
   mandadoOriginLabel: string | null;
   mandadoDestinationLabel: string | null;
