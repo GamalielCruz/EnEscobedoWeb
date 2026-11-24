@@ -124,6 +124,7 @@ import {
   computeGuidance,
   isGpsWeak,
   nextGuidanceState,
+  shouldHideManeuverDistance,
   shouldHoldLastGuidance,
   type GuidanceState,
 } from "@/lib/drive/guidance";
@@ -803,7 +804,7 @@ function formatMetersShort(meters: number): string {
 // ── Main component ─────────────────────────────────────────────────
 
 export default function DrivePage() {
-  const { isSignedIn } = useAuth();
+  const { isSignedIn, userId } = useAuth();
   const mountMarkedRef = useRef(false);
   if (!mountMarkedRef.current) {
     mountMarkedRef.current = true;
@@ -829,6 +830,10 @@ export default function DrivePage() {
     restoredFromSnapshot,
   } = useDriverState({
     enabled: isSignedIn === true,
+    // Fase 10 (punto 2): el snapshot se atribuye al usuario y se borra al
+    // cerrar sesión (`signedOut` solo cuando Clerk lo afirma, no al cargar).
+    ownerId: userId ?? null,
+    signedOut: isSignedIn === false,
   });
   const {
     location: gpsLocation,
@@ -1581,18 +1586,32 @@ export default function DrivePage() {
   // «GPS débil»: solo se re-evalúa 1 vez por segundo y el setState únicamente
   // ocurre al cambiar el booleano (nunca por frame).
   const [gpsWeak, setGpsWeak] = useState(false);
+  // Fase 10 (punto 3): a los `GPS_STALE_DISTANCE_MS` (30 s) la posición
+  // visual lleva demasiado tiempo sin corregirse y la distancia «en X m»
+  // sería una cifra congelada. Se oculta la distancia (la maniobra y el
+  // aviso «GPS débil» de los 8 s se quedan igual).
+  const [gpsDistanceStale, setGpsDistanceStale] = useState(false);
   useEffect(() => {
     const evaluate = () => {
       const last = lastGoodFixAtRef.current;
+      const msSinceGoodFix = last == null ? null : Date.now() - last;
       const next =
         sim.active || !routeAlive
           ? false
           : isGpsWeak({
               routeAlive,
               navigationReady: navigationPositionReady,
-              msSinceGoodFix: last == null ? null : Date.now() - last,
+              msSinceGoodFix,
             });
+      const nextStale = sim.active
+        ? false
+        : shouldHideManeuverDistance({
+            routeAlive,
+            navigationReady: navigationPositionReady,
+            msSinceGoodFix,
+          });
       setGpsWeak((prev) => (prev === next ? prev : next));
+      setGpsDistanceStale((prev) => (prev === nextStale ? prev : nextStale));
     };
     evaluate();
     const id = setInterval(evaluate, 1_000);
@@ -3426,7 +3445,9 @@ export default function DrivePage() {
     const isTurnLike =
       maneuver != null &&
       !["straight", "depart", "unknown", "arrive"].includes(maneuver);
-    const distToManeuver = navGuidance?.distanceToManeuver ?? null;
+    const distToManeuver = gpsDistanceStale
+      ? null
+      : navGuidance?.distanceToManeuver ?? null;
     const maneuverDistance =
       isTurnLike &&
       distToManeuver != null &&
@@ -3524,7 +3545,15 @@ export default function DrivePage() {
       default:
         return null;
     }
-  }, [navPhase, activeOrder, navGuidance, sim.active, isRecalculating, arrivingActive]);
+  }, [
+    navPhase,
+    activeOrder,
+    navGuidance,
+    sim.active,
+    isRecalculating,
+    arrivingActive,
+    gpsDistanceStale,
+  ]);
 
   // Fase 3-D: lo que la tarjeta RENDERIZA (texto + «en X m»), no lo que
   // calcula guidance. En T4 veía «en 360 m» con el giro a ~60 m: sin esta

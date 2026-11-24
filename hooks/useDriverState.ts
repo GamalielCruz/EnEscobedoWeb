@@ -104,7 +104,17 @@ function getPollInterval(state: DriverState | null): number {
   return IDLE_POLL_MS;
 }
 
-export function useDriverState({ enabled = true }: { enabled?: boolean } = {}) {
+export function useDriverState({
+  enabled = true,
+  ownerId = null,
+  signedOut = false,
+}: {
+  enabled?: boolean;
+  /** id de Clerk del repartidor actual (atribuye el snapshot). */
+  ownerId?: string | null;
+  /** true ⇔ Clerk ya confirmó que NO hay sesión (no durante "cargando"). */
+  signedOut?: boolean;
+} = {}) {
   const [state, setState] = useState<DriverState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -156,7 +166,7 @@ export function useDriverState({ enabled = true }: { enabled?: boolean } = {}) {
         // pedido ya cerrado.
         const storage = browserStorage();
         if (shouldPersistDriverState(data)) {
-          writeDriverStateSnapshot(storage, data, Date.now());
+          writeDriverStateSnapshot(storage, data, Date.now(), ownerId);
         } else {
           clearDriverStateSnapshot(storage);
         }
@@ -205,6 +215,32 @@ export function useDriverState({ enabled = true }: { enabled?: boolean } = {}) {
     };
   }, [fetchState, rescheduleInterval]);
 
+  // ── Fase 10 (punto 2): el snapshot es del USUARIO, no del teléfono ──
+  // Cerrar sesión lo borra en el acto; con otro usuario en el mismo iPhone no
+  // hay que esperar a que caduque (10 min de datos ajenos en pantalla).
+  useEffect(() => {
+    if (!signedOut) return;
+    clearDriverStateSnapshot(browserStorage());
+    setRestoredFromSnapshot(false);
+    setState(null);
+    stateRef.current = null;
+  }, [signedOut]);
+
+  // Cambio de usuario sin pasar por «cerrar sesión» (Clerk cambia de id):
+  // `readDriverStateSnapshot` borra el sobre ajeno y aquí se descarta lo que
+  // ya se hubiera restaurado antes de conocer el id.
+  useEffect(() => {
+    if (!ownerId) return;
+    const storage = browserStorage();
+    if (!storage) return;
+    const check = readDriverStateSnapshot<DriverState>(storage, Date.now(), undefined, ownerId);
+    if (check.status !== "foreign") return;
+    setRestoredFromSnapshot(false);
+    setState(null);
+    stateRef.current = null;
+    setLoading(true);
+  }, [ownerId]);
+
   // Setup polling (solo cuando hay sesión).
   useEffect(() => {
     mountedRef.current = true;
@@ -227,7 +263,12 @@ export function useDriverState({ enabled = true }: { enabled?: boolean } = {}) {
     // esto la página caía en la pantalla de error y se perdía el viaje.
     if (!snapshotRestoredRef.current) {
       snapshotRestoredRef.current = true;
-      const snapshot = readDriverStateSnapshot<DriverState>(browserStorage(), Date.now());
+      const snapshot = readDriverStateSnapshot<DriverState>(
+        browserStorage(),
+        Date.now(),
+        undefined,
+        ownerId
+      );
       if (snapshot.status === "ok") {
         setState(snapshot.payload);
         stateRef.current = snapshot.payload;
@@ -244,7 +285,7 @@ export function useDriverState({ enabled = true }: { enabled?: boolean } = {}) {
       mountedRef.current = false;
       stop();
     };
-  }, [enabled, fetchState, rescheduleInterval]);
+  }, [enabled, fetchState, rescheduleInterval, ownerId]);
 
   // Re-adjust interval when state changes (offer appears/disappears)
   useEffect(() => {

@@ -73,6 +73,37 @@ export function shouldHoldLastGuidance(input: {
   return input.routeAlive && !input.hasFreshGuidance;
 }
 
+/**
+ * Distancia congelada (Fase 10, punto 3).
+ *
+ * La gracia de `GPS_WEAK_GRACE_MS` (8 s) solo AVISA. A partir de aquí la
+ * posición visual lleva segundos sin corregirse (`visualPosRef` se congela
+ * cuando la estima deja de avanzar), así que la distancia «en X m» de la
+ * tarjeta es un valor viejo presentado como actual. Pasados 30 s se oculta
+ * la distancia y la tarjeta queda con el texto de la maniobra + «GPS débil».
+ *
+ * Por qué 30 s: la telemetría de `follow-frame.ts` deja de avanzar la estima
+ * a los ~2,4 s sin fix y el gate cambia de política a los 10 s
+ * (`NO_GOOD_FIX_ESCAPE_MS`); 30 s es ~3 políticas de espera completas, muy
+ * por encima de cualquier hueco normal (túnel corto, cambio de celda) y ya
+ * sin margen para que la cifra signifique algo. NO cambia el criterio de 8 s
+ * del aviso: son dos umbrales con propósitos distintos.
+ */
+export const GPS_STALE_DISTANCE_MS = 30_000;
+
+/** ¿Ocultar la distancia «en X m» de la tarjeta? Solo con ruta viva, con
+ * navegación ya iniciada y tras `GPS_STALE_DISTANCE_MS` sin fix bueno. */
+export function shouldHideManeuverDistance(input: {
+  routeAlive: boolean;
+  navigationReady: boolean;
+  msSinceGoodFix: number | null;
+  staleAfterMs?: number;
+}): boolean {
+  if (!input.routeAlive || !input.navigationReady) return false;
+  if (input.msSinceGoodFix == null) return false;
+  return input.msSinceGoodFix > (input.staleAfterMs ?? GPS_STALE_DISTANCE_MS);
+}
+
 export type GuidanceState = {
   /** Clave de ruta (identidad del array de steps); al cambiar, se reinicia. */
   routeKey: unknown;
