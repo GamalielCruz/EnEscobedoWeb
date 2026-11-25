@@ -12,6 +12,7 @@ import {
   type MapboxMapHandle,
   type MapboxMapLine,
   type MapboxMapMarker,
+  type MapboxWidthStop,
 } from "@/components/map/MapboxMap";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -158,6 +159,24 @@ const NAV_HEADING_SMOOTH = 0.16;
 // lib/drive/follow-frame.ts (zoom, adelanto, suavizados, anclaje) y
 // lib/drive/speed-heading.ts (velocidad/curso). Un solo origen de verdad:
 // aquí solo se importan NAV_ZOOM_BASE y NAV_HEADING_SKIP_DEG.
+
+// Ruta de navegación a todo el ancho de la calle: una banda tenue pinta el
+// arroyo completo (calle o carretera) y el núcleo sólido mantiene la dirección
+// legible. Los anchos van interpolados por zoom para no desbordar la vía
+// cuando el mapa se aleja (anticipación del cruce) ni quedarse cortos de cerca.
+const ROUTE_ROAD_BAND_WIDTH: MapboxWidthStop[] = [
+  { zoom: 15, width: 8 },
+  { zoom: 16.5, width: 13 },
+  { zoom: 18, width: 20 },
+  { zoom: 19.5, width: 28 },
+];
+const ROUTE_CORE_WIDTH: MapboxWidthStop[] = [
+  { zoom: 15, width: 3.5 },
+  { zoom: 16.5, width: 5.5 },
+  { zoom: 18, width: 7.5 },
+  { zoom: 19.5, width: 10.5 },
+];
+const ROUTE_ROAD_BAND_OPACITY = 0.32;
 
 // Desvío: distancia lateral a la geometría y ticks consecutivos antes de
 // recalcular la ruta (anti-jitter del GPS).
@@ -3500,12 +3519,21 @@ export default function DrivePage() {
   const mapLines = useMemo<MapboxMapLine[]>(() => {
     const lines: MapboxMapLine[] = [];
     if (roadRoute?.path) {
+      // Banda: pinta el ancho completo de la calle por la que va la ruta.
+      lines.push({
+        id: "drive-road-route-band",
+        points: roadRoute.path,
+        color: ROUTE_BLUE,
+        widthStops: ROUTE_ROAD_BAND_WIDTH,
+        opacity: ROUTE_ROAD_BAND_OPACITY,
+      });
+      // Núcleo: el trazo de siempre, ahora algo más grueso y sólido.
       lines.push({
         id: "drive-road-route",
         points: roadRoute.path,
         color: ROUTE_BLUE,
-        width: 4,
-        opacity: 0.7,
+        widthStops: ROUTE_CORE_WIDTH,
+        opacity: 0.95,
       });
     }
 

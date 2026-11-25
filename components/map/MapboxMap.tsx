@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import type {
+  DataDrivenPropertyValueSpecification,
   GeoJSONSource,
   Map as MapboxMapInstance,
   Marker as MapboxMarker,
@@ -39,11 +40,19 @@ export type MapboxMapMarker = {
   onDragEnd?: (point: MapboxPoint) => void;
 };
 
+/**
+ * Ancho de línea interpolado por zoom: mantiene el trazo pegado al ancho real
+ * de la calle tanto de cerca (navegación) como de lejos (vista general).
+ */
+export type MapboxWidthStop = { zoom: number; width: number };
+
 export type MapboxMapLine = {
   id: string;
   points: MapboxPoint[];
   color: string;
   width?: number;
+  /** Si se indica, sustituye a `width` con una interpolación lineal por zoom. */
+  widthStops?: MapboxWidthStop[];
   opacity?: number;
   dashed?: boolean;
 };
@@ -144,10 +153,26 @@ function pointsSignature(points: MapboxPoint[]): string {
   return points.map((point) => `${point.lat.toFixed(5)},${point.lng.toFixed(5)}`).join(";");
 }
 
+function lineWidthValue(
+  line: MapboxMapLine
+): DataDrivenPropertyValueSpecification<number> {
+  const stops = line.widthStops;
+  if (!stops || stops.length === 0) return line.width ?? 4;
+  return [
+    "interpolate",
+    ["linear"],
+    ["zoom"],
+    ...stops.flatMap((stop) => [stop.zoom, stop.width]),
+  ] as DataDrivenPropertyValueSpecification<number>;
+}
+
 function lineSignature(line: MapboxMapLine): string {
   return [
     line.color,
     line.width ?? 4,
+    line.widthStops
+      ? line.widthStops.map((stop) => `${stop.zoom}:${stop.width}`).join(",")
+      : "",
     line.opacity ?? 0.9,
     line.dashed ? "dashed" : "solid",
     pointsSignature(line.points),
@@ -419,15 +444,15 @@ export const MapboxMap = forwardRef<MapboxMapHandle, MapboxMapProps>(
             layout: { "line-join": "round", "line-cap": "round" },
             paint: {
               "line-color": line.color,
-              "line-width": line.width ?? 4,
+              "line-width": lineWidthValue(line),
               "line-opacity": line.opacity ?? 0.9,
               ...(line.dashed ? { "line-dasharray": [2, 1.5] } : {}),
             },
-          });
+          } as Parameters<MapboxMapInstance["addLayer"]>[0]);
         }
         lineSignaturesRef.current.set(line.id, signature);
         map.setPaintProperty(layerId, "line-color", line.color);
-        map.setPaintProperty(layerId, "line-width", line.width ?? 4);
+        map.setPaintProperty(layerId, "line-width", lineWidthValue(line));
         map.setPaintProperty(layerId, "line-opacity", line.opacity ?? 0.9);
         if (line.dashed) {
           map.setPaintProperty(layerId, "line-dasharray", [2, 1.5]);
