@@ -256,28 +256,22 @@ const ARRIVAL_RADIUS_METERS = 50;
 const DRIVE_SIM_ENABLED = getDeploymentEnvironment() !== "production";
 // ── Pin SVG ────────────────────────────────────────────────────────
 
-// Marcador del conductor (dónde está el GPS) como SVG data-URI. Diseño
-// minimalista y algo más grande que antes: halo blanco, disco azul de la ruta
-// y un chevrón blanco de rumbo. El halo separa el azul del mapa claro (los
-// caminos son blancos) y el chevrón da la dirección sin recargar el icono.
-// La rotación se aplica explícitamente en el SVG (positiva = sentido horario,
-// igual que el heading), así el marcador apunta hacia donde conduce.
-function driverArrowIcon(headingDeg: number): string {
-  const rotate = normalizeDeg(headingDeg);
+// Marcador del conductor (dónde está el GPS) como SVG EN LÍNEA dentro del
+// DOM, no como <img src="data:image/svg+xml…">: el data-URI se rasteriza a su
+// tamaño base y en pantallas Retina (DPR 2–3) se ve pixelado al ampliarlo y
+// girarlo el marcador. El SVG en línea lo dibuja el navegador a resolución de
+// dispositivo, así que queda nítido en cualquier pantalla y rotación.
+//
+// Sin filtro de sombra (feDropShadow): iOS lo rasteriza aparte y es otra fuente
+// de bordes suaves. La definición la dan el halo blanco con un aro de 1 px al
+// 12 % y el chevrón blanco de rumbo.
+function driverPuckMarkup(): string {
   const half = PUCK_SIZE_PX / 2;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${PUCK_SIZE_PX}" height="${PUCK_SIZE_PX}" viewBox="${-half} ${-half} ${PUCK_SIZE_PX} ${PUCK_SIZE_PX}">
-  <defs>
-    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
-      <feDropShadow dx="0" dy="1.8" stdDeviation="2.2" flood-color="#0F172A" flood-opacity="0.26"/>
-    </filter>
-  </defs>
-  <g filter="url(#shadow)" transform="rotate(${rotate})">
-    <circle cx="0" cy="0" r="20" fill="#FFFFFF"/>
-    <circle cx="0" cy="0" r="15.5" fill="${ROUTE_BLUE}" stroke="#FFFFFF" stroke-width="3.5"/>
-    <path d="M0 -7 L5 3.8 L0 1.2 L-5 3.8 Z" fill="#FFFFFF" stroke-linejoin="round"/>
-  </g>
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${PUCK_SIZE_PX}" height="${PUCK_SIZE_PX}" viewBox="${-half} ${-half} ${PUCK_SIZE_PX} ${PUCK_SIZE_PX}" shape-rendering="geometricPrecision" style="display:block">
+  <circle cx="0" cy="0" r="20" fill="#FFFFFF" stroke="rgba(15,23,42,0.12)" stroke-width="1"/>
+  <circle cx="0" cy="0" r="15.5" fill="${ROUTE_BLUE}" stroke="#FFFFFF" stroke-width="3.5"/>
+  <path d="M0 -7 L5 3.8 L0 1.2 L-5 3.8 Z" fill="#FFFFFF" stroke-linejoin="round"/>
 </svg>`;
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
 // ── Rotación IMPERATIVA del marcador (por buckets de ángulo) ────────
@@ -302,11 +296,11 @@ const PUCK_SIZE_PX = 72;
 const ICON_BUCKET_DEG = 10;
 const ICON_BUCKET_COUNT = 360 / ICON_BUCKET_DEG;
 
-// El HTML del marcador se construye UNA vez (flecha apuntando arriba): la
-// rotación ya no requiere un icono por ángulo porque el propio marcador de
-// Mapbox gira con marker.setRotation().
+// El HTML del marcador se construye UNA vez (chevrón apuntando arriba): la
+// rotación no requiere un icono por ángulo porque el propio marcador de Mapbox
+// gira con marker.setRotation().
 const DRIVER_MARKER_ID = "drive-driver-marker";
-const DRIVER_MARKER_HTML = `<img src="${driverArrowIcon(0)}" width="${PUCK_SIZE_PX}" height="${PUCK_SIZE_PX}" alt="" style="display:block" />`;
+const DRIVER_MARKER_HTML = driverPuckMarkup();
 let lastDriverIconBucket: number | null = null;
 
 /**
