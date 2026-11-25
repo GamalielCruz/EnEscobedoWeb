@@ -107,6 +107,23 @@ export const TURN_CAMERA_PITCH = 58;
 /** Zoom máximo de alejamiento adicional al aproximarse al cruce. */
 export const TURN_CAMERA_ZOOM_OUT = 2.2;
 /**
+ * Distancia (m) a la maniobra donde empieza el ACERCAMIENTO FINAL.
+ *
+ * El alejamiento de anticipación sirve para ver venir el cruce desde lejos,
+ * pero en los últimos ~80 m mantenerlo deja la maniobra diminuta justo cuando
+ * hay que ejecutarla. Desde aquí el mapa se cierra sobre el cruce.
+ */
+export const TURN_CLOSE_METERS = 80;
+/** Distancia (m) en la que el acercamiento final está completo. */
+export const TURN_CLOSE_FULL_METERS = 30;
+/** Zoom al llegar al cruce: el cruce llena la pantalla. */
+export const TURN_CLOSE_ZOOM = NAV_ZOOM_MAX;
+/**
+ * Pitch en el cruce (grados): menos inclinación que la base para leer las
+ * calles desde arriba, conservando algo de perspectiva.
+ */
+export const TURN_CLOSE_PITCH = 38;
+/**
  * Suelo de zoom SOLO durante la aproximación a una maniobra. El suelo normal
  * (NAV_ZOOM_MIN - 0.4 = 17.5) frenaba el alejamiento justo cuando debía ser
  * máximo: el mapa se quedaba en 17.5 en vez de abrirse.
@@ -487,7 +504,23 @@ export function computeFollowFrame(
         realManeuver && distToTurn <= TURN_CAMERA_AWARENESS_METERS
           ? (TURN_CAMERA_PITCH - NAV_PITCH_BASE) * cameraApproachFactor
           : 0;
-      const pitchGoal = input.navigationReady ? NAV_PITCH_BASE + approachPitch : 0;
+      // Acercamiento final: de 80 m a 30 m del cruce el alejamiento de
+      // anticipación se deshace y la cámara se cierra desde arriba.
+      const closeFactor = realManeuver
+        ? Math.min(
+            1,
+            Math.max(
+              0,
+              (TURN_CLOSE_METERS - distToTurn) /
+                (TURN_CLOSE_METERS - TURN_CLOSE_FULL_METERS)
+            )
+          )
+        : 0;
+      const approachPitchGoal = NAV_PITCH_BASE + approachPitch;
+      const pitchGoal = input.navigationReady
+        ? approachPitchGoal +
+          (TURN_CLOSE_PITCH - approachPitchGoal) * closeFactor
+        : 0;
       pitch += (pitchGoal - pitch) * (1 - Math.pow(1 - NAV_PITCH_SMOOTH, frameScale));
       if (Math.abs(pitch - pitchGoal) < 0.1) pitch = pitchGoal;
       const nextNextStep = route.steps[idx + 2];
@@ -513,7 +546,7 @@ export function computeFollowFrame(
         return strength * rampIn;
       };
       const approachFactor = TURN_CAMERA_ZOOM_OUT * cameraApproachFactor;
-      turnApproachActive = approachFactor > 0;
+      turnApproachActive = approachFactor > 0 || closeFactor > 0;
       let openFactor = Math.max(
         turnOpenFactor(curStep, nextStep, distToTurn),
         approachFactor
@@ -532,6 +565,11 @@ export function computeFollowFrame(
         const maneuverTarget = NAV_ZOOM_BASE - openFactor;
         targetZoom = Math.min(targetZoom, maneuverTarget);
         targetZoom = Math.max(TURN_CAMERA_ZOOM_FLOOR, targetZoom);
+        if (closeFactor > 0) {
+          // Dentro de los últimos 80 m el alejamiento se revierte: se cierra
+          // sobre el cruce hasta el zoom máximo justo al llegar.
+          targetZoom += (TURN_CLOSE_ZOOM - targetZoom) * closeFactor;
+        }
       }
     }
     // Si Directions está recalculando o no hay una geometría utilizable, vuelve
