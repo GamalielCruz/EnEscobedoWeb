@@ -453,8 +453,8 @@ export function computeFollowFrame(
       const realManeuver =
         nextStep != null && !["straight", "depart", "arrive", "unknown"].includes(nextStep.maneuver ?? "");
       const cameraApproachFactor = realManeuver
-        ? 0.12 +
-          0.88 *
+        ? 0.35 +
+          0.65 *
             Math.max(
               0,
               1 - Math.max(0, distToTurn) / TURN_CAMERA_AWARENESS_METERS
