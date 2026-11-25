@@ -8,6 +8,7 @@ import { OrderAddressInput, OrderItemInput, validateAndQuoteOrder } from "@/lib/
 import { backendClient } from "@/sanity/lib/backendClient";
 import { assertCurrentLegalAcceptance } from "@/lib/legal-config";
 import { resolvePromotionCode, type AutoPromotion } from "@/lib/stripe-promotion";
+import type { FulfillmentSelection } from "@/lib/fulfillment-schedule";
 
 export type Metadata = {
   orderNumber: string;
@@ -24,10 +25,18 @@ export type Metadata = {
   shippingAddress?: OrderAddressInput;
   deliveryNotes?: string;
   legalAccepted?: boolean;
+  fulfillmentTiming?: "asap" | "scheduled";
+  scheduledSlot?: {
+    startAt: string;
+    endAt: string;
+    timezone?: string;
+  };
 };
 
 export type GroupedBasketItem = {
   product: BasketItem["product"];
+  notes?: string;
+  allergies?: string[];
   quantity: number;
   customizations?: { [key: string]: string | string[] };
   customPrice?: number;
@@ -42,6 +51,8 @@ function buildOrderItems(items: GroupedBasketItem[]): OrderItemInput[] {
     productId: item.product._id,
     quantity: item.quantity,
     customizations: item.customizations,
+    notes: item.notes,
+    allergies: item.allergies,
   }));
 }
 
@@ -113,6 +124,13 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
     orderType,
     paymentMethod: "stripe",
     shippingAddress: buildShippingAddress(metadata),
+    fulfillment:
+      metadata.fulfillmentTiming === "scheduled" && metadata.scheduledSlot
+        ? {
+            timing: "scheduled",
+            scheduledSlot: metadata.scheduledSlot,
+          }
+        : ({ timing: "asap" } satisfies FulfillmentSelection),
   });
 
   const customers = await stripe.customers.list({
@@ -143,11 +161,18 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
     pickupStoreId: storeId,
     pickupStoreName: metadata.pickupStoreName || quotedOrder.store.name || "",
     shippingFee: String(quotedOrder.shippingFee),
+    platformServiceFee: String(quotedOrder.platformServiceFee),
     productsSubtotal: String(quotedOrder.productsSubtotal),
     grossTotal: String(quotedOrder.grossTotal),
     discount: String(quotedOrder.discount),
     tax: String(quotedOrder.tax),
+    fulfillmentTiming: quotedOrder.fulfillment.timing,
   };
+  if (quotedOrder.fulfillment.slot) {
+    stripeMetadata.scheduledStartAt = quotedOrder.fulfillment.slot.start;
+    stripeMetadata.scheduledEndAt = quotedOrder.fulfillment.slot.end;
+    stripeMetadata.scheduledTimezone = quotedOrder.fulfillment.slot.timezone;
+  }
 
   const shippingAddress = buildShippingAddress(metadata);
   if (shippingAddress?.line1) stripeMetadata.shippingLine1 = shippingAddress.line1;
@@ -162,10 +187,12 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
   if (deliveryNotes) stripeMetadata.deliveryNotes = deliveryNotes;
 
   const compactOrderItems = JSON.stringify(buildOrderItems(items));
-  if (compactOrderItems.length > 500) {
-    throw new Error("Los detalles del pedido exceden el limite permitido");
+  for (let index = 0; index * 450 < compactOrderItems.length; index += 1) {
+    if (index >= 20) {
+      throw new Error("Los detalles del pedido exceden el limite permitido");
+    }
+    stripeMetadata[`orderItems${index}`] = compactOrderItems.slice(index * 450, (index + 1) * 450);
   }
-  stripeMetadata.orderItems = compactOrderItems;
 
   const itemLookup = new Map(items.map((item) => [item.product._id, item.product]));
   const lineItems = quotedOrder.items.map((item) => {
@@ -200,6 +227,20 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
   }
 
   const autoPromotionCode = await getEligibleAutoPromotion(orderType, "stripe", storeId);
+
+  if (quotedOrder.platformServiceFee > 0) lineItems.push({
+    price_data: {
+      currency: "mxn",
+      unit_amount: Math.round(quotedOrder.platformServiceFee * 100),
+      product_data: {
+        name: "Tarifa de servicio de ElMenu",
+        description: "Uso de la plataforma",
+        metadata: { id: "platform-service-fee" },
+        images: undefined,
+      },
+    },
+    quantity: 1,
+  });
   const totalStripeAmount = lineItems.reduce((sum, item) => sum + item.price_data.unit_amount * item.quantity, 0);
   if (totalStripeAmount < 1000) {
     throw new Error("El monto minimo para procesar el pago con tarjeta es de $10.00 MXN.");
@@ -228,4 +269,3 @@ export async function createCheckoutSession(items: GroupedBasketItem[], metadata
 
   return session.client_secret;
 }
-

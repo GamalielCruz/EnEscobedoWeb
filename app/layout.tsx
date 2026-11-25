@@ -4,6 +4,7 @@ import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { esMX } from '@clerk/localizations';
 import "./globals.css";
+import "mapbox-gl/dist/mapbox-gl.css";
 import { ClerkRedirectInterceptor } from "@/components/ClerkRedirectInterceptor";
 import { SanityLive } from "@/sanity/lib/live";
 import { ChatwootWidget } from "@/components/support/ChatwootWidget";

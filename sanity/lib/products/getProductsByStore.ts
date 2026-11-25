@@ -28,6 +28,8 @@ const PRODUCTS_BY_STORE_QUERY = defineQuery(`
       slug
     },
     optionGroups,
+    allowSpecialInstructions,
+    acceptsAllergyRequests,
     affiliateStore->{
       _id,
       name,
@@ -43,6 +45,7 @@ const PRODUCTS_BY_STORE_QUERY = defineQuery(`
 const STORE_PRODUCT_ORDER_QUERY = defineQuery(`
   *[_type == "affiliateStore" && _id == $storeId][0]{
     "all": productOrder[]._ref,
+    "categoryOrder": categoryOrder[]._ref,
     "categories": categoryProductOrders[]{
       "categoryId": category._ref,
       "productIds": products[]._ref
@@ -52,6 +55,7 @@ const STORE_PRODUCT_ORDER_QUERY = defineQuery(`
 
 type StoreProductOrdering = {
   all?: string[];
+  categoryOrder?: string[];
   categories?: Array<{ categoryId?: string; productIds?: string[] }>;
 };
 
@@ -99,9 +103,10 @@ export const getProductsByStore = async (storeId: string) => {
         ordering?.all ?? []
       ),
       categoryProductOrders,
+      categoryOrder: ordering?.categoryOrder ?? [],
     };
   } catch (error) {
     console.error("Error fetching products by store:", error);
-    return { products: [], categoryProductOrders: {} };
+    return { products: [], categoryProductOrders: {}, categoryOrder: [] };
   }
 };

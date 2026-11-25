@@ -7,6 +7,7 @@ import {
   normalizeDeliveryConfig,
 } from "@/lib/delivery-zones";
 import { writeClient } from "@/sanity/lib/client";
+import { getStoreCommercialConditions } from "@/lib/commercial-config";
 
 export async function POST(request: NextRequest) {
   try {
@@ -25,8 +26,22 @@ export async function POST(request: NextRequest) {
       lng,
       orderDate: body.orderDate ? new Date(body.orderDate) : new Date(),
     });
+    const commercial = storeId ? (await getStoreCommercialConditions(storeId)).effective : null;
+    const deliveryBasePrice = Number(quote.finalPrice || 0);
+    const deliveryBenefitDiscount = commercial?.deliveryBenefitEnabled
+      ? Math.min(deliveryBasePrice, commercial.deliveryDiscountAmount)
+      : 0;
 
-    return NextResponse.json({ success: true, quote });
+    return NextResponse.json({
+      success: true,
+      quote: {
+        ...quote,
+        finalPrice: quote.finalPrice == null ? null : Math.max(0, deliveryBasePrice - deliveryBenefitDiscount),
+        deliveryBasePrice,
+        deliveryBenefitDiscount,
+        deliveryBenefitAbsorbedBy: deliveryBenefitDiscount ? commercial?.deliveryBenefitAbsorbedBy : null,
+      },
+    });
   } catch (error) {
     console.error("[delivery-pricing/quote POST]", error);
     return NextResponse.json({ error: "Error calculando costo de envio" }, { status: 500 });

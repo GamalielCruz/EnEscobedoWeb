@@ -33,6 +33,7 @@ export type PromoBannerItem = {
   ctaLink?: string | null;
   affiliateStore?: PromoBannerStore | null;
   sale?: PromoBannerSale | null;
+  premiumOnly?: boolean | null;
 };
 
 const ACTIVE_PROMO_BANNERS_QUERY = defineQuery(`
@@ -41,6 +42,10 @@ const ACTIVE_PROMO_BANNERS_QUERY = defineQuery(`
     && isActive == true
     && (!defined(validFrom) || validFrom <= now())
     && (!defined(validUntil) || validUntil >= now())
+    && (premiumOnly != true || (
+      affiliateStore->commercialPlanId == "premium"
+      && coalesce(affiliateStore->commercialOverrides.bannerEligible, *[_id == "commercial-settings"][0].plans.premium.bannerEligible, true) == true
+    ))
   ] | order(sortOrder asc, _createdAt desc) {
     _id,
     title,
@@ -53,6 +58,7 @@ const ACTIVE_PROMO_BANNERS_QUERY = defineQuery(`
     displayDurationSeconds,
     ctaText,
     ctaLink,
+    premiumOnly,
     affiliateStore-> {
       _id,
       name,

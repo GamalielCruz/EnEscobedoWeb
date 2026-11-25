@@ -1,0 +1,486 @@
+/**
+ * Capa aislada de routing vial para el mapa del repartidor.
+ *
+ * Usa la API de Mapbox Directions (client-side, mismo token
+ * NEXT_PUBLIC_MAPBOX_TOKEN que carga el mapa) y devuelve la geometría de la
+ * ruta + distancia + duración.
+ *
+ * CACHÉ: la ruta se reutiliza mientras el destino siga siendo el mismo y el
+ * origen no se mueva más de ROUTE_REUSE_METERS. Las actualizaciones
+ * frecuentes de GPS dentro de ese umbral NO disparan llamadas de routing.
+ *
+ * FALLBACK: si la API falla, tarda demasiado o no hay ruta, devuelve null;
+ * la página no dibuja ninguna línea (nunca una línea recta entre los dos
+ * puntos) y el mapa sigue funcionando con los marcadores.
+ *
+ * FALLOS CACHEADOS: los fallos también se recuerdan por un tiempo corto
+ * (FAILURE_REUSE_MS), de modo que si Directions está caída/deshabilitada no
+ * se reintenta en cada tick de GPS.
+ */
+
+import {
+  MAPBOX_PUBLIC_TOKEN,
+  mapboxDirections,
+  type MapboxRoadRoute,
+} from "@/lib/mapbox";
+
+export type RoutePoint = { lat: number; lng: number };
+
+/**
+ * Un paso (step) del tramo, normalizado a datos pequeños y estables para la
+ * UI (sin exponer objetos gigantes del proveedor al componente).
+ */
+export type RouteStep = {
+  /** Texto legible de la maniobra ("Gira a la derecha en Av. X", ...). */
+  instruction: string;
+  /** Maniobra normalizada ("turn-right", "straight", ...). */
+  maneuver?: string;
+  distanceMeters: number;
+  durationSeconds: number;
+  start: RoutePoint;
+  end: RoutePoint;
+};
+
+export type RoadRoute = {
+  /** Geometría vial completa. Nunca [origin, destination]. */
+  path: RoutePoint[];
+  distanceMeters: number | null;
+  durationSeconds: number | null;
+  distanceText: string | null;
+  durationText: string | null;
+  /** Pasos del tramo (para indicaciones y progreso). Puede estar vacío. */
+  steps: RouteStep[];
+  /** Destino con el que se solicitó la ruta (pickup o delivery). */
+  destination: RoutePoint;
+};
+
+/** El origen debe moverse más que esto para recalcular la ruta (≈200 m). */
+const ROUTE_REUSE_METERS = 200;
+/** Si Directions no responde en este tiempo, se devuelve null (fallback). */
+const ROUTE_TIMEOUT_MS = 6_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      lastErrorReason = "timeout";
+      resolve(null);
+    }, ms);
+    promise
+      .then((value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      })
+      .catch(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      });
+  });
+}
+const MAX_CACHE_ENTRIES = 4;
+
+/**
+ * Motivo del ÚLTIMO fallo de routing, para diagnóstico (panel dev del
+ * repartidor). No afecta la lógica: es solo texto legible.
+ */
+let lastErrorReason: string | null = null;
+
+export function getLastRoutingError(): string | null {
+  return lastErrorReason;
+}
+
+type CachedRoute = {
+  origin: RoutePoint;
+  destination: RoutePoint;
+  route: RoadRoute;
+};
+
+type InFlightRoute = {
+  origin: RoutePoint;
+  destination: RoutePoint;
+  promise: Promise<RoadRoute | null>;
+};
+
+const routeCache = new Map<string, CachedRoute>();
+const inFlight = new Map<string, InFlightRoute>();
+
+/** Reutilizar también los FALLOS: si Directions falla (API no habilitada,
+ * quota, etc.) no reintentar en cada tick de GPS durante un tiempo corto. */
+const FAILURE_REUSE_MS = 60_000;
+const failureCache: Array<{ destination: RoutePoint; failedAt: number }> = [];
+
+function isRecentlyFailed(destination: RoutePoint): boolean {
+  const now = Date.now();
+  for (let i = failureCache.length - 1; i >= 0; i--) {
+    const entry = failureCache[i];
+    if (now - entry.failedAt > FAILURE_REUSE_MS) {
+      failureCache.splice(i, 1);
+      continue;
+    }
+    if (haversineMeters(entry.destination, destination) < ROUTE_REUSE_METERS) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function rememberFailure(destination: RoutePoint) {
+  failureCache.push({ destination, failedAt: Date.now() });
+  if (failureCache.length > MAX_CACHE_ENTRIES) failureCache.shift();
+}
+
+export function haversineMeters(a: RoutePoint, b: RoutePoint): number {
+  const R = 6371000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1 - s));
+}
+
+/** Rumbo (bearing) en grados [0,360) desde el norte, entre dos puntos. */
+export function bearingBetween(a: RoutePoint, b: RoutePoint): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const toDeg = (rad: number) => (rad * 180) / Math.PI;
+  const lat1 = toRad(a.lat);
+  const lat2 = toRad(b.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+/**
+ * Desplaza `point` `meters` metros en la dirección `bearingDeg` (0 = norte,
+ * 90 = este). Se usa solo para el objetivo de CÁMARA (nunca mueve al
+ * conductor ni la ruta).
+ */
+export function movePointAlong(point: RoutePoint, bearingDeg: number, meters: number): RoutePoint {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = (Math.cos(toRad(bearingDeg)) * meters) / 111320;
+  const dLng =
+    (Math.sin(toRad(bearingDeg)) * meters) /
+    (111320 * Math.cos(toRad(point.lat)) || 1);
+  return { lat: point.lat + dLat, lng: point.lng + dLng };
+}
+
+// ── Cache de geometría por referencia ──────────────────────────────
+// Las rutas son inmutables una vez creadas, así que las longitudes acumuladas
+// se calculan UNA vez por array y se reutilizan. Antes, pathLengthMeters /
+// headingAlongPath / projectOntoPath re-sumían haversine O(n) en CADA frame
+// del loop rAF de navegación (30 fps): con geometrías de 500–2000 puntos en
+// Safari iOS eso bloqueaba el hilo principal y causaba el jank/desfase.
+const cumulativeCache = new WeakMap<RoutePoint[], Float64Array>();
+const lastProjectionIndex = new WeakMap<RoutePoint[], number>();
+
+function cumulativeLengths(path: RoutePoint[]): Float64Array {
+  let cached = cumulativeCache.get(path);
+  if (cached && cached.length === path.length) return cached;
+  cached = new Float64Array(path.length);
+  for (let i = 1; i < path.length; i++) {
+    cached[i] = cached[i - 1] + haversineMeters(path[i - 1], path[i]);
+  }
+  cumulativeCache.set(path, cached);
+  return cached;
+}
+
+/** Índice del segmento que contiene `meters` (búsqueda binaria). */
+function segmentIndexAt(cum: Float64Array, meters: number): number {
+  if (meters <= 0) return 1;
+  let lo = 1;
+  let hi = cum.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid] < meters) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
+/** Rumbo del tramo de la polyline en la posición `meters` (0 si no aplica). */
+export function headingAlongPath(path: RoutePoint[], meters: number): number | null {
+  if (path.length < 2) return null;
+  const i = segmentIndexAt(cumulativeLengths(path), meters);
+  return bearingBetween(path[i - 1], path[i]);
+}
+
+/** Longitud total de una polyline en metros (suma de segmentos). */
+export function pathLengthMeters(path: RoutePoint[]): number {
+  if (path.length < 2) return 0;
+  const cum = cumulativeLengths(path);
+  return cum[path.length - 1];
+}
+
+/**
+ * Punto de la polyline a `meters` desde el inicio (interpolado entre puntos
+ * consecutivos). Se usa para desplazar el marcador sobre la geometría real.
+ */
+export function pointAtDistance(path: RoutePoint[], meters: number): RoutePoint {
+  if (path.length === 0) return { lat: 0, lng: 0 };
+  if (path.length === 1 || meters <= 0) return path[0];
+  const cum = cumulativeLengths(path);
+  if (meters >= cum[path.length - 1]) return path[path.length - 1];
+  const i = segmentIndexAt(cum, meters);
+  const a = path[i - 1];
+  const b = path[i];
+  const seg = cum[i] - cum[i - 1];
+  const t = seg === 0 ? 0 : (meters - cum[i - 1]) / seg;
+  return {
+    lat: a.lat + (b.lat - a.lat) * t,
+    lng: a.lng + (b.lng - a.lng) * t,
+  };
+}
+
+/**
+ * Metros recorridos desde el inicio de la polyline hasta la proyección del
+ * punto dado sobre la geometría (segmento más cercano). Aproximación planar
+ * por tramo corto — suficiente para seguimiento GPS urbano.
+ */
+export function projectOntoPath(path: RoutePoint[], point: RoutePoint): number {
+  return projectOntoPathDetailed(path, point).meters;
+}
+
+/**
+ * Proyección sobre la polyline con la distancia LATERAL incluida.
+ *
+ * Misma búsqueda (ventana local ±80 segmentos + fallback completo) que
+ * `projectOntoPath`, pero devuelve también cuánto está el punto fuera de la
+ * geometría. La estima entre fixes (Fase 5-A) necesita ambas cosas: el
+ * progreso para avanzar a lo largo de la ruta y la lateral para decidir si el
+ * vehículo sigue «sobre» ella (≤25 m) o debe avanzar por su rumbo resuelto.
+ */
+export function projectOntoPathDetailed(
+  path: RoutePoint[],
+  point: RoutePoint
+): { meters: number; distance: number } {
+  if (path.length < 2) return { meters: 0, distance: Infinity };
+  const cum = cumulativeLengths(path);
+
+  const scanSegment = (
+    i: number,
+    best: { meters: number; distance: number }
+  ): { meters: number; distance: number } => {
+    const a = path[i - 1];
+    const b = path[i];
+    const segLen = cum[i] - cum[i - 1];
+    const midLatRad = ((a.lat + b.lat) / 2) * (Math.PI / 180);
+    const cosLat = Math.cos(midLatRad) || 1;
+    const bx = (b.lng - a.lng) * cosLat;
+    const by = b.lat - a.lat;
+    const px = (point.lng - a.lng) * cosLat;
+    const py = point.lat - a.lat;
+    const denom = bx * bx + by * by;
+    const t = denom === 0 ? 0 : Math.min(1, Math.max(0, (px * bx + py * by) / denom));
+    const candidate = {
+      lat: a.lat + t * (b.lat - a.lat),
+      lng: a.lng + t * (b.lng - a.lng),
+    };
+    const distance = haversineMeters(candidate, point);
+    return distance < best.distance
+      ? { meters: cum[i - 1] + t * segLen, distance }
+      : best;
+  };
+
+  // Búsqueda local: el vehículo avanza de forma continua, así que el segmento
+  // más cercano casi siempre está junto al de la llamada anterior. Ventana
+  // amplia (±80 segmentos) alrededor del último índice conocido.
+  const WINDOW = 80;
+  const last = lastProjectionIndex.get(path);
+  let best = { meters: 0, distance: Infinity };
+  let bestIndex = 1;
+  if (last != null && last >= 1 && last < path.length) {
+    const from = Math.max(1, last - WINDOW);
+    const to = Math.min(path.length - 1, last + WINDOW);
+    for (let i = from; i <= to; i++) {
+      const next = scanSegment(i, best);
+      if (next !== best) {
+        best = next;
+        bestIndex = i;
+      }
+    }
+  }
+
+  // Fallback completo si la ventana local no encontró nada cercano (desvío
+  // grande, teletransporte, primera llamada): escaneo O(n) completo.
+  if (best.distance > 60) {
+    best = { meters: 0, distance: Infinity };
+    for (let i = 1; i < path.length; i++) {
+      const next = scanSegment(i, best);
+      if (next !== best) {
+        best = next;
+        bestIndex = i;
+      }
+    }
+  }
+
+  lastProjectionIndex.set(path, bestIndex);
+  return { meters: best.meters, distance: best.distance };
+}
+
+/** ¿La ruta fue solicitada hacia este destino? (mismo punto ± 50 m). */
+export function routeTargets(route: RoadRoute | null, destination: RoutePoint): boolean {
+  if (!route) return false;
+  return haversineMeters(route.destination, destination) < 50;
+}
+
+const snap = (value: number, decimals = 3) => Math.round(value * 10 ** decimals) / 10 ** decimals;
+
+const cacheKeyFor = (origin: RoutePoint, destination: RoutePoint) =>
+  `${snap(origin.lat)},${snap(origin.lng)}|${snap(destination.lat)},${snap(destination.lng)}`;
+
+function isLoaded(): boolean {
+  return Boolean(MAPBOX_PUBLIC_TOKEN);
+}
+
+function toRoadRoute(route: MapboxRoadRoute | null): RoadRoute | null {
+  if (!route) return null;
+  return {
+    path: route.path,
+    distanceMeters: route.distanceMeters,
+    durationSeconds: route.durationSeconds,
+    distanceText: route.distanceText,
+    durationText: route.durationText,
+    steps: route.steps.map((step) => ({
+      instruction: step.instruction,
+      maneuver: step.maneuver,
+      distanceMeters: step.distanceMeters,
+      durationSeconds: step.durationSeconds,
+      start: step.start,
+      end: step.end,
+    })),
+    destination: route.destination,
+  };
+}
+
+async function requestDirections(
+  origin: RoutePoint,
+  destination: RoutePoint
+): Promise<RoadRoute | null> {
+  const route = await withTimeout(
+    mapboxDirections(origin, destination, {
+      // `driving-traffic` incorpora tráfico en vivo, igual que el modo de
+      // conducción de Google que se usaba antes.
+      profile: "driving-traffic",
+      language: "es",
+    }),
+    ROUTE_TIMEOUT_MS
+  );
+
+  if (!route) {
+    if (lastErrorReason !== "timeout") {
+      lastErrorReason = "directions_unavailable";
+      console.warn(
+        "[routing] Mapbox Directions no devolvió una ruta para el tramo seleccionado."
+      );
+    }
+    return null;
+  }
+
+  lastErrorReason = null;
+  return toRoadRoute(route);
+}
+
+/** Distancia lateral mínima de `point` a la polyline (metros). */
+export function distanceToPathMeters(path: RoutePoint[], point: RoutePoint): number {
+  if (path.length < 2) return Infinity;
+  let best = Infinity;
+  for (let i = 1; i < path.length; i++) {
+    const a = path[i - 1];
+    const b = path[i];
+    const midLatRad = ((a.lat + b.lat) / 2) * (Math.PI / 180);
+    const cosLat = Math.cos(midLatRad) || 1;
+    const bx = (b.lng - a.lng) * cosLat;
+    const by = b.lat - a.lat;
+    const px = (point.lng - a.lng) * cosLat;
+    const py = point.lat - a.lat;
+    const denom = bx * bx + by * by;
+    const t = denom === 0 ? 0 : Math.min(1, Math.max(0, (px * bx + py * by) / denom));
+    const cx = px - t * bx;
+    const cy = py - t * by;
+    const distance = Math.sqrt(cx * cx + cy * cy) * 111320;
+    if (distance < best) best = distance;
+  }
+  return best;
+}
+
+/**
+ * Ruta vial entre `origin` y `destination`, con caché y dedupe de llamadas
+ * concurrentes. Devuelve null si no hay API disponible o la ruta falla.
+ *
+ * `force=true` omite la caché de proximidad y la caché de fallos: se usa para
+ * el RECÁLCULO por desvío, cuando el repartidor se alejó de la geometría y
+ * hace falta una ruta nueva aunque el origen siga cerca del anterior.
+ */
+export async function getRoadRoute(
+  origin: RoutePoint,
+  destination: RoutePoint,
+  force = false
+): Promise<RoadRoute | null> {
+  if (!isLoaded()) {
+    lastErrorReason = "maps_api_unavailable";
+    return null;
+  }
+
+  // Caché: mismo destino y origen sin moverse más que el umbral → reutilizar
+  // sin llamar a la API (las actualizaciones de GPS frecuentes caen aquí).
+  // Con force (desvío) se salta: queremos una ruta NUEVA desde la posición
+  // actual, aunque esté dentro del umbral del origen anterior.
+  if (!force) {
+    for (const entry of routeCache.values()) {
+      if (
+        haversineMeters(entry.destination, destination) < ROUTE_REUSE_METERS &&
+        haversineMeters(entry.origin, origin) < ROUTE_REUSE_METERS
+      ) {
+        return entry.route;
+      }
+    }
+  }
+
+  const key = `${force ? "force|" : ""}${cacheKeyFor(origin, destination)}`;
+
+  // Caché de fallos: si Directions falló hace poco para este destino, no
+  // volver a llamar a la API en cada tick de GPS. Un recálculo por desvío
+  // (force) sí reintenta: la situación del conductor cambió.
+  if (!force && isRecentlyFailed(destination)) return null;
+
+  // Dedupe de llamadas concurrentes: si ya hay una petición en vuelo para
+  // el mismo tramo (misma lógica de proximidad que el caché), reutilizarla.
+  // Evita que ticks de GPS mientras una petición está en vuelo disparen
+  // llamadas nuevas a la API.
+  for (const entry of inFlight.values()) {
+    if (
+      haversineMeters(entry.destination, destination) < ROUTE_REUSE_METERS &&
+      haversineMeters(entry.origin, origin) < ROUTE_REUSE_METERS
+    ) {
+      return entry.promise;
+    }
+  }
+
+  const request = requestDirections(origin, destination);
+  inFlight.set(key, { origin, destination, promise: request });
+  try {
+    const route = await request;
+    if (route) {
+      routeCache.set(key, { origin, destination, route });
+      while (routeCache.size > MAX_CACHE_ENTRIES) {
+        const oldestKey = routeCache.keys().next().value;
+        if (oldestKey === undefined) break;
+        routeCache.delete(oldestKey);
+      }
+    } else {
+      rememberFailure(destination);
+    }
+    return route;
+  } finally {
+    inFlight.delete(key);
+  }
+}

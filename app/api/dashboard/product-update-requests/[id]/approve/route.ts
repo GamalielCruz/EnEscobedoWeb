@@ -40,6 +40,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (changes.image) setObj.image = changes.image;
     if (changes.categories) setObj.categories = changes.categories;
     if (changes.optionGroups) setObj.optionGroups = changes.optionGroups;
+    if (changes.allowSpecialInstructions != null) setObj.allowSpecialInstructions = changes.allowSpecialInstructions;
+    if (changes.acceptsAllergyRequests != null) setObj.acceptsAllergyRequests = changes.acceptsAllergyRequests;
 
     if (Object.keys(setObj).length > 0) patch.set(setObj);
 

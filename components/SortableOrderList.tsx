@@ -108,6 +108,11 @@ export function SortableOrderList({
   order,
   onReorder,
 }: SortableOrderListProps) {
+  const itemsById = new Map(items.map((item) => [item.id, item]));
+  const orderedItems = order
+    .map((id) => itemsById.get(id))
+    .filter((item): item is SortableOrderItem => Boolean(item));
+
   const move = (index: number, direction: -1 | 1) => {
     const nextIndex = index + direction;
     if (nextIndex < 0 || nextIndex >= order.length) return;
@@ -118,12 +123,12 @@ export function SortableOrderList({
 
   return (
     <Reorder.Group axis="y" values={order} onReorder={onReorder} className="space-y-2">
-      {items.map((item, index) => (
+      {orderedItems.map((item, index) => (
         <SortableOrderRow
           key={item.id}
           item={item}
           index={index}
-          total={items.length}
+          total={orderedItems.length}
           onMove={(direction) => move(index, direction)}
         />
       ))}

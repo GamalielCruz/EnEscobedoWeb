@@ -5,7 +5,8 @@ export default function Footer() {
   return <footer className="mt-auto w-full bg-white px-4 pb-6 pt-12 text-black">
     <div className="mx-auto mt-8 flex max-w-7xl flex-col items-center justify-between gap-3 border-t border-[#eb1922] pt-4 text-xs text-gray-700 md:flex-row">
       <span>© {new Date().getFullYear()} ElMenu.site</span>
-      <nav aria-label="Enlaces legales" className="flex flex-wrap items-center justify-center gap-3">
+      <nav aria-label="Enlaces del sitio" className="flex flex-wrap items-center justify-center gap-3">
+        <Link href="/unete-a-elmenu" className="font-semibold text-[#c81400] hover:underline">Únete a ElMenu</Link>
         <Link href="/legal" className="hover:underline">Centro legal</Link>
         <Link href="/legal/privacidad" className="hover:underline">Privacidad</Link>
         <Link href="/legal/terminos-clientes" className="hover:underline">Términos</Link>

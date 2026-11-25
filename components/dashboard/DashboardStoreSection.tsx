@@ -1,12 +1,15 @@
 "use client";
 
 import * as React from "react";
+import { Navigation } from "lucide-react";
 
 import DeliveryZonesAdmin from "@/components/DeliveryZonesAdmin";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { MapboxMap, type MapboxMapMarker } from "@/components/map/MapboxMap";
+import { MAPBOX_DEFAULT_CENTER, mapboxReverseGeocode, type MapboxPoint } from "@/lib/mapbox";
 
 import {
   DashboardDescription,
@@ -39,6 +42,83 @@ export function DashboardStoreSection({
     buildStoreSettingsDraft(storeConfig)
   );
   const [message, setMessage] = React.useState<string | null>(null);
+  const [isLocating, setIsLocating] = React.useState(false);
+  const latitude = Number(draft.coordinates.latitude);
+  const longitude = Number(draft.coordinates.longitude);
+  const hasValidCoordinates =
+    draft.coordinates.latitude.trim() !== "" && draft.coordinates.longitude.trim() !== "" &&
+    Number.isFinite(latitude) && latitude >= -90 && latitude <= 90 &&
+    Number.isFinite(longitude) && longitude >= -180 && longitude <= 180;
+  const mapCenter: MapboxPoint = hasValidCoordinates
+    ? { lat: latitude, lng: longitude }
+    : MAPBOX_DEFAULT_CENTER;
+  const setCoordinatesFromPoint = React.useCallback((point: MapboxPoint) => {
+    setDraft((current) => ({
+      ...current,
+      coordinates: {
+        latitude: point.lat.toFixed(6),
+        longitude: point.lng.toFixed(6),
+      },
+    }));
+  }, []);
+  const locationMarkers = React.useMemo<MapboxMapMarker[]>(
+    () => hasValidCoordinates
+      ? [{
+          id: "store-location",
+          lat: latitude,
+          lng: longitude,
+          variant: "pin",
+          color: "#20096F",
+          draggable: true,
+          onDragEnd: setCoordinatesFromPoint,
+        }]
+      : [],
+    [hasValidCoordinates, latitude, longitude, setCoordinatesFromPoint]
+  );
+  const useCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      setMessage("Este navegador no permite acceder a la ubicación.");
+      return;
+    }
+
+    setIsLocating(true);
+    setMessage(null);
+    navigator.geolocation.getCurrentPosition(
+      async ({ coords }) => {
+        const point = { lat: coords.latitude, lng: coords.longitude };
+        setCoordinatesFromPoint(point);
+        const address = await mapboxReverseGeocode(point.lat, point.lng, { language: "es" });
+        if (address) {
+          setDraft((current) => ({
+            ...current,
+            address: {
+              ...current.address,
+              street: address.street || current.address.street,
+              city: address.city || current.address.city,
+              state: address.state || current.address.state,
+              postalCode: address.postalCode || current.address.postalCode,
+              country: address.country || current.address.country,
+            },
+          }));
+          setMessage("Ubicación encontrada con Mapbox. Envía los cambios para solicitar su actualización.");
+        } else {
+          setMessage("Coordenadas actuales listas; Mapbox no pudo resolver la dirección. Puedes enviar las coordenadas manualmente.");
+        }
+        setIsLocating(false);
+      },
+      (error) => {
+        setIsLocating(false);
+        setMessage(
+          error.code === error.PERMISSION_DENIED
+            ? "Permite el acceso a tu ubicación en el navegador e inténtalo de nuevo."
+            : error.code === error.TIMEOUT
+              ? "La búsqueda de ubicación tardó demasiado. Inténtalo de nuevo."
+              : "No se pudo obtener tu ubicación actual. Verifica el GPS e inténtalo de nuevo."
+        );
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  };
   const pendingOwnDeliveryRequest = storeRequests.some(
     (request) => request.status === "pending" && typeof request.changes?.hasOwnDelivery === "boolean"
   );
@@ -58,6 +138,15 @@ export function DashboardStoreSection({
   }));
 
   const handleSubmit = async () => {
+    const originalCoordinates = buildStoreSettingsDraft(storeConfig).coordinates;
+    const coordinatesChanged =
+      originalCoordinates.latitude !== draft.coordinates.latitude ||
+      originalCoordinates.longitude !== draft.coordinates.longitude;
+    if (coordinatesChanged && !hasValidCoordinates) {
+      setMessage("Ingresa una latitud entre -90 y 90 y una longitud entre -180 y 180.");
+      return;
+    }
+
     const changes = buildStoreChangesPayload(storeConfig, draft);
     if (Object.keys(changes).length === 0) {
       setMessage("No hay cambios para enviar.");
@@ -70,7 +159,11 @@ export function DashboardStoreSection({
 
   const requestOwnDelivery = async (enabled: boolean) => {
     const success = await onSubmitChanges({ hasOwnDelivery: enabled });
-    setMessage(success ? "Solicitud de reparto enviada correctamente." : "No se pudo enviar la solicitud.");
+    setMessage(
+      success
+        ? `Solicitud para ${enabled ? "activar" : "desactivar"} repartidores propios enviada al administrador.`
+        : "No se pudo enviar la solicitud."
+    );
   };
 
   return (
@@ -234,6 +327,79 @@ export function DashboardStoreSection({
                 />
               </div>
             </div>
+
+            <div className="space-y-3 border-t border-black/6 pt-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-sm font-medium text-gray-900">Ubicacion de la tienda</p>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Arrastra el marcador o selecciona un punto del mapa para ajustar la ubicacion exacta.
+                  </p>
+                </div>
+                <Button type="button" variant="outline" size="sm" onClick={useCurrentLocation} disabled={isLocating}>
+                  <Navigation className="size-4" />
+                  {isLocating ? "Buscando ubicación..." : "Usar mi ubicación actual"}
+                </Button>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div>
+                  <Label htmlFor="store-latitude" className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                    Latitud
+                  </Label>
+                  <Input
+                    id="store-latitude"
+                    className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
+                    type="number"
+                    min={-90}
+                    max={90}
+                    step="any"
+                    placeholder="Ej. 20.5888"
+                    value={draft.coordinates.latitude}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        coordinates: { ...current.coordinates, latitude: event.target.value },
+                      }))
+                    }
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="store-longitude" className="text-xs font-medium uppercase tracking-[0.08em] text-gray-500">
+                    Longitud
+                  </Label>
+                  <Input
+                    id="store-longitude"
+                    className="mt-1 h-10 rounded-lg border-black/8 shadow-none"
+                    type="number"
+                    min={-180}
+                    max={180}
+                    step="any"
+                    placeholder="Ej. -100.3899"
+                    value={draft.coordinates.longitude}
+                    onChange={(event) =>
+                      setDraft((current) => ({
+                        ...current,
+                        coordinates: { ...current.coordinates, longitude: event.target.value },
+                      }))
+                    }
+                  />
+                </div>
+              </div>
+              <div className="overflow-hidden rounded-xl border border-black/8">
+                <MapboxMap
+                  className="h-[280px] w-full"
+                  center={mapCenter}
+                  zoom={hasValidCoordinates ? 16 : 12}
+                  markers={locationMarkers}
+                  onClick={setCoordinatesFromPoint}
+                />
+              </div>
+              {hasValidCoordinates ? (
+                <p className="text-xs text-gray-500">
+                  Coordenadas: {latitude.toFixed(6)}, {longitude.toFixed(6)}
+                </p>
+              ) : null}
+            </div>
           </DashboardPanelBody>
         </DashboardPanel>
 
@@ -379,32 +545,50 @@ export function DashboardStoreSection({
             <div className="rounded-xl border border-black/6 bg-[#fafafb] px-4 py-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <p className="font-medium text-gray-900">
-                    {storeConfig?.hasOwnDelivery ? "Repartidores propios habilitados" : "¿Cuentas con repartidores propios?"}
-                  </p>
+                  <p className="font-medium text-gray-900">Repartidores propios</p>
                   <p className="mt-1 text-[13px] text-gray-600">
                     {storeConfig?.hasOwnDelivery
-                      ? "El costo de envio corresponde a tu restaurante y se calcula con tus zonas."
-                      : "Solicita administrar tus propias zonas y costos de entrega."}
+                      ? "Activo. Puedes administrar tus zonas y precios de entrega abajo."
+                      : "Inactivo. El mapa y los precios propios permanecen ocultos."}
                   </p>
                   <p className="mt-1 text-[13px] text-gray-600">
-                    Comision de El Menu sobre productos: {storeConfig?.platformCommissionPercent != null
-                      ? `${storeConfig.platformCommissionPercent}%`
-                      : "segun convenio"}.
+                    Esta configuracion aplica solo a tu tienda y cualquier cambio requiere aprobacion del administrador.
                   </p>
+                  <div className="mt-2 grid gap-1 text-[13px] text-gray-600 sm:grid-cols-2">
+                    <p>Plan: {storeConfig?.commercial?.reviewRequired ? "Pendiente de revisión" : storeConfig?.commercial?.name || "Sin asignar"}</p>
+                    <p>Comisión sobre productos: {storeConfig?.commercial ? `${storeConfig.commercial.commissionPercent}%` : "según convenio"}</p>
+                    <p>Tope mensual: {storeConfig?.commercial?.monthlyCommissionCap ? `$${storeConfig.commercial.monthlyCommissionCap.toFixed(2)} MXN` : "Sin tope"}</p>
+                    <p>Tarifa de servicio: {storeConfig?.commercial ? `$${storeConfig.commercial.serviceFee.toFixed(2)} MXN` : "Según convenio"}</p>
+                    <p>Pagos en línea: {storeConfig?.commercial?.onlinePaymentsEnabled ? "Activos" : "Inactivos"}</p>
+                    <p>Badge: {storeConfig?.commercial?.premiumBadgeEnabled ? "Activo" : "Inactivo"}</p>
+                  </div>
                 </div>
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={submitting || pendingOwnDeliveryRequest}
-                  onClick={() => requestOwnDelivery(!storeConfig?.hasOwnDelivery)}
-                >
-                  {pendingOwnDeliveryRequest
-                    ? "Solicitud pendiente"
-                    : storeConfig?.hasOwnDelivery
-                      ? "Solicitar reparto de El Menu"
-                      : "Solicitar entregas propias"}
-                </Button>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-medium text-gray-700">
+                    {pendingOwnDeliveryRequest
+                      ? "Solicitud pendiente"
+                      : storeConfig?.hasOwnDelivery
+                        ? "Habilitado"
+                        : "Deshabilitado"}
+                  </span>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-label="Repartidores propios"
+                    aria-checked={Boolean(storeConfig?.hasOwnDelivery)}
+                    disabled={submitting || pendingOwnDeliveryRequest}
+                    onClick={() => requestOwnDelivery(!storeConfig?.hasOwnDelivery)}
+                    className={`relative h-7 w-12 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                      storeConfig?.hasOwnDelivery ? "bg-[#20096F]" : "bg-gray-300"
+                    }`}
+                  >
+                    <span
+                      className={`absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform ${
+                        storeConfig?.hasOwnDelivery ? "translate-x-5" : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -465,6 +649,55 @@ export function DashboardStoreSection({
                 }
               />
             </div>
+          ))}
+        </DashboardPanelBody>
+      </DashboardPanel>
+
+      <DashboardPanel>
+        <DashboardPanelHeader>
+          <DashboardEyebrow>Pedidos programados</DashboardEyebrow>
+          <DashboardTitle className="text-[17px]">Preparación y límites</DashboardTitle>
+          <DashboardDescription>
+            Puedes reducir tus límites, pero el horario global de reparto siempre tiene prioridad.
+          </DashboardDescription>
+        </DashboardPanelHeader>
+        <DashboardPanelBody className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <label className="flex items-center gap-2 rounded-xl border border-black/8 p-3 text-sm font-medium">
+            <input
+              type="checkbox"
+              checked={draft.scheduledOrdersEnabled}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  scheduledOrdersEnabled: event.target.checked,
+                }))
+              }
+            />
+            Aceptar pedidos programados
+          </label>
+          {([
+            ["minimumPreparationMinutes", "Preparación mínima (min)"],
+            ["scheduledOrderIntervalMinutes", "Duración del intervalo (min)"],
+            ["maximumScheduledDays", "Días máximos"],
+            ["lastDeliveryOrderMinutesBeforeClose", "Última entrega antes de cerrar (min)"],
+            ["lastPickupOrderMinutesBeforeClose", "Última recolección antes de cerrar (min)"],
+          ] as Array<[keyof StoreSettingsDraft, string]>).map(([key, label]) => (
+            <label key={key} className="text-sm">
+              <span className="mb-1 block font-medium text-gray-700">{label}</span>
+              <Input
+                type="number"
+                min={key === "scheduledOrderIntervalMinutes" ? 30 : 0}
+                step={key === "scheduledOrderIntervalMinutes" ? 30 : 1}
+                className="h-10 rounded-lg border-black/8 shadow-none"
+                value={Number(draft[key])}
+                onChange={(event) =>
+                  setDraft((current) => ({
+                    ...current,
+                    [key]: Number(event.target.value),
+                  }))
+                }
+              />
+            </label>
           ))}
         </DashboardPanelBody>
       </DashboardPanel>

@@ -23,6 +23,12 @@ export default function SuccessCODPage() {
 
     if (orderNum) {
       setOrderNumber(orderNum);
+      // UX estilo Uber: tras confirmar, el cliente aterriza directo en su
+      // pantalla de seguimiento (Buscando repartidor → asignado).
+      const tracked = searchParams?.get("track");
+      if (tracked !== "0") {
+        router.replace(`/pedido/${encodeURIComponent(orderNum)}`);
+      }
       return;
     }
 

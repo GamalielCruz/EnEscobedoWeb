@@ -1,11 +1,19 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect } from "react";
+import { MapboxMap } from "./map/MapboxMap";
+import { mapboxForwardGeocode, mapboxReverseGeocode } from "@/lib/mapbox";
 import { MapPin, Navigation, Loader2, CheckCircle, Store, AlertCircle, ChevronRight, Clock } from "lucide-react";
 import { CustomerAddressWithCoords } from "@/lib/clickCollect";
 import { calculateDistance } from "@/lib/clickCollect";
+import {
+  CustomerAddress as StoredAddress,
+  customerAddressStorageKey,
+} from "@/lib/customer-address";
+import { useUserAddresses } from "@/hooks/useUserAddresses";
 
 interface ModernDeliveryFlowProps {
+  userId: string;
   onComplete: (data: {
     customerAddress: CustomerAddressWithCoords;
     selectedStore: any;
@@ -20,6 +28,9 @@ type FlowStep = 'address' | 'validating' | 'map-confirm' | 'finding-stores' | 's
 type DeliveryQuote = {
   allowed: boolean;
   finalPrice: number | null;
+  deliveryBasePrice?: number;
+  deliveryBenefitDiscount?: number;
+  deliveryBenefitAbsorbedBy?: "platform" | "restaurant" | null;
   zone: { id: string; name: string; basePrice: number } | null;
   demandMultiplier: number;
   scheduleMultiplier: number;
@@ -27,7 +38,7 @@ type DeliveryQuote = {
   debug?: string[];
 };
 
-export default function ModernDeliveryFlow({ onComplete, filterStoreId }: ModernDeliveryFlowProps) {
+export default function ModernDeliveryFlow({ userId, onComplete, filterStoreId }: ModernDeliveryFlowProps) {
   // Estados del flujo
   const [currentStep, setCurrentStep] = useState<FlowStep>('address');
   const [addressInput, setAddressInput] = useState("");
@@ -36,247 +47,53 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
   const [selectedStore, setSelectedStore] = useState<any | null>(null);
   const [isLoadingLocation, setIsLoadingLocation] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isGoogleMapsLoaded, setIsGoogleMapsLoaded] = useState(false);
-  const [loadError, setLoadError] = useState<boolean>(false);
+  // Mapbox GL se carga solo (hooks/useMapbox): no hay script externo que
+  // esperar, así que el formulario de direcciones nunca queda deshabilitado.
+  const isGoogleMapsLoaded = true;
   const [deliveryQuote, setDeliveryQuote] = useState<DeliveryQuote | null>(null);
+  // Direcciones guardadas del usuario (libreta compartida, Clerk privateMetadata).
+  const { addresses: savedAddresses } = useUserAddresses(userId, { silent: true });
 
-  // Map refs
-  const mapRef = useRef<HTMLDivElement>(null);
-  const mapInstanceRef = useRef<google.maps.Map | null>(null);
-  const markerRef = useRef<google.maps.Marker | null>(null);
+  // Mapa declarativo: la posición del marcador vive en customerAddress
+  // (mismo estado que se envía al servidor).
 
-  // Cargar Google Maps si no está cargado
-  const loadGoogleMaps = useCallback(() => {
-    if (window.google && window.google.maps) {
-      setIsGoogleMapsLoaded(true);
-      return Promise.resolve();
-    }
-
-    return new Promise<void>((resolve, reject) => {
-      const existingScript = document.querySelector('script[src*="maps.googleapis.com"]');
-      
-      if (existingScript) {
-        const checkLoaded = () => {
-          if (window.google && window.google.maps) {
-            setIsGoogleMapsLoaded(true);
-            resolve();
-          } else {
-            setTimeout(checkLoaded, 100);
-          }
-        };
-        checkLoaded();
-        return;
-      }
-
-      const script = document.createElement('script');
-      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
-      
-      if (!apiKey) {
-        reject(new Error('API Key no configurada'));
-        return;
-      }
-
-      const callbackName = 'initGoogleMapsModernFlow';
-      (window as any)[callbackName] = () => {
-        setIsGoogleMapsLoaded(true);
-        resolve();
-        setTimeout(() => delete (window as any)[callbackName], 1000);
+  // Geocodificar dirección (Mapbox Geocoding v6)
+  const geocodeAddress = useCallback(
+    async (address: string): Promise<CustomerAddressWithCoords | null> => {
+      const [match] = await mapboxForwardGeocode(address, {
+        limit: 1,
+        country: 'mx',
+        language: 'es',
+      });
+      if (!match) return null;
+      return {
+        street: match.street || match.fullAddress || address,
+        city: match.city || '',
+        state: match.state || '',
+        country: match.country || 'México',
+        postalCode: match.postalCode || '',
+        latitude: match.latitude,
+        longitude: match.longitude,
       };
+    },
+    []
+  );
 
-      script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places&callback=${callbackName}`;
-      script.async = true;
-      script.defer = true;
-      script.onerror = () => reject(new Error('Error cargando Google Maps'));
-      
-      document.head.appendChild(script);
-    });
-  }, []);
-
-  // Cargar Google Maps al montar
-  useEffect(() => {
-    loadGoogleMaps().catch(() => setLoadError(true));
-  }, [loadGoogleMaps]);
-
-  // Inicializar mapa cuando estamos en el paso map-confirm
-  useEffect(() => {
-    if (currentStep === 'map-confirm' && isGoogleMapsLoaded && customerAddress && mapRef.current && !mapInstanceRef.current) {
-      const map = new google.maps.Map(mapRef.current, {
-        center: { lat: customerAddress.latitude!, lng: customerAddress.longitude! },
-        zoom: 17,
-        disableDefaultUI: true,
-        zoomControl: true,
-        streetViewControl: false,
-        mapTypeControl: false,
-        fullscreenControl: false,
-      });
-
-      const marker = new google.maps.Marker({
-        position: { lat: customerAddress.latitude!, lng: customerAddress.longitude! },
-        map: map,
-        draggable: true,
-        animation: google.maps.Animation.DROP,
-      });
-
-      // Actualizar posición al arrastrar
-      marker.addListener('dragend', () => {
-        const position = marker.getPosition();
-        if (position) {
-          const lat = position.lat();
-          const lng = position.lng();
-          
-          setCustomerAddress(prev => prev ? ({
-            ...prev,
-            latitude: lat,
-            longitude: lng
-          }) : null);
-          
-          // Opcional: Reverse geocoding aquí para actualizar la dirección de texto
-        }
-      });
-
-      mapInstanceRef.current = map;
-      markerRef.current = marker;
-    }
-
-    // Cleanup al salir del paso
-    return () => {
-      if (currentStep !== 'map-confirm') {
-        mapInstanceRef.current = null;
-        markerRef.current = null;
-      }
-    };
-  }, [currentStep, isGoogleMapsLoaded, customerAddress]);
-
-  // Geocodificar dirección usando Google Maps
-  const geocodeAddress = useCallback(async (address: string): Promise<CustomerAddressWithCoords | null> => {
-    // Cargar Google Maps si no está cargado
-    try {
-      await loadGoogleMaps();
-    } catch (err) {
-      console.error('Error cargando Google Maps:', err);
-      return null;
-    }
-
-    if (!window.google || !window.google.maps) {
-      return null;
-    }
-
-    const geocoder = new google.maps.Geocoder();
-    
-    return new Promise((resolve) => {
-      geocoder.geocode({ address, componentRestrictions: { country: 'MX' } }, (results, status) => {
-        if (status === 'OK' && results && results[0]) {
-          const place = results[0];
-          const components = place.address_components || [];
-          
-          let street = '';
-          let city = '';
-          let state = '';
-          let postalCode = '';
-          
-          components.forEach((component: any) => {
-            const types = component.types;
-            if (types.includes('street_number') || types.includes('route')) {
-              street += component.long_name + ' ';
-            }
-            if (types.includes('locality')) {
-              city = component.long_name;
-            }
-            if (types.includes('administrative_area_level_1')) {
-              state = component.long_name;
-            }
-            if (types.includes('postal_code')) {
-              postalCode = component.long_name;
-            }
-          });
-
-          resolve({
-            street: street.trim() || place.formatted_address || address,
-            city: city || '',
-            state: state || '',
-            country: 'México',
-            postalCode: postalCode || '',
-            latitude: place.geometry?.location?.lat() || 0,
-            longitude: place.geometry?.location?.lng() || 0,
-          });
-        } else {
-          resolve(null);
-        }
-      });
-    });
-  }, [loadGoogleMaps]);
-
-  const reverseGeocodeCoordinates = useCallback(async (
-    latitude: number,
-    longitude: number
-  ): Promise<CustomerAddressWithCoords | null> => {
-    try {
-      await loadGoogleMaps();
-    } catch (err) {
-      console.error('Error cargando Google Maps:', err);
-      return null;
-    }
-
-    if (!window.google || !window.google.maps) {
-      return null;
-    }
-
-    const geocoder = new google.maps.Geocoder();
-
-    return new Promise((resolve) => {
-      geocoder.geocode(
-        { location: { lat: latitude, lng: longitude } },
-        (results, status) => {
-          if (status === 'OK' && results && results[0]) {
-            const place = results[0];
-            const components = place.address_components || [];
-
-            let street = '';
-            let city = '';
-            let state = '';
-            let postalCode = '';
-
-            components.forEach((component: any) => {
-              const types = component.types;
-              if (types.includes('street_number') || types.includes('route')) {
-                street += component.long_name + ' ';
-              }
-              if (types.includes('locality')) {
-                city = component.long_name;
-              }
-              if (types.includes('administrative_area_level_1')) {
-                state = component.long_name;
-              }
-              if (types.includes('postal_code')) {
-                postalCode = component.long_name;
-              }
-            });
-
-            resolve({
-              street: street.trim() || place.formatted_address || `${latitude}, ${longitude}`,
-              city: city || '',
-              state: state || '',
-              country: 'México',
-              postalCode: postalCode || '',
-              latitude,
-              longitude,
-            });
-            return;
-          }
-
-          resolve({
-            street: `${latitude}, ${longitude}`,
-            city: '',
-            state: '',
-            country: 'México',
-            postalCode: '',
-            latitude,
-            longitude,
-          });
-        }
-      );
-    });
-  }, [loadGoogleMaps]);
+  const reverseGeocodeCoordinates = useCallback(
+    async (latitude: number, longitude: number): Promise<CustomerAddressWithCoords | null> => {
+      const result = await mapboxReverseGeocode(latitude, longitude, { language: 'es' });
+      return {
+        street: result?.street || result?.fullAddress || `${latitude}, ${longitude}`,
+        city: result?.city || '',
+        state: result?.state || '',
+        country: result?.country || 'México',
+        postalCode: result?.postalCode || '',
+        latitude,
+        longitude,
+      };
+    },
+    []
+  );
 
   useEffect(() => {
     if (
@@ -400,76 +217,30 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
     setIsLoadingLocation(true);
     setError(null);
 
-    // Asegurarse de que Google Maps esté cargado
-    if (!isGoogleMapsLoaded) {
-      try {
-        await loadGoogleMaps();
-      } catch (err) {
-        setError("Error cargando el sistema de mapas. Intenta con entrada manual.");
-        setIsLoadingLocation(false);
-        return;
-      }
-    }
-
     navigator.geolocation.getCurrentPosition(
       async (position) => {
         const { latitude, longitude } = position.coords;
-        
+
         try {
-          // Geocodificar coordenadas a dirección
-          if (window.google && window.google.maps) {
-            const geocoder = new google.maps.Geocoder();
-            const latlng = { lat: latitude, lng: longitude };
-            
-            geocoder.geocode({ location: latlng }, async (results, status) => {
-              if (status === 'OK' && results && results[0]) {
-                const place = results[0];
-                const components = place.address_components || [];
-                
-                let street = '';
-                let city = '';
-                let state = '';
-                let postalCode = '';
-                
-                components.forEach((component: any) => {
-                  const types = component.types;
-                  if (types.includes('street_number') || types.includes('route')) {
-                    street += component.long_name + ' ';
-                  }
-                  if (types.includes('locality')) {
-                    const longName = component.long_name;
-                    if (!city || longName === 'Pedro Escobedo') {
-                         city = longName;
-                    }
-                  }
-                  if (types.includes('administrative_area_level_1')) {
-                    state = component.long_name;
-                  }
-                  if (types.includes('postal_code')) {
-                    postalCode = component.long_name;
-                  }
-                });
-
-                const address: CustomerAddressWithCoords = {
-                  street: street.trim() || place.formatted_address || 'Ubicación detectada',
-                  city: city || '',
-                  state: state || '',
-                  country: 'México',
-                  postalCode: postalCode || '',
-                  latitude,
-                  longitude,
-                };
-
-                setAddressInput(place.formatted_address || `${latitude}, ${longitude}`);
-                setCustomerAddress(address);
-                // Ir a confirmar mapa en lugar de validar directamente
-                setCurrentStep('map-confirm');
-              } else {
-                 setError("No se pudo obtener la dirección exacta.");
-                 setCurrentStep('address');
-              }
-            });
+          // Geocodificar coordenadas a dirección (Mapbox inverso)
+          const resolved = await reverseGeocodeCoordinates(latitude, longitude);
+          if (!resolved) {
+            setError("No se pudo obtener la dirección exacta.");
+            setCurrentStep('address');
+            return;
           }
+
+          const address: CustomerAddressWithCoords = {
+            ...resolved,
+            street: resolved.street || 'Ubicación detectada',
+          };
+
+          setAddressInput(
+            [address.street, address.city, address.state, address.postalCode].filter(Boolean).join(', ')
+          );
+          setCustomerAddress(address);
+          // Ir a confirmar mapa en lugar de validar directamente
+          setCurrentStep('map-confirm');
         } catch (err) {
           setError("Error al obtener tu dirección");
         } finally {
@@ -483,7 +254,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
       },
       { enableHighAccuracy: true, timeout: 10000 }
     );
-  }, [loadGoogleMaps, isGoogleMapsLoaded]);
+  }, [reverseGeocodeCoordinates]);
 
   // Manejar envío de dirección manual
   const handleAddressSubmit = useCallback(async () => {
@@ -512,6 +283,43 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
       setCurrentStep('address');
     }
   }, [addressInput, geocodeAddress]);
+
+  const handleSavedAddress = useCallback(async (saved: StoredAddress) => {
+    setError(null);
+    setAddressInput(saved.formattedAddress);
+    setCurrentStep('validating');
+
+    const hasCoordinates =
+      typeof saved.latitude === 'number' &&
+      typeof saved.longitude === 'number';
+    const address = hasCoordinates
+      ? {
+          street: saved.street,
+          city: saved.city,
+          state: saved.state,
+          country: saved.country,
+          postalCode: saved.postalCode,
+          latitude: saved.latitude,
+          longitude: saved.longitude,
+        }
+      : await geocodeAddress(saved.formattedAddress);
+
+    if (!address) {
+      setError("No pudimos ubicar esta dirección guardada. Puedes escribirla nuevamente.");
+      setCurrentStep('address');
+      return;
+    }
+
+    setCustomerAddress(address);
+    localStorage.setItem(customerAddressStorageKey(userId), JSON.stringify(saved));
+    window.dispatchEvent(new CustomEvent("customerAddressChanged", { detail: saved }));
+    void fetch("/api/user/addresses", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address: saved }),
+    }).catch(() => {});
+    setCurrentStep('map-confirm');
+  }, [geocodeAddress, userId]);
 
   // Confirmar ubicación en mapa y buscar tiendas
   const handleConfirmLocation = useCallback(async () => {
@@ -583,6 +391,29 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
           <h3 className="text-lg font-semibold text-gray-900">¿Dónde entregaremos tu pedido?</h3>
         </div>
 
+        {savedAddresses.length > 0 && <label className="block space-y-2">
+          <span className="text-sm font-semibold text-gray-800">Usar una dirección guardada</span>
+          <div className="relative">
+            <MapPin className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-[#eb1901]" />
+            <select
+              defaultValue=""
+              onChange={(event) => {
+                const address = savedAddresses.find((item) => item.id === event.target.value);
+                if (address) void handleSavedAddress(address);
+              }}
+              className="w-full appearance-none rounded-xl border-2 border-gray-300 bg-white py-3.5 pl-11 pr-10 text-sm font-medium text-gray-800 outline-none focus:border-[#eb1901] focus:ring-2 focus:ring-[#eb1901]/20"
+            >
+              <option value="" disabled>Elige Casa, Oficina u otra dirección</option>
+              {savedAddresses.map((address) => (
+                <option key={address.id} value={address.id}>
+                  {address.label} — {address.formattedAddress}
+                </option>
+              ))}
+            </select>
+            <ChevronRight className="pointer-events-none absolute right-3 top-1/2 h-5 w-5 -translate-y-1/2 rotate-90 text-gray-400" />
+          </div>
+        </label>}
+
         {/* Botón de ubicación */}
         <button
           onClick={handleDetectLocation}
@@ -645,13 +476,7 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
           </div>
         )}
 
-        {/* Loader de Google Maps */}
-        {!isGoogleMapsLoaded && !loadError && (
-          <div className="flex items-center justify-center gap-2 p-3 bg-gray-50 rounded-xl">
-            <Loader2 className="w-4 h-4 animate-spin text-gray-600" />
-            <span className="text-sm text-gray-600">Cargando sistema de direcciones...</span>
-          </div>
-        )}
+        {/* Sin loader: Mapbox se carga solo cuando el mapa aparece. */}
       </div>
     );
   }
@@ -680,8 +505,28 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
             </div>
 
             <div className="relative w-full h-64 bg-gray-100 rounded-xl overflow-hidden border-2 border-gray-300">
-                <div ref={mapRef} className="w-full h-full" />
-                {/* Botón para volver a centrar si existiera, pero el usuario puede arrastrar */}
+                <MapboxMap
+                    className="w-full h-64"
+                    center={{ lat: customerAddress!.latitude!, lng: customerAddress!.longitude! }}
+                    zoom={17}
+                    markers={[
+                        {
+                            id: 'delivery-pin',
+                            lat: customerAddress!.latitude!,
+                            lng: customerAddress!.longitude!,
+                            html: `<img src="data:image/svg+xml;charset=utf-8,${encodeURIComponent(
+                                '<svg width="40" height="50" viewBox="0 0 40 50" xmlns="http://www.w3.org/2000/svg"><path d="M20 0C8.95 0 0 8.95 0 20C0 35 20 50 20 50S40 35 40 20C40 8.95 31.05 0 20 0Z" fill="#EF4444"/><circle cx="20" cy="20" r="8" fill="white"/><circle cx="20" cy="20" r="4" fill="#EF4444"/></svg>'
+                            )}" width="40" height="50" alt="" style="display:block" />`,
+                            anchor: 'bottom',
+                            draggable: true,
+                            onDragEnd: (next: { lat: number; lng: number }) => {
+                                setCustomerAddress((prev) =>
+                                    prev ? { ...prev, latitude: next.lat, longitude: next.lng } : prev
+                                );
+                            },
+                        },
+                    ]}
+                />
             </div>
 
             <div className="p-3 bg-rose-50 rounded-lg text-sm text-rose-800">
@@ -777,6 +622,9 @@ export default function ModernDeliveryFlow({ onComplete, filterStoreId }: Modern
               <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
                 <span className="font-semibold">Zona:</span> {deliveryQuote.zone?.name || "Tarifa especial"} ·
                 <span className="font-semibold"> Envio:</span> ${deliveryQuote.finalPrice} MXN
+                {deliveryQuote.deliveryBenefitDiscount ? (
+                  <span className="block text-xs">Beneficio: -${deliveryQuote.deliveryBenefitDiscount} MXN · lo absorbe {deliveryQuote.deliveryBenefitAbsorbedBy === "platform" ? "ElMenu" : "el restaurante"}.</span>
+                ) : null}
               </div>
             )}
 

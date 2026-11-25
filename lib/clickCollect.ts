@@ -1,3 +1,5 @@
+import { mapboxForwardGeocode } from "./mapbox";
+
 // Tipos para el sistema Click & Collect
 export interface CustomerAddress {
   street: string;
@@ -100,17 +102,11 @@ function toRadians(degrees: number): number {
 }
 
 /**
- * Geocodifica una dirección usando la API de Google Maps
+ * Geocodifica una dirección usando la API de Mapbox
  * @param address Dirección del cliente
  * @returns Coordenadas de la dirección
  */
 export async function geocodeAddress(address: CustomerAddress): Promise<Coordinates> {
-  const apiKey = process.env.GOOGLE_MAPS_API_KEY;
-  
-  if (!apiKey || apiKey === 'TU_API_KEY_AQUI') {
-    throw new Error('Google Maps API key no configurada correctamente');
-  }
-
   // Construir la dirección completa
   const fullAddress = [
     address.street,
@@ -120,36 +116,25 @@ export async function geocodeAddress(address: CustomerAddress): Promise<Coordina
     address.country || 'México'
   ].filter(Boolean).join(', ');
 
-  const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(fullAddress)}&key=${apiKey}`;
-
   try {
-    console.log(`Geocodificando con Google Maps: ${fullAddress}`);
-    const response = await fetch(url);
-    const data = await response.json();
+    console.log(`Geocodificando con Mapbox: ${fullAddress}`);
+    const [result] = await mapboxForwardGeocode(fullAddress, {
+      limit: 1,
+      country: 'mx',
+    });
 
-    console.log(`Google Maps response status: ${data.status}`);
-
-    if (data.status === 'REQUEST_DENIED') {
-      throw new Error(`Google Maps API key inválida o sin permisos. Status: ${data.status}. Error: ${data.error_message || 'Sin mensaje de error'}`);
+    if (!result) {
+      throw new Error('No se encontraron resultados en Mapbox');
     }
 
-    if (data.status === 'OVER_QUERY_LIMIT') {
-      throw new Error('Límite de consultas de Google Maps excedido');
-    }
+    console.log(`Coordenadas obtenidas: ${result.latitude}, ${result.longitude}`);
 
-    if (data.status !== 'OK' || !data.results.length) {
-      throw new Error(`No se encontraron resultados. Status: ${data.status}`);
-    }
-
-    const location = data.results[0].geometry.location;
-    console.log(`Coordenadas obtenidas: ${location.lat}, ${location.lng}`);
-    
     return {
-      latitude: location.lat,
-      longitude: location.lng,
+      latitude: result.latitude,
+      longitude: result.longitude,
     };
   } catch (error) {
-    console.error('Error en geocodificación con Google Maps:', error);
+    console.error('Error en geocodificación con Mapbox:', error);
     throw error; // Re-lanzar el error para que el fallback funcione
   }
 }
@@ -232,13 +217,13 @@ export async function geocodeAddressOSM(address: CustomerAddress): Promise<Coord
  * Encuentra la tienda más cercana a una dirección
  * @param customerAddress Dirección del cliente
  * @param stores Lista de tiendas afiliadas
- * @param useGoogleMaps Si usar Google Maps o OpenStreetMap para geocodificación
+ * @param useMapboxGeocoding Si usar Mapbox o OpenStreetMap para geocodificación
  * @returns Tienda más cercana con información de distancia
  */
 export async function findNearestStore(
   customerAddress: CustomerAddress,
   stores: AffiliateStore[],
-  useGoogleMaps: boolean = false
+  useMapboxGeocoding: boolean = false
 ): Promise<StoreWithDistance> {
   // Filtrar solo tiendas activas
   const activeStores = stores.filter(store => store.isActive);
@@ -250,12 +235,12 @@ export async function findNearestStore(
   // Geocodificar la dirección del cliente con fallback automático
   let customerCoords: Coordinates;
   
-  if (useGoogleMaps) {
+  if (useMapboxGeocoding) {
     try {
       customerCoords = await geocodeAddress(customerAddress);
-      console.log('Geocodificación exitosa con Google Maps');
-    } catch (googleError) {
-      console.log('Google Maps falló, usando OpenStreetMap como fallback:', googleError);
+      console.log('Geocodificación exitosa con Mapbox');
+    } catch (mapboxError) {
+      console.log('Mapbox falló, usando OpenStreetMap como fallback:', mapboxError);
       customerCoords = await geocodeAddressOSM(customerAddress);
     }
   } else {

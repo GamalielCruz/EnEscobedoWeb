@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { AlertCircle, MapPin, Navigation } from "lucide-react";
-import { SafeGoogleMapsLoader } from "./SafeGoogleMapsLoader";
+import { SafeMapboxLoader } from "./SafeMapboxLoader";
 import LocationBasedStoreSelector from "./LocationBasedStoreSelector";
 import SimpleAddressInput from "./SimpleAddressInput";
 import { CustomerAddress } from "@/lib/clickCollect";
@@ -12,20 +12,18 @@ import { CustomerAddress } from "@/lib/clickCollect";
 interface SafeLocationBasedStoreSelectorProps {
   onStoreSelected: (storeData: any) => void;
   onAddressChange?: (address: CustomerAddress) => void;
-  apiKey: string;
   filterStoreId?: string;
 }
 
 export function SafeLocationBasedStoreSelector({ 
   onStoreSelected, 
   onAddressChange, 
-  apiKey,
   filterStoreId
 }: SafeLocationBasedStoreSelectorProps) {
   const [useManualInput, setUseManualInput] = useState(false);
 
-  // Si el usuario prefiere entrada manual o no hay API key
-  if (useManualInput || !apiKey || apiKey.trim() === '' || apiKey === 'undefined') {
+  // Si el usuario prefiere entrada manual
+  if (useManualInput) {
     return (
       <Card>
         <CardHeader>
@@ -93,15 +91,13 @@ export function SafeLocationBasedStoreSelector({
             label="Tu dirección"
           />
           
-          {apiKey && apiKey.trim() !== '' && apiKey !== 'undefined' && (
-            <Button
-              variant="outline"
-              onClick={() => setUseManualInput(false)}
-              className="w-full"
-            >
-              🗺️ Probar con Google Maps (Avanzado)
-            </Button>
-          )}
+          <Button
+            variant="outline"
+            onClick={() => setUseManualInput(false)}
+            className="w-full"
+          >
+            🗺️ Buscar tiendas en el mapa (Avanzado)
+          </Button>
         </CardContent>
       </Card>
     );
@@ -110,15 +106,15 @@ export function SafeLocationBasedStoreSelector({
   // Usar Google Maps con manejo seguro
   return (
     <div className="space-y-4">
-      <SafeGoogleMapsLoader apiKey={apiKey}>
-        {(isLoaded, error) => {
+      <SafeMapboxLoader>
+        {(isLoaded: boolean, error: string | null) => {
           if (error) {
             return (
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <AlertCircle className="h-5 w-5 text-red-500" />
-                    Google Maps No Disponible
+                    Mapa No Disponible
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
@@ -147,7 +143,7 @@ export function SafeLocationBasedStoreSelector({
                 <CardContent className="flex items-center justify-center p-8">
                   <div className="text-center">
                     <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"></div>
-                    <p className="text-gray-600">Cargando Google Maps...</p>
+                    <p className="text-gray-600">Cargando mapa...</p>
                     <p className="text-gray-500 text-sm mt-1">Esto puede tomar unos segundos</p>
                   </div>
                 </CardContent>
@@ -160,14 +156,13 @@ export function SafeLocationBasedStoreSelector({
               <LocationBasedStoreSelector
                 onStoreSelected={onStoreSelected}
                 onAddressChange={onAddressChange}
-                apiKey={apiKey}
                 filterStoreId={filterStoreId}
               />
               
             </div>
           );
         }}
-      </SafeGoogleMapsLoader>
+      </SafeMapboxLoader>
     </div>
   );
 }

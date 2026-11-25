@@ -60,7 +60,7 @@ export async function POST(req: NextRequest) {
       const order = await createOrderInSanity(session, stripe);
       const deliveryMethod = session.metadata?.deliveryMethod;
       const isDelivery = deliveryMethod !== "click_collect" && deliveryMethod !== "pickup";
-      if (session.payment_status === "paid" && isDelivery) {
+      if (session.payment_status === "paid" && isDelivery && order.fulfillmentTiming !== "scheduled") {
         await dispatchDeliveryOffer(order._id).catch((error) => {
           console.error("[webhook] dispatchDeliveryOffer error:", error);
         });
@@ -76,7 +76,11 @@ export async function POST(req: NextRequest) {
         const updatedOrder = await markOrderPaidBySession(session.id);
         const paidOrder = updatedOrder ?? await createOrderInSanity(session, stripe);
         const deliveryMethod = session.metadata?.deliveryMethod;
-        if (deliveryMethod !== "click_collect" && deliveryMethod !== "pickup") {
+        if (
+          deliveryMethod !== "click_collect" &&
+          deliveryMethod !== "pickup" &&
+          paidOrder.fulfillmentTiming !== "scheduled"
+        ) {
           await dispatchDeliveryOffer(paidOrder._id).catch((error) => {
             console.error("[webhook] dispatchDeliveryOffer error:", error);
           });
@@ -87,7 +91,7 @@ export async function POST(req: NextRequest) {
     if (event.type === "checkout.session.expired") {
       const session = event.data.object as Stripe.Checkout.Session;
       const now = new Date().toISOString();
-      const patched = await patchOrderBySession(
+      await patchOrderBySession(
         session.id,
         {
           status: "expired",
@@ -98,11 +102,7 @@ export async function POST(req: NextRequest) {
         "manual_admin_action"
       );
 
-      if (!patched) {
-        const order = await createOrderInSanity(session, stripe);
-        await backendClient.patch(order._id).set({ status: "expired", paymentStatus: "expired", expiredAt: now, updatedAt: now }).commit();
-        after(() => syncBaserowOrderById(order._id));
-      }
+      // An abandoned checkout is not an order. Legacy reservations are marked expired above.
     }
 
     if (event.type === "payment_intent.payment_failed") {

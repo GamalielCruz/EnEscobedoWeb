@@ -8,7 +8,7 @@ const nextConfig: NextConfig = {
   
   // Image optimization
   images: {
-    domains: ['cdn.sanity.io'],
+    domains: ['cdn.sanity.io', 'coreva-normal.trae.ai'],
     formats: ['image/webp', 'image/avif'],
   },
   

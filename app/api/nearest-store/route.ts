@@ -32,7 +32,13 @@ export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
   try {
     const body = await request.json();
-    const { address, latitude, longitude, useGoogleMaps = false, filterStoreId } = body;
+    const {
+      address,
+      latitude,
+      longitude,
+      useMapboxGeocoding = false,
+      filterStoreId,
+    } = body;
 
     // Validar que se proporcione dirección O coordenadas
     if (!address && (!latitude || !longitude)) {
@@ -321,7 +327,7 @@ export async function POST(request: NextRequest) {
     const nearestStore: StoreWithDistance = await findNearestStore(
       customerAddress,
       stores,
-      useGoogleMaps
+      useMapboxGeocoding
     );
     
     console.log('Tienda más cercana encontrada:', JSON.stringify(nearestStore, null, 2));

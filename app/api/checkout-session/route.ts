@@ -7,6 +7,7 @@ import {
 } from "@/actions/createCheckoutSession";
 import { assertCurrentLegalAcceptance } from "@/lib/legal-config";
 import { recordCurrentLegalAcceptance } from "@/lib/legal-acceptance";
+import { DeliverySlotUnavailableError } from "@/lib/fulfillment-schedule";
 
 export async function POST(request: NextRequest) {
   const requestId = crypto.randomUUID();
@@ -41,10 +42,13 @@ export async function POST(request: NextRequest) {
     });
     return NextResponse.json(
       {
+        ...(error instanceof DeliverySlotUnavailableError
+          ? { code: error.code, alternatives: error.alternatives }
+          : {}),
         error: error instanceof Error ? error.message : "Error al crear la sesion de checkout",
         requestId,
       },
-      { status: 500 }
+      { status: error instanceof DeliverySlotUnavailableError ? 409 : 500 }
     );
   }
 }

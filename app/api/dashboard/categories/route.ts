@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
+import { revalidatePath } from "next/cache";
 export const dynamic = "force-dynamic";
 import { writeClient } from "@/sanity/lib/client";
 
@@ -28,14 +29,66 @@ export async function GET(request: NextRequest) {
     );
     if (!ownsStore) return NextResponse.json({ error: "Sin permisos" }, { status: 403 });
 
-    const categories = await writeClient.fetch(CATEGORIES_QUERY, { storeId });
-    return NextResponse.json({ success: true, categories: categories ?? [] });
+    const [categories, categoryOrder] = await Promise.all([
+      writeClient.fetch(CATEGORIES_QUERY, { storeId }),
+      writeClient.fetch<string[]>(
+        `*[_type == "affiliateStore" && _id == $storeId][0].categoryOrder[]._ref`,
+        { storeId }
+      ),
+    ]);
+    return NextResponse.json({ success: true, categories: categories ?? [], categoryOrder: categoryOrder ?? [] });
   } catch (e) {
     console.error("[dashboard/categories GET]", e);
     return NextResponse.json(
       { error: "Error al cargar categorías" },
       { status: 500 }
     );
+  }
+}
+
+export async function PATCH(request: NextRequest) {
+  try {
+    const { userId } = await auth();
+    if (!userId) return NextResponse.json({ error: "No autorizado" }, { status: 401 });
+
+    const { storeId, categoryIds } = await request.json();
+    if (!storeId || !Array.isArray(categoryIds) || categoryIds.some((id) => typeof id !== "string" || !id)) {
+      return NextResponse.json({ error: "Tienda y orden de categorías requeridos" }, { status: 400 });
+    }
+    if (new Set(categoryIds).size !== categoryIds.length) {
+      return NextResponse.json({ error: "El orden contiene categorías repetidas" }, { status: 400 });
+    }
+
+    const ownsStore = await writeClient.fetch<boolean>(
+      `count(*[_type == "affiliateStore" && _id == $storeId && ownerClerkUserId == $userId]) > 0`,
+      { storeId, userId }
+    );
+    if (!ownsStore) return NextResponse.json({ error: "Sin permisos" }, { status: 403 });
+
+    const validIds = await writeClient.fetch<string[]>(
+      `*[_type == "category" && _id in $categoryIds &&
+        (affiliateStore._ref == $storeId ||
+          _id in *[_type == "product" && affiliateStore._ref == $storeId].categories[]._ref)
+      ]._id`,
+      { storeId, categoryIds }
+    );
+    if (validIds.length !== categoryIds.length) {
+      return NextResponse.json({ error: "Una categoría no pertenece a esta tienda" }, { status: 400 });
+    }
+
+    const references = categoryIds.map((id: string, index: number) => ({
+      _type: "reference",
+      _ref: id,
+      _key: `category-${index}`,
+    }));
+    await writeClient.patch(storeId).set({ categoryOrder: references }).commit();
+    revalidatePath("/");
+    revalidatePath("/dashboard");
+    revalidatePath(`/store/${storeId}`);
+    return NextResponse.json({ success: true, categoryOrder: categoryIds });
+  } catch (e) {
+    console.error("[dashboard/categories PATCH]", e);
+    return NextResponse.json({ error: "Error al guardar el orden de categorías" }, { status: 500 });
   }
 }
 

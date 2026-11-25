@@ -82,7 +82,7 @@ export function useStoreSearch() {
         },
         body: JSON.stringify({
           address: addressObj,
-          useGoogleMaps: false // Usar OpenStreetMap para evitar problemas de API key
+          useMapboxGeocoding: true // Geocodificación con Mapbox (fallback a OSM)
         }),
       });
 

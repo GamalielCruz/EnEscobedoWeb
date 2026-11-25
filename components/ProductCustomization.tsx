@@ -19,14 +19,15 @@ interface OptionGroup {
 }
 
 interface ProductCustomizationProps {
-  optionGroups?: OptionGroup[];
+  optionGroups?: OptionGroup[] | null;
   onSelectionChange?: (selections: { [key: string]: string | string[] }) => void;
 }
 
 export default function ProductCustomization({ 
-  optionGroups = [], 
+  optionGroups: rawOptionGroups,
   onSelectionChange 
 }: ProductCustomizationProps) {
+  const optionGroups = Array.isArray(rawOptionGroups) ? rawOptionGroups.filter(Boolean) : [];
   const [selections, setSelections] = useState<{ [key: string]: string | string[] }>({});
 
   const handleSingleSelection = (groupIndex: number, optionIndex: number) => {
@@ -124,13 +125,14 @@ export default function ProductCustomization({
               )}
             </div>
 
-            <div className="space-y-2">
+            <div className="divide-y divide-gray-200">
               {group.options?.map((option, optionIndex) => {
                 const isSelected = isOptionSelected(groupIndex, optionIndex);
                 const additionalPrice = option.priceDelta || 0;
                 
                 return (
-                  <div
+                  <button
+                    type="button"
                     key={optionIndex}
                     onClick={() => {
                       if (group.selectionType === "multiple") {
@@ -140,25 +142,15 @@ export default function ProductCustomization({
                       }
                     }}
                     className={`
-                      relative p-3 rounded-lg border cursor-pointer transition-all
-                      ${isSelected 
-                        ? 'border-green-500 bg-green-50' 
-                        : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                      }
+                      relative w-full py-4 text-left transition-colors hover:bg-[#70E000]/5
+                      focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#70E000]
                     `}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
                         <div className={`
-                          w-4 h-4 rounded border-2 flex items-center justify-center
-                          ${group.selectionType === "multiple"
-                            ? isSelected 
-                              ? 'border-green-500 bg-green-500' 
-                              : 'border-gray-300'
-                            : isSelected 
-                              ? 'border-green-500 bg-green-500' 
-                              : 'border-gray-300'
-                          }
+                          flex h-5 w-5 items-center justify-center border-2
+                          ${group.selectionType === "multiple" ? "rounded" : "rounded-full"} ${isSelected ? 'border-[#70E000] bg-[#70E000]' : 'border-gray-400'}
                         `}>
                           {isSelected && (
                             <Check className="w-3 h-3 text-white" />
@@ -171,7 +163,7 @@ export default function ProductCustomization({
                       </div>
                       
                       {additionalPrice > 0 && (
-                        <span className="text-sm font-semibold text-green-600">
+                        <span className="text-sm font-semibold text-[#4d9f00]">
                           +${additionalPrice.toFixed(2)}
                         </span>
                       )}
@@ -182,7 +174,7 @@ export default function ProductCustomization({
                         {option.description}
                       </p>
                     )}
-                  </div>
+                  </button>
                 );
               })}
             </div>

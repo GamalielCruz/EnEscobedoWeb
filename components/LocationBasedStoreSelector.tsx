@@ -1,18 +1,23 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Navigation, Loader2, AlertCircle, MapPin, Edit3, Store } from "lucide-react";
 import SimpleAddressInput from "./SimpleAddressInput";
 import { CustomerAddress } from "@/lib/clickCollect";
-import { useGoogleMaps } from "@/hooks/useGoogleMaps";
+import { useMapbox } from "@/hooks/useMapbox";
+import {
+  MapboxMap,
+  type MapboxMapLine,
+  type MapboxMapMarker,
+} from "@/components/map/MapboxMap";
+import {
+  MAPBOX_DEFAULT_CENTER,
+  mapboxDirections,
+  mapboxForwardGeocode,
+  mapboxReverseGeocode,
+  type MapboxPoint,
+} from "@/lib/mapbox";
 
 interface Store {
   _id: string;
@@ -47,19 +52,16 @@ interface LocationBasedStoreSelectorProps {
     };
   }) => void;
   onAddressChange?: (address: CustomerAddress) => void;
-  apiKey: string;
   filterStoreId?: string;
 }
 
 export default function LocationBasedStoreSelector({
   onStoreSelected,
   onAddressChange,
-  apiKey,
   filterStoreId,
 }: LocationBasedStoreSelectorProps) {
   // Distancia máxima para mostrar tiendas (en kilómetros)
   const MAX_DISTANCE_KM = 50;
-  const mapRef = useRef<HTMLDivElement>(null);
   const [userLocation, setUserLocation] = useState<{
     lat: number;
     lng: number;
@@ -68,11 +70,8 @@ export default function LocationBasedStoreSelector({
   const [selectedStore, setSelectedStore] = useState<Store | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [map, setMap] = useState<any>(null);
-  const [storeMarkers, setStoreMarkers] = useState<any[]>([]);
-  const [userMarker, setUserMarker] = useState<any>(null);
-  const [directionsRenderer, setDirectionsRenderer] = useState<any>(null);
-  const [directionsService, setDirectionsService] = useState<any>(null);
+  const [routePath, setRoutePath] = useState<MapboxPoint[]>([]);
+  const [fitPoints, setFitPoints] = useState<MapboxPoint[] | null>(null);
   const [routeInfo, setRouteInfo] = useState<{
     distance: string;
     duration: string;
@@ -81,49 +80,15 @@ export default function LocationBasedStoreSelector({
   const [geolocationDenied, setGeolocationDenied] = useState(false);
   const [autoLocationAttempted, setAutoLocationAttempted] = useState(false);
 
-  // Usar el hook personalizado para cargar Google Maps
-  const { isLoaded: isMapLoaded, loadError } = useGoogleMaps({
-    apiKey,
-    libraries: ["places"],
-  });
+  // Cargar Mapbox GL (sustituye a useGoogleMaps)
+  const { isLoaded: isMapLoaded, loadError } = useMapbox();
 
-  // Actualizar error si hay problema cargando Google Maps
+  // Actualizar error si hay problema cargando el mapa
   useEffect(() => {
     if (loadError) {
       setError(loadError);
     }
   }, [loadError]);
-
-  // Inicializar mapa cuando esté cargado
-  useEffect(() => {
-    if (isMapLoaded && mapRef.current && !map) {
-      const google = (window as any).google;
-      const googleMap = new google.maps.Map(mapRef.current, {
-        center: { lat: 20.5089, lng: -100.1456 }, // Pedro Escobedo
-        zoom: 13,
-        mapTypeControl: false,
-        streetViewControl: false,
-        fullscreenControl: false,
-      });
-
-      // Inicializar servicios de direcciones
-      const directionsServiceInstance = new google.maps.DirectionsService();
-      const directionsRendererInstance = new google.maps.DirectionsRenderer({
-        suppressMarkers: true, // Suprimir marcadores automáticos para usar los nuestros
-        polylineOptions: {
-          strokeColor: "#4285F4",
-          strokeWeight: 4,
-          strokeOpacity: 0.8,
-        },
-      });
-
-      directionsRendererInstance.setMap(googleMap);
-
-      setMap(googleMap);
-      setDirectionsService(directionsServiceInstance);
-      setDirectionsRenderer(directionsRendererInstance);
-    }
-  }, [isMapLoaded, map]);
 
   // Intentar obtener ubicación automáticamente al cargar (solo una vez)
   useEffect(() => {
@@ -168,30 +133,7 @@ export default function LocationBasedStoreSelector({
         const location = { lat: latitude, lng: longitude };
 
         setUserLocation(location);
-
-        // Centrar mapa en la ubicación del usuario
-        if (map) {
-          const google = (window as any).google;
-          map.setCenter(location);
-          map.setZoom(15);
-
-          // Limpiar marcador anterior del usuario
-          if (userMarker) {
-            userMarker.setMap(null);
-          }
-
-          // Agregar marcador del usuario
-          const userMarkerInstance = new google.maps.Marker({
-            position: location,
-            map: map,
-            title: "Tu ubicación",
-            icon: {
-              url: "https://maps.google.com/mapfiles/ms/icons/blue-dot.png",
-            },
-          });
-
-          setUserMarker(userMarkerInstance);
-        }
+        setFitPoints([location]);
 
         // Buscar tiendas cercanas
         await findNearbyStores(latitude, longitude);
@@ -228,14 +170,8 @@ export default function LocationBasedStoreSelector({
   // Buscar tiendas cercanas usando la API
   const findNearbyStores = async (lat: number, lng: number) => {
     try {
-      // Limpiar marcadores anteriores
-      storeMarkers.forEach((marker) => marker.setMap(null));
-      setStoreMarkers([]);
-
       // Limpiar ruta anterior
-      if (directionsRenderer) {
-        directionsRenderer.setDirections({ routes: [] });
-      }
+      setRoutePath([]);
       setRouteInfo(null);
 
       // Obtener todas las tiendas disponibles (posible filtro por storeId)
@@ -290,6 +226,15 @@ export default function LocationBasedStoreSelector({
         nearbyStoresFiltered.sort((a, b) => a.distanceKm - b.distanceKm);
         setNearbyStores(nearbyStoresFiltered);
 
+        // Encuadrar el mapa: usuario + tiendas disponibles
+        setFitPoints([
+          { lat, lng },
+          ...nearbyStoresFiltered.map((store) => ({
+            lat: store.coordinates.latitude,
+            lng: store.coordinates.longitude,
+          })),
+        ]);
+
         // Verificar si hay tiendas dentro del rango
         if (nearbyStoresFiltered.length === 0) {
           const closestStore = storesWithDistance[0];
@@ -301,55 +246,6 @@ export default function LocationBasedStoreSelector({
             setError("No se encontraron tiendas disponibles.");
           }
           return;
-        }
-
-        // Agregar marcadores al mapa
-        if (map) {
-          const google = (window as any).google;
-          const markers: any[] = [];
-
-          nearbyStoresFiltered.forEach((store) => {
-            const marker = new google.maps.Marker({
-              position: {
-                lat: store.coordinates.latitude,
-                lng: store.coordinates.longitude,
-              },
-              map: map,
-              title: store.name,
-              icon: {
-                url: "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
-              },
-            });
-
-            const infoWindow = new google.maps.InfoWindow({
-              content: `
-                <div style="padding: 8px;">
-                  <h3 style="margin: 0 0 8px 0; font-size: 16px;">${store.name}</h3>
-                  <p style="margin: 0; font-size: 14px;">${store.address.street}</p>
-                  <p style="margin: 4px 0; font-size: 12px; color: #666;">
-                    📍 ${store.distanceKm.toFixed(2)} km de distancia
-                  </p>
-                  <p style="margin: 4px 0; font-size: 12px; color: #666;">
-                    📞 ${store.contact?.phone || "Teléfono no disponible"}
-                  </p>
-                  <button onclick="window.selectStoreFromMap('${store._id}')" 
-                          style="margin-top: 8px; padding: 4px 8px; background: #4285F4; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                    Seleccionar esta tienda
-                  </button>
-                </div>
-              `,
-            });
-
-            marker.addListener("click", () => {
-              infoWindow.open(map, marker);
-            });
-
-            // Agregar referencia de la tienda al marcador
-            marker.storeId = store._id;
-            markers.push(marker);
-          });
-
-          setStoreMarkers(markers);
         }
 
         // Seleccionar automáticamente la tienda más cercana
@@ -364,7 +260,7 @@ export default function LocationBasedStoreSelector({
     }
   };
 
-  // Manejar dirección simple (sin Google Places)
+  // Manejar dirección simple
   const handleSimpleAddressSubmit = async (addressData: {
     fullAddress: string;
     components: {
@@ -378,9 +274,9 @@ export default function LocationBasedStoreSelector({
     setError(null);
 
     try {
-      // Geocodificar la dirección usando OpenStreetMap directamente
-      const geocodeResponse = await geocodeAddressWithOSM(addressData.fullAddress);
-      
+      // Geocodificar la dirección con Mapbox (fallback Nominatim)
+      const geocodeResponse = await geocodeAddressWithMapbox(addressData.fullAddress);
+
       if (geocodeResponse.success && geocodeResponse.coordinates) {
         const userLoc = {
           lat: geocodeResponse.coordinates.latitude,
@@ -388,30 +284,7 @@ export default function LocationBasedStoreSelector({
         };
 
         setUserLocation(userLoc);
-
-        // Centrar mapa y agregar marcador del usuario en la ubicación exacta
-        if (map) {
-          const google = (window as any).google;
-          map.setCenter(userLoc);
-          map.setZoom(15);
-
-          // Limpiar marcador anterior del usuario
-          if (userMarker) {
-            userMarker.setMap(null);
-          }
-
-          // Agregar marcador del usuario en la ubicación exacta que escribió
-          const userMarkerInstance = new google.maps.Marker({
-            position: userLoc,
-            map: map,
-            title: `Tu ubicación: ${addressData.fullAddress}`,
-            icon: {
-              url: "https://maps.google.com/mapfiles/ms/icons/blue-dot.png",
-            },
-          });
-
-          setUserMarker(userMarkerInstance);
-        }
+        setFitPoints([userLoc]);
 
         // Buscar tiendas cercanas desde la ubicación exacta del usuario
         await findNearbyStores(userLoc.lat, userLoc.lng);
@@ -428,82 +301,47 @@ export default function LocationBasedStoreSelector({
     }
   };
 
-  // Función para geocodificar dirección usando OpenStreetMap directamente
-  const geocodeAddressWithOSM = async (address: string): Promise<{
+  // Geocodificación directa con Mapbox
+  const geocodeAddressWithMapbox = async (address: string): Promise<{
     success: boolean;
     coordinates?: { latitude: number; longitude: number };
     error?: string;
   }> => {
-    try {
-      // Usar Nominatim de OpenStreetMap para geocodificación
-      const encodedAddress = encodeURIComponent(address);
-      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodedAddress}&limit=1&countrycodes=mx`;
-      
-      const response = await fetch(url);
-      const data = await response.json();
-      
-      if (data && data.length > 0) {
-        const result = data[0];
-        return {
-          success: true,
-          coordinates: {
-            latitude: parseFloat(result.lat),
-            longitude: parseFloat(result.lon),
-          },
-        };
-      } else {
-        return {
-          success: false,
-          error: "No se encontró la dirección especificada",
-        };
-      }
-    } catch (error) {
+    const [result] = await mapboxForwardGeocode(address, {
+      limit: 1,
+      country: "mx",
+    });
+    if (!result) {
       return {
         success: false,
-        error: "Error al geocodificar la dirección",
+        error: "No se encontró la dirección especificada",
       };
     }
+    return {
+      success: true,
+      coordinates: {
+        latitude: result.latitude,
+        longitude: result.longitude,
+      },
+    };
   };
 
-  // Función para geocodificación inversa (coordenadas a dirección)
-  const reverseGeocode = async (lat: number, lng: number): Promise<{
+  // Geocodificación inversa (coordenadas a dirección) con Mapbox
+  const reverseGeocode = async (
+    lat: number,
+    lng: number
+  ): Promise<{
     street: string;
     city: string;
     state: string;
     postalCode: string;
   }> => {
-    try {
-      console.log(`🌍 Geocodificando coordenadas: ${lat}, ${lng}`);
-      const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`;
-      const response = await fetch(url);
-      const data = await response.json();
-      
-      console.log('🗺️ Respuesta de geocodificación:', data);
-      
-      if (data && data.address) {
-        const addr = data.address;
-        const result = {
-          street: addr.road || addr.street || addr.neighbourhood || addr.suburb || "",
-          city: addr.city || addr.town || addr.village || addr.municipality || "",
-          state: addr.state || "",
-          postalCode: addr.postcode || "",
-        };
-        console.log('✅ Dirección geocodificada:', result);
-        return result;
-      } else {
-        console.log('⚠️ No se encontró dirección en la respuesta');
-      }
-    } catch (error) {
-      console.error('❌ Error en geocodificación inversa:', error);
-    }
-    
-    // Retornar valores vacíos si falla
-    console.log('⚠️ Retornando dirección vacía');
+    const result = await mapboxReverseGeocode(lat, lng, { language: "es" });
     return {
-      street: "",
-      city: "",
-      state: "",
-      postalCode: "",
+      street: result?.street ?? "",
+      city: result?.city ?? "",
+      state: result?.state ?? "",
+      postalCode: result?.postalCode ?? "",
     };
   };
 
@@ -566,86 +404,46 @@ export default function LocationBasedStoreSelector({
     }
   };
 
-  // Mostrar ruta hacia la tienda seleccionada
-  const showRouteToStore = (store: Store) => {
-    if (!userLocation || !directionsService || !directionsRenderer) return;
+  // Mostrar ruta hacia la tienda seleccionada (Mapbox Directions)
+  const showRouteToStore = async (store: Store) => {
+    if (!userLocation) return;
 
-    const request = {
-      origin: { lat: userLocation.lat, lng: userLocation.lng },
-      destination: {
-        lat: store.coordinates.latitude,
-        lng: store.coordinates.longitude,
-      },
-      travelMode: (window as any).google.maps.TravelMode.DRIVING,
+    const origin = { lat: userLocation.lat, lng: userLocation.lng };
+    const destination = {
+      lat: store.coordinates.latitude,
+      lng: store.coordinates.longitude,
     };
 
-    directionsService.route(request, (result: any, status: any) => {
-      if (status === "OK") {
-        directionsRenderer.setDirections(result);
-
-        // Extraer información de la ruta
-        const route = result.routes[0];
-        const leg = route.legs[0];
-        setRouteInfo({
-          distance: leg.distance.text,
-          duration: leg.duration.text,
-        });
-
-        // Ajustar el zoom para mostrar toda la ruta con un poco de padding
-        const bounds = new (window as any).google.maps.LatLngBounds();
-        bounds.extend({ lat: userLocation.lat, lng: userLocation.lng });
-        bounds.extend({
-          lat: store.coordinates.latitude,
-          lng: store.coordinates.longitude,
-        });
-        map.fitBounds(bounds, { padding: 50 });
-      } else {
-        setRouteInfo(null);
-        // Si no se puede calcular la ruta, al menos centrar entre los dos puntos
-        const bounds = new (window as any).google.maps.LatLngBounds();
-        bounds.extend({ lat: userLocation.lat, lng: userLocation.lng });
-        bounds.extend({
-          lat: store.coordinates.latitude,
-          lng: store.coordinates.longitude,
-        });
-        map.fitBounds(bounds, { padding: 50 });
-      }
+    const route = await mapboxDirections(origin, destination, {
+      profile: "driving-traffic",
+      language: "es",
     });
-  };
 
-  // Resaltar marcador de tienda seleccionada
-  const highlightStoreMarker = (selectedStoreId: string) => {
-    storeMarkers.forEach((marker) => {
-      if (marker.storeId === selectedStoreId) {
-        // Cambiar a marcador verde para la tienda seleccionada
-        marker.setIcon({
-          url: "https://maps.google.com/mapfiles/ms/icons/green-dot.png",
-        });
-        marker.setZIndex(1000); // Traer al frente
-      } else {
-        // Mantener marcadores rojos para las demás tiendas
-        marker.setIcon({
-          url: "https://maps.google.com/mapfiles/ms/icons/red-dot.png",
-        });
-        marker.setZIndex(1);
-      }
-    });
+    if (route) {
+      setRoutePath(route.path);
+      setRouteInfo({
+        distance: route.distanceText ?? "",
+        duration: route.durationText ?? "",
+      });
+      setFitPoints(route.path);
+    } else {
+      setRoutePath([]);
+      setRouteInfo(null);
+      // Si no se puede calcular la ruta, al menos encuadrar los dos puntos
+      setFitPoints([origin, destination]);
+    }
   };
 
   // Seleccionar una tienda
   const selectStore = async (store: Store) => {
     setSelectedStore(store);
 
-    // Resaltar marcador en el mapa
-    highlightStoreMarker(store._id);
-
     // Mostrar ruta hacia la tienda
-    showRouteToStore(store);
+    void showRouteToStore(store);
 
     // Si hay ubicación del usuario, obtener su dirección primero
     let customerAddress = null;
     if (onAddressChange && userLocation) {
-      console.log('🔍 Obteniendo dirección del usuario...');
       const address = await reverseGeocode(userLocation.lat, userLocation.lng);
       customerAddress = {
         street: address.street || "Ubicación detectada",
@@ -656,8 +454,7 @@ export default function LocationBasedStoreSelector({
         latitude: userLocation.lat as any,
         longitude: userLocation.lng as any,
       } as unknown as CustomerAddress;
-      
-      console.log('📍 Dirección obtenida:', customerAddress);
+
       onAddressChange(customerAddress);
     }
 
@@ -677,19 +474,49 @@ export default function LocationBasedStoreSelector({
     onStoreSelected(storeData);
   };
 
-  // Función global para seleccionar tienda desde el mapa
-  useEffect(() => {
-    (window as any).selectStoreFromMap = (storeId: string) => {
-      const store = nearbyStores.find((s) => s._id === storeId);
-      if (store) {
-        selectStore(store);
-      }
-    };
+  // Marcadores declarativos (usuario + tiendas, resaltando la seleccionada)
+  const markers = useMemo<MapboxMapMarker[]>(() => {
+    const list: MapboxMapMarker[] = [];
+    if (userLocation) {
+      list.push({
+        id: "user-location",
+        lat: userLocation.lat,
+        lng: userLocation.lng,
+        color: "#2563EB",
+        size: 8,
+        title: "Tu ubicación",
+        zIndex: 900,
+      });
+    }
+    nearbyStores.forEach((store) => {
+      const selected = selectedStore?._id === store._id;
+      list.push({
+        id: `store-${store._id}`,
+        lat: store.coordinates.latitude,
+        lng: store.coordinates.longitude,
+        color: selected ? "#16A34A" : "#EF4444",
+        variant: "pin",
+        size: selected ? 16 : 13,
+        title: `${store.name} · ${store.distanceKm.toFixed(1)} km`,
+        zIndex: selected ? 1000 : 1,
+        onClick: () => void selectStore(store),
+      });
+    });
+    return list;
+  }, [userLocation, nearbyStores, selectedStore]);
 
-    return () => {
-      delete (window as any).selectStoreFromMap;
-    };
-  }, [nearbyStores]);
+  const routeLines = useMemo<MapboxMapLine[]>(() => {
+    if (routePath.length < 2) return [];
+    return [
+      {
+        id: "store-route",
+        points: routePath,
+        color: "#4285F4",
+        width: 4,
+        opacity: 0.85,
+      },
+    ];
+  }, [routePath]);
 
   return (
     <div className="space-y-4">
@@ -832,12 +659,19 @@ export default function LocationBasedStoreSelector({
 
       {/* Mapa - Solo mostrar cuando hay ubicación */}
       {userLocation && (
-        <div
-          ref={mapRef}
-          className="w-full h-64 bg-gray-100 rounded-lg border-2 border-gray-200 shadow-sm"
-          style={{ minHeight: "256px" }}
-        >
-          {!isMapLoaded && (
+        <div className="w-full h-64 bg-gray-100 rounded-lg border-2 border-gray-200 shadow-sm overflow-hidden">
+          {isMapLoaded ? (
+            <MapboxMap
+              className="w-full h-full"
+              center={userLocation ?? MAPBOX_DEFAULT_CENTER}
+              zoom={13}
+              showControls
+              markers={markers}
+              lines={routeLines}
+              fitPoints={fitPoints ?? undefined}
+              fitPadding={50}
+            />
+          ) : (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
                 <Loader2 className="h-8 w-8 animate-spin mx-auto mb-2 text-blue-500" />
@@ -864,7 +698,7 @@ export default function LocationBasedStoreSelector({
                     ? "border-green-500 bg-green-50 shadow-md"
                     : "border-gray-200 hover:border-blue-300 hover:bg-blue-50"
                 }`}
-                onClick={() => selectStore(store)}
+                onClick={() => void selectStore(store)}
               >
                 <div className="flex justify-between items-start gap-3">
                   <div className="flex-1 min-w-0">
@@ -906,27 +740,18 @@ export default function LocationBasedStoreSelector({
                 size="sm"
                 onClick={() => {
                   // Limpiar ruta
-                  if (directionsRenderer) {
-                    directionsRenderer.setDirections({ routes: [] });
-                  }
+                  setRoutePath([]);
                   setRouteInfo(null);
 
-                  // Volver a vista general
-                  if (map && userLocation) {
-                    const bounds = new (
-                      window as any
-                    ).google.maps.LatLngBounds();
-                    bounds.extend({
-                      lat: userLocation.lat,
-                      lng: userLocation.lng,
-                    });
-                    nearbyStores.forEach((store) => {
-                      bounds.extend({
+                  // Volver a vista general (usuario + todas las tiendas)
+                  if (userLocation) {
+                    setFitPoints([
+                      { lat: userLocation.lat, lng: userLocation.lng },
+                      ...nearbyStores.map((store) => ({
                         lat: store.coordinates.latitude,
                         lng: store.coordinates.longitude,
-                      });
-                    });
-                    map.fitBounds(bounds, { padding: 50 });
+                      })),
+                    ]);
                   }
                 }}
                 className="text-xs"

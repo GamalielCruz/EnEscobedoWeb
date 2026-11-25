@@ -3,6 +3,12 @@ import { getPaymentMethodLabel } from "@/lib/payment";
 import { backendClient } from "@/sanity/lib/backendClient";
 
 type RestaurantOrderProduct = {
+  notes?: string | null;
+  allergies?: string[] | null;
+  customizations?: Array<{
+    title?: string | null;
+    options?: Array<{ label?: string | null }> | null;
+  }> | null;
   quantity?: number;
   product?: {
     name?: string | null;
@@ -41,7 +47,10 @@ const RESTAURANT_ORDER_QUERY = `*[_type == "order" && _id == $orderId][0]{
   totalPrice,
   products[]{
     quantity,
-    product->{name}
+    product->{name},
+    notes,
+    allergies,
+    customizations[]{title, options[]{label}}
   },
   affiliateStore->{
     _id,
@@ -64,7 +73,18 @@ function formatProducts(products: RestaurantOrderProduct[] | null | undefined) {
       const name = String(entry?.product?.name || "").replace(/\p{Cf}/gu, "").trim();
       if (!name) return null;
       const prefix = quantity > 1 ? `${quantity}x ` : "";
-      return `${prefix}${name}`;
+      const details: string[] = [];
+      const options = (entry?.customizations || [])
+        .flatMap((group) => (group.options || []).map((option) => option.label).filter(Boolean))
+        .join(", ");
+      const notes = String(entry?.notes || "").trim();
+      const allergies = (entry?.allergies || []).map((allergy) => String(allergy).trim()).filter(Boolean);
+
+      if (options) details.push(`Opciones: ${options}`);
+      if (notes) details.push(`Instrucciones: ${notes}`);
+      if (allergies.length) details.push(`ALERGIAS: ${allergies.join(", ")}`);
+
+      return [`${prefix}${name}`, ...details.map((detail) => `  ${detail}`)].join("\n");
     })
     .filter((line): line is string => Boolean(line));
 

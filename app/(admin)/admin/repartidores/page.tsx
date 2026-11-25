@@ -18,6 +18,10 @@ type Repartidor = {
   nombre: string;
   telefono: string;
   activo: boolean;
+  disponible: boolean;
+  disponibleHasta?: string;
+  estadoDisponibilidad?: "available" | "offline" | "busy" | "offer_pending";
+  conectado: boolean;
   notas?: string;
   tiendaAsignada?: {
     _id: string;
@@ -52,6 +56,8 @@ export default function AdminRepartidoresPage() {
 
   useEffect(() => {
     fetchRepartidores();
+    const interval = window.setInterval(fetchRepartidores, 30_000);
+    return () => window.clearInterval(interval);
   }, []);
 
   async function toggleActivo(repartidor: Repartidor) {
@@ -66,7 +72,13 @@ export default function AdminRepartidoresPage() {
       if (data.success) {
         setRepartidores((prev) =>
           prev.map((r) =>
-            r._id === repartidor._id ? { ...r, activo: !repartidor.activo } : r
+            r._id === repartidor._id
+              ? {
+                  ...r,
+                  activo: !repartidor.activo,
+                  conectado: repartidor.activo ? false : r.conectado,
+                }
+              : r
           )
         );
       }
@@ -77,8 +89,21 @@ export default function AdminRepartidoresPage() {
     }
   }
 
-  const activos = repartidores.filter((r) => r.activo).length;
-  const inactivos = repartidores.length - activos;
+  const comunitarios = repartidores.filter((r) => !r.tiendaAsignada);
+  const propiosDeRestaurante = repartidores.filter((r) => r.tiendaAsignada);
+  const comunitariosConectados = comunitarios.filter((r) => r.conectado).length;
+  const grupos = [
+    {
+      titulo: "Repartidores de El Menú",
+      descripcion: "Atienden pedidos de restaurantes sin reparto propio.",
+      repartidores: comunitarios,
+    },
+    {
+      titulo: "Repartidores de restaurantes",
+      descripcion: "Solo atienden pedidos de su restaurante asignado.",
+      repartidores: propiosDeRestaurante,
+    },
+  ];
 
   return (
     <div className="space-y-6 px-4 sm:px-0">
@@ -89,7 +114,7 @@ export default function AdminRepartidoresPage() {
           </p>
           <h1 className="text-3xl font-bold text-gray-900">Repartidores</h1>
           <p className="mt-1 text-gray-500">
-            Gestiona el estado de los repartidores registrados.
+            Consulta quién está conectado y separa el reparto de El Menú del reparto propio.
           </p>
         </div>
         <Button
@@ -107,9 +132,9 @@ export default function AdminRepartidoresPage() {
       {/* Stats */}
       <div className="grid grid-cols-3 gap-4">
         {[
-          { label: "Total", value: repartidores.length, color: "text-gray-900" },
-          { label: "Activos", value: activos, color: "text-green-600" },
-          { label: "Inactivos", value: inactivos, color: "text-red-500" },
+          { label: "De El Menú", value: comunitarios.length, color: "text-gray-900" },
+          { label: "Conectados", value: comunitariosConectados, color: "text-green-600" },
+          { label: "De restaurantes", value: propiosDeRestaurante.length, color: "text-gray-900" },
         ].map((stat) => (
           <Card key={stat.label}>
             <CardContent className="pt-4">
@@ -166,57 +191,87 @@ export default function AdminRepartidoresPage() {
           )}
 
           {repartidores.length > 0 && (
-            <div className="divide-y divide-gray-100">
-              {repartidores.map((rep) => (
-                <div
-                  key={rep._id}
-                  className="flex items-center justify-between gap-4 py-4"
-                >
-                  <div className="min-w-0 flex-1 space-y-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-gray-900">{rep.nombre}</span>
-                      <Badge
-                        className={
-                          rep.activo
-                            ? "bg-green-100 text-green-800"
-                            : "bg-gray-100 text-gray-500"
-                        }
-                      >
-                        {rep.activo ? "Activo" : "Inactivo"}
-                      </Badge>
-                    </div>
-                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500">
-                      <span className="flex items-center gap-1">
-                        <Phone className="h-3.5 w-3.5" />
-                        {rep.telefono}
-                      </span>
-                      <span className="flex items-center gap-1">
-                        <Store className="h-3.5 w-3.5" />
-                        {rep.tiendaAsignada?.name ?? "Comunitario"}
-                      </span>
-                    </div>
-                    {rep.notas && (
-                      <p className="text-xs text-gray-400 italic">{rep.notas}</p>
-                    )}
+            <div className="space-y-8">
+              {grupos.map((grupo) => (
+                <section key={grupo.titulo}>
+                  <div className="mb-2">
+                    <h3 className="font-semibold text-gray-900">{grupo.titulo}</h3>
+                    <p className="text-xs text-gray-500">{grupo.descripcion}</p>
                   </div>
-                  <Button
-                    variant={rep.activo ? "outline" : "default"}
-                    size="sm"
-                    disabled={toggling === rep._id}
-                    onClick={() => toggleActivo(rep)}
-                    className={
-                      rep.activo
-                        ? "border-red-200 text-red-600 hover:bg-red-50"
-                        : "bg-[#ff8800] text-white hover:bg-[#ff8800]/90"
-                    }
-                  >
-                    {toggling === rep._id
-                      ? "..."
-                      : rep.activo
-                      ? "Desactivar"
-                      : "Activar"}
-                  </Button>
-                </div>
+                  {grupo.repartidores.length === 0 ? (
+                    <p className="rounded-md bg-gray-50 px-3 py-4 text-sm text-gray-500">
+                      No hay repartidores en este grupo.
+                    </p>
+                  ) : (
+                    <div className="divide-y divide-gray-100">
+                      {grupo.repartidores.map((rep) => {
+                        const estado =
+                          !rep.conectado
+                            ? "Desconectado"
+                            : rep.estadoDisponibilidad === "busy"
+                            ? "En entrega"
+                            : rep.estadoDisponibilidad === "offer_pending"
+                              ? "Oferta pendiente"
+                              : "Disponible";
+
+                        return (
+                          <div
+                            key={rep._id}
+                            className="flex items-center justify-between gap-4 py-4"
+                          >
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-medium text-gray-900">{rep.nombre}</span>
+                                <Badge
+                                  className={
+                                    rep.conectado
+                                      ? "bg-green-100 text-green-800"
+                                      : "bg-gray-100 text-gray-500"
+                                  }
+                                >
+                                  {estado}
+                                </Badge>
+                                {!rep.activo && (
+                                  <Badge className="bg-red-100 text-red-700">Desactivado</Badge>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-gray-500">
+                                <span className="flex items-center gap-1">
+                                  <Phone className="h-3.5 w-3.5" />
+                                  {rep.telefono}
+                                </span>
+                                <span className="flex items-center gap-1">
+                                  <Store className="h-3.5 w-3.5" />
+                                  {rep.tiendaAsignada?.name ?? "El Menú"}
+                                </span>
+                              </div>
+                              {rep.notas && (
+                                <p className="text-xs text-gray-400 italic">{rep.notas}</p>
+                              )}
+                            </div>
+                            <Button
+                              variant={rep.activo ? "outline" : "default"}
+                              size="sm"
+                              disabled={toggling === rep._id}
+                              onClick={() => toggleActivo(rep)}
+                              className={
+                                rep.activo
+                                  ? "border-red-200 text-red-600 hover:bg-red-50"
+                                  : "bg-[#ff8800] text-white hover:bg-[#ff8800]/90"
+                              }
+                            >
+                              {toggling === rep._id
+                                ? "..."
+                                : rep.activo
+                                  ? "Desactivar"
+                                  : "Activar"}
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
               ))}
             </div>
           )}
