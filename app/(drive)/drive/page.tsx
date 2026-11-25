@@ -256,20 +256,25 @@ const ARRIVAL_RADIUS_METERS = 50;
 const DRIVE_SIM_ENABLED = getDeploymentEnvironment() !== "production";
 // ── Pin SVG ────────────────────────────────────────────────────────
 
-// Flecha de navegación del conductor como SVG data-URI: la rotación se aplica
-// explícitamente en el SVG (positiva = sentido horario, igual que el heading),
-// así el marcador siempre apunta hacia donde conduce el repartidor.
+// Marcador del conductor (dónde está el GPS) como SVG data-URI. Diseño
+// minimalista y algo más grande que antes: halo blanco, disco azul de la ruta
+// y un chevrón blanco de rumbo. El halo separa el azul del mapa claro (los
+// caminos son blancos) y el chevrón da la dirección sin recargar el icono.
+// La rotación se aplica explícitamente en el SVG (positiva = sentido horario,
+// igual que el heading), así el marcador apunta hacia donde conduce.
 function driverArrowIcon(headingDeg: number): string {
   const rotate = normalizeDeg(headingDeg);
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="44" height="44" viewBox="-22 -22 44 44">
+  const half = PUCK_SIZE_PX / 2;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${PUCK_SIZE_PX}" height="${PUCK_SIZE_PX}" viewBox="${-half} ${-half} ${PUCK_SIZE_PX} ${PUCK_SIZE_PX}">
   <defs>
-    <filter id="shadow" x="-40%" y="-40%" width="180%" height="180%">
-      <feDropShadow dx="0" dy="1.2" stdDeviation="1.4" flood-color="#000000" flood-opacity="0.35"/>
+    <filter id="shadow" x="-50%" y="-50%" width="200%" height="200%">
+      <feDropShadow dx="0" dy="1.8" stdDeviation="2.2" flood-color="#0F172A" flood-opacity="0.26"/>
     </filter>
   </defs>
   <g filter="url(#shadow)" transform="rotate(${rotate})">
-    <circle cx="0" cy="0" r="15" fill="#FFFFFF" stroke="#D7DEE8" stroke-width="1.5"/>
-    <path d="M0 -8.5 L6 8.5 L0 4.5 L-6 8.5 Z" fill="${ROUTE_BLUE}" stroke="#FFFFFF" stroke-width="1" stroke-linejoin="round"/>
+    <circle cx="0" cy="0" r="20" fill="#FFFFFF"/>
+    <circle cx="0" cy="0" r="15.5" fill="${ROUTE_BLUE}" stroke="#FFFFFF" stroke-width="3.5"/>
+    <path d="M0 -7 L5 3.8 L0 1.2 L-5 3.8 Z" fill="#FFFFFF" stroke-linejoin="round"/>
   </g>
 </svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
@@ -293,7 +298,7 @@ function driverArrowIcon(headingDeg: number): string {
 // cero objetos Size/Point por frame. El último bucket aplicado se recuerda
 // para no tocar el marcador si el ángulo no cambió de bucket.
 
-const ICON_SIZE_PX = 44;
+const PUCK_SIZE_PX = 72;
 const ICON_BUCKET_DEG = 10;
 const ICON_BUCKET_COUNT = 360 / ICON_BUCKET_DEG;
 
@@ -301,7 +306,7 @@ const ICON_BUCKET_COUNT = 360 / ICON_BUCKET_DEG;
 // rotación ya no requiere un icono por ángulo porque el propio marcador de
 // Mapbox gira con marker.setRotation().
 const DRIVER_MARKER_ID = "drive-driver-marker";
-const DRIVER_MARKER_HTML = `<img src="${driverArrowIcon(0)}" width="${ICON_SIZE_PX}" height="${ICON_SIZE_PX}" alt="" style="display:block" />`;
+const DRIVER_MARKER_HTML = `<img src="${driverArrowIcon(0)}" width="${PUCK_SIZE_PX}" height="${PUCK_SIZE_PX}" alt="" style="display:block" />`;
 let lastDriverIconBucket: number | null = null;
 
 /**
