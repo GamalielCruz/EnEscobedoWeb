@@ -250,8 +250,15 @@ type OfferPreviewState = {
 };
 
 // Radio de llegada AUTOMÁTICA: dentro de esta geocerca el backend marca la
-// llegada (pickup_arrival / destination_arrival) sin acción del repartidor.
-const ARRIVAL_RADIUS_METERS = 50;
+// llegada (pickup_arrival / destination_arrival) sin acción del repartidor y
+// la UI muestra el aviso de confirmación por deslizaje. 10 m: el aviso aparece
+// AL LLEGAR al punto, no en la aproximación (a 50 m tapaba el mapa durante los
+// últimos metros de la ruta).
+const ARRIVAL_RADIUS_METERS = 10;
+// Histéresis de SALIDA del aviso: detenido en el punto el GPS oscila unos
+// metros; sin margen el deslizador aparecería y desaparecería (perdiendo el
+// avance del gesto). Se retira solo al alejarse más de 20 m.
+const ARRIVAL_EXIT_METERS = 20;
 // El simulador de viaje SOLO existe fuera de producción (dev local/preview).
 const DRIVE_SIM_ENABLED = getDeploymentEnvironment() !== "production";
 // ── Pin SVG ────────────────────────────────────────────────────────
@@ -1242,15 +1249,23 @@ export default function DrivePage() {
   // avanza a "en el punto" sin acción del repartidor (sin paso visual
   // "Llegué al punto"). El backend se marca en segundo plano (ver efecto
   // siguiente) para que las transiciones de confirmación sean válidas.
+  // El aviso de deslizaje entra a 10 m y se sostiene hasta 20 m.
+  const atPointRef = useRef<"pickup" | "delivery" | null>(null);
   const navPhase = useMemo<DriveNavPhase | null>(() => {
     if (sim.active) return sim.stage as DriveNavPhase;
     const phase = actionToNavPhase(orderAction?.action ?? null);
-    if (phase === "to_pickup" && pickupPoint && haversineMeters(currentLocation, pickupPoint) < ARRIVAL_RADIUS_METERS) {
-      return "at_pickup";
+    if (phase === "to_pickup" || phase === "to_delivery") {
+      const point = phase === "to_pickup" ? pickupPoint : deliveryPoint;
+      const side = phase === "to_pickup" ? "pickup" : "delivery";
+      const distance = point ? haversineMeters(currentLocation, point) : Infinity;
+      const inPoint =
+        distance < ARRIVAL_RADIUS_METERS ||
+        (atPointRef.current === side && distance < ARRIVAL_EXIT_METERS);
+      atPointRef.current = inPoint ? side : null;
+      if (inPoint) return phase === "to_pickup" ? "at_pickup" : "at_delivery";
+      return phase;
     }
-    if (phase === "to_delivery" && deliveryPoint && haversineMeters(currentLocation, deliveryPoint) < ARRIVAL_RADIUS_METERS) {
-      return "at_delivery";
-    }
+    atPointRef.current = null;
     return phase;
   }, [sim.active, sim.stage, orderAction, currentLocation, pickupPoint, deliveryPoint]);
 
