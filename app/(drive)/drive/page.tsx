@@ -1390,6 +1390,10 @@ export default function DrivePage() {
   const movementPrevRef = useRef<{ pos: RoutePoint; ts: number } | null>(null);
   const visualHeadingRef = useRef<number | null>(null);
   const visualCameraHeadingRef = useRef<{ current: number | null; lastTs?: number }>({ current: null });
+  // Pitch INTERPOLADO vigente. Debe persistir entre cuadros: si no se devuelve
+  // al frame, cada cuadro vuelve a interpolar desde 0 y la cámara aplicada se
+  // queda casi plana (el mapa «desde muy arriba»).
+  const visualPitchRef = useRef(0);
   // Zoom calculado en el frame ANTERIOR por el bloque de zoom adaptativo: se
   // aplica junto con center+heading en el MISMO jumpTo (antes eran dos
   // jumpTo por frame = doble invalidación de render de Mapbox).
@@ -1967,6 +1971,9 @@ export default function DrivePage() {
     // Al tomar el control, cancelar cualquier heading tween en vuelo para que
     // solo un rAF escriba visualHeadingRef.current.
     stopHeadingAnimation();
+    // El pitch arranca desde el valor REAL del mapa (no desde 0) para que la
+    // transición a la vista al horizonte sea continua.
+    visualPitchRef.current = mapRef.current?.getPitch() ?? 0;
     let lastCameraUpdateTs = 0;
     const step = (ts: number) => {
       followRafRef.current = requestAnimationFrame(step);
@@ -2021,6 +2028,7 @@ export default function DrivePage() {
           cameraHeading: visualCameraHeadingRef.current.current,
           cameraHeadingTs: visualCameraHeadingRef.current.lastTs ?? null,
           zoomTarget: targetZoomRef.current?.target ?? null,
+          pitch: visualPitchRef.current,
           frameTs: followFrameTsRef.current,
           fixTs: followFrameFixTsRef.current,
           correctionMeters: followCorrectionRef.current.meters,
@@ -2065,6 +2073,7 @@ export default function DrivePage() {
       visualCameraHeadingRef.current.current = frame.state.cameraHeading;
       visualCameraHeadingRef.current.lastTs =
         frame.state.cameraHeadingTs ?? undefined;
+      visualPitchRef.current = frame.state.pitch ?? visualPitchRef.current;
       if (frame.state.zoomTarget != null) {
         targetZoomRef.current = {
           target: frame.state.zoomTarget,

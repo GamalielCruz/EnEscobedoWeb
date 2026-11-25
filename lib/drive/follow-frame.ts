@@ -89,8 +89,21 @@ export const NAV_SPEED_REF_MPS = 18;
 export const TURN_AWARENESS_METERS = 220;
 /** Distancia de activación de la vista de anticipación para cruces. */
 export const TURN_CAMERA_AWARENESS_METERS = 1_000;
-/** Pitch máximo de la cámara al aproximarse a una maniobra real. */
-export const TURN_CAMERA_PITCH = 35;
+/**
+ * Pitch BASE de la navegación (grados): 0 = cenital, 60 = horizonte.
+ *
+ * Es el estilo de la vista de conducción, no una anticipación: durante toda la
+ * navegación el mapa se ve en 3D «al horizonte» (carretera por delante y
+ * edificios en perspectiva), como un GPS de coche. Antes la base era 0 y el
+ * mapa solo se inclinaba cerca de un cruce, así que la sensación era de estar
+ * mirando desde muy arriba.
+ */
+export const NAV_PITCH_BASE = 50;
+/**
+ * Pitch máximo al aproximarse a una maniobra real (extra sobre la base).
+ * Se mantiene por debajo de 60, el máximo de Mapbox.
+ */
+export const TURN_CAMERA_PITCH = 58;
 /** Zoom máximo de alejamiento adicional al aproximarse al cruce. */
 export const TURN_CAMERA_ZOOM_OUT = 2.2;
 /**
@@ -466,10 +479,15 @@ export function computeFollowFrame(
               1 - Math.max(0, distToTurn) / TURN_CAMERA_AWARENESS_METERS
             )
         : 0;
-      const pitchGoal =
-        input.navigationReady && realManeuver && distToTurn <= TURN_CAMERA_AWARENESS_METERS
-          ? TURN_CAMERA_PITCH * cameraApproachFactor
+      // Vista 3D al horizonte durante TODA la navegación (base) y un poco más
+      // de inclinación al acercarse a una maniobra real. El efecto de
+      // anticipación (inclinación extra + alejamiento) sigue sin activarse en
+      // pasos `straight`/`depart`/`arrive`/`unknown`.
+      const approachPitch =
+        realManeuver && distToTurn <= TURN_CAMERA_AWARENESS_METERS
+          ? (TURN_CAMERA_PITCH - NAV_PITCH_BASE) * cameraApproachFactor
           : 0;
+      const pitchGoal = input.navigationReady ? NAV_PITCH_BASE + approachPitch : 0;
       pitch += (pitchGoal - pitch) * (1 - Math.pow(1 - NAV_PITCH_SMOOTH, frameScale));
       if (Math.abs(pitch - pitchGoal) < 0.1) pitch = pitchGoal;
       const nextNextStep = route.steps[idx + 2];
