@@ -93,6 +93,12 @@ export const TURN_CAMERA_AWARENESS_METERS = 1_000;
 export const TURN_CAMERA_PITCH = 35;
 /** Zoom máximo de alejamiento adicional al aproximarse al cruce. */
 export const TURN_CAMERA_ZOOM_OUT = 2.2;
+/**
+ * Suelo de zoom SOLO durante la aproximación a una maniobra. El suelo normal
+ * (NAV_ZOOM_MIN - 0.4 = 17.5) frenaba el alejamiento justo cuando debía ser
+ * máximo: el mapa se quedaba en 17.5 en vez de abrirse.
+ */
+export const TURN_CAMERA_ZOOM_FLOOR = 15.6;
 /** Velocidad de interpolación del pitch por segundo. */
 export const NAV_PITCH_SMOOTH = 0.045;
 export const TURN_ZOOM_OUT = 0.9;
@@ -507,7 +513,7 @@ export function computeFollowFrame(
       if (openFactor > 0) {
         const maneuverTarget = NAV_ZOOM_BASE - openFactor;
         targetZoom = Math.min(targetZoom, maneuverTarget);
-        targetZoom = Math.max(NAV_ZOOM_MIN - 0.4, targetZoom);
+        targetZoom = Math.max(TURN_CAMERA_ZOOM_FLOOR, targetZoom);
       }
     }
     // Si Directions está recalculando o no hay una geometría utilizable, vuelve
@@ -530,7 +536,7 @@ export function computeFollowFrame(
     if (Math.abs(zoomDelta) > NAV_ZOOM_EPSILON) {
       const stepZoom = zoomNow + zoomDelta * NAV_ZOOM_SMOOTH;
       pendingZoom = Math.max(
-        NAV_ZOOM_MIN - 0.4,
+        TURN_CAMERA_ZOOM_FLOOR,
         Math.min(NAV_ZOOM_MAX, stepZoom)
       );
     } else {
